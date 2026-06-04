@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/java_workspace/shixun-vue/**)",
+      "Bash(npm run *)"
+    ]
+  }
+}

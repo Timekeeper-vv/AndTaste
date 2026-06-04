@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.shixun.mapper.ProductMapper">
+
+    <select id="findAll" resultType="com.example.shixun.model.Product">
+        SELECT * FROM product ORDER BY id
+    </select>
+
+    <select id="findById" resultType="com.example.shixun.model.Product">
+        SELECT * FROM product WHERE id = #{id}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO product (name, price, stock, category, description)
+        VALUES (#{name}, #{price}, #{stock}, #{category}, #{description})
+    </insert>
+
+    <update id="update">
+        UPDATE product SET name=#{name}, price=#{price}, stock=#{stock},
+        category=#{category}, description=#{description}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM product WHERE id = #{id}
+    </delete>
+
+</mapper>
