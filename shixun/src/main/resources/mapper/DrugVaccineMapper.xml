@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.shixun.mapper.DrugVaccineMapper">
+
+    <select id="findAll" resultType="com.example.shixun.model.DrugVaccine">
+        SELECT * FROM drugs_vaccines ORDER BY category, generic_name
+    </select>
+
+    <select id="findById" resultType="com.example.shixun.model.DrugVaccine">
+        SELECT * FROM drugs_vaccines WHERE id = #{id}
+    </select>
+
+    <select id="findByCategory" resultType="com.example.shixun.model.DrugVaccine">
+        SELECT * FROM drugs_vaccines WHERE category = #{category} ORDER BY generic_name
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO drugs_vaccines (category, generic_name, specification, manufacturer)
+        VALUES (#{category}, #{genericName}, #{specification}, #{manufacturer})
+    </insert>
+
+    <update id="update">
+        UPDATE drugs_vaccines SET category=#{category}, generic_name=#{genericName},
+            specification=#{specification}, manufacturer=#{manufacturer}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM drugs_vaccines WHERE id = #{id}
+    </delete>
+
+</mapper>

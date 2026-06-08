@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.shixun.mapper.AnimalMapper">
+
+    <select id="findAll" resultType="com.example.shixun.model.Animal">
+        SELECT a.id, a.ear_tag, a.gender, DATE_FORMAT(a.entry_date,'%Y-%m-%d') as entry_date,
+            a.breed, a.batch_id, a.current_pen_id, a.birth_weight, a.status,
+            DATE_FORMAT(a.created_at,'%Y-%m-%d %H:%i:%s') as created_at,
+            b.batch_code, p.pen_name as current_pen_name
+        FROM animals a
+        LEFT JOIN batches b ON a.batch_id = b.id
+        LEFT JOIN pens p ON a.current_pen_id = p.id
+        ORDER BY a.id
+    </select>
+
+    <select id="findById" resultType="com.example.shixun.model.Animal">
+        SELECT a.id, a.ear_tag, a.gender, DATE_FORMAT(a.entry_date,'%Y-%m-%d') as entry_date,
+            a.breed, a.batch_id, a.current_pen_id, a.birth_weight, a.status,
+            DATE_FORMAT(a.created_at,'%Y-%m-%d %H:%i:%s') as created_at,
+            b.batch_code, p.pen_name as current_pen_name
+        FROM animals a
+        LEFT JOIN batches b ON a.batch_id = b.id
+        LEFT JOIN pens p ON a.current_pen_id = p.id
+        WHERE a.id = #{id}
+    </select>
+
+    <select id="findByEarTag" resultType="com.example.shixun.model.Animal">
+        SELECT a.id, a.ear_tag, a.gender, DATE_FORMAT(a.entry_date,'%Y-%m-%d') as entry_date,
+            a.breed, a.batch_id, a.current_pen_id, a.birth_weight, a.status,
+            DATE_FORMAT(a.created_at,'%Y-%m-%d %H:%i:%s') as created_at,
+            b.batch_code, p.pen_name as current_pen_name
+        FROM animals a
+        LEFT JOIN batches b ON a.batch_id = b.id
+        LEFT JOIN pens p ON a.current_pen_id = p.id
+        WHERE a.ear_tag = #{earTag}
+    </select>
+
+    <select id="findByBatchId" resultType="com.example.shixun.model.Animal">
+        SELECT a.*, b.batch_code, p.pen_name as current_pen_name
+        FROM animals a
+        LEFT JOIN batches b ON a.batch_id = b.id
+        LEFT JOIN pens p ON a.current_pen_id = p.id
+        WHERE a.batch_id = #{batchId}
+        ORDER BY a.ear_tag
+    </select>
+
+    <select id="existsByEarTag" resultType="boolean">
+        SELECT COUNT(*) > 0 FROM animals WHERE ear_tag = #{earTag}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO animals (ear_tag, gender, entry_date, breed, batch_id, current_pen_id, birth_weight, status)
+        VALUES (#{earTag}, #{gender}, #{entryDate}, #{breed}, #{batchId}, #{currentPenId}, #{birthWeight}, 'ACTIVE')
+    </insert>
+
+    <update id="update">
+        UPDATE animals SET gender=#{gender}, entry_date=#{entryDate}, breed=#{breed},
+            batch_id=#{batchId}, current_pen_id=#{currentPenId}, birth_weight=#{birthWeight}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateCurrentPen">
+        UPDATE animals SET current_pen_id = #{penId} WHERE ear_tag = #{earTag}
+    </update>
+
+    <update id="updateStatus">
+        UPDATE animals SET status = #{status} WHERE ear_tag = #{earTag}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM animals WHERE id = #{id}
+    </delete>
+
+</mapper>

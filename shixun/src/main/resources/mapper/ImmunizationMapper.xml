@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.shixun.mapper.ImmunizationMapper">
+
+    <select id="findAll" resultType="com.example.shixun.model.ImmunizationRecord">
+        SELECT ir.*, dv.generic_name as vaccine_name
+        FROM immunization_records ir
+        LEFT JOIN drugs_vaccines dv ON ir.vaccine_id = dv.id
+        ORDER BY ir.event_time DESC
+    </select>
+
+    <select id="findByEarTag" resultType="com.example.shixun.model.ImmunizationRecord">
+        SELECT ir.*, dv.generic_name as vaccine_name
+        FROM immunization_records ir
+        LEFT JOIN drugs_vaccines dv ON ir.vaccine_id = dv.id
+        WHERE ir.ear_tag = #{earTag}
+        ORDER BY ir.event_time DESC
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO immunization_records (ear_tag, vaccine_id, event_time, dosage, operator, notes)
+        VALUES (#{earTag}, #{vaccineId}, #{eventTime}, #{dosage}, #{operator}, #{notes})
+    </insert>
+
+    <delete id="deleteById">
+        DELETE FROM immunization_records WHERE id = #{id}
+    </delete>
+
+</mapper>

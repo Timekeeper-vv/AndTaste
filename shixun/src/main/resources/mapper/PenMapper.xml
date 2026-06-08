@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.shixun.mapper.PenMapper">
+
+    <select id="findAll" resultType="com.example.shixun.model.Pen">
+        SELECT * FROM pens ORDER BY id
+    </select>
+
+    <select id="findById" resultType="com.example.shixun.model.Pen">
+        SELECT * FROM pens WHERE id = #{id}
+    </select>
+
+    <select id="findAllActive" resultType="com.example.shixun.model.Pen">
+        SELECT * FROM pens WHERE status = 1 ORDER BY pen_name
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO pens (pen_code, pen_name, capacity, responsible_person, status)
+        VALUES (#{penCode}, #{penName}, #{capacity}, #{responsiblePerson}, #{status})
+    </insert>
+
+    <update id="update">
+        UPDATE pens SET pen_name=#{penName}, capacity=#{capacity},
+            responsible_person=#{responsiblePerson}, status=#{status}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM pens WHERE id = #{id}
+    </delete>
+
+    <update id="incrementCount">
+        UPDATE pens SET current_count = current_count + 1 WHERE id = #{penId}
+    </update>
+
+    <update id="decrementCount">
+        UPDATE pens SET current_count = GREATEST(current_count - 1, 0) WHERE id = #{penId}
+    </update>
+
+</mapper>

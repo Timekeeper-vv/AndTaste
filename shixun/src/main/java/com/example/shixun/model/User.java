@@ -25,6 +25,9 @@ public class User {
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;
 
+    @Schema(description = "角色：admin 管理员 / technician 技术员 / feeder 饲养员", example = "admin")
+    private String role;
+
     public User() {
     }
 
@@ -82,5 +85,13 @@ public Long getId() {
 
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = role;
     }
 }

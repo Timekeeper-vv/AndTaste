@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.shixun.mapper.TraceabilityMapper">
+
+    <!-- 个体全生命周期时间线：UNION ALL 聚合所有事件类型，按时间排序 -->
+    <select id="getAnimalTimeline" resultType="com.example.shixun.model.TraceabilityEvent">
+        SELECT 'ENTRY' as event_type,
+            DATE_FORMAT(a.entry_date, '%Y-%m-%d') as event_time,
+            CONCAT('批次: ', b.batch_code) as item_name,
+            CONCAT('入栏，品种: ', a.breed) as detail,
+            NULL as operator,
+            CONCAT(IFNULL(CAST(a.birth_weight AS CHAR), '未知'), ' kg') as dosage
+        FROM animals a
+        LEFT JOIN batches b ON a.batch_id = b.id
+        WHERE a.ear_tag = #{earTag}
+
+        UNION ALL
+
+        SELECT 'IMMUNIZATION' as event_type,
+            DATE_FORMAT(ir.event_time, '%Y-%m-%d') as event_time,
+            dv.generic_name as item_name,
+            ir.notes as detail,
+            ir.operator,
+            ir.dosage
+        FROM immunization_records ir
+        LEFT JOIN drugs_vaccines dv ON ir.vaccine_id = dv.id
+        WHERE ir.ear_tag = #{earTag}
+
+        UNION ALL
+
+        SELECT 'MEDICATION' as event_type,
+            DATE_FORMAT(mr.event_time, '%Y-%m-%d') as event_time,
+            dv.generic_name as item_name,
+            mr.reason as detail,
+            mr.operator,
+            mr.dosage
+        FROM medication_records mr
+        LEFT JOIN drugs_vaccines dv ON mr.drug_id = dv.id
+        WHERE mr.ear_tag = #{earTag}
+
+        UNION ALL
+
+        SELECT 'PEN_TRANSFER' as event_type,
+            DATE_FORMAT(ptr.event_time, '%Y-%m-%d') as event_time,
+            CONCAT(IFNULL(pf.pen_name, '初始'), ' → ', pt.pen_name) as item_name,
+            ptr.reason as detail,
+            NULL as operator,
+            NULL as dosage
+        FROM pen_transfer_records ptr
+        LEFT JOIN pens pf ON ptr.from_pen_id = pf.id
+        LEFT JOIN pens pt ON ptr.to_pen_id = pt.id
+        WHERE ptr.ear_tag = #{earTag}
+
+        UNION ALL
+
+        SELECT 'SLAUGHTER' as event_type,
+            DATE_FORMAT(sr.event_time, '%Y-%m-%d') as event_time,
+            sr.type as item_name,
+            CONCAT(
+                IFNULL(sr.destination, ''),
+                IF(sr.weight IS NOT NULL, CONCAT('  重量: ', sr.weight, 'kg'), ''),
+                IF(sr.price IS NOT NULL, CONCAT('  价格: ¥', sr.price), '')
+            ) as detail,
+            NULL as operator,
+            NULL as dosage
+        FROM slaughter_records sr
+        WHERE sr.ear_tag = #{earTag}
+
+        ORDER BY event_time
+    </select>
+
+    <!-- 批次溯源统计 -->
+    <select id="getBatchSummary" resultType="map">
+        SELECT b.id, b.batch_code, DATE_FORMAT(b.entry_date,'%Y-%m-%d') as entry_date,
+            b.breed, b.source, b.notes,
+            p.pen_name as initial_pen_name,
+            (SELECT COUNT(*) FROM animals WHERE batch_id = b.id) as total_count,
+            (SELECT COUNT(*) FROM animals WHERE batch_id = b.id AND status = 'SOLD') as sold_count,
+            (SELECT COUNT(*) FROM immunization_records ir
+                WHERE ir.ear_tag IN (SELECT ear_tag FROM animals WHERE batch_id = b.id)) as immunization_count,
+            (SELECT COUNT(*) FROM medication_records mr
+                WHERE mr.ear_tag IN (SELECT ear_tag FROM animals WHERE batch_id = b.id)) as medication_count,
+            (SELECT COUNT(*) FROM pen_transfer_records ptr
+                WHERE ptr.ear_tag IN (SELECT ear_tag FROM animals WHERE batch_id = b.id)) as transfer_count
+        FROM batches b
+        LEFT JOIN pens p ON b.initial_pen_id = p.id
+        WHERE b.batch_code = #{batchCode}
+    </select>
+
+    <!-- 批次下所有个体 -->
+    <select id="getBatchAnimals" resultType="com.example.shixun.model.Animal">
+        SELECT a.id, a.ear_tag, a.gender,
+            DATE_FORMAT(a.entry_date,'%Y-%m-%d') as entry_date,
+            a.breed, a.batch_id, a.current_pen_id, a.birth_weight, a.status,
+            b.batch_code, p.pen_name as current_pen_name
+        FROM animals a
+        LEFT JOIN batches b ON a.batch_id = b.id
+        LEFT JOIN pens p ON a.current_pen_id = p.id
+        WHERE a.batch_id = (SELECT id FROM batches WHERE batch_code = #{batchCode})
+        ORDER BY a.ear_tag
+    </select>
+
+</mapper>

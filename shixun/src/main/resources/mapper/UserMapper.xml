@@ -16,14 +16,17 @@
     </select>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO user (username, age, email, phone, password)
-        VALUES (#{username}, #{age}, #{email}, #{phone}, #{password})
+        INSERT INTO user (username, age, email, phone, password, role)
+        VALUES (#{username}, #{age}, #{email}, #{phone}, #{password}, #{role})
     </insert>
 
     <update id="update">
         UPDATE user SET username=#{username}, age=#{age}, email=#{email}, phone=#{phone}
         <if test="password != null and password != ''">
             , password=#{password}
+        </if>
+        <if test="role != null and role != ''">
+            , role=#{role}
         </if>
         WHERE id = #{id}
     </update>

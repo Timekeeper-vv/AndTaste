@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.shixun.mapper.PenTransferMapper">
+
+    <select id="findAll" resultType="com.example.shixun.model.PenTransferRecord">
+        SELECT ptr.*,
+            pf.pen_name as from_pen_name,
+            pt.pen_name as to_pen_name
+        FROM pen_transfer_records ptr
+        LEFT JOIN pens pf ON ptr.from_pen_id = pf.id
+        LEFT JOIN pens pt ON ptr.to_pen_id = pt.id
+        ORDER BY ptr.event_time DESC
+    </select>
+
+    <select id="findByEarTag" resultType="com.example.shixun.model.PenTransferRecord">
+        SELECT ptr.*,
+            pf.pen_name as from_pen_name,
+            pt.pen_name as to_pen_name
+        FROM pen_transfer_records ptr
+        LEFT JOIN pens pf ON ptr.from_pen_id = pf.id
+        LEFT JOIN pens pt ON ptr.to_pen_id = pt.id
+        WHERE ptr.ear_tag = #{earTag}
+        ORDER BY ptr.event_time DESC
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO pen_transfer_records (ear_tag, from_pen_id, to_pen_id, event_time, reason)
+        VALUES (#{earTag}, #{fromPenId}, #{toPenId}, #{eventTime}, #{reason})
+    </insert>
+
+    <delete id="deleteById">
+        DELETE FROM pen_transfer_records WHERE id = #{id}
+    </delete>
+
+</mapper>
