@@ -17,6 +17,7 @@ import TraceabilityView from './components/TraceabilityView.vue'
 import StatisticsView from './components/StatisticsView.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
 import GlobalAlert from './components/GlobalAlert.vue'
+import AiChat from './components/AiChat.vue'
 
 const PAGE_ROLES: Record<string, Role[]> = {
   dashboard:    ['admin', 'technician'],
@@ -161,6 +162,7 @@ const pageLabels: Record<string, string> = {
   </div>
 
   <GlobalAlert :msg="alertMsg" :type="alertType" :visible="alertVisible" />
+  <AiChat v-if="currentUser" />
 </template>
 
 <style>
