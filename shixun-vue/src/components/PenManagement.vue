@@ -13,6 +13,8 @@ const showModal = ref<boolean>(false)
 const editingId = ref<number | null>(null)
 const form = ref<PenForm>({ penCode: '', penName: '', capacity: 50, responsiblePerson: '', status: 1 })
 
+const page = ref(1)
+const pageSize = 10
 const filtered = computed(() =>
   pens.value.filter(p =>
     p.penCode?.includes(search.value) ||
@@ -20,6 +22,8 @@ const filtered = computed(() =>
     p.responsiblePerson?.includes(search.value)
   )
 )
+const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize)))
+const paginated = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 
 async function load() {
   const res = await fetch('/api/pens')
@@ -117,7 +121,7 @@ onMounted(load)
             </tr>
           </thead>
           <tbody>
-            <tr v-for="p in filtered" :key="p.id">
+            <tr v-for="p in paginated" :key="p.id">
               <td><code>{{ p.penCode }}</code></td>
               <td>{{ p.penName }}</td>
               <td>{{ p.capacity }} 头</td>
@@ -131,13 +135,18 @@ onMounted(load)
                 </div>
               </td>
             </tr>
-            <tr v-if="filtered.length === 0">
+            <tr v-if="paginated.length === 0">
               <td colspan="7">
                 <div class="empty-state"><p>暂无圈舍数据</p></div>
               </td>
             </tr>
           </tbody>
         </table>
+      </div>
+      <div class="pagination" v-if="totalPages > 1">
+        <button class="pg-btn" :disabled="page === 1" @click="page--">‹</button>
+        <span class="pg-info">第 {{ page }} / {{ totalPages }} 页 &nbsp;共 {{ filtered.length }} 条</span>
+        <button class="pg-btn" :disabled="page === totalPages" @click="page++">›</button>
       </div>
     </div>
 
@@ -174,3 +183,18 @@ onMounted(load)
     </Modal>
   </div>
 </template>
+
+<style scoped>
+.pagination {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 12px; padding: 12px 16px; border-top: 1px solid var(--c-border);
+  font-size: 13px; color: var(--c-text-2);
+}
+.pg-btn {
+  width: 28px; height: 28px; border: 1px solid var(--c-border);
+  border-radius: var(--r); background: var(--c-surface); cursor: pointer;
+  font-size: 16px; display: flex; align-items: center; justify-content: center; color: var(--c-text);
+}
+.pg-btn:disabled { opacity: .4; cursor: not-allowed; }
+.pg-btn:not(:disabled):hover { border-color: var(--c-primary); color: var(--c-primary); }
+</style>

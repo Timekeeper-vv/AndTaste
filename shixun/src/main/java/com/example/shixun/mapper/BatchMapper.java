@@ -12,4 +12,5 @@ public interface BatchMapper {
     int insert(Batch batch);
     int update(Batch batch);
     int deleteById(Long id);
+    int countByBatchCodePrefix(String prefix);
 }

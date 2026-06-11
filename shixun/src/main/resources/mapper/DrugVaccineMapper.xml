@@ -16,13 +16,13 @@
     </select>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO drugs_vaccines (category, generic_name, specification, manufacturer)
-        VALUES (#{category}, #{genericName}, #{specification}, #{manufacturer})
+        INSERT INTO drugs_vaccines (category, generic_name, specification, manufacturer, description)
+        VALUES (#{category}, #{genericName}, #{specification}, #{manufacturer}, #{description})
     </insert>
 
     <update id="update">
         UPDATE drugs_vaccines SET category=#{category}, generic_name=#{genericName},
-            specification=#{specification}, manufacturer=#{manufacturer}
+            specification=#{specification}, manufacturer=#{manufacturer}, description=#{description}
         WHERE id = #{id}
     </update>
 

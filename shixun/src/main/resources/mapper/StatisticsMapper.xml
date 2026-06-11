@@ -52,6 +52,26 @@
         ORDER BY pen_name
     </select>
 
+    <!-- 近6个月入栏量统计 -->
+    <select id="monthlyEntry" resultType="map">
+        SELECT DATE_FORMAT(entry_date, '%Y-%m') AS month,
+               COUNT(*) AS count
+        FROM animals
+        WHERE entry_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY month
+        ORDER BY month
+    </select>
+
+    <!-- 近6个月死亡数统计 -->
+    <select id="monthlyDeath" resultType="map">
+        SELECT DATE_FORMAT(event_time, '%Y-%m') AS month,
+               COUNT(*) AS count
+        FROM death_records
+        WHERE event_time >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY month
+        ORDER BY month
+    </select>
+
     <!-- 近30天未接种的在栏个体（用于通知） -->
     <select id="immunizationDueAnimals" resultType="map">
         SELECT a.ear_tag AS earTag

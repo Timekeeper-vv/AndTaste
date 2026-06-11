@@ -44,4 +44,16 @@ public class StatisticsController {
     public List<Map<String, Object>> penUsage() {
         return mapper.penUsage();
     }
+
+    @GetMapping("/monthly-entry")
+    @Operation(summary = "近6个月入栏量月度统计")
+    public List<Map<String, Object>> monthlyEntry() {
+        return mapper.monthlyEntry();
+    }
+
+    @GetMapping("/monthly-death")
+    @Operation(summary = "近6个月死亡数月度统计")
+    public List<Map<String, Object>> monthlyDeath() {
+        return mapper.monthlyDeath();
+    }
 }

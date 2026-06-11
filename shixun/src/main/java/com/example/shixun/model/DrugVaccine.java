@@ -6,6 +6,7 @@ public class DrugVaccine {
     private String genericName;
     private String specification;
     private String manufacturer;
+    private String description;
     private String createdAt;
 
     public Long getId() { return id; }
@@ -18,6 +19,8 @@ public class DrugVaccine {
     public void setSpecification(String specification) { this.specification = specification; }
     public String getManufacturer() { return manufacturer; }
     public void setManufacturer(String manufacturer) { this.manufacturer = manufacturer; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
 }

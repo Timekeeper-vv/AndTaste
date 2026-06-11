@@ -12,4 +12,6 @@ public interface StatisticsMapper {
     List<Map<String, Object>> penUsage();
     List<Map<String, Object>> overcapacityPens();
     List<Map<String, Object>> immunizationDueAnimals();
+    List<Map<String, Object>> monthlyEntry();
+    List<Map<String, Object>> monthlyDeath();
 }

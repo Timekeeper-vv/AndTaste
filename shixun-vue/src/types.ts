@@ -3,7 +3,7 @@ export type AlertType = 'success' | 'error'
 export type PageName =
   | 'dashboard' | 'statistics' | 'pens' | 'drugs' | 'batches'
   | 'animals' | 'immunization' | 'medication' | 'transfer'
-  | 'slaughter' | 'traceability' | 'users' | 'products'
+  | 'slaughter' | 'death' | 'traceability' | 'users' | 'products'
 
 export interface User {
   id: number
@@ -44,7 +44,7 @@ export interface Animal {
   currentPenId: number | null
   currentPenName: string | null
   birthWeight: number | null
-  status: 'ACTIVE' | 'SOLD'
+  status: 'ACTIVE' | 'SOLD' | 'DEAD'
 }
 
 export interface DrugVaccine {
@@ -53,6 +53,7 @@ export interface DrugVaccine {
   genericName: string
   specification: string
   manufacturer: string
+  description: string | null
 }
 
 export interface UserRecord {
@@ -125,8 +126,17 @@ export interface MonthlyData {
 }
 
 export interface AnimalStatusData {
-  status: 'ACTIVE' | 'SOLD'
+  status: 'ACTIVE' | 'SOLD' | 'DEAD'
   count: string
+}
+
+export interface DeathRecord {
+  id: number
+  earTag: string
+  eventTime: string
+  cause: string | null
+  operator: string | null
+  notes: string | null
 }
 
 export interface PenUsageData {
@@ -174,6 +184,7 @@ export interface DashboardStats {
   animals: number
   activeAnimals: number
   soldAnimals: number
+  deadAnimals: number
   pens: number
   activePens: number
   batches: number

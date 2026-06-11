@@ -5,6 +5,8 @@ import com.example.shixun.mapper.PenMapper;
 import com.example.shixun.model.Animal;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 @Service
@@ -30,13 +32,25 @@ public class AnimalService {
         return animalMapper.findByEarTag(earTag);
     }
 
+    public String generateEarTag() {
+        String prefix = "ET" + LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        int count = animalMapper.countByEarTagPrefix(prefix);
+        String candidate = prefix + String.format("%03d", count + 1);
+        while (animalMapper.existsByEarTag(candidate)) {
+            count++;
+            candidate = prefix + String.format("%03d", count + 1);
+        }
+        return candidate;
+    }
+
     @Transactional
     public Animal create(Animal animal) {
-        if (animalMapper.existsByEarTag(animal.getEarTag())) {
+        if (animal.getEarTag() == null || animal.getEarTag().isBlank()) {
+            animal.setEarTag(generateEarTag());
+        } else if (animalMapper.existsByEarTag(animal.getEarTag())) {
             throw new IllegalArgumentException("耳标号已存在: " + animal.getEarTag());
         }
         animalMapper.insert(animal);
-        // 同步更新圈舍存栏计数
         if (animal.getCurrentPenId() != null) {
             penMapper.incrementCount(animal.getCurrentPenId());
         }

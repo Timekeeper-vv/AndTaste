@@ -28,6 +28,12 @@ public class BatchController {
         return batchService.findAll();
     }
 
+    @GetMapping("/generate-batch-code")
+    @Operation(summary = "生成下一个可用批次号")
+    public ResponseEntity<Map<String, String>> generateBatchCode() {
+        return ResponseEntity.ok(Map.of("batchCode", batchService.generateBatchCode()));
+    }
+
     @GetMapping("/{id}")
     @Operation(summary = "根据ID获取批次")
     public ResponseEntity<Batch> findById(@PathVariable Long id) {
@@ -37,10 +43,8 @@ public class BatchController {
     }
 
     @PostMapping
-    @Operation(summary = "新建养殖批次")
+    @Operation(summary = "新建养殖批次（批次号可自动生成）")
     public ResponseEntity<?> create(@RequestBody Batch batch) {
-        if (batch.getBatchCode() == null || batch.getBatchCode().isBlank())
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "批次号不能为空");
         if (batch.getBreed() == null || batch.getBreed().isBlank())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "品种不能为空");
         try {

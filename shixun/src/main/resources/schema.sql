@@ -41,8 +41,11 @@ CREATE TABLE IF NOT EXISTS drugs_vaccines (
     generic_name VARCHAR(100) NOT NULL COMMENT '通用名',
     specification VARCHAR(100) COMMENT '规格',
     manufacturer VARCHAR(100) COMMENT '生产厂家',
+    description TEXT COMMENT '用途说明',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+-- 兼容已存在的数据库：补加 description 列（列已存在时报错被 continue-on-error 忽略）
+ALTER TABLE drugs_vaccines ADD COLUMN description TEXT COMMENT '用途说明';
 
 -- 养殖批次表
 CREATE TABLE IF NOT EXISTS batches (
@@ -66,7 +69,7 @@ CREATE TABLE IF NOT EXISTS animals (
     batch_id BIGINT NOT NULL COMMENT '所属批次',
     current_pen_id BIGINT COMMENT '当前圈舍',
     birth_weight DECIMAL(8,2) COMMENT '出生重量(kg)',
-    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE在栏,SOLD已出栏',
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE在栏,SOLD已出栏,DEAD死亡',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -102,6 +105,17 @@ CREATE TABLE IF NOT EXISTS pen_transfer_records (
     to_pen_id BIGINT NOT NULL COMMENT '目标圈舍ID',
     event_time DATE NOT NULL COMMENT '转舍日期',
     reason TEXT COMMENT '转舍原因',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 死亡记录表
+CREATE TABLE IF NOT EXISTS death_records (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    ear_tag VARCHAR(50) NOT NULL COMMENT '耳标号',
+    event_time DATE NOT NULL COMMENT '死亡日期',
+    cause VARCHAR(200) COMMENT '死亡原因',
+    operator VARCHAR(50) COMMENT '记录人',
+    notes TEXT COMMENT '备注',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

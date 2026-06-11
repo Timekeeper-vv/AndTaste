@@ -49,6 +49,10 @@
         SELECT COUNT(*) > 0 FROM animals WHERE ear_tag = #{earTag}
     </select>
 
+    <select id="countByEarTagPrefix" resultType="int">
+        SELECT COUNT(*) FROM animals WHERE ear_tag LIKE CONCAT(#{prefix}, '%')
+    </select>
+
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO animals (ear_tag, gender, entry_date, breed, batch_id, current_pen_id, birth_weight, status)
         VALUES (#{earTag}, #{gender}, #{entryDate}, #{breed}, #{batchId}, #{currentPenId}, #{birthWeight}, 'ACTIVE')

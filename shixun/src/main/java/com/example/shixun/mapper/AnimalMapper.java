@@ -17,4 +17,5 @@ public interface AnimalMapper {
     int updateCurrentPen(@Param("earTag") String earTag, @Param("penId") Long penId);
     int updateStatus(@Param("earTag") String earTag, @Param("status") String status);
     boolean existsByEarTag(String earTag);
+    int countByEarTagPrefix(String prefix);
 }

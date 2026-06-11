@@ -120,4 +120,29 @@ public class FarmEventController {
         service.deleteSlaughter(id);
         return ResponseEntity.noContent().build();
     }
+
+    // ── 死亡管理 ──────────────────────────────────────────
+    @GetMapping("/death")
+    @Operation(summary = "查询死亡记录（可按耳标过滤）")
+    public List<DeathRecord> getDeath(@RequestParam(required = false) String earTag) {
+        if (earTag != null && !earTag.isBlank()) return service.findDeathByEarTag(earTag);
+        return service.findAllDeath();
+    }
+
+    @PostMapping("/death")
+    @Operation(summary = "登记死亡（原子更新个体状态）")
+    public ResponseEntity<?> recordDeath(@RequestBody DeathRecord record) {
+        try {
+            return ResponseEntity.status(HttpStatus.CREATED).body(service.recordDeath(record));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/death/{id}")
+    @Operation(summary = "删除死亡记录")
+    public ResponseEntity<Void> deleteDeath(@PathVariable Long id) {
+        service.deleteDeath(id);
+        return ResponseEntity.noContent().build();
+    }
 }

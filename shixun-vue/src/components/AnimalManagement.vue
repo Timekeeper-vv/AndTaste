@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import Modal from './Modal.vue'
 import type { Animal, Batch, Pen, AlertType } from '../types'
+import { BREEDS } from '../constants'
 
 const emit = defineEmits<{ alert: [msg: string, type?: AlertType] }>()
 
@@ -19,6 +20,8 @@ const showModal = ref<boolean>(false)
 const editingId = ref<number | null>(null)
 const form = ref<AnimalForm>({ earTag: '', gender: 'MALE', entryDate: '', breed: '', batchId: null, currentPenId: null, birthWeight: null })
 
+const page = ref(1)
+const pageSize = 10
 const filtered = computed(() =>
   animals.value.filter(a =>
     (!statusFilter.value || a.status === statusFilter.value) &&
@@ -27,6 +30,9 @@ const filtered = computed(() =>
      a.batchCode?.includes(search.value))
   )
 )
+const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize)))
+const paginated = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+function onSearch() { page.value = 1 }
 
 async function load() {
   const [aRes, bRes, pRes] = await Promise.all([
@@ -37,10 +43,15 @@ async function load() {
   pens.value = await pRes.json()
 }
 
-function openAdd() {
+async function openAdd() {
   editingId.value = null
   form.value = { earTag: '', gender: 'MALE', entryDate: today(), breed: '', batchId: null, currentPenId: null, birthWeight: null }
   showModal.value = true
+  try {
+    const res = await fetch('/api/animals/generate-ear-tag')
+    const data = await res.json()
+    form.value.earTag = data.earTag
+  } catch {}
 }
 
 function openEdit(a) {
@@ -97,18 +108,23 @@ onMounted(load)
         <div class="stat-label">已出栏</div>
         <div class="stat-num" style="color:var(--c-text-2)">{{ animals.filter(a => a.status === 'SOLD').length }}</div>
       </div>
+      <div class="stat-card">
+        <div class="stat-label">死亡</div>
+        <div class="stat-num" style="color:#64748B">{{ animals.filter(a => a.status === 'DEAD').length }}</div>
+      </div>
     </div>
 
     <div class="table-card">
       <div class="toolbar">
         <div class="search-wrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input v-model="search" class="search-input" placeholder="搜索耳标号、品种或批次号..." />
+          <input v-model="search" class="search-input" placeholder="搜索耳标号、品种或批次号..." @input="onSearch" />
         </div>
         <select v-model="statusFilter" class="select-filter">
           <option value="">全部状态</option>
           <option value="ACTIVE">在栏</option>
           <option value="SOLD">已出栏</option>
+          <option value="DEAD">死亡</option>
         </select>
       </div>
       <div class="table-wrap">
@@ -127,7 +143,7 @@ onMounted(load)
             </tr>
           </thead>
           <tbody>
-            <tr v-for="a in filtered" :key="a.id">
+            <tr v-for="a in paginated" :key="a.id">
               <td><code>{{ a.earTag }}</code></td>
               <td><span :class="['badge', genderClass(a.gender)]">{{ genderLabel(a.gender) }}</span></td>
               <td>{{ a.breed }}</td>
@@ -136,8 +152,8 @@ onMounted(load)
               <td>{{ a.currentPenName || '—' }}</td>
               <td>{{ a.birthWeight ? a.birthWeight + ' kg' : '—' }}</td>
               <td>
-                <span :class="['status-badge', a.status === 'ACTIVE' ? 'active' : 'sold']">
-                  {{ a.status === 'ACTIVE' ? '在栏' : '已出栏' }}
+                <span :class="['status-badge', a.status === 'ACTIVE' ? 'active' : a.status === 'DEAD' ? 'dead' : 'sold']">
+                  {{ a.status === 'ACTIVE' ? '在栏' : a.status === 'DEAD' ? '死亡' : '已出栏' }}
                 </span>
               </td>
               <td>
@@ -147,19 +163,24 @@ onMounted(load)
                 </div>
               </td>
             </tr>
-            <tr v-if="filtered.length === 0">
+            <tr v-if="paginated.length === 0">
               <td colspan="9"><div class="empty-state"><p>暂无个体数据</p></div></td>
             </tr>
           </tbody>
         </table>
+      </div>
+      <div class="pagination" v-if="totalPages > 1">
+        <button class="pg-btn" :disabled="page === 1" @click="page--">‹</button>
+        <span class="pg-info">第 {{ page }} / {{ totalPages }} 页 &nbsp;共 {{ filtered.length }} 条</span>
+        <button class="pg-btn" :disabled="page === totalPages" @click="page++">›</button>
       </div>
     </div>
 
     <Modal :show="showModal" :title="editingId ? '编辑个体档案' : '新建个体档案'" @close="showModal = false">
       <div class="form-grid">
         <div class="form-group">
-          <label>耳标号 <span style="color:var(--c-error)">*</span> <small style="color:var(--c-text-3)">(全局唯一)</small></label>
-          <input v-model="form.earTag" :disabled="!!editingId" placeholder="如 ET-004" />
+          <label>耳标号 <span style="color:var(--c-error)">*</span> <small style="color:var(--c-text-3)">{{ editingId ? '(全局唯一)' : '(系统已自动分配，可修改)' }}</small></label>
+          <input v-model="form.earTag" :disabled="!!editingId" :placeholder="editingId ? '' : '系统自动生成'" />
         </div>
         <div class="form-group">
           <label>性别 <span style="color:var(--c-error)">*</span></label>
@@ -170,7 +191,10 @@ onMounted(load)
         </div>
         <div class="form-group">
           <label>品种 <span style="color:var(--c-error)">*</span></label>
-          <input v-model="form.breed" placeholder="如 杜洛克猪" />
+          <select v-model="form.breed">
+            <option value="">— 请选择品种 —</option>
+            <option v-for="b in BREEDS" :key="b" :value="b">{{ b }}</option>
+          </select>
         </div>
         <div class="form-group">
           <label>入栏日期</label>
@@ -202,3 +226,22 @@ onMounted(load)
     </Modal>
   </div>
 </template>
+
+<style scoped>
+.pagination {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 12px; padding: 12px 16px; border-top: 1px solid var(--c-border);
+  font-size: 13px; color: var(--c-text-2);
+}
+.pg-btn {
+  width: 28px; height: 28px; border: 1px solid var(--c-border);
+  border-radius: var(--r); background: var(--c-surface); cursor: pointer;
+  font-size: 16px; display: flex; align-items: center; justify-content: center; color: var(--c-text);
+}
+.pg-btn:disabled { opacity: .4; cursor: not-allowed; }
+.pg-btn:not(:disabled):hover { border-color: var(--c-primary); color: var(--c-primary); }
+.status-badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; }
+.status-badge.active { background: var(--c-success-bg); color: var(--c-success); }
+.status-badge.sold   { background: var(--c-bg-2); color: var(--c-text-3); }
+.status-badge.dead   { background: #F1F5F9; color: #64748B; }
+</style>

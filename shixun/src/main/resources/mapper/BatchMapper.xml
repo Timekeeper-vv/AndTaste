@@ -40,4 +40,8 @@
         DELETE FROM batches WHERE id = #{id}
     </delete>
 
+    <select id="countByBatchCodePrefix" resultType="int">
+        SELECT COUNT(*) FROM batches WHERE batch_code LIKE CONCAT(#{prefix}, '%')
+    </select>
+
 </mapper>

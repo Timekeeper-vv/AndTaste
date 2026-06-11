@@ -13,6 +13,7 @@ public class FarmEventService {
     private final MedicationMapper medicationMapper;
     private final PenTransferMapper penTransferMapper;
     private final SlaughterMapper slaughterMapper;
+    private final DeathMapper deathMapper;
     private final AnimalMapper animalMapper;
     private final PenMapper penMapper;
 
@@ -20,12 +21,14 @@ public class FarmEventService {
                             MedicationMapper medicationMapper,
                             PenTransferMapper penTransferMapper,
                             SlaughterMapper slaughterMapper,
+                            DeathMapper deathMapper,
                             AnimalMapper animalMapper,
                             PenMapper penMapper) {
         this.immunizationMapper = immunizationMapper;
         this.medicationMapper = medicationMapper;
         this.penTransferMapper = penTransferMapper;
         this.slaughterMapper = slaughterMapper;
+        this.deathMapper = deathMapper;
         this.animalMapper = animalMapper;
         this.penMapper = penMapper;
     }
@@ -82,6 +85,7 @@ public class FarmEventService {
         Animal animal = animalMapper.findByEarTag(record.getEarTag());
         if (animal == null) throw new IllegalArgumentException("耳标号不存在: " + record.getEarTag());
         if ("SOLD".equals(animal.getStatus())) throw new IllegalArgumentException("该个体已出栏，无法转舍");
+        if ("DEAD".equals(animal.getStatus())) throw new IllegalArgumentException("该个体已死亡，无法转舍");
         Pen targetPen = penMapper.findById(record.getToPenId());
         if (targetPen == null || targetPen.getStatus() != 1) {
             throw new IllegalArgumentException("目标圈舍不存在或已停用");
@@ -132,9 +136,38 @@ public class FarmEventService {
         return slaughterMapper.deleteById(id) > 0;
     }
 
+    // ── 死亡管理 ─────────────────────────────────────────
+    public List<DeathRecord> findAllDeath() {
+        return deathMapper.findAll();
+    }
+
+    public List<DeathRecord> findDeathByEarTag(String earTag) {
+        return deathMapper.findByEarTag(earTag);
+    }
+
+    @Transactional
+    public DeathRecord recordDeath(DeathRecord record) {
+        Animal animal = animalMapper.findByEarTag(record.getEarTag());
+        if (animal == null) throw new IllegalArgumentException("耳标号不存在: " + record.getEarTag());
+        if ("SOLD".equals(animal.getStatus())) throw new IllegalArgumentException("该个体已出栏");
+        if ("DEAD".equals(animal.getStatus())) throw new IllegalArgumentException("该个体已记录死亡");
+
+        deathMapper.insert(record);
+        animalMapper.updateStatus(record.getEarTag(), "DEAD");
+        if (animal.getCurrentPenId() != null) {
+            penMapper.decrementCount(animal.getCurrentPenId());
+        }
+        return record;
+    }
+
+    public boolean deleteDeath(Long id) {
+        return deathMapper.deleteById(id) > 0;
+    }
+
     private void validateAnimalActive(String earTag) {
         Animal animal = animalMapper.findByEarTag(earTag);
         if (animal == null) throw new IllegalArgumentException("耳标号不存在: " + earTag);
         if ("SOLD".equals(animal.getStatus())) throw new IllegalArgumentException("该个体已出栏，无法录入事件");
+        if ("DEAD".equals(animal.getStatus())) throw new IllegalArgumentException("该个体已死亡，无法录入事件");
     }
 }

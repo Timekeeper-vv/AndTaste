@@ -36,6 +36,12 @@ public class AnimalController {
         return ResponseEntity.ok(animal);
     }
 
+    @GetMapping("/generate-ear-tag")
+    @Operation(summary = "生成下一个可用耳标号")
+    public ResponseEntity<Map<String, String>> generateEarTag() {
+        return ResponseEntity.ok(Map.of("earTag", animalService.generateEarTag()));
+    }
+
     @GetMapping("/ear-tag/{earTag}")
     @Operation(summary = "根据耳标号精确查询个体")
     public ResponseEntity<Animal> findByEarTag(@PathVariable String earTag) {
@@ -45,10 +51,8 @@ public class AnimalController {
     }
 
     @PostMapping
-    @Operation(summary = "新建个体档案（耳标号全局唯一校验）")
+    @Operation(summary = "新建个体档案（耳标号可自动生成，全局唯一）")
     public ResponseEntity<?> create(@RequestBody Animal animal) {
-        if (animal.getEarTag() == null || animal.getEarTag().isBlank())
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "耳标号不能为空");
         if (animal.getBreed() == null || animal.getBreed().isBlank())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "品种不能为空");
         try {

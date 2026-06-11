@@ -13,6 +13,7 @@ import ImmunizationManagement from './components/ImmunizationManagement.vue'
 import MedicationManagement from './components/MedicationManagement.vue'
 import PenTransferManagement from './components/PenTransferManagement.vue'
 import SlaughterManagement from './components/SlaughterManagement.vue'
+import DeathManagement from './components/DeathManagement.vue'
 import TraceabilityView from './components/TraceabilityView.vue'
 import StatisticsView from './components/StatisticsView.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
@@ -30,6 +31,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   medication:   ['admin', 'technician', 'feeder'],
   transfer:     ['admin', 'technician', 'feeder'],
   slaughter:    ['admin', 'feeder'],
+  death:        ['admin', 'technician', 'feeder'],
   traceability: ['admin', 'technician'],
   users:        ['admin'],
 }
@@ -93,6 +95,7 @@ const pageLabels: Record<string, string> = {
   medication:   '用药记录',
   transfer:     '转舍管理',
   slaughter:    '出栏管理',
+  death:        '死亡管理',
   traceability: '全链路溯源',
   users:        '用户管理',
 }
@@ -151,10 +154,11 @@ const pageLabels: Record<string, string> = {
         <DrugVaccineManagement  v-if="currentPage === 'drugs'"         @alert="showAlert" />
         <BatchManagement        v-if="currentPage === 'batches'"       @alert="showAlert" />
         <AnimalManagement       v-if="currentPage === 'animals'"       @alert="showAlert" />
-        <ImmunizationManagement v-if="currentPage === 'immunization'"  @alert="showAlert" />
-        <MedicationManagement   v-if="currentPage === 'medication'"    @alert="showAlert" />
+        <ImmunizationManagement v-if="currentPage === 'immunization'"  :current-user="currentUser" @alert="showAlert" />
+        <MedicationManagement   v-if="currentPage === 'medication'"    :current-user="currentUser" @alert="showAlert" />
         <PenTransferManagement  v-if="currentPage === 'transfer'"      @alert="showAlert" />
         <SlaughterManagement    v-if="currentPage === 'slaughter'"     @alert="showAlert" />
+        <DeathManagement        v-if="currentPage === 'death'"         @alert="showAlert" />
         <TraceabilityView       v-if="currentPage === 'traceability'"  @alert="showAlert" />
         <UserManagement         v-if="currentPage === 'users'"         @alert="showAlert" />
       </main>
