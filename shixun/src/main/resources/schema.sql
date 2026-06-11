@@ -42,10 +42,12 @@ CREATE TABLE IF NOT EXISTS drugs_vaccines (
     specification VARCHAR(100) COMMENT '规格',
     manufacturer VARCHAR(100) COMMENT '生产厂家',
     description TEXT COMMENT '用途说明',
+    image_url MEDIUMTEXT COMMENT '产品图片(base64)',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
--- 兼容已存在的数据库：补加 description 列（列已存在时报错被 continue-on-error 忽略）
+-- 兼容已存在的数据库：补加列（列已存在时报错被 continue-on-error 忽略）
 ALTER TABLE drugs_vaccines ADD COLUMN description TEXT COMMENT '用途说明';
+ALTER TABLE drugs_vaccines ADD COLUMN image_url MEDIUMTEXT COMMENT '产品图片(base64)';
 
 -- 养殖批次表
 CREATE TABLE IF NOT EXISTS batches (

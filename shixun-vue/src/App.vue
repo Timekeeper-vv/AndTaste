@@ -158,7 +158,7 @@ const pageLabels: Record<string, string> = {
         <MedicationManagement   v-if="currentPage === 'medication'"    :current-user="currentUser" @alert="showAlert" />
         <PenTransferManagement  v-if="currentPage === 'transfer'"      @alert="showAlert" />
         <SlaughterManagement    v-if="currentPage === 'slaughter'"     @alert="showAlert" />
-        <DeathManagement        v-if="currentPage === 'death'"         @alert="showAlert" />
+        <DeathManagement        v-if="currentPage === 'death'"         :current-user="currentUser" @alert="showAlert" />
         <TraceabilityView       v-if="currentPage === 'traceability'"  @alert="showAlert" />
         <UserManagement         v-if="currentPage === 'users'"         @alert="showAlert" />
       </main>

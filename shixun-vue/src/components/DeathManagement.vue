@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import Modal from './Modal.vue'
-import type { DeathRecord, AlertType } from '../types'
+import type { DeathRecord, User, AlertType } from '../types'
 
+const props = defineProps<{ currentUser: User | null }>()
 const emit = defineEmits<{ alert: [msg: string, type?: AlertType] }>()
 
 interface DeathForm {
@@ -32,7 +33,7 @@ async function load() {
 }
 
 function openAdd() {
-  form.value = { earTag: '', eventTime: today(), cause: '', operator: '', notes: '' }
+  form.value = { earTag: '', eventTime: today(), cause: '', operator: props.currentUser?.username || '', notes: '' }
   showModal.value = true
 }
 
@@ -145,7 +146,10 @@ onMounted(load)
         </div>
         <div class="form-group">
           <label>记录人</label>
-          <input v-model="form.operator" placeholder="操作员姓名" />
+          <div class="operator-display">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            {{ form.operator || '—' }}
+          </div>
         </div>
         <div class="form-group" style="grid-column: span 2">
           <label>备注</label>
@@ -162,6 +166,13 @@ onMounted(load)
 
 <style scoped>
 .stat-num.dead { color: #64748B; }
+
+.operator-display {
+  display: flex; align-items: center; gap: 6px;
+  height: 36px; padding: 0 12px;
+  background: var(--c-bg); border: 1px solid var(--c-border);
+  border-radius: var(--r); font-size: 13px; color: var(--c-text-2);
+}
 
 .pagination {
   display: flex; align-items: center; justify-content: flex-end;

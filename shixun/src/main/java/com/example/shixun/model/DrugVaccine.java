@@ -7,6 +7,7 @@ public class DrugVaccine {
     private String specification;
     private String manufacturer;
     private String description;
+    private String imageUrl;
     private String createdAt;
 
     public Long getId() { return id; }
@@ -21,6 +22,8 @@ public class DrugVaccine {
     public void setManufacturer(String manufacturer) { this.manufacturer = manufacturer; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
+    public String getImageUrl() { return imageUrl; }
+    public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
 }

@@ -5,14 +5,15 @@ import type { DrugVaccine, AlertType } from '../types'
 
 const emit = defineEmits<{ alert: [msg: string, type?: AlertType] }>()
 
-interface DrugForm { category: 'DRUG' | 'VACCINE'; genericName: string; specification: string; manufacturer: string; description: string }
+interface DrugForm { category: 'DRUG' | 'VACCINE'; genericName: string; specification: string; manufacturer: string; description: string; imageUrl: string }
 
 const items = ref<DrugVaccine[]>([])
 const search = ref<string>('')
 const categoryFilter = ref<string>('')
 const showModal = ref<boolean>(false)
 const editingId = ref<number | null>(null)
-const form = ref<DrugForm>({ category: 'VACCINE', genericName: '', specification: '', manufacturer: '', description: '' })
+const form = ref<DrugForm>({ category: 'VACCINE', genericName: '', specification: '', manufacturer: '', description: '', imageUrl: '' })
+const imagePreview = ref<string>('')
 
 const page = ref(1)
 const pageSize = 10
@@ -32,14 +33,33 @@ async function load() {
 
 function openAdd() {
   editingId.value = null
-  form.value = { category: 'VACCINE', genericName: '', specification: '', manufacturer: '', description: '' }
+  form.value = { category: 'VACCINE', genericName: '', specification: '', manufacturer: '', description: '', imageUrl: '' }
+  imagePreview.value = ''
   showModal.value = true
 }
 
 function openEdit(d) {
   editingId.value = d.id
-  form.value = { ...d }
+  form.value = { category: d.category, genericName: d.genericName, specification: d.specification, manufacturer: d.manufacturer, description: d.description || '', imageUrl: d.imageUrl || '' }
+  imagePreview.value = d.imageUrl || ''
   showModal.value = true
+}
+
+function onImageChange(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const result = reader.result as string
+    form.value.imageUrl = result
+    imagePreview.value = result
+  }
+  reader.readAsDataURL(file)
+}
+
+function removeImage() {
+  form.value.imageUrl = ''
+  imagePreview.value = ''
 }
 
 async function save() {
@@ -100,6 +120,7 @@ onMounted(load)
         <table>
           <thead>
             <tr>
+              <th>图片</th>
               <th>分类</th>
               <th>通用名</th>
               <th>规格</th>
@@ -110,6 +131,12 @@ onMounted(load)
           </thead>
           <tbody>
             <tr v-for="d in paginated" :key="d.id">
+              <td>
+                <div class="thumb-wrap">
+                  <img v-if="d.imageUrl" :src="d.imageUrl" class="thumb-img" alt="图片" />
+                  <span v-else class="thumb-empty">—</span>
+                </div>
+              </td>
               <td>
                 <span :class="['badge', d.category === 'VACCINE' ? 'badge-info' : 'badge-warning']">
                   {{ d.category === 'VACCINE' ? '疫苗' : '药品' }}
@@ -127,7 +154,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="paginated.length === 0">
-              <td colspan="6"><div class="empty-state"><p>暂无数据</p></div></td>
+              <td colspan="7"><div class="empty-state"><p>暂无数据</p></div></td>
             </tr>
           </tbody>
         </table>
@@ -164,6 +191,23 @@ onMounted(load)
           <label>用途说明</label>
           <textarea v-model="form.description" rows="3" placeholder="说明该药品/疫苗的主要用途、适应症或注意事项"></textarea>
         </div>
+        <div class="form-group" style="grid-column: 1 / -1">
+          <label>产品图片</label>
+          <div class="upload-area">
+            <div v-if="imagePreview" class="upload-preview">
+              <img :src="imagePreview" class="preview-img" alt="预览" />
+              <button type="button" class="btn-remove-img" @click="removeImage">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <label v-else class="upload-trigger">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span>点击上传图片</span>
+              <span class="upload-hint">支持 JPG、PNG、WebP</span>
+              <input type="file" accept="image/*" class="upload-input" @change="onImageChange" />
+            </label>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" @click="showModal = false">取消</button>
@@ -187,11 +231,38 @@ onMounted(load)
 .pg-btn:disabled { opacity: .4; cursor: not-allowed; }
 .pg-btn:not(:disabled):hover { border-color: var(--c-primary); color: var(--c-primary); }
 .cell-desc {
-  max-width: 240px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--c-text-2);
   font-size: 13px;
 }
+
+.thumb-wrap { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; }
+.thumb-img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--c-border); }
+.thumb-empty { color: var(--c-text-3); font-size: 13px; }
+
+.upload-area { margin-top: 4px; }
+
+.upload-trigger {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  border: 1.5px dashed var(--c-border); border-radius: var(--r);
+  padding: 20px; cursor: pointer; color: var(--c-text-2);
+  transition: border-color .15s, background .15s; position: relative;
+}
+.upload-trigger:hover { border-color: var(--c-primary); background: rgba(13,148,136,.04); color: var(--c-primary); }
+.upload-trigger span { font-size: 13px; font-weight: 500; }
+.upload-hint { font-size: 11px; color: var(--c-text-3); font-weight: 400 !important; }
+.upload-input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+
+.upload-preview { position: relative; display: inline-block; }
+.preview-img { width: 120px; height: 120px; object-fit: cover; border-radius: 8px; border: 1px solid var(--c-border); display: block; }
+.btn-remove-img {
+  position: absolute; top: -8px; right: -8px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #ef4444; color: #fff; border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.btn-remove-img:hover { background: #dc2626; }
 </style>

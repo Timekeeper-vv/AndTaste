@@ -54,6 +54,7 @@ export interface DrugVaccine {
   specification: string
   manufacturer: string
   description: string | null
+  imageUrl: string | null
 }
 
 export interface UserRecord {
