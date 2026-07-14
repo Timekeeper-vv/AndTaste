@@ -158,3 +158,22 @@ nginx -t
 curl -I http://127.0.0.1:8080/
 ss -lntp | grep -E ':80|:8080|:3306'
 ```
+
+## 10. Tripo真实3D模型生成
+
+在项目根目录 `.env` 配置：
+
+```dotenv
+TRIPO_API_KEY=你的Tripo API Key
+TRIPO_API_BASE_URL=https://openapi.tripo3d.com/v3
+TRIPO_MODEL_VERSION=v3.1-20260211
+```
+
+然后重新部署：
+
+```bash
+cd /opt/smart_pig
+bash scripts/aliyun-start.sh production
+```
+
+在“创意设计 → 3D辅助建模”上传产品参考图，系统会提交Tripo图生3D任务，自动轮询进度，并将完成的GLB模型和预览图下载到本系统资产目录，避免Tripo临时下载地址过期。

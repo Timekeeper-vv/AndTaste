@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.CacheControl;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,6 +12,7 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -18,12 +20,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
+import java.net.URLEncoder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
@@ -33,7 +39,7 @@ import java.util.*;
 public class CreativeAiController {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
-    private final HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).followRedirects(HttpClient.Redirect.NORMAL).build();
 
     @Value("${siliconflow.api.key:}")
     private String siliconflowApiKey;
@@ -47,9 +53,24 @@ public class CreativeAiController {
     @Value("${siliconflow.chat.model:Qwen/Qwen3-32B}")
     private String chatModel;
 
+    @Value("${tripo.api.key:}")
+    private String tripoApiKey;
+
+    @Value("${tripo.api.base-url:https://openapi.tripo3d.com/v3}")
+    private String tripoBaseUrl;
+
+    @Value("${tripo.model.version:v3.1-20260211}")
+    private String tripoModelVersion;
+
     public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.mapper = mapper;
+    }
+
+    @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String,Object> businessError(RuntimeException e) {
+        return Map.of("success", false, "message", e.getMessage() == null ? "请求处理失败" : e.getMessage());
     }
 
     @GetMapping("/styles")
@@ -103,6 +124,23 @@ public class CreativeAiController {
                 "styleName", style.get("name"),
                 "source", "siliconflow:" + chatModel
         );
+    }
+
+    @PostMapping("/prompt/tripo-3d-optimize")
+    public Map<String,Object> optimizeTripo3dPrompt(@RequestBody Generate3dRequest req) throws Exception {
+        if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础3D模型描述");
+        String system="你是Tripo文生3D提示词优化专家。把用户的基础描述整理成一段可直接提交给Tripo text-to-model接口的高质量中文提示词。只输出最终提示词，不要标题、解释或Markdown。保留用户主体，补充整体轮廓、比例、结构、部件、材质、表面细节、风格、真实用途以及便于3D重建的明确描述，避免复杂背景和二维构图词，控制在800字符以内。";
+        String optimized=callChat(system,req.prompt.trim()).trim(); if(optimized.length()>1024)optimized=optimized.substring(0,1024);
+        return Map.of("prompt",optimized,"source","siliconflow:"+chatModel,"target","tripo:text-to-model");
+    }
+
+    @PostMapping("/prompt/tripo-optimize")
+    public Map<String,Object> optimizeTripoImagePrompt(@RequestBody GenerateImageRequest req) throws Exception {
+        if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础创意描述");
+        String system="你是Tripo文本生图提示词优化专家。把用户的基础描述整理为一段可直接提交给Tripo text-to-image接口的高质量中文提示词。只输出最终提示词，不要标题、解释、反向提示词或Markdown。保持用户主体与意图，补充主体造型、材质、色彩、构图、镜头、光线、背景和商业产品表现，控制在800字符以内。";
+        String optimized=callChat(system,req.prompt.trim()).trim();
+        if(optimized.length()>1024)optimized=optimized.substring(0,1024);
+        return Map.of("prompt",optimized,"source","siliconflow:"+chatModel,"target","tripo:text-to-image");
     }
 
     @PostMapping("/text-to-image")
@@ -198,6 +236,210 @@ public class CreativeAiController {
             jdbc.update("UPDATE ai_generation_job SET status='failed', error_message=? WHERE id=?", e.getMessage(), jobId);
             throw e;
         }
+    }
+
+    @GetMapping("/tripo/config")
+    public Map<String,Object> tripoConfig() {
+        Map<String,Object> result = new LinkedHashMap<>();
+        boolean configured = !blank(tripoApiKey) && !tripoApiKey.contains("YOUR_");
+        result.put("configured", configured);
+        result.put("provider", "Tripo");
+        result.put("apiVersion", "v3");
+        result.put("modelVersion", tripoModelVersion);
+        result.put("qualityPreset", "ultra");
+        result.put("geometryQuality", "detailed");
+        result.put("textureQuality", "extreme");
+        result.put("maxFaceLimit", 2_000_000);
+        result.put("modelOptions", List.of(
+                Map.of("value","tripo-p1","label","P1.0 · P系列低面数旗舰","series","P"),
+                Map.of("value","v3.1-20260211","label","H3.1 · 最新高精度","series","H"),
+                Map.of("value","v3.0-20250812","label","H3.0 · 稳定版","series","H"),
+                Map.of("value","v2.5-20250123","label","H2.5 · 兼容版","series","H")
+        ));
+        result.put("modes", List.of("image_to_model", "multiview_to_model", "text_to_model", "text_to_image"));
+        result.put("imageModels", List.of("seedream_v5", "seedream_v4", "banana", "banana_pro", "banana2", "chat_image_1", "chat_image_1.5", "chat_image_2"));
+        if(configured) {
+            try {
+                JsonNode balanceRoot = mapper.readTree(tripoJson("GET", "/account/balance", null));
+                ensureTripoOk(balanceRoot, balanceRoot.toString());
+                result.put("serviceReachable", true);
+                result.put("balance", balanceRoot.path("data").path("balance").asDouble(0));
+                result.put("frozenBalance", balanceRoot.path("data").path("frozen").asDouble(0));
+            } catch(Exception e) {
+                result.put("serviceReachable", false);
+                result.put("connectionError", safeMessage(e));
+            }
+        }
+        return result;
+    }
+
+    @PostMapping("/tripo/text-to-image")
+    public Map<String,Object> tripoTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
+        if(blank(tripoApiKey) || tripoApiKey.contains("YOUR_")) throw new IllegalStateException("未配置Tripo API Key");
+        if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
+        if(req.prompt.trim().length()>1024) throw new IllegalArgumentException("Tripo生图提示词不能超过1024个字符");
+        String model=Set.of("seedream_v5","seedream_v4","banana","banana_pro","banana2","chat_image_1","chat_image_1.5","chat_image_2").contains(req.tripoImageModel)?req.tripoImageModel:"seedream_v5";
+        Map<String,Object> body=new LinkedHashMap<>(); body.put("prompt",req.prompt.trim()); body.put("model",model);
+        if(!blank(req.tripoTemplate)) body.put("template",req.tripoTemplate.trim());
+        if(Boolean.TRUE.equals(req.tPose)) body.put("t_pose",true);
+        if(Boolean.TRUE.equals(req.sketchToRender)) body.put("sketch_to_render",true);
+        String raw=tripoJson("POST","/generation/text-to-image",mapper.writeValueAsString(body)); JsonNode root=mapper.readTree(raw); ensureTripoOk(root,raw);
+        String taskId=root.path("data").path("task_id").asText(""); if(blank(taskId))throw new IllegalStateException("Tripo文本生图未返回task_id："+raw);
+        String jobNo=no("T2D"); Long jobId=createJob(jobNo,"text_to_image","tripo",model,req.styleId,null,req.prompt,req.negativePrompt,"running",null,req.imageSize);
+        jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?",taskId,jobId);
+        return Map.of("jobId",jobId,"jobNo",jobNo,"taskId",taskId,"status","running","progress",0,"provider","tripo","model",model,"message","Tripo文本生图任务已提交");
+    }
+
+    @GetMapping("/tripo/image-tasks/{jobId}")
+    public synchronized Map<String,Object> tripoImageTask(@PathVariable Long jobId) throws Exception {
+        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,output_asset_id outputAssetId,status,progress,error_message errorMessage,prompt,negative_prompt negativePrompt,style_id styleId,model_name modelName FROM ai_generation_job WHERE id=? AND provider='tripo'",jobId);
+        String taskId=str(job.get("externalTaskId")); if(blank(taskId))throw new IllegalStateException("任务没有Tripo task_id");
+        if(job.get("outputAssetId")!=null)return completedTripoImageJob(jobId,job);
+        String raw=tripoJson("GET","/tasks/"+URLEncoder.encode(taskId,StandardCharsets.UTF_8),null); JsonNode root=mapper.readTree(raw); ensureTripoOk(root,raw); JsonNode data=root.path("data");
+        String remoteStatus=data.path("status").asText("unknown"); int progress=data.path("progress").asInt(0); String localStatus=mapTripoStatus(remoteStatus);
+        String error=data.path("error").path("message").asText(data.path("message").asText(""));
+        if(!"succeeded".equals(localStatus)) jdbc.update("UPDATE ai_generation_job SET status=?,progress=?,error_message=? WHERE id=?",localStatus,progress,blank(error)?null:error,jobId);
+        if("succeeded".equals(localStatus)) {
+            JsonNode output=data.path("output"); String imageUrl=firstUrl(output,"generated_image_url","generated_image","image_url","image","images");
+            if(blank(imageUrl))throw new IllegalStateException("Tripo生图任务成功但没有返回图片地址："+raw);
+            String localImage=saveRemoteFile(imageUrl,"tripo-image-",suffixFromUrl(imageUrl,".png"),"images");
+            Long styleId=job.get("styleId") instanceof Number?((Number)job.get("styleId")).longValue():null;
+            Map<String,Object> meta=new LinkedHashMap<>();meta.put("provider","tripo");meta.put("taskId",taskId);meta.put("model",job.get("modelName"));meta.put("remoteImage",imageUrl);meta.put("size",output.path("size").asText(""));
+            Long assetId=createAsset("Tripo 2D创意图","image","ai_generated",localImage,localImage,str(job.get("prompt")),str(job.get("negativePrompt")),styleId,null,suffixFromUrl(imageUrl,".png").replace(".",""),"Tripo,2D创意生图,AI生成",meta);
+            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?",assetId,jobId);
+            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,output_asset_id outputAssetId,status,progress,error_message errorMessage,model_name modelName FROM ai_generation_job WHERE id=?",jobId);
+            return completedTripoImageJob(jobId,job);
+        }
+        Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);out.put("model",job.get("modelName"));return out;
+    }
+
+    @PostMapping({"/tripo/generate", "/tripo/image-to-3d"})
+    public Map<String,Object> tripoGenerate(@RequestBody Generate3dRequest req) throws Exception {
+        if(blank(tripoApiKey) || tripoApiKey.contains("YOUR_"))
+            throw new IllegalStateException("未配置 tripo.api.key，请在服务器.env中填写TRIPO_API_KEY后重新部署");
+
+        String mode = blank(req.mode) ? "image_to_model" : req.mode.trim();
+        if(!Set.of("image_to_model", "multiview_to_model", "text_to_model").contains(mode))
+            throw new IllegalArgumentException("不支持的Tripo生成模式：" + mode);
+
+        String selectedModel=blank(req.modelVersion)?tripoModelVersion:req.modelVersion.trim();
+        Set<String> supportedModels=Set.of("tripo-p1","tripo-v3.1","v3.1-20260211","tripo-v3.0","v3.0-20250812","tripo-v2.5","v2.5-20250123");
+        if(!supportedModels.contains(selectedModel))throw new IllegalArgumentException("不支持的Tripo 3D模型："+selectedModel);
+        Map<String,Object> taskBody = new LinkedHashMap<>();
+        taskBody.put("model", selectedModel);
+        Long primaryInputAssetId = req.inputAssetId;
+
+        if("text_to_model".equals(mode)) {
+            if(blank(req.prompt)) throw new IllegalArgumentException("文生3D模式必须填写模型描述");
+            if(req.prompt.trim().length() > 1024) throw new IllegalArgumentException("模型描述不能超过1024个字符");
+            if(!blank(req.negativePrompt) && req.negativePrompt.trim().length() > 255) throw new IllegalArgumentException("反向提示词不能超过255个字符");
+            taskBody.put("prompt", req.prompt.trim());
+            if(!blank(req.negativePrompt)) taskBody.put("negative_prompt", req.negativePrompt.trim());
+        } else if("multiview_to_model".equals(mode)) {
+            if(req.multiviewAssetIds == null || req.multiviewAssetIds.get("front") == null)
+                throw new IllegalArgumentException("多视图建模必须上传正面图");
+            long viewCount = List.of("front", "left", "back", "right").stream().filter(v -> req.multiviewAssetIds.get(v) != null).count();
+            if(viewCount < 2) throw new IllegalArgumentException("多视图建模至少需要正面图和另一个视角，共2张图片");
+            List<Map<String,String>> inputs = new ArrayList<>();
+            for(String view : List.of("front", "left", "back", "right")) {
+                Long assetId = req.multiviewAssetIds.get(view);
+                if(assetId == null) continue;
+                Path image = resolveAssetImage(assetId);
+                inputs.add(Map.of(view, uploadToTripo(image)));
+                if(primaryInputAssetId == null) primaryInputAssetId = assetId;
+            }
+            taskBody.put("inputs", inputs);
+        } else {
+            if(req.inputAssetId == null) throw new IllegalArgumentException("请先上传2D参考图");
+            Path image = resolveAssetImage(req.inputAssetId);
+            taskBody.put("input", uploadToTripo(image));
+        }
+
+        applyTripoQualityOptions(taskBody, req, mode, selectedModel);
+        String generationPath = "text_to_model".equals(mode) ? "/generation/text-to-model" :
+                "multiview_to_model".equals(mode) ? "/generation/multiview-to-model" : "/generation/image-to-model";
+        String taskResponse = tripoJson("POST", generationPath, mapper.writeValueAsString(taskBody));
+        JsonNode root = mapper.readTree(taskResponse);
+        ensureTripoOk(root, taskResponse);
+        String taskId = root.path("data").path("task_id").asText(root.path("data").path("taskId").asText(""));
+        if(blank(taskId)) throw new IllegalStateException("Tripo未返回task_id：" + taskResponse);
+
+        String jobNo = no("T3D");
+        Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
+                primaryInputAssetId, req.prompt, req.negativePrompt, "running", null,
+                req.quad ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
+        jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
+        Map<String,Object> response = new LinkedHashMap<>();
+        response.put("jobId", jobId); response.put("jobNo", jobNo); response.put("taskId", taskId);
+        response.put("status", "running"); response.put("progress", 0); response.put("provider", "tripo");
+        response.put("modelVersion", selectedModel); response.put("qualityPreset", "tripo-p1".equals(selectedModel)?"p-series":"standard");
+        response.put("message", "Tripo "+selectedModel+"任务已提交");
+        return response;
+    }
+
+    private Path resolveAssetImage(Long assetId) throws IOException {
+        Map<String,Object> asset = jdbc.queryForMap("SELECT file_url fileUrl,preview_url previewUrl FROM digital_asset WHERE id=?", assetId);
+        Object url = asset.get("fileUrl") == null ? asset.get("previewUrl") : asset.get("fileUrl");
+        return resolvePublicAsset(String.valueOf(url));
+    }
+
+    private void applyTripoQualityOptions(Map<String,Object> body, Generate3dRequest req, String mode, String model) {
+        boolean pSeries="tripo-p1".equals(model);
+        boolean legacy25=model.contains("v2.5");
+        boolean supportsAdvanced=!pSeries&&!legacy25;
+        boolean texture=req.texture==null||req.texture;
+        boolean pbr=texture&&(req.pbr==null||req.pbr);
+        boolean parts=supportsAdvanced&&Boolean.TRUE.equals(req.generateParts);
+        boolean quad=supportsAdvanced&&!parts&&Boolean.TRUE.equals(req.quad);
+        boolean smartLowPoly=supportsAdvanced&&!parts&&!quad&&Boolean.TRUE.equals(req.smartLowPoly);
+
+        body.put("texture",texture); body.put("pbr",pbr); body.put("export_uv",req.exportUv==null||req.exportUv);
+        if(!legacy25) {
+            body.put("auto_size",req.autoSize==null||req.autoSize);
+            if(texture)body.put("texture_quality",Set.of("standard","detailed","extreme").contains(req.textureQuality)?req.textureQuality:"extreme");
+            if(Boolean.TRUE.equals(req.compress))body.put("compress","geometry");
+        }
+        if(supportsAdvanced) {
+            body.put("generate_parts",parts); body.put("quad",quad); body.put("smart_low_poly",smartLowPoly);
+            if(!quad&&!smartLowPoly&&!parts)body.put("geometry_quality","standard".equals(req.geometryQuality)?"standard":"detailed");
+        }
+        if("image_to_model".equals(mode)) body.put("enable_image_autofix",req.imageAutofix==null||req.imageAutofix);
+        if("image_to_model".equals(mode)||(pSeries&&"multiview_to_model".equals(mode))) {
+            body.put("orientation",Set.of("default","align_image").contains(req.orientation)?req.orientation:"align_image");
+            if(texture)body.put("texture_alignment","original_image".equals(req.textureAlignment)?"original_image":"geometry");
+        }
+        int maxFaces=pSeries?20_000:legacy25?500_000:(quad?150_000:smartLowPoly?20_000:2_000_000);
+        int minFaces=pSeries?48:1_000; int requested=req.faceLimit==null?maxFaces:req.faceLimit;
+        body.put("face_limit",Math.max(minFaces,Math.min(requested,maxFaces)));
+        if("text_to_model".equals(mode)||pSeries){if(req.modelSeed!=null)body.put("model_seed",req.modelSeed);}
+        if("text_to_model".equals(mode)&&req.imageSeed!=null)body.put("image_seed",req.imageSeed);
+        if(texture&&req.textureSeed!=null)body.put("texture_seed",req.textureSeed);
+    }
+
+    @GetMapping("/tripo/tasks/{jobId}")
+    public synchronized Map<String,Object> tripoTask(@PathVariable Long jobId) throws Exception {
+        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage FROM ai_generation_job WHERE id=?",jobId);
+        String taskId=str(job.get("externalTaskId")); if(blank(taskId))throw new IllegalStateException("任务没有Tripo task_id");
+        if(job.get("outputAssetId")!=null) return completedTripoJob(jobId,job);
+        String response=tripoJson("GET","/tasks/"+URLEncoder.encode(taskId,StandardCharsets.UTF_8),null);
+        JsonNode root=mapper.readTree(response); ensureTripoOk(root,response); JsonNode data=root.path("data");
+        String remoteStatus=data.path("status").asText("unknown"); int progress=data.path("progress").asInt(0);
+        String localStatus=mapTripoStatus(remoteStatus); String error=data.path("error").asText(data.path("message").asText(""));
+        if(!"succeeded".equals(localStatus)) jdbc.update("UPDATE ai_generation_job SET status=?,progress=?,error_message=? WHERE id=?",localStatus,progress,blank(error)?null:error,jobId);
+        if("succeeded".equals(localStatus)) {
+            JsonNode output=data.path("output"); String modelUrl=firstUrl(output,"model_url","pbr_model","model","base_model","glb_model","model_urls"); String previewUrl=firstUrl(output,"rendered_image_url","rendered_image","image","preview_image");
+            if(blank(modelUrl)) throw new IllegalStateException("Tripo任务成功但没有返回模型地址："+response);
+            String localModel=saveRemoteFile(modelUrl,"tripo-model-",suffixFromUrl(modelUrl,".glb"),"models");
+            String localPreview=blank(previewUrl)?null:saveRemoteFile(previewUrl,"tripo-preview-",suffixFromUrl(previewUrl,".webp"),"models");
+            Long inputId=job.get("inputAssetId") instanceof Number ? ((Number)job.get("inputAssetId")).longValue() : null;
+            String modelName=jdbc.queryForObject("SELECT model_name FROM ai_generation_job WHERE id=?",String.class,jobId);
+            Map<String,Object> metadata=new LinkedHashMap<>(); metadata.put("provider","tripo"); metadata.put("taskId",taskId); metadata.put("remoteModel",modelUrl); metadata.put("modelVersion",modelName);
+            Long assetId=createAsset("Tripo "+modelName+" 3D模型","model","ai_generated",localModel,localPreview,String.valueOf(jdbc.queryForObject("SELECT prompt FROM ai_generation_job WHERE id=?",String.class,jobId)),null,null,inputId,suffixFromUrl(modelUrl,".glb").replace(".",""),"Tripo,3D模型,"+modelName,metadata);
+            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100 WHERE id=?",assetId,jobId);
+            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage FROM ai_generation_job WHERE id=?",jobId);
+            return completedTripoJob(jobId,job);
+        }
+        Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);return out;
     }
 
     @PostMapping("/text-to-3d")
@@ -315,6 +557,18 @@ public class CreativeAiController {
         return Map.of("reviewId", reviewId, "reviewNo", reviewNo, "asset", asset, "overallScore", avg, "recommendation", recommendation, "summary", summary, "agents", results);
     }
 
+    @Scheduled(fixedDelayString = "${tripo.poll.delay-ms:5000}", initialDelayString = "${tripo.poll.initial-delay-ms:8000}")
+    public void autoDownloadTripoModels() {
+        if(blank(tripoApiKey) || tripoApiKey.contains("YOUR_")) return;
+        List<Long> jobIds=jdbc.queryForList("SELECT id FROM ai_generation_job WHERE provider='tripo' AND status IN ('running','queued','succeeded') AND external_task_id IS NOT NULL AND output_asset_id IS NULL ORDER BY id LIMIT 20",Long.class);
+        for(Long jobId:jobIds) {
+            try {
+                String type=jdbc.queryForObject("SELECT job_type FROM ai_generation_job WHERE id=?",String.class,jobId);
+                if("text_to_image".equals(type)) tripoImageTask(jobId); else tripoTask(jobId);
+            } catch(Exception e) { jdbc.update("UPDATE ai_generation_job SET error_message=? WHERE id=?", "后台轮询："+safeMessage(e), jobId); }
+        }
+    }
+
     @GetMapping("/reviews")
     public List<Map<String, Object>> reviews(@RequestParam(required = false) Long assetId) {
         String sql = "SELECT r.id, r.review_no reviewNo, r.asset_id assetId, a.title assetTitle, a.preview_url previewUrl, r.overall_score overallScore, r.summary, r.recommendation, r.created_at createdAt FROM design_review r JOIN digital_asset a ON r.asset_id=a.id";
@@ -329,8 +583,55 @@ public class CreativeAiController {
 
     @GetMapping("/jobs")
     public List<Map<String, Object>> jobs() {
-        return jdbc.queryForList("SELECT id, job_no jobNo, job_type jobType, provider, model_name modelName, input_asset_id inputAssetId, output_asset_id outputAssetId, status, error_message errorMessage, export_formats exportFormats, created_at createdAt FROM ai_generation_job ORDER BY id DESC LIMIT 100");
+        return jdbc.queryForList("SELECT id, job_no jobNo, job_type jobType, provider, model_name modelName, input_asset_id inputAssetId, output_asset_id outputAssetId, external_task_id externalTaskId, status, progress, error_message errorMessage, export_formats exportFormats, created_at createdAt FROM ai_generation_job ORDER BY id DESC LIMIT 100");
     }
+
+    private String uploadToTripo(Path file) throws Exception {
+        String boundary="----AndTaste"+System.nanoTime(); byte[] bytes=Files.readAllBytes(file);
+        String head="--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\""+file.getFileName()+"\"\r\nContent-Type: application/octet-stream\r\n\r\n";
+        byte[] tail=("\r\n--"+boundary+"--\r\n").getBytes(StandardCharsets.UTF_8); byte[] hb=head.getBytes(StandardCharsets.UTF_8); byte[] body=new byte[hb.length+bytes.length+tail.length];
+        System.arraycopy(hb,0,body,0,hb.length);System.arraycopy(bytes,0,body,hb.length,bytes.length);System.arraycopy(tail,0,body,hb.length+bytes.length,tail.length);
+        HttpRequest request=HttpRequest.newBuilder().uri(URI.create(tripoBaseUrl+"/files")).timeout(Duration.ofSeconds(60)).header("Authorization","Bearer "+tripoApiKey.trim()).header("Content-Type","multipart/form-data; boundary="+boundary).POST(HttpRequest.BodyPublishers.ofByteArray(body)).build();
+        try {
+            HttpResponse<String> response=http.send(request,HttpResponse.BodyHandlers.ofString());
+            if(response.statusCode()<200||response.statusCode()>=300) throw tripoHttpError("上传",response.statusCode(),response.body());
+            JsonNode root=mapper.readTree(response.body()); ensureTripoOk(root,response.body());
+            String token=root.path("data").path("file_token").asText("");
+            if(blank(token))throw new IllegalStateException("Tripo上传未返回file_token："+response.body());
+            return token;
+        } catch(HttpTimeoutException e) { throw new IllegalStateException("连接Tripo上传接口超时，请检查服务器外网",e); }
+          catch(IOException e) { throw new IllegalStateException("无法连接Tripo上传接口，请检查服务器DNS和HTTPS外网："+safeMessage(e),e); }
+    }
+    private String tripoJson(String method,String path,String body)throws Exception {
+        HttpRequest.Builder b=HttpRequest.newBuilder().uri(URI.create(tripoBaseUrl+path)).timeout(Duration.ofSeconds(45)).header("Authorization","Bearer "+tripoApiKey.trim()).header("Content-Type","application/json");
+        if("POST".equals(method)) b.POST(HttpRequest.BodyPublishers.ofString(body==null?"{}":body)); else b.GET();
+        try {
+            HttpResponse<String> r=http.send(b.build(),HttpResponse.BodyHandlers.ofString());
+            if(r.statusCode()<200||r.statusCode()>=300) throw tripoHttpError("请求",r.statusCode(),r.body());
+            return r.body();
+        } catch(HttpTimeoutException e) { throw new IllegalStateException("连接Tripo接口超时，任务没有提交，请检查服务器外网",e); }
+          catch(IOException e) { throw new IllegalStateException("无法连接Tripo接口，任务没有提交："+safeMessage(e),e); }
+    }
+    private IllegalStateException tripoHttpError(String action,int status,String raw) {
+        try {
+            JsonNode root=mapper.readTree(raw); int code=root.path("code").asInt(-1); String message=root.path("message").asText(root.path("status").asText(raw));
+            if(status==403 && code==2010) return new IllegalStateException("Tripo账户积分不足，请先在Tripo工作台充值后再提交（错误码2010）");
+            return new IllegalStateException("Tripo"+action+"失败 HTTP "+status+" / "+code+"："+message);
+        } catch(Exception ignored) { return new IllegalStateException("Tripo"+action+"失败 HTTP "+status+"："+raw); }
+    }
+    private void ensureTripoOk(JsonNode root,String raw){int code=root.path("code").asInt(0);if(code!=0)throw new IllegalStateException("Tripo错误 "+code+": "+root.path("message").asText(raw));}
+    private Path resolvePublicAsset(String url)throws IOException{Path dir=Path.of(System.getProperty("user.dir"),"..","shixun-vue","public").normalize().toAbsolutePath();String rel=url.startsWith("/")?url.substring(1):url;Path file=dir.resolve(rel).normalize();if(!file.startsWith(dir)||!Files.exists(file))throw new IOException("参考图文件不存在："+url);return file;}
+    private String imageExtension(Path p){String n=p.getFileName().toString().toLowerCase(Locale.ROOT);return n.endsWith(".jpeg")?"jpg":n.substring(n.lastIndexOf('.')+1);}
+    private String mapTripoStatus(String s){s=s.toLowerCase(Locale.ROOT);if(s.contains("success"))return "succeeded";if(s.contains("fail")||s.contains("cancel")||s.contains("banned")||s.contains("expired"))return "failed";return "running";}
+    private String firstText(JsonNode n,String...keys){for(String k:keys){String v=n.path(k).asText("");if(!blank(v))return v;}return "";}
+    private String firstUrl(JsonNode n,String...keys){for(String k:keys){JsonNode v=n.path(k);if(v.isTextual()&&!blank(v.asText()))return v.asText();if(v.isArray()&&v.size()>0&&v.get(0).isTextual())return v.get(0).asText();}return "";}
+    private String safeMessage(Throwable e){String m=e.getMessage();return blank(m)?e.getClass().getSimpleName():m;}
+    private String suffixFromUrl(String url,String fallback){try{String p=URI.create(url).getPath();int i=p.lastIndexOf('.');if(i>=0&&p.length()-i<=6)return p.substring(i).toLowerCase(Locale.ROOT);}catch(Exception ignored){}return fallback;}
+    private String saveRemoteFile(String url,String prefix,String suffix,String folder)throws Exception{HttpResponse<byte[]> r=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());if(r.statusCode()<200||r.statusCode()>=300)throw new IOException("下载Tripo文件失败 HTTP "+r.statusCode());Path dir=Path.of("..","shixun-vue","public","generated",folder).normalize();Files.createDirectories(dir);String file=prefix+System.currentTimeMillis()+suffix;Files.write(dir.resolve(file),r.body());return "/generated/"+folder+"/"+file;}
+    private Map<String,Object> completedTripoImageJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("assetId",a.get("id"));r.put("imageUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));r.put("model",job.get("modelName"));r.put("source","Tripo "+str(job.get("modelName")));return r;}
+    private Map<String,Object> completedTripoJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("assetId",a.get("id"));r.put("modelUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));return r;}
+    private boolean blank(String s){return s==null||s.trim().isEmpty();}
+    private String str(Object o){return o==null?"":String.valueOf(o);}
 
     private Long insertReview(String reviewNo, Long assetId) {
         KeyHolder kh = new GeneratedKeyHolder();
@@ -499,10 +800,35 @@ public class CreativeAiController {
         public Long seed;
         public String tags;
         public Long inputAssetId;
+        public String tripoImageModel;
+        public String tripoTemplate;
+        public Boolean tPose;
+        public Boolean sketchToRender;
     }
     public static class Generate3dRequest {
+        public String mode;
+        public String modelVersion;
         public String prompt;
+        public String negativePrompt;
         public Long inputAssetId;
+        public Map<String,Long> multiviewAssetIds;
         public String exportFormats;
+        public Boolean texture;
+        public Boolean pbr;
+        public String textureQuality;
+        public String geometryQuality;
+        public String textureAlignment;
+        public String orientation;
+        public Boolean autoSize;
+        public Boolean imageAutofix;
+        public Boolean quad;
+        public Boolean smartLowPoly;
+        public Boolean generateParts;
+        public Boolean exportUv;
+        public Boolean compress;
+        public Integer faceLimit;
+        public Long modelSeed;
+        public Long imageSeed;
+        public Long textureSeed;
     }
 }

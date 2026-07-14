@@ -959,3 +959,9 @@ ALTER TABLE commercial_order ADD COLUMN production_requirement TEXT NULL;
 ALTER TABLE commercial_order ADD COLUMN bom_snapshot_json JSON NULL;
 ALTER TABLE commercial_order ADD COLUMN material_snapshot_json JSON NULL;
 ALTER TABLE commercial_order ADD COLUMN process_snapshot_json JSON NULL;
+
+
+-- TRIPO_3D_INTEGRATION_V5
+ALTER TABLE ai_generation_job ADD COLUMN external_task_id VARCHAR(160) NULL;
+ALTER TABLE ai_generation_job ADD COLUMN progress INT NOT NULL DEFAULT 0;
+CREATE INDEX idx_ai_job_external_task ON ai_generation_job(external_task_id);
