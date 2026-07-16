@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import Modal from './Modal.vue'
 import type { UserRecord, AlertType, Role } from '../types'
 
+const props = defineProps<{ currentUser?: { username: string; role: Role } | null }>()
 const emit = defineEmits<{ alert: [msg: string, type?: AlertType] }>()
 
 interface UserForm { id: string; username: string; age: string; email: string; phone: string; password: string; role: Role }
@@ -36,7 +37,7 @@ async function loadUsers() {
   try {
     const p = new URLSearchParams({ page: String(currentPage.value), size: String(pageSize.value) })
     if (searchQuery.value.trim()) p.set('search', searchQuery.value.trim())
-    const res = await fetch(`/api/users?${p}`)
+    const res = await fetch(`/api/users?${p}`, { headers: { 'X-Current-Role': props.currentUser?.role || 'admin', 'X-Current-User': props.currentUser?.username || 'admin' } })
     const data = await res.json()
     users.value = data.content
     total.value = data.total
@@ -59,7 +60,7 @@ async function openEdit(id: number): Promise<void> {
   if (editingId.value !== null) return
   editingId.value = id
   try {
-    const res = await fetch(`/api/users/${id}`)
+    const res = await fetch(`/api/users/${id}`, { headers: { 'X-Current-Role': props.currentUser?.role || 'admin', 'X-Current-User': props.currentUser?.username || 'admin' } })
     if (!res.ok) { emit('alert', '获取用户信息失败', 'error'); return }
     const u = await res.json()
     form.value = { id: u.id, username: u.username ?? '', age: u.age ?? '', email: u.email ?? '', phone: u.phone ?? '', password: '', role: u.role || 'admin' }
@@ -87,7 +88,11 @@ async function submitForm() {
   try {
     const res = await fetch(isEdit.value ? `/api/users/${form.value.id}` : '/api/users', {
       method: isEdit.value ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Current-Role': props.currentUser?.role || 'admin',
+        'X-Current-User': props.currentUser?.username || 'admin',
+      },
       body: JSON.stringify(payload)
     })
     if (!res.ok) {
@@ -107,7 +112,13 @@ async function submitForm() {
 async function deleteUser(id: number, name: string) {
   if (!confirm(`确定要删除用户「${name}」？此操作不可恢复。`)) return
   try {
-    const res = await fetch(`/api/users/${id}`, { method: 'DELETE' })
+    const res = await fetch(`/api/users/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'X-Current-Role': props.currentUser?.role || 'admin',
+        'X-Current-User': props.currentUser?.username || 'admin',
+      },
+    })
     if (!res.ok && res.status !== 204) { emit('alert', '删除失败', 'error'); return }
     emit('alert', '用户删除成功')
     loadUsers()

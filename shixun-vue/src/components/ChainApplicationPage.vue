@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import type { User } from '../types'
+
+const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
 
 const props = defineProps<{ type: 'home' | 'marketing' | 'newProduct' | 'priceAdjust'; currentUser?: User }>()
 const titles = {
@@ -22,32 +24,55 @@ const fields: Record<string,string[]> = {
 }
 const form = reactive<Record<string,string>>({})
 const saved = ref<any[]>([])
-const STORAGE_KEY = 'workflowApplications'
+const loading = ref(false)
 
-function loadApplications(){
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]') } catch { return [] }
-}
-function submit(){
+async function loadRecords(){
   if (props.type === 'home') return
-  const now = new Date().toLocaleString('zh-CN')
-  const currentFields = Object.fromEntries([...(fields[props.type] || []), '补充说明'].map(k => [k, form[k] || '']))
-  const item = {
-    id: Date.now(),
-    category: 'chain',
-    type: props.type,
-    title: titles[props.type],
-    applicant: props.currentUser?.username || '当前用户',
-    applicantRole: props.currentUser?.role || '',
-    fields: currentFields,
-    status: 'pending',
-    createdAt: now
+  loading.value = true
+  try {
+    const p = new URLSearchParams({ category: 'chain', applicant: props.currentUser?.username || '', page: '1', size: '20' })
+    const res = await fetch(`/api/workflows/applications?${p}`)
+    const data = await res.json()
+    saved.value = Array.isArray(data) ? data : data.content || []
+  } catch {
+    saved.value = []
+    emit('alert', '加载连锁申请记录失败', 'error')
+  } finally {
+    loading.value = false
   }
-  const list = loadApplications()
-  list.unshift(item)
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
-  saved.value.unshift({ id: item.id, title: item.title, time: now })
-  Object.keys(form).forEach(k => form[k] = '')
 }
+
+async function submit(){
+  if (props.type === 'home') return
+  const currentFields = Object.fromEntries([...(fields[props.type] || []), '补充说明'].map(k => [k, form[k] || '']))
+  const res = await fetch('/api/workflows/applications', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      category: 'chain',
+      typeKey: props.type,
+      title: titles[props.type],
+      applicant: props.currentUser?.username || '当前用户',
+      applicantRole: props.currentUser?.role || 'feeder',
+      fields: currentFields,
+    })
+  })
+  if (!res.ok) throw new Error(await res.text())
+  saved.value.unshift(await res.json())
+  Object.keys(form).forEach(k => form[k] = '')
+  await loadRecords()
+  emit('alert', '申请已提交到审批中心', 'success')
+}
+
+async function submitWithGuard() {
+  try {
+    await submit()
+  } catch (e: any) {
+    emit('alert', `提交失败：${e.message || e}`, 'error')
+  }
+}
+
+onMounted(loadRecords)
 </script>
 
 <template>
@@ -69,10 +94,13 @@ function submit(){
           <label v-for="f in fields[props.type]" :key="f">{{ f }}<input v-model="form[f]" :placeholder="'请输入'+f"></label>
         </div>
         <label>补充说明<textarea v-model="form['补充说明']" rows="4" placeholder="请输入附件、说明或审批备注"></textarea></label>
-        <button class="submit" @click="submit">提交申请到审批中心</button>
-        <div v-if="saved.length" class="saved-list">
+        <button class="submit" @click="submitWithGuard">提交申请到审批中心</button>
+        <div v-if="loading" class="saved-list">
+          <p>正在加载已提交记录...</p>
+        </div>
+        <div v-else-if="saved.length" class="saved-list">
           <h3>本页已提交记录</h3>
-          <p v-for="x in saved" :key="x.id"><b>{{x.title}}</b><span>{{x.time}}</span></p>
+          <p v-for="x in saved" :key="x.id"><b>{{x.title}}</b><span>{{x.createdAt || x.created_at || x.updatedAt || '—'}}</span></p>
         </div>
       </div>
     </section>

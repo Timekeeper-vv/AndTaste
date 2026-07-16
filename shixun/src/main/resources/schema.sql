@@ -168,3 +168,34 @@ INSERT IGNORE INTO animals (ear_tag, gender, entry_date, breed, batch_id, curren
 ('ET-001', 'MALE', '2024-01-15', '杜洛克猪', 1, 1, 25.50, 'ACTIVE'),
 ('ET-002', 'FEMALE', '2024-01-15', '杜洛克猪', 1, 1, 23.80, 'ACTIVE'),
 ('ET-003', 'MALE', '2024-01-15', '杜洛克猪', 1, 2, 26.20, 'ACTIVE');
+
+-- 统一申请单 / 审批流
+CREATE TABLE IF NOT EXISTS workflow_application (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    app_no VARCHAR(50) NOT NULL UNIQUE COMMENT '申请单号',
+    category VARCHAR(20) NOT NULL COMMENT 'finance/chain',
+    type_key VARCHAR(50) NOT NULL COMMENT '申请类型编码',
+    title VARCHAR(200) NOT NULL COMMENT '申请标题',
+    applicant VARCHAR(100) NOT NULL COMMENT '申请人',
+    applicant_role VARCHAR(20) NOT NULL COMMENT '申请人角色',
+    form_data_json JSON NOT NULL COMMENT '申请表单内容',
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
+    approver VARCHAR(100) DEFAULT NULL COMMENT '审批人',
+    approval_comment TEXT COMMENT '审批意见',
+    submitted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '提交时间',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    approved_at DATETIME DEFAULT NULL COMMENT '审批时间',
+    rejected_at DATETIME DEFAULT NULL COMMENT '驳回时间',
+    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除'
+) COMMENT='统一申请单';
+
+CREATE TABLE IF NOT EXISTS workflow_approval_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    application_id BIGINT NOT NULL COMMENT '申请单ID',
+    action VARCHAR(20) NOT NULL COMMENT 'submit/approve/reject',
+    operator VARCHAR(100) NOT NULL COMMENT '操作人',
+    operator_role VARCHAR(20) NOT NULL COMMENT '操作人角色',
+    comment TEXT COMMENT '操作意见',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+    INDEX idx_workflow_log_app_id (application_id)
+) COMMENT='审批流日志';

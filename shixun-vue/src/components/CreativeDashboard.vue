@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 const emit = defineEmits<{ 'switch-page': [page: string], alert: [msg: string, type?: 'success' | 'error'] }>()
 const loading = ref(false)
 const production = ref<any>({}), warehouse = ref<any>({}), logistics = ref<any>({})
+const workflow = ref<any>({})
 const workbench = ref<any>({ orders: [], sources: [] }), assets = ref<any[]>([])
 const updatedAt = ref('等待同步')
 
@@ -37,7 +38,8 @@ const actions = computed(() => [
   { code:'SAMPLE 05', title:'产品打样', desc:`${samples.value} 张打样订单正在管理`, page:'sampleProduction', tone:'rose' },
   { code:'MASS 06', title:'大货生产', desc:`${bulk.value} 张大货订单全程追踪`, page:'bulkProduction', tone:'blue' },
   { code:'STOCK 07', title:'智能仓储', desc:`${warehouse.value.alertCount || 0} 项库存预警待处理`, page:'warehouseLogistics', tone:'green' },
-  { code:'TRACK 08', title:'物流跟踪', desc:`${logistics.value.inTransitCount || 0} 单在途 · 订单号实时绑定`, page:'logistics', tone:'slate' }
+  { code:'TRACK 08', title:'物流跟踪', desc:`${logistics.value.inTransitCount || 0} 单在途 · 订单号实时绑定`, page:'logistics', tone:'slate' },
+  { code:'APPROVAL 09', title:'审批中心', desc:`${workflow.value.pendingCount || 0} 条待审批申请`, page:'approvalCenter', tone:'rose' }
 ])
 function money(v: unknown) { return Number(v || 0).toLocaleString('zh-CN', { minimumFractionDigits:2, maximumFractionDigits:2 }) }
 async function json(url:string) { const r=await fetch(url); if(!r.ok) throw new Error(await r.text()); return r.json() }
@@ -45,8 +47,8 @@ async function load() {
   if (loading.value) return
   loading.value=true
   try {
-    const [p,w,l,wb,a]=await Promise.all([json('/api/production/dashboard'),json('/api/warehouse/dashboard'),json('/api/logistics/dashboard'),json('/api/production/workbench'),json('/api/creative/ai/assets')])
-    production.value=p; warehouse.value=w; logistics.value=l; workbench.value=wb; assets.value=a
+    const [p,w,l,wb,a,ws]=await Promise.all([json('/api/production/dashboard'),json('/api/warehouse/dashboard'),json('/api/logistics/dashboard'),json('/api/production/workbench'),json('/api/creative/ai/assets'),json('/api/workflows/summary')])
+    production.value=p; warehouse.value=w; logistics.value=l; workbench.value=wb; assets.value=a; workflow.value=ws
     updatedAt.value=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})
   } catch(e:any) { emit('alert',`经营看板加载失败：${e.message}`,'error') } finally { loading.value=false }
 }
@@ -108,6 +110,7 @@ onMounted(load)
 
     <aside class="surface priorities">
       <div class="section-head"><div><small>PRIORITY QUEUE</small><h2>经营优先级</h2><p>按风险与交付节点排列</p></div><b class="todo">{{count('pending_confirm')+count('confirmed')+risks}}</b></div>
+      <button @click="go('approvalCenter')"><i class="rose">✉</i><span><b>审批待办</b><small>连锁 / 财务申请待处理</small></span><strong>{{workflow.pendingCount||0}}</strong></button>
       <button @click="go('sampleProduction')"><i class="amber">◷</i><span><b>等待客户确认</b><small>确认详细报价与生产内容</small></span><strong>{{count('pending_confirm')}}</strong></button>
       <button @click="go('bulkProduction')"><i class="violet">◇</i><span><b>待下达生产</b><small>已确认订单等待执行</small></span><strong>{{count('confirmed')}}</strong></button>
       <button @click="go('warehouseLogistics')"><i class="rose">△</i><span><b>库存预警</b><small>缺货、低库存与超储风险</small></span><strong>{{warehouse.alertCount||0}}</strong></button>

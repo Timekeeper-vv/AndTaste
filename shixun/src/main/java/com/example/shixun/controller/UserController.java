@@ -34,9 +34,11 @@ public class UserController {
     @Operation(summary = "获取用户（传page参数则返回分页结果）")
     @ApiResponse(responseCode = "200", description = "查询成功")
     public Object findAll(
+            @RequestHeader(value = "X-Current-Role", required = false) String currentRole,
             @RequestParam(required = false) String search,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false, defaultValue = "10") int size) {
+        requireManager(currentRole);
         if (page != null) return userService.findPage(search, page, Math.max(1, Math.min(size, 100)));
         return userService.findAll();
     }
@@ -48,7 +50,9 @@ public class UserController {
         @ApiResponse(responseCode = "404", description = "用户不存在")
     })
     public CompletableFuture<ResponseEntity<User>> findById(
-            @Parameter(description = "用户ID", example = "1") @PathVariable Long id) {
+            @Parameter(description = "用户ID", example = "1") @PathVariable Long id,
+            @RequestHeader(value = "X-Current-Role", required = false) String currentRole) {
+        requireManager(currentRole);
         return userService.findById(id)
             .thenApply(user -> {
                 if (user == null) {
@@ -65,7 +69,17 @@ public class UserController {
         @ApiResponse(responseCode = "400", description = "参数校验失败"),
         @ApiResponse(responseCode = "409", description = "用户名已存在")
     })
-    public CompletableFuture<ResponseEntity<User>> create(@RequestBody User user) {
+    public CompletableFuture<ResponseEntity<User>> create(
+            @RequestHeader(value = "X-Current-Role", required = false) String currentRole,
+            @RequestBody User user) {
+        if (currentRole == null || currentRole.isBlank()) {
+            user.setRole("feeder");
+        } else {
+            requireAdmin(currentRole);
+        }
+        if (user.getRole() == null || user.getRole().isBlank()) {
+            user.setRole("feeder");
+        }
         validateUser(user);
         if (user.getPassword() == null || user.getPassword().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "密码不能为空");
@@ -91,7 +105,9 @@ public class UserController {
     })
     public CompletableFuture<ResponseEntity<User>> update(
             @Parameter(description = "用户ID", example = "1") @PathVariable Long id,
+            @RequestHeader(value = "X-Current-Role", required = false) String currentRole,
             @RequestBody User user) {
+        requireAdmin(currentRole);
         validateUser(user);
         return userService.update(id, user)
             .thenApply(updated -> {
@@ -109,7 +125,9 @@ public class UserController {
         @ApiResponse(responseCode = "404", description = "用户不存在")
     })
     public CompletableFuture<ResponseEntity<Void>> delete(
-            @Parameter(description = "用户ID", example = "1") @PathVariable Long id) {
+            @Parameter(description = "用户ID", example = "1") @PathVariable Long id,
+            @RequestHeader(value = "X-Current-Role", required = false) String currentRole) {
+        requireAdmin(currentRole);
         return userService.delete(id)
             .thenApply(deleted -> {
                 if (!deleted) {
@@ -157,6 +175,18 @@ public class UserController {
         }
         if (user.getEmail() == null || user.getEmail().trim().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email must not be blank");
+        }
+    }
+
+    private void requireAdmin(String role) {
+        if (!"admin".equals(role)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅超级管理员可管理用户账号");
+        }
+    }
+
+    private void requireManager(String role) {
+        if (!"admin".equals(role) && !"technician".equals(role)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅管理员或审批主管可查看用户账号");
         }
     }
 }

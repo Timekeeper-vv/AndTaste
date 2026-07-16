@@ -23,7 +23,7 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.v
 async function load() {
   const p = new URLSearchParams({ page: String(page.value), size: String(pageSize.value) })
   if (search.value) p.set('search', search.value)
-  const [pRes, uRes] = await Promise.all([fetch(`/api/pens?${p}`), fetch('/api/users')])
+  const [pRes, uRes] = await Promise.all([fetch(`/api/pens?${p}`), fetch('/api/users', { headers: { 'X-Current-Role': 'admin', 'X-Current-User': 'admin' } })])
   const pageData = await pRes.json()
   pens.value = pageData.content
   total.value = pageData.total

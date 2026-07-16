@@ -189,27 +189,27 @@ const pageLabels: Record<string, string> = {
       <!-- Main content -->
       <main class="app-main">
         <CreativeDashboard    v-if="currentPage === 'dashboard'"   @switch-page="p => { if (hasAccess(p, currentUser?.role)) currentPage = p as PageName }" @alert="showAlert" />
-        <ApprovalCenter v-if="currentPage === 'approvalCenter'" :current-user="currentUser" />
+        <ApprovalCenter v-if="currentPage === 'approvalCenter'" :current-user="currentUser" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'studio'" initial-view="image2d" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'creative2d'" initial-view="image2d" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'creative3d'" initial-view="model3d" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'creativeReview'" initial-view="review" @alert="showAlert" />
-        <ChainApplicationPage v-if="currentPage === 'chain'" type="home" :current-user="currentUser" />
-        <ChainApplicationPage v-if="currentPage === 'chainMarketing'" type="marketing" :current-user="currentUser" />
-        <ChainApplicationPage v-if="currentPage === 'chainNewProduct'" type="newProduct" :current-user="currentUser" />
-        <ChainApplicationPage v-if="currentPage === 'chainPriceAdjust'" type="priceAdjust" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'finance'" type="home" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financeAssetScrap'" type="assetScrap" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financePublicPayment'" type="publicPayment" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financePettyCash'" type="pettyCash" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financePersonalExpense'" type="personalExpense" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financePromotionApproval'" type="promotionApproval" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financeSeal'" type="seal" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financePettyCashRepay'" type="pettyCashRepay" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financeTravel'" type="travel" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financeInvoice'" type="invoice" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financeSpecialExpense'" type="specialExpense" :current-user="currentUser" />
-        <FinanceApplicationPage v-if="currentPage === 'financePettyCashWriteoff'" type="pettyCashWriteoff" :current-user="currentUser" />
+        <ChainApplicationPage v-if="currentPage === 'chain'" type="home" :current-user="currentUser" @alert="showAlert" />
+        <ChainApplicationPage v-if="currentPage === 'chainMarketing'" type="marketing" :current-user="currentUser" @alert="showAlert" />
+        <ChainApplicationPage v-if="currentPage === 'chainNewProduct'" type="newProduct" :current-user="currentUser" @alert="showAlert" />
+        <ChainApplicationPage v-if="currentPage === 'chainPriceAdjust'" type="priceAdjust" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'finance'" type="home" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financeAssetScrap'" type="assetScrap" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financePublicPayment'" type="publicPayment" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financePettyCash'" type="pettyCash" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financePersonalExpense'" type="personalExpense" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financePromotionApproval'" type="promotionApproval" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financeSeal'" type="seal" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financePettyCashRepay'" type="pettyCashRepay" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financeTravel'" type="travel" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financeInvoice'" type="invoice" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financeSpecialExpense'" type="specialExpense" :current-user="currentUser" @alert="showAlert" />
+        <FinanceApplicationPage v-if="currentPage === 'financePettyCashWriteoff'" type="pettyCashWriteoff" :current-user="currentUser" @alert="showAlert" />
         <ScaleUpPlatform     v-if="currentPage === 'scaleUp'" @alert="showAlert" />
         <ProductionManagement v-if="currentPage === 'production'" initial-view="cost" @alert="showAlert" />
         <ProductionManagement v-if="currentPage === 'sampleProduction'" initial-view="sample" @alert="showAlert" />
@@ -218,7 +218,7 @@ const pageLabels: Record<string, string> = {
         <WarehouseManagement v-if="currentPage === 'warehouseLogistics'" initial-view="inventory" @alert="showAlert" />
         <WarehouseManagement v-if="currentPage === 'warehouse'" initial-view="alerts" @alert="showAlert" />
         <DesignerCenter       v-if="currentPage === 'designers'"   @alert="showAlert" />
-        <UserManagement       v-if="currentPage === 'users'"       @alert="showAlert" />
+        <UserManagement       v-if="currentPage === 'users'"       :current-user="currentUser" @alert="showAlert" />
       </main>
     </div>
   </div>

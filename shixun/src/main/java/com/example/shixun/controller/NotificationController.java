@@ -33,6 +33,7 @@ public class NotificationController {
     @Operation(summary = "获取当前系统待处理预警")
     public List<Map<String, Object>> getNotifications() {
         List<Map<String, Object>> list = new ArrayList<>();
+        addWorkflowAlerts(list);
         addWarehouseAlerts(list);
         addLogisticsAlerts(list);
         addPickTaskAlerts(list);
@@ -40,6 +41,20 @@ public class NotificationController {
         addQuoteAlerts(list);
         addConfigAlerts(list);
         return list.size() > 20 ? list.subList(0, 20) : list;
+    }
+
+    private void addWorkflowAlerts(List<Map<String, Object>> list) {
+        try {
+            Long pending = jdbc.queryForObject("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND status='pending'", Long.class);
+            if (pending != null && pending > 0) {
+                list.add(Map.of(
+                        "type", "warning",
+                        "category", "workflow",
+                        "title", "审批待办",
+                        "message", "当前有 " + pending + " 条待审批申请，请进入“审批中心”处理"
+                ));
+            }
+        } catch (Exception ignored) { }
     }
 
     private void addWarehouseAlerts(List<Map<String, Object>> list) {
