@@ -1,5 +1,4 @@
 package com.example.shixun.controller;
-
 import com.example.shixun.model.Animal;
 import com.example.shixun.service.AnimalService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -66,7 +65,6 @@ public class AnimalController {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
         }
     }
-
     @PutMapping("/{id}")
     @Operation(summary = "更新个体信息")
     public ResponseEntity<Animal> update(@PathVariable Long id, @RequestBody Animal animal) {
