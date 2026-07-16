@@ -36,6 +36,11 @@ public class WorkflowController {
         result.put("rejectedCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND status='rejected'"));
         result.put("financePendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='finance' AND status='pending'"));
         result.put("chainPendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='chain' AND status='pending'"));
+        result.put("marketDepartmentPendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='marketDepartment' AND status='pending'"));
+        result.put("projectDepartmentPendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='projectDepartment' AND status='pending'"));
+        result.put("humanResourcePendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='humanResource' AND status='pending'"));
+        result.put("attendancePendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='attendance' AND status='pending'"));
+        result.put("productionPendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='production' AND status='pending'"));
         result.put("recentPending", listApplications("pending", null, null, 5, 0));
         result.put("recentApproved", listApplications("approved", null, null, 5, 0));
         return result;
@@ -260,6 +265,10 @@ public class WorkflowController {
     private String defaultTitle(String category, String typeKey) {
         if ("finance".equals(category)) return "财务申请";
         if ("chain".equals(category)) return "连锁申请";
+        if ("marketDepartment".equals(category)) return "市场部需求";
+        if ("projectDepartment".equals(category)) return "项目部需求";
+        if ("humanResource".equals(category)) return "人力资源申请";
+        if ("attendance".equals(category)) return "考勤申请";
         return blank(typeKey) ? "申请单" : typeKey;
     }
 

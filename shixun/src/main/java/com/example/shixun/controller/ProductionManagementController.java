@@ -204,6 +204,11 @@ public class ProductionManagementController {
             "(SELECT COUNT(*) FROM logistics_shipment ls WHERE ls.order_no=o.order_no) shipmentCount " +
             "FROM commercial_order o JOIN product_bom b ON o.bom_id=b.id LEFT JOIN creative_project p ON o.project_id=p.id " +
             "LEFT JOIN cost_quote q ON o.quote_id=q.id LEFT JOIN sample_order s ON o.sample_id=s.id LEFT JOIN production_order po ON o.production_order_id=po.id ORDER BY o.id DESC");
+        for (Map<String,Object> order : orderList) {
+            Long orderId = ((Number) order.get("id")).longValue();
+            order.put("confirmApproval", orderApproval(orderId, "confirm"));
+            order.put("startApproval", orderApproval(orderId, "start"));
+        }
         return Map.of("sources", sources, "orders", orderList);
     }
 
@@ -270,6 +275,9 @@ public class ProductionManagementController {
 
     @PostMapping("/commercial-orders/{id}/confirm")
     public Map<String,Object> confirmCommercialOrder(@PathVariable Long id) {
+        if (!hasApprovedOrderApproval(id, "confirm")) {
+            throw new IllegalStateException("请先提交订单确认申请，审批通过后才能确认订单");
+        }
         jdbc.update("UPDATE commercial_order SET status='confirmed',confirmed_at=NOW() WHERE id=? AND status IN ('quoted','pending_confirm')",id);
         return commercialOrder(id);
     }
@@ -278,15 +286,80 @@ public class ProductionManagementController {
     public Map<String,Object> startCommercialOrder(@PathVariable Long id) throws Exception {
         Map<String,Object> o=commercialOrder(id); String type=String.valueOf(o.get("orderType")); Long bomId=((Number)o.get("bomId")).longValue(); int qty=((Number)o.get("quantity")).intValue();
         if (!"confirmed".equals(String.valueOf(o.get("status")))) throw new IllegalStateException("订单须先经客户确认才能下达生产");
+        if (!hasApprovedOrderApproval(id, "start")) {
+            throw new IllegalStateException("请先提交下达生产申请，审批通过后才能进入下一步");
+        }
         if ("sample".equals(type)) { createSample(new SampleRequest(bomId,null,qty,null,"来源统一订单 "+o.get("orderNo"))); Long sid=jdbc.queryForObject("SELECT id FROM sample_order WHERE bom_id=? ORDER BY id DESC LIMIT 1",Long.class,bomId); jdbc.update("UPDATE commercial_order SET sample_id=?,status='producing' WHERE id=?",sid,id); }
         else { Map<String,Object> po=createProduction(new ProductionRequest(bomId,qty,null,null)); jdbc.update("UPDATE commercial_order SET production_order_id=?,status='producing' WHERE id=?",po.get("productionId"),id); }
         return commercialOrder(id);
+    }
+
+    @PostMapping("/commercial-orders/{id}/approval-request")
+    public Map<String,Object> requestCommercialOrderApproval(@PathVariable Long id, @RequestBody OrderApprovalRequest req) throws Exception {
+        Map<String,Object> o = commercialOrder(id);
+        String action = req == null || req.action == null ? "" : req.action.trim();
+        if (!List.of("confirm", "start").contains(action)) throw new IllegalArgumentException("审批动作必须为 confirm 或 start");
+        String status = String.valueOf(o.get("status"));
+        if ("confirm".equals(action) && !List.of("quoted", "pending_confirm").contains(status)) {
+            throw new IllegalStateException("当前订单状态不允许提交确认申请");
+        }
+        if ("start".equals(action) && !"confirmed".equals(status)) {
+            throw new IllegalStateException("订单须先确认后才能提交下达生产申请");
+        }
+        Map<String,Object> existing = orderApproval(id, action);
+        if (existing != null && List.of("pending", "approved").contains(String.valueOf(existing.get("status")))) {
+            return existing;
+        }
+
+        String type = String.valueOf(o.get("orderType"));
+        String typeName = "sample".equals(type) ? "打样" : "大货";
+        String actionName = "confirm".equals(action) ? "订单确认" : "下达生产";
+        String applicant = blank(req == null ? null : req.applicant) ? "当前用户" : req.applicant.trim();
+        String applicantRole = blank(req == null ? null : req.applicantRole) ? "feeder" : req.applicantRole.trim();
+        String appNo = no("WF");
+        String title = typeName + actionName + "申请 - " + o.get("orderNo");
+        Map<String,String> fields = new LinkedHashMap<>();
+        fields.put("orderId", String.valueOf(id));
+        fields.put("action", action);
+        fields.put("动作", actionName);
+        fields.put("业务类型", typeName);
+        fields.put("订单号", String.valueOf(o.get("orderNo")));
+        fields.put("产品名称", String.valueOf(o.get("productName")));
+        fields.put("数量", String.valueOf(o.get("quantity")));
+        fields.put("成交金额", String.valueOf(o.get("totalAmount")));
+        fields.put("客户/公司", String.valueOf(o.getOrDefault("customerName", "")));
+        fields.put("申请说明", blank(req == null ? null : req.comment) ? "申请进入下一步：" + actionName : req.comment.trim());
+        String formJson = mapper.writeValueAsString(fields);
+        jdbc.update(
+                "INSERT INTO workflow_application (app_no,category,type_key,title,applicant,applicant_role,form_data_json,status) VALUES (?,?,?,?,?,?,?,?)",
+                appNo, "production", type + "_" + action, title, applicant, applicantRole, formJson, "pending"
+        );
+        Long appId = jdbc.queryForObject("SELECT id FROM workflow_application WHERE app_no=?", Long.class, appNo);
+        jdbc.update("INSERT INTO workflow_approval_log (application_id, action, operator, operator_role, comment) VALUES (?,?,?,?,?)",
+                appId, "submit", applicant, applicantRole, fields.get("申请说明"));
+        return orderApproval(id, action);
     }
 
     @PostMapping("/commercial-orders/{id}/ready")
     public Map<String,Object> readyCommercialOrder(@PathVariable Long id) { jdbc.update("UPDATE commercial_order SET status='ready_to_ship' WHERE id=? AND status='producing'",id); return commercialOrder(id); }
 
     private Map<String,Object> commercialOrder(Long id) { return jdbc.queryForMap("SELECT o.id,o.order_no orderNo,o.order_type orderType,o.project_id projectId,o.project_sku_id projectSkuId,o.bom_id bomId,b.product_name productName,o.quote_id quoteId,o.sample_id sampleId,o.production_order_id productionOrderId,o.customer_name customerName,o.contact_name contactName,o.contact_phone contactPhone,o.receiver_address receiverAddress,o.quantity,o.unit_price unitPrice,o.total_amount totalAmount,o.status,o.confirmed_at confirmedAt,o.created_at createdAt FROM commercial_order o JOIN product_bom b ON o.bom_id=b.id WHERE o.id=?",id); }
+
+    private Map<String,Object> orderApproval(Long orderId, String action) {
+        List<Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT id, app_no appNo, type_key typeKey, title, status, applicant, approver, approval_comment approvalComment, submitted_at submittedAt, approved_at approvedAt, rejected_at rejectedAt, updated_at updatedAt " +
+                "FROM workflow_application WHERE deleted=0 AND category='production' " +
+                "AND JSON_UNQUOTE(JSON_EXTRACT(form_data_json,'$.orderId'))=? AND JSON_UNQUOTE(JSON_EXTRACT(form_data_json,'$.action'))=? " +
+                "ORDER BY id DESC LIMIT 1",
+                String.valueOf(orderId), action
+        );
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private boolean hasApprovedOrderApproval(Long orderId, String action) {
+        Map<String,Object> approval = orderApproval(orderId, action);
+        return approval != null && "approved".equals(String.valueOf(approval.get("status")));
+    }
 
     @GetMapping("/purchase-suggestions")
     public List<Map<String, Object>> purchaseSuggestions() {
@@ -347,6 +420,7 @@ public class ProductionManagementController {
     private Long count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class); }
     private BigDecimal bd(Object o) { if (o == null) return BigDecimal.ZERO; if (o instanceof BigDecimal) return (BigDecimal) o; if (o instanceof Number) return BigDecimal.valueOf(((Number)o).doubleValue()); return new BigDecimal(String.valueOf(o)); }
     private String no(String prefix) { return prefix + DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(LocalDateTime.now()) + (int)(Math.random()*900+100); }
+    private boolean blank(String s) { return s == null || s.trim().isEmpty(); }
 
     public static class AutoBomRequest { public String productName; public String productType; public Long skuId; public Long assetId; public Integer plannedQty; public BigDecimal targetPrice; }
     public static class QuoteRequest { public Long bomId; public Integer quantity; public BigDecimal overheadRate; public BigDecimal targetMarginRate; public QuoteRequest(){} public QuoteRequest(Long bomId, Integer quantity, BigDecimal overheadRate, BigDecimal targetMarginRate){this.bomId=bomId;this.quantity=quantity;this.overheadRate=overheadRate;this.targetMarginRate=targetMarginRate;} }
@@ -356,4 +430,5 @@ public class ProductionManagementController {
     public static class BomMaterialEdit { public Long materialId; public BigDecimal qty; public BigDecimal lossRate; public String remark; }
     public static class BomProcessEdit { public Long processId; public BigDecimal qty; public String remark; }
     public static class CommercialOrderRequest { public String orderType; public Long projectId; public Long projectSkuId; public Long bomId; public Integer quantity; public BigDecimal unitPrice; public BigDecimal targetMarginRate; public String customerName; public String contactName; public String contactPhone; public String receiverAddress; public String productionRequirement; }
+    public static class OrderApprovalRequest { public String action; public String applicant; public String applicantRole; public String comment; }
 }

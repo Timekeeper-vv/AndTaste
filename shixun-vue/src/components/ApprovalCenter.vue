@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
 
 type ApprovalStatus = 'pending' | 'approved' | 'rejected'
-type ApprovalCategory = 'finance' | 'chain'
+type ApprovalCategory = 'finance' | 'chain' | 'production' | 'marketDepartment' | 'projectDepartment' | 'humanResource' | 'attendance'
 
 interface WorkflowApplication {
   id: number
@@ -82,7 +82,7 @@ function statusLabel(status: ApprovalStatus) {
 }
 
 function categoryLabel(category: ApprovalCategory) {
-  return category === 'finance' ? '财务申请' : '连锁申请'
+  return category === 'finance' ? '财务申请' : category === 'production' ? '生产申请' : category === 'marketDepartment' ? '市场部需求' : category === 'projectDepartment' ? '项目部需求' : category === 'humanResource' ? '人力资源申请' : category === 'attendance' ? '考勤申请' : '连锁申请'
 }
 
 onMounted(load)
@@ -93,7 +93,7 @@ onMounted(load)
     <section class="approval-hero">
       <span>APPROVAL CENTER</span>
       <h2>审批中心</h2>
-      <p>超级管理员和审批主管在这里统一处理员工提交的财务、连锁和业务申请。</p>
+      <p>超级管理员和审批主管在这里统一处理员工提交的财务、连锁、市场部、项目部、人力资源、考勤和业务申请。</p>
     </section>
 
     <section class="approval-stats">
@@ -116,7 +116,7 @@ onMounted(load)
       </header>
 
       <div v-if="!visibleApplications.length" class="empty">
-        暂无{{ filter === 'pending' ? '待审批' : '' }}申请。请先到“财务管理”或“之间连锁”里提交一条申请。
+        暂无{{ filter === 'pending' ? '待审批' : '' }}申请。请先到“财务管理”“之间连锁”“市场部需求管理”“项目部需求管理”“人力资源管理”或“考勤管理”里提交一条申请。
       </div>
 
       <article v-for="item in visibleApplications" :key="item.id" class="approval-item">

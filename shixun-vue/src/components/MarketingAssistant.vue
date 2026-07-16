@@ -53,9 +53,9 @@ function joinList(list?: string[]) {
   <div class="page marketing-page">
     <div class="page-header marketing-hero">
       <div>
-        <p class="eyebrow">AI MARKETING COPY ASSISTANT</p>
-        <h2 class="page-title">AI营销文案助手</h2>
-        <p class="page-desc">先把文创产品的标题、卖点、详情页、小红书、抖音脚本和客服回复跑起来，适合每天快速上新和发内容。</p>
+        <p class="eyebrow">MARKETING DEPARTMENT · COPYWRITING</p>
+        <h2 class="page-title">产品宣传文案</h2>
+        <p class="page-desc">独立的产品宣传文案页面，可生成标题、卖点、详情页、小红书、抖音脚本和客服回复，适合电商上新与日常内容发布。</p>
       </div>
       <button class="btn btn-primary" :disabled="loading" @click="generate">{{ loading ? '生成中...' : '一键生成文案' }}</button>
     </div>

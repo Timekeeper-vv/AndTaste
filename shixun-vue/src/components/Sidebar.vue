@@ -30,7 +30,8 @@ const allMenus: MenuGroup[] = [
     { key: 'creative3d', label: '3D辅助建模', parentKey: 'studio', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'creativeReview', label: '智能评估', parentKey: 'studio', roles: MANAGER_ROLES, icon: `<svg></svg>` },
     { key: 'scaleUp', label: '生产管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h16"/><path d="M7 16V8"/><path d="M12 16V5"/><path d="M17 16v-3"/></svg>` },
-    { key: 'production', label: '智能成本核算引擎', parentKey: 'scaleUp', roles: MANAGER_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><path d="M6 3v18"/><path d="M18 3v10"/></svg>` },
+    { key: 'createProductionProject', label: '创建项目', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'production', label: '智能成本核算引擎', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><path d="M6 3v18"/><path d="M18 3v10"/></svg>` },
     { key: 'sampleProduction', label: '产品打样管理', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'bulkProduction', label: '大货生产管理', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
   ]},
@@ -45,6 +46,36 @@ const allMenus: MenuGroup[] = [
     { key: 'chainMarketing', label: '门店营销方案申请【连锁】', parentKey: 'chain', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'chainNewProduct', label: '新商品上架申请【连锁】', parentKey: 'chain', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'chainPriceAdjust', label: '商品售价调整申请【连锁】', parentKey: 'chain', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+  ]},
+  { group: '', items: [
+    { key: 'marketDemand', label: '市场部需求管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l18-5v12L3 13v-2z"/><path d="M11.6 16.8a3 3 0 0 1-5.8-1.6"/><path d="M21 8v8"/></svg>` },
+    { key: 'marketPromotion', label: '营销宣传申请', parentKey: 'marketDemand', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'marketEcommerceNewProduct', label: '电商新品上架申请', parentKey: 'marketDemand', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'marketShooting', label: '拍摄需求申请', parentKey: 'marketDemand', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'marketProductCopy', label: '产品宣传文案', parentKey: 'marketDemand', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+  ]},
+  { group: '', items: [
+    { key: 'projectDemand', label: '项目部需求管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v14H4z"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M6 3v4"/><path d="M18 3v4"/></svg>` },
+    { key: 'projectInitiation', label: '项目立项申请', parentKey: 'projectDemand', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'projectInquiry', label: '项目询价申请', parentKey: 'projectDemand', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+  ]},
+  { group: '', items: [
+    { key: 'hrManagement', label: '人力资源管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>` },
+    { key: 'hrNewProductIncentive', label: '新产品开发激励', parentKey: 'hrManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'hrResignation', label: '离职申请', parentKey: 'hrManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'hrTraining', label: '培训申请', parentKey: 'hrManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'hrHolidayOvertime', label: '加班申请【法定节假日】', parentKey: 'hrManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'hrTransfer', label: '调岗申请', parentKey: 'hrManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'hrPolicyApproval', label: '制度&方案审批', parentKey: 'hrManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'hrRegularization', label: '转正申请', parentKey: 'hrManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'hrRecruitment', label: '招聘申请', parentKey: 'hrManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+  ]},
+  { group: '', items: [
+    { key: 'attendanceManagement', label: '考勤管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/><path d="M12 14v3l2 1"/></svg>` },
+    { key: 'attendanceCardRepair', label: '补卡申请', parentKey: 'attendanceManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'attendanceLeave', label: '请假申请', parentKey: 'attendanceManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'attendanceBusinessTrip', label: '出差申请', parentKey: 'attendanceManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'attendanceOutgoing', label: '外出申请', parentKey: 'attendanceManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
   ]},
   { group: '', items: [
     { key: 'finance', label: '财务管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-8h6v8"/><path d="M8 9h8"/></svg>` },
@@ -97,7 +128,7 @@ const currentRoleColor = computed<string>(() => roleColors[props.currentUser?.ro
           v-for="item in menu.items"
           :key="item.key"
           class="nav-item"
-          :class="{ active: currentPage === item.key, parent: ['studio','scaleUp','warehouseLogistics','chain','finance'].includes(item.key), child: !!item.parentKey }"
+          :class="{ active: currentPage === item.key, parent: ['studio','scaleUp','warehouseLogistics','chain','marketDemand','projectDemand','hrManagement','attendanceManagement','finance'].includes(item.key), child: !!item.parentKey }"
           :title="collapsed ? item.label : ''"
           @click="emit('switch-page', item.key)"
         >
@@ -106,7 +137,7 @@ const currentRoleColor = computed<string>(() => roleColors[props.currentUser?.ro
             <span v-if="!collapsed" class="nav-content">
               <span v-if="item.parentKey" class="child-line"></span>
               <span class="nav-label">{{ item.label }}</span>
-              <span v-if="['studio','scaleUp','warehouseLogistics','chain','finance'].includes(item.key)" class="parent-arrow">⌄</span>
+              <span v-if="['studio','scaleUp','warehouseLogistics','chain','marketDemand','projectDemand','hrManagement','attendanceManagement','finance'].includes(item.key)" class="parent-arrow">⌄</span>
             </span>
           </transition>
           <transition name="fade">

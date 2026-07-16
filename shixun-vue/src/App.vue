@@ -12,6 +12,11 @@ import WarehouseManagement from './components/WarehouseManagement.vue'
 import DesignerCenter from './components/DesignerCenter.vue'
 import UserManagement from './components/UserManagement.vue'
 import ChainApplicationPage from './components/ChainApplicationPage.vue'
+import MarketingDemandPage from './components/MarketingDemandPage.vue'
+import MarketingAssistant from './components/MarketingAssistant.vue'
+import ProjectDemandPage from './components/ProjectDemandPage.vue'
+import HumanResourcePage from './components/HumanResourcePage.vue'
+import AttendanceManagementPage from './components/AttendanceManagementPage.vue'
 import FinanceApplicationPage from './components/FinanceApplicationPage.vue'
 import ApprovalCenter from './components/ApprovalCenter.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
@@ -38,6 +43,28 @@ const PAGE_ROLES: Record<string, Role[]> = {
   chainMarketing:STAFF_WORKFLOW_ROLES,
   chainNewProduct:STAFF_WORKFLOW_ROLES,
   chainPriceAdjust:STAFF_WORKFLOW_ROLES,
+  marketDemand:STAFF_WORKFLOW_ROLES,
+  marketPromotion:STAFF_WORKFLOW_ROLES,
+  marketEcommerceNewProduct:STAFF_WORKFLOW_ROLES,
+  marketShooting:STAFF_WORKFLOW_ROLES,
+  marketProductCopy:STAFF_WORKFLOW_ROLES,
+  projectDemand:STAFF_WORKFLOW_ROLES,
+  projectInitiation:STAFF_WORKFLOW_ROLES,
+  projectInquiry:STAFF_WORKFLOW_ROLES,
+  hrManagement:STAFF_WORKFLOW_ROLES,
+  hrNewProductIncentive:STAFF_WORKFLOW_ROLES,
+  hrResignation:STAFF_WORKFLOW_ROLES,
+  hrTraining:STAFF_WORKFLOW_ROLES,
+  hrHolidayOvertime:STAFF_WORKFLOW_ROLES,
+  hrTransfer:STAFF_WORKFLOW_ROLES,
+  hrPolicyApproval:STAFF_WORKFLOW_ROLES,
+  hrRegularization:STAFF_WORKFLOW_ROLES,
+  hrRecruitment:STAFF_WORKFLOW_ROLES,
+  attendanceManagement:STAFF_WORKFLOW_ROLES,
+  attendanceCardRepair:STAFF_WORKFLOW_ROLES,
+  attendanceLeave:STAFF_WORKFLOW_ROLES,
+  attendanceBusinessTrip:STAFF_WORKFLOW_ROLES,
+  attendanceOutgoing:STAFF_WORKFLOW_ROLES,
   finance:      STAFF_WORKFLOW_ROLES,
   financeAssetScrap:STAFF_WORKFLOW_ROLES,
   financePublicPayment:STAFF_WORKFLOW_ROLES,
@@ -51,7 +78,8 @@ const PAGE_ROLES: Record<string, Role[]> = {
   financeSpecialExpense:STAFF_WORKFLOW_ROLES,
   financePettyCashWriteoff:STAFF_WORKFLOW_ROLES,
   scaleUp:      STAFF_WORKFLOW_ROLES,
-  production:   MANAGER_ROLES,
+  createProductionProject:STAFF_WORKFLOW_ROLES,
+  production:   STAFF_WORKFLOW_ROLES,
   sampleProduction:STAFF_WORKFLOW_ROLES,
   bulkProduction:STAFF_WORKFLOW_ROLES,
   logistics:    MANAGER_ROLES,
@@ -118,6 +146,28 @@ const pageLabels: Record<string, string> = {
   chainMarketing:'门店营销方案申请【连锁】',
   chainNewProduct:'新商品上架申请【连锁】',
   chainPriceAdjust:'商品售价调整申请【连锁】',
+  marketDemand:'市场部需求管理',
+  marketPromotion:'营销宣传申请',
+  marketEcommerceNewProduct:'电商新品上架申请',
+  marketShooting:'拍摄需求申请',
+  marketProductCopy:'产品宣传文案',
+  projectDemand:'项目部需求管理',
+  projectInitiation:'项目立项申请',
+  projectInquiry:'项目询价申请',
+  hrManagement:'人力资源管理',
+  hrNewProductIncentive:'新产品开发激励',
+  hrResignation:'离职申请',
+  hrTraining:'培训申请',
+  hrHolidayOvertime:'加班申请【法定节假日】',
+  hrTransfer:'调岗申请',
+  hrPolicyApproval:'制度&方案审批',
+  hrRegularization:'转正申请',
+  hrRecruitment:'招聘申请',
+  attendanceManagement:'考勤管理',
+  attendanceCardRepair:'补卡申请',
+  attendanceLeave:'请假申请',
+  attendanceBusinessTrip:'出差申请',
+  attendanceOutgoing:'外出申请',
   finance:      '财务管理',
   financeAssetScrap:'固定资产报废申请',
   financePublicPayment:'对公付款申请(供应链)',
@@ -131,6 +181,7 @@ const pageLabels: Record<string, string> = {
   financeSpecialExpense:'费用报销(特殊事项)',
   financePettyCashWriteoff:'备用金核销',
   scaleUp:      '生产管理',
+  createProductionProject:'创建项目',
   production:   '智能成本核算引擎',
   sampleProduction:'产品打样管理',
   bulkProduction:'大货生产管理',
@@ -198,6 +249,28 @@ const pageLabels: Record<string, string> = {
         <ChainApplicationPage v-if="currentPage === 'chainMarketing'" type="marketing" :current-user="currentUser" @alert="showAlert" />
         <ChainApplicationPage v-if="currentPage === 'chainNewProduct'" type="newProduct" :current-user="currentUser" @alert="showAlert" />
         <ChainApplicationPage v-if="currentPage === 'chainPriceAdjust'" type="priceAdjust" :current-user="currentUser" @alert="showAlert" />
+        <MarketingDemandPage v-if="currentPage === 'marketDemand'" type="home" :current-user="currentUser" @alert="showAlert" />
+        <MarketingDemandPage v-if="currentPage === 'marketPromotion'" type="promotion" :current-user="currentUser" @alert="showAlert" />
+        <MarketingDemandPage v-if="currentPage === 'marketEcommerceNewProduct'" type="ecommerceNewProduct" :current-user="currentUser" @alert="showAlert" />
+        <MarketingDemandPage v-if="currentPage === 'marketShooting'" type="shooting" :current-user="currentUser" @alert="showAlert" />
+        <MarketingAssistant v-if="currentPage === 'marketProductCopy'" @alert="showAlert" />
+        <ProjectDemandPage v-if="currentPage === 'projectDemand'" type="home" :current-user="currentUser" @alert="showAlert" />
+        <ProjectDemandPage v-if="currentPage === 'projectInitiation'" type="initiation" :current-user="currentUser" @alert="showAlert" />
+        <ProjectDemandPage v-if="currentPage === 'projectInquiry'" type="inquiry" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrManagement'" type="home" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrNewProductIncentive'" type="newProductIncentive" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrResignation'" type="resignation" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrTraining'" type="training" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrHolidayOvertime'" type="holidayOvertime" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrTransfer'" type="transfer" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrPolicyApproval'" type="policyApproval" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrRegularization'" type="regularization" :current-user="currentUser" @alert="showAlert" />
+        <HumanResourcePage v-if="currentPage === 'hrRecruitment'" type="recruitment" :current-user="currentUser" @alert="showAlert" />
+        <AttendanceManagementPage v-if="currentPage === 'attendanceManagement'" type="home" :current-user="currentUser" @alert="showAlert" />
+        <AttendanceManagementPage v-if="currentPage === 'attendanceCardRepair'" type="cardRepair" :current-user="currentUser" @alert="showAlert" />
+        <AttendanceManagementPage v-if="currentPage === 'attendanceLeave'" type="leave" :current-user="currentUser" @alert="showAlert" />
+        <AttendanceManagementPage v-if="currentPage === 'attendanceBusinessTrip'" type="businessTrip" :current-user="currentUser" @alert="showAlert" />
+        <AttendanceManagementPage v-if="currentPage === 'attendanceOutgoing'" type="outgoing" :current-user="currentUser" @alert="showAlert" />
         <FinanceApplicationPage v-if="currentPage === 'finance'" type="home" :current-user="currentUser" @alert="showAlert" />
         <FinanceApplicationPage v-if="currentPage === 'financeAssetScrap'" type="assetScrap" :current-user="currentUser" @alert="showAlert" />
         <FinanceApplicationPage v-if="currentPage === 'financePublicPayment'" type="publicPayment" :current-user="currentUser" @alert="showAlert" />
@@ -211,9 +284,10 @@ const pageLabels: Record<string, string> = {
         <FinanceApplicationPage v-if="currentPage === 'financeSpecialExpense'" type="specialExpense" :current-user="currentUser" @alert="showAlert" />
         <FinanceApplicationPage v-if="currentPage === 'financePettyCashWriteoff'" type="pettyCashWriteoff" :current-user="currentUser" @alert="showAlert" />
         <ScaleUpPlatform     v-if="currentPage === 'scaleUp'" @alert="showAlert" />
-        <ProductionManagement v-if="currentPage === 'production'" initial-view="cost" @alert="showAlert" />
-        <ProductionManagement v-if="currentPage === 'sampleProduction'" initial-view="sample" @alert="showAlert" />
-        <ProductionManagement v-if="currentPage === 'bulkProduction'" initial-view="bulk" @alert="showAlert" />
+        <ProductionManagement v-if="currentPage === 'createProductionProject'" initial-view="project" :current-user="currentUser" @alert="showAlert" @switch-page="p => { if (hasAccess(p, currentUser?.role)) currentPage = p as PageName }" />
+        <ProductionManagement v-if="currentPage === 'production'" initial-view="cost" :current-user="currentUser" @alert="showAlert" />
+        <ProductionManagement v-if="currentPage === 'sampleProduction'" initial-view="sample" :current-user="currentUser" @alert="showAlert" />
+        <ProductionManagement v-if="currentPage === 'bulkProduction'" initial-view="bulk" :current-user="currentUser" @alert="showAlert" />
         <LogisticsTracking    v-if="currentPage === 'logistics'"  @alert="showAlert" />
         <WarehouseManagement v-if="currentPage === 'warehouseLogistics'" initial-view="inventory" @alert="showAlert" />
         <WarehouseManagement v-if="currentPage === 'warehouse'" initial-view="alerts" @alert="showAlert" />
