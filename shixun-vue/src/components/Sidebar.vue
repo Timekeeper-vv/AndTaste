@@ -33,6 +33,7 @@ const allMenus: MenuGroup[] = [
     { key: 'createProductionProject', label: '创建项目', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'production', label: '智能成本核算引擎', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><path d="M6 3v18"/><path d="M18 3v10"/></svg>` },
     { key: 'sampleApplication', label: '打样申请', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
+    { key: 'sampleWorkOrders', label: '打样工单明细', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'sampleProduction', label: '产品打样管理', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'bulkProduction', label: '大货生产管理', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
   ]},
@@ -80,7 +81,6 @@ const allMenus: MenuGroup[] = [
   ]},
   { group: '', items: [
     { key: 'supplierList', label: '供应商列表', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18"/><path d="M5 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/><rect x="4" y="7" width="16" height="14" rx="2"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>` },
-    { key: 'sampleWorkOrders', label: '供应链打样工单明细', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>` },
   ]},
   { group: '', items: [
     { key: 'finance', label: '财务管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-8h6v8"/><path d="M8 9h8"/></svg>` },
