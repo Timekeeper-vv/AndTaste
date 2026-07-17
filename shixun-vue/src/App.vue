@@ -18,6 +18,7 @@ import ProjectDemandPage from './components/ProjectDemandPage.vue'
 import HumanResourcePage from './components/HumanResourcePage.vue'
 import AttendanceManagementPage from './components/AttendanceManagementPage.vue'
 import SupplierList from './components/SupplierList.vue'
+import SampleWorkOrderPage from './components/SampleWorkOrderPage.vue'
 import FinanceApplicationPage from './components/FinanceApplicationPage.vue'
 import ApprovalCenter from './components/ApprovalCenter.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
@@ -67,6 +68,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   attendanceBusinessTrip:STAFF_WORKFLOW_ROLES,
   attendanceOutgoing:STAFF_WORKFLOW_ROLES,
   supplierList:STAFF_WORKFLOW_ROLES,
+  sampleWorkOrders:STAFF_WORKFLOW_ROLES,
   finance:      STAFF_WORKFLOW_ROLES,
   financeAssetScrap:STAFF_WORKFLOW_ROLES,
   financePublicPayment:STAFF_WORKFLOW_ROLES,
@@ -171,6 +173,7 @@ const pageLabels: Record<string, string> = {
   attendanceBusinessTrip:'出差申请',
   attendanceOutgoing:'外出申请',
   supplierList:'供应商列表',
+  sampleWorkOrders:'供应链打样工单明细',
   finance:      '财务管理',
   financeAssetScrap:'固定资产报废申请',
   financePublicPayment:'对公付款申请(供应链)',
@@ -275,6 +278,7 @@ const pageLabels: Record<string, string> = {
         <AttendanceManagementPage v-if="currentPage === 'attendanceBusinessTrip'" type="businessTrip" :current-user="currentUser" @alert="showAlert" />
         <AttendanceManagementPage v-if="currentPage === 'attendanceOutgoing'" type="outgoing" :current-user="currentUser" @alert="showAlert" />
         <SupplierList v-if="currentPage === 'supplierList'" />
+        <SampleWorkOrderPage v-if="currentPage === 'sampleWorkOrders'" />
         <FinanceApplicationPage v-if="currentPage === 'finance'" type="home" :current-user="currentUser" @alert="showAlert" />
         <FinanceApplicationPage v-if="currentPage === 'financeAssetScrap'" type="assetScrap" :current-user="currentUser" @alert="showAlert" />
         <FinanceApplicationPage v-if="currentPage === 'financePublicPayment'" type="publicPayment" :current-user="currentUser" @alert="showAlert" />

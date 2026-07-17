@@ -960,6 +960,64 @@ ALTER TABLE commercial_order ADD COLUMN bom_snapshot_json JSON NULL;
 ALTER TABLE commercial_order ADD COLUMN material_snapshot_json JSON NULL;
 ALTER TABLE commercial_order ADD COLUMN process_snapshot_json JSON NULL;
 
+-- SUPPLY_CHAIN_SAMPLE_WORK_ORDER_IMPORT_V1
+-- 供应链工单明细：一行 Excel 打样明细保留为一条系统记录。
+-- 设计原则：结构化字段便于检索统计，raw_json 同时保留原始 34 列和 Excel 行号，确保导入零遗漏、可追溯。
+CREATE TABLE IF NOT EXISTS supply_chain_sample_work_order (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    import_batch VARCHAR(120) NOT NULL DEFAULT '2026打样申请',
+    source_file VARCHAR(255) NOT NULL,
+    source_sheet VARCHAR(120) NOT NULL,
+    excel_row_no INT NOT NULL COMMENT 'Excel 原始行号（含表头偏移）',
+    application_no VARCHAR(80) NOT NULL COMMENT '申请编号',
+    approval_status VARCHAR(40) COMMENT '申请状态',
+    approval_flow VARCHAR(80) COMMENT '审批流程',
+    initiated_at DATETIME NULL COMMENT '发起时间',
+    completed_at DATETIME NULL COMMENT '完成时间',
+    initiator VARCHAR(80) COMMENT '发起人',
+    initiator_department VARCHAR(120) COMMENT '发起人部门',
+    current_handler VARCHAR(120) COMMENT '当前处理人',
+    approval_node VARCHAR(120) COMMENT '审批节点',
+    application_department VARCHAR(120) COMMENT '申请部门',
+    applicant VARCHAR(80) COMMENT '申请人',
+    project_name VARCHAR(200) COMMENT '项目名称',
+    product_name VARCHAR(255) NOT NULL COMMENT '打样明细_产品名称',
+    order_type VARCHAR(80) COMMENT '打样明细_订单类型',
+    product_type VARCHAR(120) COMMENT '打样明细_产品类型',
+    product_sub_type VARCHAR(120) COMMENT '打样明细_二级类型',
+    product_estimate DECIMAL(14,2) NULL COMMENT '打样明细_产品估价',
+    product_estimate_currency VARCHAR(20) COMMENT '打样明细_产品估价-币种',
+    sample_quantity_text VARCHAR(120) COMMENT '打样明细_打样数量（保留文本，如 4套（24个））',
+    spec_flavor VARCHAR(255) COMMENT '打样明细_规格/口味',
+    sample_fee_yuan DECIMAL(14,2) NULL COMMENT '打样明细_打样费(元)',
+    detail_remark TEXT COMMENT '打样明细_备注',
+    detail_project_name VARCHAR(200) COMMENT '打样明细_项目名称',
+    linked_project_flow VARCHAR(500) COMMENT '关联项目立项申请流程',
+    attachment_summary VARCHAR(120) COMMENT '附件：（设计图稿）',
+    source_id VARCHAR(191) NOT NULL COMMENT 'Excel SourceID，一条打样明细唯一',
+    work_order_status VARCHAR(60) COMMENT '工单状态',
+    start_date DATE NULL COMMENT '开始时间',
+    estimated_complete_date DATE NULL COMMENT '预计完成时间',
+    actual_complete_date DATE NULL COMMENT '实际完成时间',
+    owner VARCHAR(80) COMMENT '负责人',
+    factory VARCHAR(500) COMMENT '工厂/工厂备注',
+    sample_cost_yuan DECIMAL(14,2) NULL COMMENT '打样费用',
+    sample_file_provided_date DATE NULL COMMENT '打样文件提供日期',
+    row_checksum CHAR(64) NOT NULL COMMENT '原始行校验和',
+    raw_json JSON NULL COMMENT '原始 Excel 34 列、列头、原始单元格值和显示值',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_sc_sample_source_id (source_id),
+    UNIQUE KEY uk_sc_sample_batch_row (import_batch, excel_row_no),
+    UNIQUE KEY uk_sc_sample_checksum (row_checksum),
+    KEY idx_sc_sample_application_no (application_no),
+    KEY idx_sc_sample_project (project_name),
+    KEY idx_sc_sample_product (product_name),
+    KEY idx_sc_sample_status (work_order_status),
+    KEY idx_sc_sample_owner (owner),
+    KEY idx_sc_sample_initiated (initiated_at)
+) COMMENT='供应链打样申请工单明细导入表';
+
 
 -- TRIPO_3D_INTEGRATION_V5
 ALTER TABLE ai_generation_job ADD COLUMN external_task_id VARCHAR(160) NULL;
