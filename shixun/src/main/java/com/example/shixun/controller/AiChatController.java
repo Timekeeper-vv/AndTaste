@@ -120,7 +120,7 @@ public class AiChatController {
             return ResponseEntity.ok(Map.of(
                     "reply", answer.reply(),
                     "source", answer.source(),
-                    "tool", "search_suppliers",
+                    "tool", answer.toolName(),
                     "toolArguments", answer.toolArguments(),
                     "toolResult", answer.toolResult()
             ));

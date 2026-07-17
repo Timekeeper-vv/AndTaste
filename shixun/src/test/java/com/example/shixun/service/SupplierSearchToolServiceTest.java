@@ -3,6 +3,8 @@ package com.example.shixun.service;
 import com.example.shixun.model.SupplierBankAccount;
 import com.example.shixun.model.SupplierSearchRequest;
 import com.example.shixun.model.SupplierSearchResult;
+import com.example.shixun.model.SupplierStatisticsRequest;
+import com.example.shixun.model.SupplierStatisticsResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -81,6 +83,39 @@ class SupplierSearchToolServiceTest {
         assertThat(result.getItems()).hasSize(1);
         assertThat(result.getItems().get(0).getSupplier()).isEqualTo("深圳市星米三维科技有限公司");
         assertThat(result.getItems().get(0).getBankAccount()).isEqualTo("755958121410901");
+    }
+
+    @Test
+    void getSupplierStatistics_groupByRegionUsesActualDatabaseValues() {
+        SupplierStatisticsResult result = service.getSupplierStatistics(new SupplierStatisticsRequest("region", true));
+
+        assertThat(result.getField()).isEqualTo("region");
+        assertThat(result.getGroups()).extracting(SupplierStatisticsResult.Group::getValue)
+                .contains("广东省广州市", "广东省东莞市", "深圳市", "山东省青岛市");
+        assertThat(result.getGroups()).anySatisfy(group -> {
+            assertThat(group.getValue()).isEqualTo("广东省广州市");
+            assertThat(group.getCount()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void getSupplierStatistics_groupByBankName() {
+        SupplierStatisticsResult result = service.getSupplierStatistics(new SupplierStatisticsRequest("bank_name", true));
+
+        assertThat(result.getField()).isEqualTo("bank_name");
+        assertThat(result.getGroups()).anySatisfy(group -> {
+            assertThat(group.getValue()).isEqualTo("中国建设银行");
+            assertThat(group.getCount()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    void getSupplierStatistics_supplierTypeUnsupportedDoesNotInventGroups() {
+        SupplierStatisticsResult result = service.getSupplierStatistics(new SupplierStatisticsRequest("supplier_type", true));
+
+        assertThat(result.getField()).isEqualTo("supplier_type");
+        assertThat(result.getGroups()).isEmpty();
+        assertThat(result.getMessage()).contains("暂不支持");
     }
 
     @Test

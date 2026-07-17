@@ -3,6 +3,8 @@ package com.example.shixun.service;
 import com.example.shixun.model.SupplierBankAccount;
 import com.example.shixun.model.SupplierSearchRequest;
 import com.example.shixun.model.SupplierSearchResult;
+import com.example.shixun.model.SupplierStatisticsRequest;
+import com.example.shixun.model.SupplierStatisticsResult;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -59,6 +61,48 @@ public class SupplierSearchToolService {
         return SupplierSearchResult.list(total, items, queryParams);
     }
 
+    /**
+     * get_supplier_statistics 工具函数。
+     * 仅做白名单字段聚合，不允许 LLM 传 SQL 字段名，避免注入与幻觉分类。
+     */
+    public SupplierStatisticsResult getSupplierStatistics(SupplierStatisticsRequest rawRequest) {
+        SupplierStatisticsRequest req = normalizeStats(rawRequest);
+        String field = req.getGroupByField();
+        boolean includeCount = !Boolean.FALSE.equals(req.getIncludeCount());
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("group_by_field", field);
+        params.put("include_count", includeCount);
+
+        String column = switch (field) {
+            case "region" -> "location";
+            case "bank_name" -> "bank";
+            case "supplier_type" -> null;
+            default -> null;
+        };
+
+        if (column == null) {
+            return new SupplierStatisticsResult(
+                    field,
+                    List.of(),
+                    "当前数据库暂不支持该维度的聚合统计。当前支持按地区 region 和银行 bank_name 统计。",
+                    params
+            );
+        }
+
+        String countExpr = includeCount ? "COUNT(*)" : "NULL";
+        List<SupplierStatisticsResult.Group> groups = jdbc.query(
+                "SELECT COALESCE(NULLIF(TRIM(" + column + "), ''), '未填写') AS group_value, " + countExpr + " AS cnt " +
+                        "FROM supplier_bank_accounts GROUP BY COALESCE(NULLIF(TRIM(" + column + "), ''), '未填写') ORDER BY cnt DESC, group_value ASC",
+                (rs, i) -> new SupplierStatisticsResult.Group(
+                        rs.getString("group_value"),
+                        includeCount ? rs.getLong("cnt") : null
+                )
+        );
+
+        return new SupplierStatisticsResult(field, groups, null, params);
+    }
+
     SupplierSearchRequest normalize(SupplierSearchRequest raw) {
         SupplierSearchRequest req = raw == null ? new SupplierSearchRequest() : raw;
         String region = safeText(req.getRegion());
@@ -69,6 +113,14 @@ public class SupplierSearchToolService {
         if (limit < 1) limit = 20;
         if (limit > 100) limit = 100;
         return new SupplierSearchRequest(region, keyword, bankName, countOnly, limit);
+    }
+
+    SupplierStatisticsRequest normalizeStats(SupplierStatisticsRequest raw) {
+        SupplierStatisticsRequest req = raw == null ? new SupplierStatisticsRequest() : raw;
+        String field = safeText(req.getGroupByField());
+        if (field.isBlank()) field = "region";
+        boolean includeCount = !Boolean.FALSE.equals(req.getIncludeCount());
+        return new SupplierStatisticsRequest(field, includeCount);
     }
 
     QueryParts buildQuery(SupplierSearchRequest req) {

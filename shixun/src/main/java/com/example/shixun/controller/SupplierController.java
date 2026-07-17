@@ -2,6 +2,8 @@ package com.example.shixun.controller;
 
 import com.example.shixun.model.SupplierSearchRequest;
 import com.example.shixun.model.SupplierSearchResult;
+import com.example.shixun.model.SupplierStatisticsRequest;
+import com.example.shixun.model.SupplierStatisticsResult;
 import com.example.shixun.service.SupplierSearchToolService;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.ResponseEntity;
@@ -41,6 +43,11 @@ public class SupplierController {
     @PostMapping("/search")
     public ResponseEntity<SupplierSearchResult> search(@RequestBody(required = false) SupplierSearchRequest request) {
         return ResponseEntity.ok(supplierSearch.searchSuppliers(request));
+    }
+
+    @PostMapping("/statistics")
+    public ResponseEntity<SupplierStatisticsResult> statistics(@RequestBody(required = false) SupplierStatisticsRequest request) {
+        return ResponseEntity.ok(supplierSearch.getSupplierStatistics(request));
     }
 
     @PostMapping
