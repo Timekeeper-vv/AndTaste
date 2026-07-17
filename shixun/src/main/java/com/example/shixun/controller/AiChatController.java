@@ -1,6 +1,7 @@
 package com.example.shixun.controller;
 
 import com.example.shixun.service.SiliconFlowChatService;
+import com.example.shixun.service.SampleWorkOrderAiService;
 import com.example.shixun.service.SupplierTextToApiService;
 import com.example.shixun.service.WebSearchService;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +22,7 @@ public class AiChatController {
     private final JdbcTemplate jdbc;
     private final WebSearchService webSearch;
     private final SupplierTextToApiService supplierTextToApi;
+    private final SampleWorkOrderAiService sampleWorkOrderAi;
 
     private static final String SYSTEM_PROMPT =
             "你是“之间味道-文创产品智能体平台”的AI业务助手，专注于文创产品业务。" +
@@ -42,7 +44,7 @@ public class AiChatController {
             new FormDoc("大货生产管理", "生产管理 > 大货生产管理", "查看大货订单、生产任务、采购准备和完工待发货状态。", "订单号、产品、数量、报价、审批状态", "生产完工后到物流跟踪绑定运单。"),
 
             new FormDoc("供应商列表", "供应商列表", "查询供应商对公账户、银行账号、开户行和所在地。", "收方编号、供应商、户名、银行账号、银行、开户行、所在地", "支持模糊查询、银行筛选、地区筛选、导出CSV。付款前务必核验户名和账号一致性。天津华明乳业信息需二次核实。"),
-            new FormDoc("供应链打样工单明细", "供应链打样工单明细", "查看已导入的2026打样申请工作表明细。原表155行含表头，系统保存154条业务明细，并保留34列原始数据、SourceID和行校验和。", "申请编号、项目名称、产品名称、订单类型、产品类型、打样数量、工单状态、开始时间、预计完成时间、实际完成时间、负责人、工厂、打样费用、SourceID", "支持按申请编号、项目、产品、负责人、产品类型、SourceID查询筛选；点击查看原始列可核对Excel 34列。"),
+            new FormDoc("打样工单明细", "生产管理 > 打样工单明细", "查看全部打样任务进度、负责人、计划时间和完成情况。", "申请编号、项目名称、产品名称、订单类型、产品类型、打样数量、工单状态、开始时间、预计完成时间、实际完成时间、负责人、工厂、打样费用", "支持按申请编号、项目、产品、负责人、产品类型查询筛选；点击详情可查看完整打样信息。"),
 
             new FormDoc("营销宣传申请", "市场部需求管理 > 营销宣传申请", "申请活动推广、节日营销、渠道投放、物料制作。", "需求名称、宣传主题、投放渠道、目标人群、上线时间、预算金额、所需物料、预期效果", "提交后进入审批中心。"),
             new FormDoc("电商新品上架申请", "市场部需求管理 > 电商新品上架申请", "申请电商平台新品上架资料、价格、库存、详情页和资源位。", "商品名称、SKU、上架平台、商品类目、建议售价、首批库存、卖点摘要、计划上架时间", "价格库存需和供应链确认。"),
@@ -96,11 +98,12 @@ public class AiChatController {
             new SupplierDoc("2024052000407","青岛益美鑫包装科技有限公司","对公账户","青岛益美鑫包装科技有限公司","37150198691000004147","中国建设银行","中国建设银行青岛中山路支行","山东省青岛市","")
     );
 
-    public AiChatController(SiliconFlowChatService siliconFlow, JdbcTemplate jdbc, WebSearchService webSearch, SupplierTextToApiService supplierTextToApi) {
+    public AiChatController(SiliconFlowChatService siliconFlow, JdbcTemplate jdbc, WebSearchService webSearch, SupplierTextToApiService supplierTextToApi, SampleWorkOrderAiService sampleWorkOrderAi) {
         this.siliconFlow = siliconFlow;
         this.jdbc = jdbc;
         this.webSearch = webSearch;
         this.supplierTextToApi = supplierTextToApi;
+        this.sampleWorkOrderAi = sampleWorkOrderAi;
     }
 
     @PostMapping("/chat")
@@ -115,6 +118,18 @@ public class AiChatController {
                 .limit(12)
                 .map(m -> ("assistant".equals(m.get("role")) ? "助手" : "用户") + "：" + m.getOrDefault("content", ""))
                 .collect(Collectors.joining("\n"));
+
+        var sampleToolAnswer = sampleWorkOrderAi.tryAnswer(userMessage);
+        if (sampleToolAnswer.isPresent()) {
+            var answer = sampleToolAnswer.get();
+            return ResponseEntity.ok(Map.of(
+                    "reply", answer.reply(),
+                    "source", answer.source(),
+                    "tool", answer.toolName(),
+                    "toolArguments", answer.toolArguments(),
+                    "toolResult", answer.toolResult()
+            ));
+        }
 
         var supplierToolAnswer = supplierTextToApi.tryAnswer(userMessage);
         if (supplierToolAnswer.isPresent()) {
