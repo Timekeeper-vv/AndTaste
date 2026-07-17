@@ -89,6 +89,8 @@ public class SampleWorkOrderAiService {
             }
         }
 
+        plan = normalizePlan(userQuestion, plan);
+
         if (!"search_sample_work_orders".equals(plan.tool()) && !"get_sample_work_order_statistics".equals(plan.tool())) {
             plan = heuristicPlan(userQuestion);
         }
@@ -109,15 +111,35 @@ public class SampleWorkOrderAiService {
                     + "\n\n请基于上述真实工具返回生成最终中文回答。";
 
             String reply;
-            try {
-                reply = siliconFlow.chat(ANSWER_PROMPT, answerPrompt, 0.2, 1200, 45);
-            } catch (Exception e) {
+            if ("get_sample_work_order_statistics".equals(plan.tool())) {
+                // 聚合统计类问题用后端确定性回答，避免模型把真实统计结果整理错。
                 reply = deterministicAnswer(plan.tool(), result);
+            } else {
+                try {
+                    reply = siliconFlow.chat(ANSWER_PROMPT, answerPrompt, 0.2, 1200, 45);
+                } catch (Exception e) {
+                    reply = deterministicAnswer(plan.tool(), result);
+                }
             }
             return Optional.of(new ToolAnswer(reply, "text-to-api:" + plan.tool(), plan.tool(), args, result));
         } catch (Exception e) {
             return guardrail(userQuestion, "打样工单数据库查询暂时失败，我不会编造数据。请稍后重试。");
         }
+    }
+
+    private ToolPlan normalizePlan(String userQuestion, ToolPlan plan) {
+        String q = safe(userQuestion);
+        ObjectNode args = mapper.createObjectNode();
+        boolean ownerAggregate = q.contains("负责人") && (
+                q.contains("几个") || q.contains("多少") || q.contains("几位") || q.contains("有哪些")
+                        || q.contains("哪几个") || q.contains("分别") || q.contains("各") || q.contains("统计") || q.contains("分布")
+        );
+        if (isLikelySampleQuestion(q) && ownerAggregate) {
+            args.put("group_by_field", "owner");
+            args.put("include_count", true);
+            return new ToolPlan("get_sample_work_order_statistics", args);
+        }
+        return plan;
     }
 
     ToolPlan planToolCall(String userQuestion) throws Exception {
@@ -136,7 +158,9 @@ public class SampleWorkOrderAiService {
         ObjectNode args = mapper.createObjectNode();
         boolean asksCount = q.contains("多少") || q.contains("几个") || q.contains("数量") || q.contains("有几");
 
-        if ((q.contains("各") || q.contains("分布") || q.contains("统计") || q.contains("分别")) && q.contains("负责人")) {
+        if ((q.contains("各") || q.contains("分布") || q.contains("统计") || q.contains("分别")
+                || q.contains("几个") || q.contains("多少") || q.contains("几位") || q.contains("有哪些") || q.contains("哪几个"))
+                && q.contains("负责人")) {
             args.put("group_by_field", "owner");
             args.put("include_count", true);
             return new ToolPlan("get_sample_work_order_statistics", args);
@@ -230,10 +254,11 @@ public class SampleWorkOrderAiService {
         List<Object> listParams = new ArrayList<>(params);
         listParams.add(limit);
         List<Map<String, Object>> items = jdbc.queryForList(
-                "SELECT id, application_no applicationNo, approval_status approvalStatus, initiated_at initiatedAt, applicant, application_department applicationDepartment, " +
+                "SELECT id, application_no applicationNo, approval_status approvalStatus, DATE_FORMAT(initiated_at, '%Y-%m-%d %H:%i:%s') AS initiatedAt, applicant, application_department applicationDepartment, " +
                         "COALESCE(NULLIF(project_name,''), detail_project_name) projectName, product_name productName, order_type orderType, product_type productType, product_sub_type productSubType, " +
                         "sample_quantity_text sampleQuantityText, spec_flavor specFlavor, sample_fee_yuan sampleFeeYuan, detail_remark detailRemark, work_order_status workOrderStatus, " +
-                        "start_date startDate, estimated_complete_date estimatedCompleteDate, actual_complete_date actualCompleteDate, owner, factory, sample_cost_yuan sampleCostYuan, sample_file_provided_date sampleFileProvidedDate " +
+                        "DATE_FORMAT(start_date, '%Y-%m-%d') AS startDate, DATE_FORMAT(estimated_complete_date, '%Y-%m-%d') AS estimatedCompleteDate, DATE_FORMAT(actual_complete_date, '%Y-%m-%d') AS actualCompleteDate, " +
+                        "owner, factory, sample_cost_yuan sampleCostYuan, DATE_FORMAT(sample_file_provided_date, '%Y-%m-%d') AS sampleFileProvidedDate " +
                         "FROM supply_chain_sample_work_order" + where + " ORDER BY initiated_at DESC, id DESC LIMIT ?",
                 listParams.toArray());
         if (countOnly) {
@@ -264,7 +289,21 @@ public class SampleWorkOrderAiService {
         List<Map<String, Object>> groups = jdbc.queryForList(
                 "SELECT COALESCE(NULLIF(TRIM(" + column + "), ''), '未填写') AS value, " + countExpr + " AS count " +
                         "FROM supply_chain_sample_work_order WHERE deleted=0 GROUP BY COALESCE(NULLIF(TRIM(" + column + "), ''), '未填写') ORDER BY count DESC, value ASC LIMIT 50");
-        return Map.of("field", field, "groups", groups, "query_params", query);
+        long blankCount = groups.stream()
+                .filter(g -> "未填写".equals(String.valueOf(g.get("value"))))
+                .mapToLong(g -> Long.parseLong(String.valueOf(g.getOrDefault("count", 0))))
+                .sum();
+        long nonEmptyDistinctCount = groups.stream()
+                .filter(g -> !"未填写".equals(String.valueOf(g.get("value"))))
+                .count();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("field", field);
+        result.put("group_count", groups.size());
+        result.put("non_empty_distinct_count", nonEmptyDistinctCount);
+        result.put("blank_count", blankCount);
+        result.put("groups", groups);
+        result.put("query_params", query);
+        return result;
     }
 
     private String deterministicAnswer(String toolName, Object result) {
@@ -289,6 +328,23 @@ public class SampleWorkOrderAiService {
             Object groupsObj = map.get("groups");
             if (groupsObj instanceof List<?> groups) {
                 if (groups.isEmpty()) return "未找到可统计的打样工单数据。";
+                String field = String.valueOf(map.containsKey("field") ? map.get("field") : "");
+                if ("owner".equals(field)) {
+                    long personCount = Long.parseLong(String.valueOf(map.containsKey("non_empty_distinct_count") ? map.get("non_empty_distinct_count") : 0));
+                    long blankCount = Long.parseLong(String.valueOf(map.containsKey("blank_count") ? map.get("blank_count") : 0));
+                    String names = groups.stream()
+                            .filter(g -> {
+                                Map<?, ?> item = (Map<?, ?>) g;
+                                return !"未填写".equals(String.valueOf(item.get("value")));
+                            })
+                            .limit(20)
+                            .map(g -> {
+                                Map<?, ?> item = (Map<?, ?>) g;
+                                return item.get("value") + " " + item.get("count") + "条";
+                            }).collect(Collectors.joining("；"));
+                    String suffix = blankCount > 0 ? "；另外有 " + blankCount + " 条工单未填写负责人。" : "。";
+                    return "当前打样工单中已填写的负责人有 " + personCount + " 位：" + names + suffix;
+                }
                 String text = groups.stream().limit(20).map(g -> {
                     Map<?, ?> item = (Map<?, ?>) g;
                     return item.get("value") + " " + item.get("count") + "个";
