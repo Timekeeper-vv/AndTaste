@@ -13,9 +13,9 @@ public class OpenApiConfig {
     public OpenAPI shixunOpenApi() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("智慧养殖场管理与溯源系统 API")
-                        .description("覆盖牲畜全生命周期的数字化管理：圈舍、批次、个体档案、生产事件记录、全链路溯源")
+                        .title("之间味道文创产品智能体平台 API")
+                        .description("覆盖创意设计、供应链、打样生产、仓储物流、审批流程和经营管理的一体化业务系统")
                         .version("1.0.0")
-                        .contact(new Contact().name("admin").email("admin@test.com")));
+                        .contact(new Contact().name("admin").email("admin@andtaste.com")));
     }
 }

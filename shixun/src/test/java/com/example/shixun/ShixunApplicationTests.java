@@ -1,8 +1,6 @@
 package com.example.shixun;
 
-import com.example.shixun.mapper.ProductMapper;
 import com.example.shixun.mapper.UserMapper;
-import com.example.shixun.model.Product;
 import com.example.shixun.model.User;
 import com.example.shixun.service.UserService;
 import org.junit.jupiter.api.AfterEach;
@@ -26,86 +24,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ShixunApplicationTests {
 
     @Autowired
-    private ProductMapper productMapper;
-
-    @Autowired
     private UserMapper userMapper;
 
     @Autowired
     private UserService userService;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
-    private final List<Long> createdProductIds = new ArrayList<>();
     private final List<Long> createdUserIds = new ArrayList<>();
 
     // ========== 基础 ==========
 
     @Test
     void contextLoads() {
-        assertThat(productMapper).isNotNull();
         assertThat(userMapper).isNotNull();
-    }
-
-    // ========== Product Mapper ==========
-
-    @Test
-    void testProductFindAll() {
-        List<Product> products = productMapper.findAll();
-        System.out.println(products);
-        assertThat(products).isNotNull();
-    }
-
-    @Test
-    void testProductInsert() {
-        Product product = new Product(null, "Xiaomi 14", 3999.0, 80, "Phone", "Flagship smartphone");
-
-        int rows = productMapper.insert(product);
-        System.out.println(product);
-
-        createdProductIds.add(product.getId());
-        assertThat(rows).isEqualTo(1);
-        assertThat(product.getId()).isNotNull();
-    }
-
-    @Test
-    void testProductFindById() {
-        Long id = createProduct("Xiaomi 14", 3999.0, 80, "Phone", "Flagship smartphone");
-
-        Product product = productMapper.findById(id);
-        System.out.println(product);
-
-        assertThat(product).isNotNull();
-        assertThat(product.getId()).isEqualTo(id);
-        assertThat(product.getName()).isEqualTo("Xiaomi 14");
-    }
-
-    @Test
-    void testProductUpdate() {
-        Long id = createProduct("Xiaomi 14", 3999.0, 80, "Phone", "Flagship smartphone");
-
-        Product product = new Product(id, "Xiaomi 14 Pro", 4999.0, 60, "Phone", "Updated flagship smartphone");
-        int rows = productMapper.update(product);
-        Product updatedProduct = productMapper.findById(id);
-        System.out.println(updatedProduct);
-
-        assertThat(rows).isEqualTo(1);
-        assertThat(updatedProduct).isNotNull();
-        assertThat(updatedProduct.getName()).isEqualTo("Xiaomi 14 Pro");
-        assertThat(updatedProduct.getPrice()).isEqualTo(4999.0);
-        assertThat(updatedProduct.getStock()).isEqualTo(60);
-    }
-
-    @Test
-    void testProductDelete() {
-        Long id = createProduct("Xiaomi 14", 3999.0, 80, "Phone", "Flagship smartphone");
-
-        int rows = productMapper.deleteById(id);
-        Product product = productMapper.findById(id);
-        System.out.println(product);
-
-        createdProductIds.remove(id);
-        assertThat(rows).isEqualTo(1);
-        assertThat(product).isNull();
     }
 
     // ========== User Mapper ==========
@@ -316,9 +247,6 @@ class ShixunApplicationTests {
 
     @AfterEach
     void tearDown() {
-        createdProductIds.forEach(productMapper::deleteById);
-        createdProductIds.clear();
-
         createdUserIds.forEach(userMapper::deleteById);
         createdUserIds.clear();
     }
@@ -329,13 +257,6 @@ class ShixunApplicationTests {
     }
 
     // ========== 辅助方法 ==========
-
-    private Long createProduct(String name, Double price, Integer stock, String category, String description) {
-        Product product = new Product(null, name, price, stock, category, description);
-        productMapper.insert(product);
-        createdProductIds.add(product.getId());
-        return product.getId();
-    }
 
     private Long createUser(String username, Integer age, String email, String phone, String password) {
         User user = new User(null, username, age, email, phone);
