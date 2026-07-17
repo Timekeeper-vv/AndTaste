@@ -2,10 +2,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 
 type WarehouseView = 'products' | 'inventory' | 'inbound' | 'outbound' | 'pick' | 'alerts'
-const props = withDefaults(defineProps<{ initialView?: WarehouseView }>(), { initialView: 'inventory' })
+const props = withDefaults(defineProps<{ initialView?: WarehouseView; showTabs?: boolean }>(), { initialView: 'inventory', showTabs: true })
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
 
 const active = ref<WarehouseView>(props.initialView)
+const showTabs = computed(() => props.showTabs)
 const loading = ref(false)
 const dashboard = ref<any>({})
 const locations = ref<any[]>([])
@@ -55,6 +56,7 @@ async function load() {
 function applyProductFilter() { productFilter.value.page = 1; loadProducts().catch((e: any) => emit('alert', `加载产品失败：${e.message || e}`, 'error')) }
 function changeProductPage(delta: number) { productFilter.value.page = Math.min(totalPages.value, Math.max(1, productFilter.value.page + delta)); loadProducts().catch((e: any) => emit('alert', `加载产品失败：${e.message || e}`, 'error')) }
 function useProduct(p: any) {
+  if (!props.showTabs) return
   inboundForm.value.itemType = 'SKU'
   inboundForm.value.itemCode = p.productCode
   inboundForm.value.itemName = p.productName
@@ -65,8 +67,8 @@ function useProduct(p: any) {
   inboundForm.value.supplier = '产品表主数据'
   active.value = 'inbound'
 }
-async function inbound() { loading.value = true; try { const r = await postJson('/api/warehouse/inbound', inboundForm.value); emit('alert', `${r.message}：${r.inboundNo}`, 'success'); await load(); active.value = 'inventory' } catch (e: any) { emit('alert', `入库失败：${e.message || e}`, 'error') } finally { loading.value = false } }
-async function outbound() { loading.value = true; try { const r = await postJson('/api/warehouse/outbound', { ...outboundForm.value, inventoryId: Number(outboundForm.value.inventoryId) }); emit('alert', `${r.message}：${r.pickNo}`, 'success'); await load(); active.value = 'pick' } catch (e: any) { emit('alert', `出库失败：${e.message || e}`, 'error') } finally { loading.value = false } }
+async function inbound() { loading.value = true; try { const r = await postJson('/api/warehouse/inbound', inboundForm.value); emit('alert', `${r.message}：${r.inboundNo}`, 'success'); await load(); if (props.showTabs) active.value = 'inventory' } catch (e: any) { emit('alert', `入库失败：${e.message || e}`, 'error') } finally { loading.value = false } }
+async function outbound() { loading.value = true; try { const r = await postJson('/api/warehouse/outbound', { ...outboundForm.value, inventoryId: Number(outboundForm.value.inventoryId) }); emit('alert', `${r.message}：${r.pickNo}`, 'success'); await load(); if (props.showTabs) active.value = 'pick' } catch (e: any) { emit('alert', `出库失败：${e.message || e}`, 'error') } finally { loading.value = false } }
 async function completePick(id: number) { loading.value = true; try { const r = await postJson(`/api/warehouse/pick-tasks/${id}/complete`); emit('alert', r.message, 'success'); await load() } catch (e: any) { emit('alert', `拣货失败：${e.message || e}`, 'error') } finally { loading.value = false } }
 async function refreshAlerts() { loading.value = true; try { const r = await postJson('/api/warehouse/alerts/refresh'); emit('alert', `${r.message}：${r.alertCount}条`, 'success'); await load(); active.value = 'alerts' } catch (e: any) { emit('alert', `刷新预警失败：${e.message || e}`, 'error') } finally { loading.value = false } }
 async function runAiReport() { loading.value = true; try { aiReport.value = await postJson('/api/warehouse/alerts/ai-report'); emit('alert', 'AI仓储报告已生成', 'success') } catch (e: any) { emit('alert', `AI报告失败：${e.message || e}`, 'error') } finally { loading.value = false } }
@@ -96,7 +98,7 @@ onMounted(() => { active.value = props.initialView; load() })
       <div class="stat-card"><div class="stat-label">预警</div><div class="stat-num info">{{ dashboard.alertCount ?? '-' }}</div></div>
     </div>
 
-    <div class="tabs">
+    <div v-if="showTabs" class="tabs">
       <button :class="{ active: active === 'products' }" @click="active = 'products'">产品主数据</button>
       <button :class="{ active: active === 'inventory' }" @click="active = 'inventory'">库存台账</button>
       <button :class="{ active: active === 'inbound' }" @click="active = 'inbound'">入库</button>
@@ -116,7 +118,7 @@ onMounted(() => { active.value = props.initialView; load() })
         <select v-model="productFilter.secondaryCategory" @change="applyProductFilter"><option value="">全部二级分类</option><option v-for="c in secondaryCategories" :key="c.value" :value="c.value">{{ c.value }}（{{ c.count }}）</option></select>
       </div>
       <table>
-        <thead><tr><th>产品编码</th><th>产品名称</th><th>分类</th><th>箱码</th><th>价格/成本</th><th>表内数量/位置</th><th>操作</th></tr></thead>
+        <thead><tr><th>产品编码</th><th>产品名称</th><th>分类</th><th>箱码</th><th>价格/成本</th><th>表内数量/位置</th><th v-if="showTabs">操作</th></tr></thead>
         <tbody>
           <tr v-for="p in products" :key="p.id">
             <td><b>{{ p.productCode }}</b><br><small>{{ p.productRefCode || '-' }}</small></td>
@@ -125,7 +127,7 @@ onMounted(() => { active.value = props.initialView; load() })
             <td>{{ p.boxCode || '-' }}</td>
             <td>结算 {{ money(p.settlementUnitPrice) }}<br><small>成本 {{ money(p.productCostUnitPrice || p.companyCostPrice) }}</small></td>
             <td>{{ money(p.initialQty) }}<br><small>{{ p.locationName || '未填库位' }}</small></td>
-            <td><button class="mini" @click="useProduct(p)">用于入库</button></td>
+            <td v-if="showTabs"><button class="mini" @click="useProduct(p)">用于入库</button></td>
           </tr>
         </tbody>
       </table>

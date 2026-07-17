@@ -94,7 +94,12 @@ const PAGE_ROLES: Record<string, Role[]> = {
   bulkProduction:STAFF_WORKFLOW_ROLES,
   logistics:    MANAGER_ROLES,
   warehouseLogistics:MANAGER_ROLES,
-  warehouse:    MANAGER_ROLES,
+  warehouseProducts:MANAGER_ROLES,
+  warehouseInventory:MANAGER_ROLES,
+  warehouseInbound:MANAGER_ROLES,
+  warehouseOutbound:MANAGER_ROLES,
+  warehousePick:MANAGER_ROLES,
+  warehouseAlerts:MANAGER_ROLES,
   designers:    MANAGER_ROLES,
   users:        SUPER_ADMIN_ROLES,
 }
@@ -202,7 +207,12 @@ const pageLabels: Record<string, string> = {
   bulkProduction:'大货生产管理',
   logistics:    '物流跟踪',
   warehouseLogistics:'产品库存与物流管理',
-  warehouse:    '产品主数据 / 库存出入库',
+  warehouseProducts:'产品主数据库',
+  warehouseInventory:'库存台账',
+  warehouseInbound:'入库管理',
+  warehouseOutbound:'出库管理',
+  warehousePick:'拣货任务',
+  warehouseAlerts:'库存预警',
   designers:    '设计师/创作者',
   users:        '账号权限',
 }
@@ -309,8 +319,13 @@ const pageLabels: Record<string, string> = {
         <BulkProductionWorkOrderPage v-if="currentPage === 'bulkProductionWorkOrders'" />
         <ProductionManagement v-if="currentPage === 'bulkProduction'" initial-view="bulk" :current-user="currentUser" @alert="showAlert" />
         <LogisticsTracking    v-if="currentPage === 'logistics'"  @alert="showAlert" />
-        <WarehouseManagement v-if="currentPage === 'warehouseLogistics'" initial-view="inventory" @alert="showAlert" />
-        <WarehouseManagement v-if="currentPage === 'warehouse'" initial-view="alerts" @alert="showAlert" />
+        <WarehouseManagement v-if="currentPage === 'warehouseLogistics'" initial-view="products" :show-tabs="false" @alert="showAlert" />
+        <WarehouseManagement v-if="currentPage === 'warehouseProducts'" initial-view="products" :show-tabs="false" @alert="showAlert" />
+        <WarehouseManagement v-if="currentPage === 'warehouseInventory'" initial-view="inventory" :show-tabs="false" @alert="showAlert" />
+        <WarehouseManagement v-if="currentPage === 'warehouseInbound'" initial-view="inbound" :show-tabs="false" @alert="showAlert" />
+        <WarehouseManagement v-if="currentPage === 'warehouseOutbound'" initial-view="outbound" :show-tabs="false" @alert="showAlert" />
+        <WarehouseManagement v-if="currentPage === 'warehousePick'" initial-view="pick" :show-tabs="false" @alert="showAlert" />
+        <WarehouseManagement v-if="currentPage === 'warehouseAlerts'" initial-view="alerts" :show-tabs="false" @alert="showAlert" />
         <DesignerCenter       v-if="currentPage === 'designers'"   @alert="showAlert" />
         <UserManagement       v-if="currentPage === 'users'"       :current-user="currentUser" @alert="showAlert" />
       </main>

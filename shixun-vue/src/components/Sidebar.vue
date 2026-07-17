@@ -41,7 +41,12 @@ const allMenus: MenuGroup[] = [
   ]},
   { group: '', items: [
     { key: 'warehouseLogistics', label: '产品库存与物流管理', roles: MANAGER_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l9-6 9 6v10H3z"/><path d="M7 20v-6h10v6"/></svg>` },
-    { key: 'warehouse', label: '产品主数据 / 库存出入库', parentKey: 'warehouseLogistics', roles: MANAGER_ROLES, icon: `<svg></svg>` },
+    { key: 'warehouseProducts', label: '产品主数据库', parentKey: 'warehouseLogistics', roles: MANAGER_ROLES, icon: `<svg></svg>` },
+    { key: 'warehouseInventory', label: '库存台账', parentKey: 'warehouseLogistics', roles: MANAGER_ROLES, icon: `<svg></svg>` },
+    { key: 'warehouseInbound', label: '入库管理', parentKey: 'warehouseLogistics', roles: MANAGER_ROLES, icon: `<svg></svg>` },
+    { key: 'warehouseOutbound', label: '出库管理', parentKey: 'warehouseLogistics', roles: MANAGER_ROLES, icon: `<svg></svg>` },
+    { key: 'warehousePick', label: '拣货任务', parentKey: 'warehouseLogistics', roles: MANAGER_ROLES, icon: `<svg></svg>` },
+    { key: 'warehouseAlerts', label: '库存预警', parentKey: 'warehouseLogistics', roles: MANAGER_ROLES, icon: `<svg></svg>` },
     { key: 'logistics', label: '物流跟踪', parentKey: 'warehouseLogistics', roles: MANAGER_ROLES, icon: `<svg></svg>` },
     { key: 'designers', label: '设计师/创作者', roles: MANAGER_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>` },
   ]},
