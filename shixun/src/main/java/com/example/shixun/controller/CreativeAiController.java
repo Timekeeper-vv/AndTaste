@@ -252,7 +252,7 @@ public class CreativeAiController {
         result.put("textureQuality", "extreme");
         result.put("maxFaceLimit", 2_000_000);
         result.put("modelOptions", List.of(
-                Map.of("value","tripo-p1","label","P1.0 · P系列低面数旗舰","series","P"),
+                Map.of("value","P1-20260311","label","P1.0 · P系列低面数旗舰","series","P"),
                 Map.of("value","v3.1-20260211","label","H3.1 · 最新高精度","series","H"),
                 Map.of("value","v3.0-20250812","label","H3.0 · 稳定版","series","H"),
                 Map.of("value","v2.5-20250123","label","H2.5 · 兼容版","series","H")
@@ -324,7 +324,7 @@ public class CreativeAiController {
             throw new IllegalArgumentException("不支持的Tripo生成模式：" + mode);
 
         String selectedModel=blank(req.modelVersion)?tripoModelVersion:req.modelVersion.trim();
-        Set<String> supportedModels=Set.of("tripo-p1","tripo-v3.1","v3.1-20260211","tripo-v3.0","v3.0-20250812","tripo-v2.5","v2.5-20250123");
+        Set<String> supportedModels=Set.of("P1-20260311","tripo-p1","tripo-v3.1","v3.1-20260211","tripo-v3.0","v3.0-20250812","tripo-v2.5","v2.5-20250123");
         if(!supportedModels.contains(selectedModel))throw new IllegalArgumentException("不支持的Tripo 3D模型："+selectedModel);
         Map<String,Object> taskBody = new LinkedHashMap<>();
         taskBody.put("model", selectedModel);
@@ -368,12 +368,12 @@ public class CreativeAiController {
         String jobNo = no("T3D");
         Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
                 primaryInputAssetId, req.prompt, req.negativePrompt, "running", null,
-                req.quad ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
+                Boolean.TRUE.equals(req.quad) ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
         jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
         Map<String,Object> response = new LinkedHashMap<>();
         response.put("jobId", jobId); response.put("jobNo", jobNo); response.put("taskId", taskId);
         response.put("status", "running"); response.put("progress", 0); response.put("provider", "tripo");
-        response.put("modelVersion", selectedModel); response.put("qualityPreset", "tripo-p1".equals(selectedModel)?"p-series":"standard");
+        response.put("modelVersion", selectedModel); response.put("qualityPreset", isPSeriesModel(selectedModel)?"p-series":"standard");
         response.put("message", "Tripo "+selectedModel+"任务已提交");
         return response;
     }
@@ -385,7 +385,7 @@ public class CreativeAiController {
     }
 
     private void applyTripoQualityOptions(Map<String,Object> body, Generate3dRequest req, String mode, String model) {
-        boolean pSeries="tripo-p1".equals(model);
+        boolean pSeries=isPSeriesModel(model);
         boolean legacy25=model.contains("v2.5");
         boolean supportsAdvanced=!pSeries&&!legacy25;
         boolean texture=req.texture==null||req.texture;
@@ -397,7 +397,8 @@ public class CreativeAiController {
         body.put("texture",texture); body.put("pbr",pbr); body.put("export_uv",req.exportUv==null||req.exportUv);
         if(!legacy25) {
             body.put("auto_size",req.autoSize==null||req.autoSize);
-            if(texture)body.put("texture_quality",Set.of("standard","detailed","extreme").contains(req.textureQuality)?req.textureQuality:"extreme");
+            String textureQuality = blank(req.textureQuality) ? "extreme" : req.textureQuality.trim();
+            if(texture)body.put("texture_quality",Set.of("standard","detailed","extreme").contains(textureQuality)?textureQuality:"extreme");
             if(Boolean.TRUE.equals(req.compress))body.put("compress","geometry");
         }
         if(supportsAdvanced) {
@@ -406,8 +407,10 @@ public class CreativeAiController {
         }
         if("image_to_model".equals(mode)) body.put("enable_image_autofix",req.imageAutofix==null||req.imageAutofix);
         if("image_to_model".equals(mode)||(pSeries&&"multiview_to_model".equals(mode))) {
-            body.put("orientation",Set.of("default","align_image").contains(req.orientation)?req.orientation:"align_image");
-            if(texture)body.put("texture_alignment","original_image".equals(req.textureAlignment)?"original_image":"geometry");
+            String orientation = blank(req.orientation) ? "align_image" : req.orientation.trim();
+            body.put("orientation",Set.of("default","align_image").contains(orientation)?orientation:"align_image");
+            String textureAlignment = blank(req.textureAlignment) ? "original_image" : req.textureAlignment.trim();
+            if(texture)body.put("texture_alignment","original_image".equals(textureAlignment)?"original_image":"geometry");
         }
         int maxFaces=pSeries?20_000:legacy25?500_000:(quad?150_000:smartLowPoly?20_000:2_000_000);
         int minFaces=pSeries?48:1_000; int requested=req.faceLimit==null?maxFaces:req.faceLimit;
@@ -632,6 +635,7 @@ public class CreativeAiController {
         } catch(Exception ignored) { return new IllegalStateException("Tripo"+action+"失败 HTTP "+status+"："+raw); }
     }
     private void ensureTripoOk(JsonNode root,String raw){int code=root.path("code").asInt(0);if(code!=0)throw new IllegalStateException("Tripo错误 "+code+": "+root.path("message").asText(raw));}
+    private boolean isPSeriesModel(String model){return "P1-20260311".equals(model)||"tripo-p1".equals(model);}
     private Path resolvePublicAsset(String url)throws IOException{Path dir=Path.of(System.getProperty("user.dir"),"..","shixun-vue","public").normalize().toAbsolutePath();String rel=url.startsWith("/")?url.substring(1):url;Path file=dir.resolve(rel).normalize();if(!file.startsWith(dir)||!Files.exists(file))throw new IOException("参考图文件不存在："+url);return file;}
     private String imageExtension(Path p){String n=p.getFileName().toString().toLowerCase(Locale.ROOT);return n.endsWith(".jpeg")?"jpg":n.substring(n.lastIndexOf('.')+1);}
     private String mapTripoStatus(String s){s=s.toLowerCase(Locale.ROOT);if(s.contains("success"))return "succeeded";if(s.contains("fail")||s.contains("cancel")||s.contains("banned")||s.contains("expired"))return "failed";return "running";}

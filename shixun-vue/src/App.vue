@@ -17,6 +17,7 @@ import MarketingAssistant from './components/MarketingAssistant.vue'
 import ProjectDemandPage from './components/ProjectDemandPage.vue'
 import HumanResourcePage from './components/HumanResourcePage.vue'
 import AttendanceManagementPage from './components/AttendanceManagementPage.vue'
+import SupplierList from './components/SupplierList.vue'
 import FinanceApplicationPage from './components/FinanceApplicationPage.vue'
 import ApprovalCenter from './components/ApprovalCenter.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
@@ -65,6 +66,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   attendanceLeave:STAFF_WORKFLOW_ROLES,
   attendanceBusinessTrip:STAFF_WORKFLOW_ROLES,
   attendanceOutgoing:STAFF_WORKFLOW_ROLES,
+  supplierList:STAFF_WORKFLOW_ROLES,
   finance:      STAFF_WORKFLOW_ROLES,
   financeAssetScrap:STAFF_WORKFLOW_ROLES,
   financePublicPayment:STAFF_WORKFLOW_ROLES,
@@ -168,6 +170,7 @@ const pageLabels: Record<string, string> = {
   attendanceLeave:'请假申请',
   attendanceBusinessTrip:'出差申请',
   attendanceOutgoing:'外出申请',
+  supplierList:'供应商列表',
   finance:      '财务管理',
   financeAssetScrap:'固定资产报废申请',
   financePublicPayment:'对公付款申请(供应链)',
@@ -271,6 +274,7 @@ const pageLabels: Record<string, string> = {
         <AttendanceManagementPage v-if="currentPage === 'attendanceLeave'" type="leave" :current-user="currentUser" @alert="showAlert" />
         <AttendanceManagementPage v-if="currentPage === 'attendanceBusinessTrip'" type="businessTrip" :current-user="currentUser" @alert="showAlert" />
         <AttendanceManagementPage v-if="currentPage === 'attendanceOutgoing'" type="outgoing" :current-user="currentUser" @alert="showAlert" />
+        <SupplierList v-if="currentPage === 'supplierList'" />
         <FinanceApplicationPage v-if="currentPage === 'finance'" type="home" :current-user="currentUser" @alert="showAlert" />
         <FinanceApplicationPage v-if="currentPage === 'financeAssetScrap'" type="assetScrap" :current-user="currentUser" @alert="showAlert" />
         <FinanceApplicationPage v-if="currentPage === 'financePublicPayment'" type="publicPayment" :current-user="currentUser" @alert="showAlert" />
@@ -298,7 +302,7 @@ const pageLabels: Record<string, string> = {
   </div>
 
   <GlobalAlert :msg="alertMsg" :type="alertType" :visible="alertVisible" />
-  <AiChat v-if="currentUser" />
+  <AiChat v-if="currentUser" :current-user="currentUser" />
 </template>
 
 <style>

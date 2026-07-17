@@ -78,6 +78,9 @@ const allMenus: MenuGroup[] = [
     { key: 'attendanceOutgoing', label: '外出申请', parentKey: 'attendanceManagement', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
   ]},
   { group: '', items: [
+    { key: 'supplierList', label: '供应商列表', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18"/><path d="M5 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/><rect x="4" y="7" width="16" height="14" rx="2"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>` },
+  ]},
+  { group: '', items: [
     { key: 'finance', label: '财务管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-8h6v8"/><path d="M8 9h8"/></svg>` },
     { key: 'financeAssetScrap', label: '固定资产报废申请', parentKey: 'finance', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'financePublicPayment', label: '对公付款申请(供应链)', parentKey: 'finance', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },

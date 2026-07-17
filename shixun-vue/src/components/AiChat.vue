@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
+import type { User } from '../types'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -7,10 +8,11 @@ interface Message {
 }
 
 const open = ref(false)
+const props = defineProps<{ currentUser?: User | null }>()
 const loading = ref(false)
 const inputText = ref('')
 const messages = ref<Message[]>([
-  { role: 'assistant', content: '你好！我是之间味道 AI 助手，可以协助你梳理图片IP、文创商品、设计师运营、订单履约和平台转型方案。' }
+  { role: 'assistant', content: '你好！我是之间味道 AI 助手。我可以查系统表单/供应商数据库，也可以联网搜索。比如问“tst的信息”“秦皇岛供应商有几个”“联网搜索今天文创行业新闻”“请假申请怎么做”。' }
 ])
 const messagesEnd = ref<HTMLElement | null>(null)
 
@@ -37,7 +39,7 @@ async function sendMessage() {
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, history })
+      body: JSON.stringify({ message: text, history, currentUser: props.currentUser })
     })
     const data = await res.json()
     if (data.reply) {
@@ -95,7 +97,7 @@ function clearHistory() {
           <div class="ai-avatar">AI</div>
           <div>
             <div class="ai-title">之间味道 AI 助手</div>
-            <div class="ai-subtitle">文创电商运营问答</div>
+            <div class="ai-subtitle">查表单 / 查数据库 / 联网搜索</div>
           </div>
         </div>
         <button class="ai-clear-btn" @click="clearHistory" title="清空对话">
