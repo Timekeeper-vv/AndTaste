@@ -58,6 +58,8 @@ export type PageName =
   | 'production'
   | 'sampleApplication'
   | 'sampleProduction'
+  | 'bulkProductionApplication'
+  | 'bulkProductionWorkOrders'
   | 'bulkProduction'
   | 'logistics'
   | 'warehouse'

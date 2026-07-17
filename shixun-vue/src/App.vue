@@ -20,6 +20,8 @@ import AttendanceManagementPage from './components/AttendanceManagementPage.vue'
 import SupplierList from './components/SupplierList.vue'
 import SampleWorkOrderPage from './components/SampleWorkOrderPage.vue'
 import SampleApplicationPage from './components/SampleApplicationPage.vue'
+import BulkProductionWorkOrderPage from './components/BulkProductionWorkOrderPage.vue'
+import BulkProductionApplicationPage from './components/BulkProductionApplicationPage.vue'
 import FinanceApplicationPage from './components/FinanceApplicationPage.vue'
 import ApprovalCenter from './components/ApprovalCenter.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
@@ -87,6 +89,8 @@ const PAGE_ROLES: Record<string, Role[]> = {
   production:   STAFF_WORKFLOW_ROLES,
   sampleApplication:STAFF_WORKFLOW_ROLES,
   sampleProduction:STAFF_WORKFLOW_ROLES,
+  bulkProductionApplication:STAFF_WORKFLOW_ROLES,
+  bulkProductionWorkOrders:STAFF_WORKFLOW_ROLES,
   bulkProduction:STAFF_WORKFLOW_ROLES,
   logistics:    MANAGER_ROLES,
   warehouseLogistics:MANAGER_ROLES,
@@ -193,10 +197,12 @@ const pageLabels: Record<string, string> = {
   production:   '智能成本核算引擎',
   sampleApplication:'打样申请',
   sampleProduction:'产品打样管理',
+  bulkProductionApplication:'大货生产申请',
+  bulkProductionWorkOrders:'大货工单明细',
   bulkProduction:'大货生产管理',
   logistics:    '物流跟踪',
-  warehouseLogistics:'仓储与物流管理',
-  warehouse:    '智能库存预警与出入库',
+  warehouseLogistics:'产品库存与物流管理',
+  warehouse:    '产品主数据 / 库存出入库',
   designers:    '设计师/创作者',
   users:        '账号权限',
 }
@@ -299,6 +305,8 @@ const pageLabels: Record<string, string> = {
         <ProductionManagement v-if="currentPage === 'production'" initial-view="cost" :current-user="currentUser" @alert="showAlert" />
         <SampleApplicationPage v-if="currentPage === 'sampleApplication'" :current-user="currentUser" @alert="showAlert" />
         <ProductionManagement v-if="currentPage === 'sampleProduction'" initial-view="sample" :current-user="currentUser" @alert="showAlert" />
+        <BulkProductionApplicationPage v-if="currentPage === 'bulkProductionApplication'" :current-user="currentUser" @alert="showAlert" />
+        <BulkProductionWorkOrderPage v-if="currentPage === 'bulkProductionWorkOrders'" />
         <ProductionManagement v-if="currentPage === 'bulkProduction'" initial-view="bulk" :current-user="currentUser" @alert="showAlert" />
         <LogisticsTracking    v-if="currentPage === 'logistics'"  @alert="showAlert" />
         <WarehouseManagement v-if="currentPage === 'warehouseLogistics'" initial-view="inventory" @alert="showAlert" />

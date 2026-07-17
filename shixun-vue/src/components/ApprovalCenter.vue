@@ -116,7 +116,7 @@ onMounted(load)
       </header>
 
       <div v-if="!visibleApplications.length" class="empty">
-        暂无{{ filter === 'pending' ? '待审批' : '' }}申请。请先到“财务管理”“之间连锁”“市场部需求管理”“项目部需求管理”“人力资源管理”或“考勤管理”里提交一条申请。
+        暂无{{ filter === 'pending' ? '待审批' : '' }}申请。请先到“生产管理”“财务管理”“之间连锁”“市场部需求管理”“项目部需求管理”“人力资源管理”或“考勤管理”里提交一条申请。
       </div>
 
       <article v-for="item in visibleApplications" :key="item.id" class="approval-item">

@@ -123,6 +123,7 @@ public class WorkflowController {
                 targetStatus, req.operator.trim(), comment, targetStatus, targetStatus, id
         );
         syncSampleRequestStatus(id, targetStatus, req.operator.trim());
+        syncBulkProductionStatus(id, targetStatus, req.operator.trim());
         insertLog(id, targetStatus.equals("approved") ? "approve" : "reject", req.operator.trim(), req.operatorRole.trim(), comment);
         return loadApplication(id);
     }
@@ -132,6 +133,15 @@ public class WorkflowController {
         String workStatus = "approved".equals(targetStatus) ? "待打样" : "审批驳回";
         jdbc.update(
                 "UPDATE supply_chain_sample_work_order SET approval_status=?, current_handler=NULL, work_order_status=?, updated_by=? WHERE workflow_application_id=? AND deleted=0",
+                approvalStatus, workStatus, operator, workflowId
+        );
+    }
+
+    private void syncBulkProductionStatus(Long workflowId, String targetStatus, String operator) {
+        String approvalStatus = "approved".equals(targetStatus) ? "已通过" : "已驳回";
+        String workStatus = "approved".equals(targetStatus) ? "待生产" : "审批驳回";
+        jdbc.update(
+                "UPDATE supply_chain_bulk_production_order SET approval_status=?, current_handler=NULL, work_order_status=?, updated_by=? WHERE workflow_application_id=? AND deleted=0",
                 approvalStatus, workStatus, operator, workflowId
         );
     }

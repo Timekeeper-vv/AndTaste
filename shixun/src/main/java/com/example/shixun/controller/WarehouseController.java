@@ -28,9 +28,11 @@ public class WarehouseController {
     @GetMapping("/dashboard")
     public Map<String, Object> dashboard() {
         return Map.of(
+                "productCount", qLong("SELECT COUNT(*) FROM warehouse_product_catalog WHERE enabled=1"),
                 "itemCount", qLong("SELECT COUNT(*) FROM warehouse_inventory"),
                 "totalStock", qDecimal("SELECT COALESCE(SUM(stock_qty),0) FROM warehouse_inventory"),
                 "availableStock", qDecimal("SELECT COALESCE(SUM(available_qty),0) FROM warehouse_inventory"),
+                "catalogInitialQty", qDecimal("SELECT COALESCE(SUM(initial_qty),0) FROM warehouse_product_catalog WHERE enabled=1"),
                 "inboundToday", qLong("SELECT COUNT(*) FROM warehouse_inbound WHERE DATE(created_at)=CURRENT_DATE"),
                 "outboundToday", qLong("SELECT COUNT(*) FROM warehouse_outbound WHERE DATE(created_at)=CURRENT_DATE"),
                 "pendingPick", qLong("SELECT COUNT(*) FROM warehouse_pick_task WHERE status IN ('pending','picking')"),
@@ -45,7 +47,41 @@ public class WarehouseController {
 
     @GetMapping("/inventory")
     public List<Map<String, Object>> inventory() {
-        return jdbc.queryForList("SELECT i.id, i.item_type itemType, i.item_id itemId, i.item_code itemCode, i.item_name itemName, i.spec, i.unit, i.location_id locationId, l.location_code locationCode, l.name locationName, i.stock_qty stockQty, i.locked_qty lockedQty, i.available_qty availableQty, i.safety_stock safetyStock, i.max_stock maxStock, i.last_in_at lastInAt, i.last_out_at lastOutAt, i.updated_at updatedAt FROM warehouse_inventory i LEFT JOIN warehouse_location l ON i.location_id=l.id ORDER BY i.updated_at DESC, i.id DESC");
+        return jdbc.queryForList("SELECT i.id, i.item_type itemType, i.item_id itemId, i.item_code itemCode, i.item_name itemName, i.spec, i.unit, i.location_id locationId, l.location_code locationCode, l.name locationName, i.stock_qty stockQty, i.locked_qty lockedQty, i.available_qty availableQty, i.safety_stock safetyStock, i.max_stock maxStock, i.last_in_at lastInAt, i.last_out_at lastOutAt, i.updated_at updatedAt, p.primary_category primaryCategory, p.secondary_category secondaryCategory, p.box_code boxCode, p.settlement_unit_price settlementUnitPrice, p.product_cost_unit_price productCostUnitPrice, p.company_cost_price companyCostPrice, p.cold_category coldCategory FROM warehouse_inventory i LEFT JOIN warehouse_location l ON i.location_id=l.id LEFT JOIN warehouse_product_catalog p ON p.product_code=i.item_code ORDER BY i.updated_at DESC, i.id DESC");
+    }
+
+    @GetMapping("/products")
+    public Map<String, Object> products(@RequestParam(required = false) String keyword,
+                                        @RequestParam(required = false) String primaryCategory,
+                                        @RequestParam(required = false) String secondaryCategory,
+                                        @RequestParam(defaultValue = "1") int page,
+                                        @RequestParam(defaultValue = "100") int pageSize) {
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.max(10, Math.min(pageSize, 500));
+        StringBuilder where = new StringBuilder(" WHERE enabled=1 ");
+        List<Object> params = new ArrayList<>();
+        if (!blank(keyword)) {
+            where.append(" AND (product_name LIKE ? OR product_code LIKE ? OR box_code LIKE ? OR cold_category LIKE ?) ");
+            String kw = "%" + keyword.trim() + "%";
+            params.add(kw); params.add(kw); params.add(kw); params.add(kw);
+        }
+        if (!blank(primaryCategory)) { where.append(" AND primary_category=? "); params.add(primaryCategory.trim()); }
+        if (!blank(secondaryCategory)) { where.append(" AND secondary_category=? "); params.add(secondaryCategory.trim()); }
+        Long total = jdbc.queryForObject("SELECT COUNT(*) FROM warehouse_product_catalog" + where, Long.class, params.toArray());
+        List<Object> pageParams = new ArrayList<>(params);
+        pageParams.add(safeSize);
+        pageParams.add((safePage - 1) * safeSize);
+        List<Map<String,Object>> items = jdbc.queryForList(
+                "SELECT id, product_name productName, product_code productCode, product_ref_code productRefCode, box_code boxCode, primary_category primaryCategory, secondary_category secondaryCategory, mold_type moldType, style_count styleCount, initial_qty initialQty, location_name locationName, sample_fee sampleFee, bulk_mold_fee bulkMoldFee, settlement_unit_price settlementUnitPrice, product_cost_unit_price productCostUnitPrice, company_cost_price companyCostPrice, spec_description specDescription, cold_category coldCategory, source_created_at sourceCreatedAt, updated_at updatedAt FROM warehouse_product_catalog" + where + " ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+                pageParams.toArray());
+        return Map.of(
+                "total", total == null ? 0 : total,
+                "page", safePage,
+                "pageSize", safeSize,
+                "items", items,
+                "primaryCategories", jdbc.queryForList("SELECT primary_category value, COUNT(*) count FROM warehouse_product_catalog WHERE enabled=1 AND primary_category IS NOT NULL AND primary_category<>'' GROUP BY primary_category ORDER BY count DESC, primary_category"),
+                "secondaryCategories", jdbc.queryForList("SELECT secondary_category value, COUNT(*) count FROM warehouse_product_catalog WHERE enabled=1 AND secondary_category IS NOT NULL AND secondary_category<>'' GROUP BY secondary_category ORDER BY count DESC, secondary_category LIMIT 120")
+        );
     }
 
     @GetMapping("/inbound")
@@ -74,6 +110,7 @@ public class WarehouseController {
 
     @PostMapping("/inbound")
     public Map<String, Object> inbound(@RequestBody InboundRequest req) {
+        enrichInboundFromCatalog(req);
         if (blank(req.itemName) || req.qty == null || req.qty.compareTo(BigDecimal.ZERO) <= 0) throw new IllegalArgumentException("入库商品和数量不能为空");
         Long locationId = ensureLocation(req.locationCode);
         Long inventoryId = ensureInventory(req, locationId);
@@ -172,10 +209,34 @@ public class WarehouseController {
     private Long ensureInventory(InboundRequest req, Long locationId) {
         String code = blank(req.itemCode) ? req.itemName : req.itemCode.trim();
         List<Map<String,Object>> rows = jdbc.queryForList("SELECT id FROM warehouse_inventory WHERE item_code=? AND location_id=?", code, locationId);
-        if (!rows.isEmpty()) return ((Number)rows.get(0).get("id")).longValue();
+        Long productId = productCatalogId(code);
+        if (!rows.isEmpty()) {
+            Long id = ((Number)rows.get(0).get("id")).longValue();
+            if (productId != null) jdbc.update("UPDATE warehouse_inventory SET item_id=? WHERE id=? AND item_id IS NULL", productId, id);
+            return id;
+        }
         KeyHolder kh = new GeneratedKeyHolder();
-        jdbc.update(con -> { PreparedStatement ps = con.prepareStatement("INSERT INTO warehouse_inventory (item_type,item_code,item_name,spec,unit,location_id,stock_qty,locked_qty,available_qty,safety_stock,max_stock) VALUES (?,?,?,?,?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS); ps.setString(1,nvl(req.itemType,"SKU")); ps.setString(2,code); ps.setString(3,req.itemName); ps.setString(4,req.spec); ps.setString(5,nvl(req.unit,"件")); ps.setLong(6,locationId); ps.setBigDecimal(7,BigDecimal.ZERO); ps.setBigDecimal(8,BigDecimal.ZERO); ps.setBigDecimal(9,BigDecimal.ZERO); ps.setBigDecimal(10,req.safetyStock==null?new BigDecimal("20"):req.safetyStock); ps.setBigDecimal(11,req.maxStock==null?new BigDecimal("9999"):req.maxStock); return ps; }, kh);
+        jdbc.update(con -> { PreparedStatement ps = con.prepareStatement("INSERT INTO warehouse_inventory (item_type,item_id,item_code,item_name,spec,unit,location_id,stock_qty,locked_qty,available_qty,safety_stock,max_stock) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS); ps.setString(1,nvl(req.itemType,"SKU")); if(productId==null) ps.setObject(2,null); else ps.setLong(2,productId); ps.setString(3,code); ps.setString(4,req.itemName); ps.setString(5,req.spec); ps.setString(6,nvl(req.unit,"件")); ps.setLong(7,locationId); ps.setBigDecimal(8,BigDecimal.ZERO); ps.setBigDecimal(9,BigDecimal.ZERO); ps.setBigDecimal(10,BigDecimal.ZERO); ps.setBigDecimal(11,req.safetyStock==null?new BigDecimal("20"):req.safetyStock); ps.setBigDecimal(12,req.maxStock==null?new BigDecimal("9999"):req.maxStock); return ps; }, kh);
         return Objects.requireNonNull(kh.getKey()).longValue();
+    }
+
+    private void enrichInboundFromCatalog(InboundRequest req) {
+        if (blank(req.itemCode)) return;
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT id, product_name productName, product_code productCode, primary_category primaryCategory, secondary_category secondaryCategory, spec_description specDescription, cold_category coldCategory, product_cost_unit_price productCostUnitPrice, company_cost_price companyCostPrice, location_name locationName FROM warehouse_product_catalog WHERE product_code=? AND enabled=1", req.itemCode.trim());
+        if (rows.isEmpty()) return;
+        Map<String,Object> p = rows.get(0);
+        if (blank(req.itemName)) req.itemName = String.valueOf(p.get("productName"));
+        if (blank(req.spec)) req.spec = nvl((String)p.get("specDescription"), nvl((String)p.get("coldCategory"), (String)p.get("secondaryCategory")));
+        if (blank(req.itemType)) req.itemType = "SKU";
+        if (blank(req.unit)) req.unit = "件";
+        if (req.unitCost == null) req.unitCost = bd(p.get("productCostUnitPrice")).compareTo(BigDecimal.ZERO) > 0 ? bd(p.get("productCostUnitPrice")) : bd(p.get("companyCostPrice"));
+        if (blank(req.locationCode) && !blank((String)p.get("locationName"))) req.locationCode = (String)p.get("locationName");
+    }
+
+    private Long productCatalogId(String code) {
+        if (blank(code)) return null;
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT id FROM warehouse_product_catalog WHERE product_code=? AND enabled=1", code.trim());
+        return rows.isEmpty() ? null : ((Number)rows.get(0).get("id")).longValue();
     }
 
     private long qLong(String sql) { Long v = jdbc.queryForObject(sql, Long.class); return v==null?0L:v; }

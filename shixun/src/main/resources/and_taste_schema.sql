@@ -827,6 +827,50 @@ CREATE TABLE IF NOT EXISTS warehouse_inventory (
     CONSTRAINT fk_wh_inv_location FOREIGN KEY (location_id) REFERENCES warehouse_location(id)
 ) COMMENT='仓储库存';
 
+-- WAREHOUSE_PRODUCT_CATALOG_IMPORT_V1
+-- 产品出入库产品主数据：来源于“产品表（供应链和项目维护）”，用于优化入库选品、库存成本与分类检索。
+CREATE TABLE IF NOT EXISTS warehouse_product_catalog (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source_file VARCHAR(260),
+    source_sheet VARCHAR(120),
+    excel_row_no INT NOT NULL,
+    product_name VARCHAR(240) NOT NULL,
+    product_code VARCHAR(120) NOT NULL,
+    product_ref_code VARCHAR(120),
+    box_code VARCHAR(120),
+    obsolete_primary_category VARCHAR(80),
+    primary_category VARCHAR(80),
+    obsolete_secondary_category VARCHAR(80),
+    secondary_category VARCHAR(100),
+    mold_type VARCHAR(120),
+    style_count DECIMAL(12,2) NULL,
+    initial_qty DECIMAL(12,2) NULL,
+    location_name VARCHAR(160),
+    sample_fee DECIMAL(12,2) NULL,
+    bulk_mold_fee DECIMAL(12,2) NULL,
+    mold_image_summary VARCHAR(300),
+    settlement_unit_price DECIMAL(12,2) NULL,
+    product_cost_unit_price DECIMAL(12,2) NULL,
+    company_cost_price DECIMAL(12,2) NULL,
+    image_summary VARCHAR(300),
+    spec_description VARCHAR(500),
+    cold_category VARCHAR(80),
+    duplicate_check_key VARCHAR(160),
+    source_created_at DATETIME NULL,
+    missing_check VARCHAR(160),
+    test_flag VARCHAR(160),
+    parent_record VARCHAR(260),
+    row_checksum CHAR(64) NOT NULL,
+    raw_json JSON NULL,
+    enabled TINYINT NOT NULL DEFAULT 1,
+    imported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_wh_product_code (product_code),
+    KEY idx_wh_product_category (primary_category, secondary_category),
+    KEY idx_wh_product_name (product_name),
+    KEY idx_wh_product_box_code (box_code)
+) COMMENT='仓储产品主数据';
+
 CREATE TABLE IF NOT EXISTS warehouse_inbound (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     inbound_no VARCHAR(80) NOT NULL UNIQUE,
@@ -1032,6 +1076,80 @@ ALTER TABLE supply_chain_sample_work_order ADD COLUMN updated_by VARCHAR(100) NU
 ALTER TABLE supply_chain_sample_work_order ADD COLUMN deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除';
 CREATE INDEX idx_sc_sample_source_kind ON supply_chain_sample_work_order(source_kind);
 CREATE INDEX idx_sc_sample_workflow ON supply_chain_sample_work_order(workflow_application_id);
+
+-- SUPPLY_CHAIN_BULK_PRODUCTION_ORDER_V1
+-- 供应链工单明细：2026年大货生产审批。结构与打样工单保持一致，支持 Excel 导入、系统新增、审批联动和逻辑删除。
+CREATE TABLE IF NOT EXISTS supply_chain_bulk_production_order (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    import_batch VARCHAR(120) NOT NULL DEFAULT '2026年大货生产审批',
+    source_file VARCHAR(255) NOT NULL,
+    source_sheet VARCHAR(120) NOT NULL,
+    excel_row_no INT NOT NULL COMMENT 'Excel 原始行号（含表头偏移）',
+    application_no VARCHAR(80) NOT NULL COMMENT '申请编号',
+    approval_status VARCHAR(40) COMMENT '申请状态',
+    approval_flow VARCHAR(80) COMMENT '审批流程',
+    initiated_at DATETIME NULL COMMENT '发起时间',
+    completed_at DATETIME NULL COMMENT '完成时间',
+    initiator VARCHAR(80) COMMENT '发起人',
+    initiator_department VARCHAR(120) COMMENT '发起人部门',
+    current_handler VARCHAR(120) COMMENT '当前处理人',
+    approval_node VARCHAR(120) COMMENT '审批节点',
+    application_department VARCHAR(120) COMMENT '申请部门',
+    applicant VARCHAR(80) COMMENT '申请人',
+    project_name VARCHAR(200) COMMENT '项目名称',
+    project_type VARCHAR(80) COMMENT '项目类型',
+    project_level VARCHAR(40) COMMENT '项目等级',
+    project_detail TEXT COMMENT '项目详情',
+    product_name VARCHAR(255) NOT NULL COMMENT '产品明细_产品名称',
+    product_code VARCHAR(120) COMMENT '产品明细_产品编码（必填）',
+    primary_category VARCHAR(120) COMMENT '产品明细_一级分类',
+    secondary_category VARCHAR(120) COMMENT '产品明细_二级分类',
+    production_type VARCHAR(80) COMMENT '产品明细_生产类型',
+    production_quantity INT NULL COMMENT '产品明细_生产数量',
+    spec_flavor VARCHAR(255) COMMENT '产品明细_规格/口味',
+    unit_price DECIMAL(14,2) NULL COMMENT '产品明细_产品单价',
+    unit_price_currency VARCHAR(20) COMMENT '产品明细_产品单价-币种',
+    product_remark TEXT COMMENT '产品明细_备注',
+    design_attachment_summary VARCHAR(120) COMMENT '产品明细_设计附件',
+    linked_approval VARCHAR(500) COMMENT '产品明细_关联审批',
+    contract_attachment_summary VARCHAR(120) COMMENT '合同附件',
+    source_id VARCHAR(191) NOT NULL COMMENT 'Excel SourceID，一条产品明细唯一',
+    work_order_status VARCHAR(60) COMMENT '工单状态',
+    start_date DATE NULL COMMENT '开始时间',
+    estimated_complete_date DATE NULL COMMENT '预计完成时间',
+    actual_complete_date DATE NULL COMMENT '实际完成时间',
+    owner VARCHAR(80) COMMENT '负责人',
+    factory VARCHAR(500) COMMENT '工厂/工厂备注',
+    source_kind VARCHAR(20) NOT NULL DEFAULT 'excel' COMMENT '数据来源：excel/manual',
+    workflow_application_id BIGINT NULL COMMENT '关联审批中心申请ID',
+    created_by VARCHAR(100) NULL COMMENT '系统内创建人',
+    updated_by VARCHAR(100) NULL COMMENT '最近修改人',
+    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除',
+    row_checksum CHAR(64) NOT NULL COMMENT '原始行校验和',
+    raw_json JSON NULL COMMENT '原始 Excel 35 列、列头、原始单元格值和显示值',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_sc_bulk_source_id (source_id),
+    UNIQUE KEY uk_sc_bulk_batch_row (import_batch, excel_row_no),
+    UNIQUE KEY uk_sc_bulk_checksum (row_checksum),
+    KEY idx_sc_bulk_application_no (application_no),
+    KEY idx_sc_bulk_project (project_name),
+    KEY idx_sc_bulk_product (product_name),
+    KEY idx_sc_bulk_product_code (product_code),
+    KEY idx_sc_bulk_status (work_order_status),
+    KEY idx_sc_bulk_owner (owner),
+    KEY idx_sc_bulk_source_kind (source_kind),
+    KEY idx_sc_bulk_workflow (workflow_application_id),
+    KEY idx_sc_bulk_initiated (initiated_at)
+) COMMENT='供应链大货生产审批工单明细导入表';
+
+ALTER TABLE supply_chain_bulk_production_order ADD COLUMN source_kind VARCHAR(20) NOT NULL DEFAULT 'excel' COMMENT '数据来源：excel/manual';
+ALTER TABLE supply_chain_bulk_production_order ADD COLUMN workflow_application_id BIGINT NULL COMMENT '关联审批中心申请ID';
+ALTER TABLE supply_chain_bulk_production_order ADD COLUMN created_by VARCHAR(100) NULL COMMENT '系统内创建人';
+ALTER TABLE supply_chain_bulk_production_order ADD COLUMN updated_by VARCHAR(100) NULL COMMENT '最近修改人';
+ALTER TABLE supply_chain_bulk_production_order ADD COLUMN deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除';
+CREATE INDEX idx_sc_bulk_source_kind ON supply_chain_bulk_production_order(source_kind);
+CREATE INDEX idx_sc_bulk_workflow ON supply_chain_bulk_production_order(workflow_application_id);
 
 
 -- TRIPO_3D_INTEGRATION_V5
