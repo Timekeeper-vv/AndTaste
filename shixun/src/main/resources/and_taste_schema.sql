@@ -1003,6 +1003,11 @@ CREATE TABLE IF NOT EXISTS supply_chain_sample_work_order (
     factory VARCHAR(500) COMMENT '工厂/工厂备注',
     sample_cost_yuan DECIMAL(14,2) NULL COMMENT '打样费用',
     sample_file_provided_date DATE NULL COMMENT '打样文件提供日期',
+    source_kind VARCHAR(20) NOT NULL DEFAULT 'excel' COMMENT '数据来源：excel/manual',
+    workflow_application_id BIGINT NULL COMMENT '关联审批中心申请ID',
+    created_by VARCHAR(100) NULL COMMENT '系统内创建人',
+    updated_by VARCHAR(100) NULL COMMENT '最近修改人',
+    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除',
     row_checksum CHAR(64) NOT NULL COMMENT '原始行校验和',
     raw_json JSON NULL COMMENT '原始 Excel 34 列、列头、原始单元格值和显示值',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1015,8 +1020,18 @@ CREATE TABLE IF NOT EXISTS supply_chain_sample_work_order (
     KEY idx_sc_sample_product (product_name),
     KEY idx_sc_sample_status (work_order_status),
     KEY idx_sc_sample_owner (owner),
+    KEY idx_sc_sample_source_kind (source_kind),
+    KEY idx_sc_sample_workflow (workflow_application_id),
     KEY idx_sc_sample_initiated (initiated_at)
 ) COMMENT='供应链打样申请工单明细导入表';
+
+ALTER TABLE supply_chain_sample_work_order ADD COLUMN source_kind VARCHAR(20) NOT NULL DEFAULT 'excel' COMMENT '数据来源：excel/manual';
+ALTER TABLE supply_chain_sample_work_order ADD COLUMN workflow_application_id BIGINT NULL COMMENT '关联审批中心申请ID';
+ALTER TABLE supply_chain_sample_work_order ADD COLUMN created_by VARCHAR(100) NULL COMMENT '系统内创建人';
+ALTER TABLE supply_chain_sample_work_order ADD COLUMN updated_by VARCHAR(100) NULL COMMENT '最近修改人';
+ALTER TABLE supply_chain_sample_work_order ADD COLUMN deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除';
+CREATE INDEX idx_sc_sample_source_kind ON supply_chain_sample_work_order(source_kind);
+CREATE INDEX idx_sc_sample_workflow ON supply_chain_sample_work_order(workflow_application_id);
 
 
 -- TRIPO_3D_INTEGRATION_V5

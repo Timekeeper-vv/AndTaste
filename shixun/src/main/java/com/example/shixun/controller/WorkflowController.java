@@ -122,8 +122,18 @@ public class WorkflowController {
                 "UPDATE workflow_application SET status=?, approver=?, approval_comment=?, approved_at=CASE WHEN ?='approved' THEN CURRENT_TIMESTAMP ELSE approved_at END, rejected_at=CASE WHEN ?='rejected' THEN CURRENT_TIMESTAMP ELSE rejected_at END WHERE id=?",
                 targetStatus, req.operator.trim(), comment, targetStatus, targetStatus, id
         );
+        syncSampleRequestStatus(id, targetStatus, req.operator.trim());
         insertLog(id, targetStatus.equals("approved") ? "approve" : "reject", req.operator.trim(), req.operatorRole.trim(), comment);
         return loadApplication(id);
+    }
+
+    private void syncSampleRequestStatus(Long workflowId, String targetStatus, String operator) {
+        String approvalStatus = "approved".equals(targetStatus) ? "已通过" : "已驳回";
+        String workStatus = "approved".equals(targetStatus) ? "待打样" : "审批驳回";
+        jdbc.update(
+                "UPDATE supply_chain_sample_work_order SET approval_status=?, current_handler=NULL, work_order_status=?, updated_by=? WHERE workflow_application_id=? AND deleted=0",
+                approvalStatus, workStatus, operator, workflowId
+        );
     }
 
     private List<Map<String, Object>> listApplications(String status, String category, String applicant, Integer limit, Integer offset) {

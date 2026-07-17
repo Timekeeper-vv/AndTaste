@@ -19,6 +19,7 @@ import HumanResourcePage from './components/HumanResourcePage.vue'
 import AttendanceManagementPage from './components/AttendanceManagementPage.vue'
 import SupplierList from './components/SupplierList.vue'
 import SampleWorkOrderPage from './components/SampleWorkOrderPage.vue'
+import SampleApplicationPage from './components/SampleApplicationPage.vue'
 import FinanceApplicationPage from './components/FinanceApplicationPage.vue'
 import ApprovalCenter from './components/ApprovalCenter.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
@@ -84,6 +85,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   scaleUp:      STAFF_WORKFLOW_ROLES,
   createProductionProject:STAFF_WORKFLOW_ROLES,
   production:   STAFF_WORKFLOW_ROLES,
+  sampleApplication:STAFF_WORKFLOW_ROLES,
   sampleProduction:STAFF_WORKFLOW_ROLES,
   bulkProduction:STAFF_WORKFLOW_ROLES,
   logistics:    MANAGER_ROLES,
@@ -189,6 +191,7 @@ const pageLabels: Record<string, string> = {
   scaleUp:      '生产管理',
   createProductionProject:'创建项目',
   production:   '智能成本核算引擎',
+  sampleApplication:'打样申请',
   sampleProduction:'产品打样管理',
   bulkProduction:'大货生产管理',
   logistics:    '物流跟踪',
@@ -294,6 +297,7 @@ const pageLabels: Record<string, string> = {
         <ScaleUpPlatform     v-if="currentPage === 'scaleUp'" @alert="showAlert" />
         <ProductionManagement v-if="currentPage === 'createProductionProject'" initial-view="project" :current-user="currentUser" @alert="showAlert" @switch-page="p => { if (hasAccess(p, currentUser?.role)) currentPage = p as PageName }" />
         <ProductionManagement v-if="currentPage === 'production'" initial-view="cost" :current-user="currentUser" @alert="showAlert" />
+        <SampleApplicationPage v-if="currentPage === 'sampleApplication'" :current-user="currentUser" @alert="showAlert" />
         <ProductionManagement v-if="currentPage === 'sampleProduction'" initial-view="sample" :current-user="currentUser" @alert="showAlert" />
         <ProductionManagement v-if="currentPage === 'bulkProduction'" initial-view="bulk" :current-user="currentUser" @alert="showAlert" />
         <LogisticsTracking    v-if="currentPage === 'logistics'"  @alert="showAlert" />
