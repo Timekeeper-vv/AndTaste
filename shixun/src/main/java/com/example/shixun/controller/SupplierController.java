@@ -30,7 +30,7 @@ public class SupplierController {
         String kw = search == null ? "" : search.trim();
         String sql = "SELECT id, receiver_no AS receiverNo, supplier, account_type AS accountType, " +
                 "account_name AS accountName, bank_account AS bankAccount, bank, branch, location, note, " +
-                "created_at AS createdAt, updated_at AS updatedAt " +
+                "DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS createdAt, DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updatedAt " +
                 "FROM supplier_bank_accounts ";
         if (!kw.isBlank()) {
             String like = "%" + kw + "%";
@@ -69,7 +69,7 @@ public class SupplierController {
         try {
             jdbc.update("INSERT INTO supplier_bank_accounts (receiver_no, supplier, account_type, account_name, bank_account, bank, branch, location, note) VALUES (?,?,?,?,?,?,?,?,?)",
                     receiverNo, supplier, accountType, accountName, bankAccount, bank, branch, location, note.isBlank() ? null : note);
-            Map<String, Object> row = jdbc.queryForMap("SELECT id, receiver_no AS receiverNo, supplier, account_type AS accountType, account_name AS accountName, bank_account AS bankAccount, bank, branch, location, note, created_at AS createdAt, updated_at AS updatedAt FROM supplier_bank_accounts WHERE receiver_no=?", receiverNo);
+            Map<String, Object> row = jdbc.queryForMap("SELECT id, receiver_no AS receiverNo, supplier, account_type AS accountType, account_name AS accountName, bank_account AS bankAccount, bank, branch, location, note, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS createdAt, DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updatedAt FROM supplier_bank_accounts WHERE receiver_no=?", receiverNo);
             return ResponseEntity.ok(row);
         } catch (DuplicateKeyException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "收方编号已存在，请换一个编号"));

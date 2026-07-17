@@ -102,13 +102,14 @@ public class SupplyChainSampleWorkOrderController {
         args.add((page - 1) * size);
         List<Map<String, Object>> items = jdbc.queryForList(
                 "SELECT id, import_batch importBatch, source_file sourceFile, source_sheet sourceSheet, excel_row_no excelRowNo, " +
-                        "application_no applicationNo, approval_status approvalStatus, approval_flow approvalFlow, initiated_at initiatedAt, completed_at completedAt, " +
+                        "application_no applicationNo, approval_status approvalStatus, approval_flow approvalFlow, " +
+                        "DATE_FORMAT(initiated_at, '%Y-%m-%d %H:%i:%s') AS initiatedAt, DATE_FORMAT(completed_at, '%Y-%m-%d %H:%i:%s') AS completedAt, " +
                         "initiator, initiator_department initiatorDepartment, application_department applicationDepartment, applicant, project_name projectName, " +
                         "product_name productName, order_type orderType, product_type productType, product_sub_type productSubType, product_estimate productEstimate, " +
                         "product_estimate_currency productEstimateCurrency, sample_quantity_text sampleQuantityText, spec_flavor specFlavor, sample_fee_yuan sampleFeeYuan, " +
                         "detail_remark detailRemark, detail_project_name detailProjectName, attachment_summary attachmentSummary, source_id sourceId, " +
-                        "work_order_status workOrderStatus, start_date startDate, estimated_complete_date estimatedCompleteDate, actual_complete_date actualCompleteDate, " +
-                        "owner, factory, sample_cost_yuan sampleCostYuan, sample_file_provided_date sampleFileProvidedDate, source_kind sourceKind, workflow_application_id workflowApplicationId, row_checksum rowChecksum " +
+                        "work_order_status workOrderStatus, DATE_FORMAT(start_date, '%Y-%m-%d') AS startDate, DATE_FORMAT(estimated_complete_date, '%Y-%m-%d') AS estimatedCompleteDate, DATE_FORMAT(actual_complete_date, '%Y-%m-%d') AS actualCompleteDate, " +
+                        "owner, factory, sample_cost_yuan sampleCostYuan, DATE_FORMAT(sample_file_provided_date, '%Y-%m-%d') AS sampleFileProvidedDate, source_kind sourceKind, workflow_application_id workflowApplicationId, row_checksum rowChecksum " +
                         "FROM supply_chain_sample_work_order" + where.sql + " ORDER BY initiated_at DESC, excel_row_no ASC LIMIT ? OFFSET ?",
                 args.toArray());
         return Map.of(
@@ -127,13 +128,14 @@ public class SupplyChainSampleWorkOrderController {
     public Map<String, Object> detail(@PathVariable Long id) {
         return jdbc.queryForMap(
                 "SELECT id, import_batch importBatch, source_file sourceFile, source_sheet sourceSheet, excel_row_no excelRowNo, " +
-                        "application_no applicationNo, approval_status approvalStatus, approval_flow approvalFlow, initiated_at initiatedAt, completed_at completedAt, " +
+                        "application_no applicationNo, approval_status approvalStatus, approval_flow approvalFlow, " +
+                        "DATE_FORMAT(initiated_at, '%Y-%m-%d %H:%i:%s') AS initiatedAt, DATE_FORMAT(completed_at, '%Y-%m-%d %H:%i:%s') AS completedAt, " +
                         "initiator, initiator_department initiatorDepartment, current_handler currentHandler, approval_node approvalNode, application_department applicationDepartment, applicant, " +
                         "project_name projectName, product_name productName, order_type orderType, product_type productType, product_sub_type productSubType, product_estimate productEstimate, " +
                         "product_estimate_currency productEstimateCurrency, sample_quantity_text sampleQuantityText, spec_flavor specFlavor, sample_fee_yuan sampleFeeYuan, " +
                         "detail_remark detailRemark, detail_project_name detailProjectName, linked_project_flow linkedProjectFlow, attachment_summary attachmentSummary, source_id sourceId, " +
-                        "work_order_status workOrderStatus, start_date startDate, estimated_complete_date estimatedCompleteDate, actual_complete_date actualCompleteDate, " +
-                        "owner, factory, sample_cost_yuan sampleCostYuan, sample_file_provided_date sampleFileProvidedDate, source_kind sourceKind, workflow_application_id workflowApplicationId, created_by createdBy, updated_by updatedBy, row_checksum rowChecksum, raw_json rawJson, created_at createdAt, updated_at updatedAt " +
+                        "work_order_status workOrderStatus, DATE_FORMAT(start_date, '%Y-%m-%d') AS startDate, DATE_FORMAT(estimated_complete_date, '%Y-%m-%d') AS estimatedCompleteDate, DATE_FORMAT(actual_complete_date, '%Y-%m-%d') AS actualCompleteDate, " +
+                        "owner, factory, sample_cost_yuan sampleCostYuan, DATE_FORMAT(sample_file_provided_date, '%Y-%m-%d') AS sampleFileProvidedDate, source_kind sourceKind, workflow_application_id workflowApplicationId, created_by createdBy, updated_by updatedBy, row_checksum rowChecksum, raw_json rawJson, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS createdAt, DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updatedAt " +
                         "FROM supply_chain_sample_work_order WHERE id=? AND deleted=0", id);
     }
 
