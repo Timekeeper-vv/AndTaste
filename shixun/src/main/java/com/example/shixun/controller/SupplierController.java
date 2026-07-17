@@ -1,5 +1,8 @@
 package com.example.shixun.controller;
 
+import com.example.shixun.model.SupplierSearchRequest;
+import com.example.shixun.model.SupplierSearchResult;
+import com.example.shixun.service.SupplierSearchToolService;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -13,9 +16,11 @@ import java.util.Map;
 @CrossOrigin(origins = "*")
 public class SupplierController {
     private final JdbcTemplate jdbc;
+    private final SupplierSearchToolService supplierSearch;
 
-    public SupplierController(JdbcTemplate jdbc) {
+    public SupplierController(JdbcTemplate jdbc, SupplierSearchToolService supplierSearch) {
         this.jdbc = jdbc;
+        this.supplierSearch = supplierSearch;
     }
 
     @GetMapping
@@ -31,6 +36,11 @@ public class SupplierController {
                     like, like, like, like, like, like, like, like));
         }
         return ResponseEntity.ok(jdbc.queryForList(sql + "ORDER BY id DESC LIMIT 300"));
+    }
+
+    @PostMapping("/search")
+    public ResponseEntity<SupplierSearchResult> search(@RequestBody(required = false) SupplierSearchRequest request) {
+        return ResponseEntity.ok(supplierSearch.searchSuppliers(request));
     }
 
     @PostMapping

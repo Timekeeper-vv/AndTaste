@@ -1,6 +1,7 @@
 package com.example.shixun.controller;
 
 import com.example.shixun.service.SiliconFlowChatService;
+import com.example.shixun.service.SupplierTextToApiService;
 import com.example.shixun.service.WebSearchService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -19,6 +20,7 @@ public class AiChatController {
     private final SiliconFlowChatService siliconFlow;
     private final JdbcTemplate jdbc;
     private final WebSearchService webSearch;
+    private final SupplierTextToApiService supplierTextToApi;
 
     private static final String SYSTEM_PROMPT =
             "你是“之间味道-文创产品智能体平台”的AI业务助手，专注于文创产品业务。" +
@@ -92,10 +94,11 @@ public class AiChatController {
             new SupplierDoc("2024052000407","青岛益美鑫包装科技有限公司","对公账户","青岛益美鑫包装科技有限公司","37150198691000004147","中国建设银行","中国建设银行青岛中山路支行","山东省青岛市","")
     );
 
-    public AiChatController(SiliconFlowChatService siliconFlow, JdbcTemplate jdbc, WebSearchService webSearch) {
+    public AiChatController(SiliconFlowChatService siliconFlow, JdbcTemplate jdbc, WebSearchService webSearch, SupplierTextToApiService supplierTextToApi) {
         this.siliconFlow = siliconFlow;
         this.jdbc = jdbc;
         this.webSearch = webSearch;
+        this.supplierTextToApi = supplierTextToApi;
     }
 
     @PostMapping("/chat")
@@ -110,6 +113,19 @@ public class AiChatController {
                 .limit(12)
                 .map(m -> ("assistant".equals(m.get("role")) ? "助手" : "用户") + "：" + m.getOrDefault("content", ""))
                 .collect(Collectors.joining("\n"));
+
+        var supplierToolAnswer = supplierTextToApi.tryAnswer(userMessage);
+        if (supplierToolAnswer.isPresent()) {
+            var answer = supplierToolAnswer.get();
+            return ResponseEntity.ok(Map.of(
+                    "reply", answer.reply(),
+                    "source", answer.source(),
+                    "tool", "search_suppliers",
+                    "toolArguments", answer.toolArguments(),
+                    "toolResult", answer.toolResult()
+            ));
+        }
+
         String context = retrieveKnowledge(userMessage);
         if (context.startsWith("【供应商实时查询结果】") || context.startsWith("【供应商实时汇总】")) {
             if (needsSupplierExternalAnalysis(userMessage)) {
@@ -301,22 +317,15 @@ public class AiChatController {
 
     private String retrieveKnowledge(String query) {
         String q = query == null ? "" : query.toLowerCase();
-        String supplierKnowledge = retrieveSupplierKnowledge(q);
-        if (supplierKnowledge.startsWith("【供应商实时查询结果】") || supplierKnowledge.startsWith("【供应商实时汇总】")) {
-            return supplierKnowledge;
-        }
-        boolean supplierRelated = !supplierKnowledge.isBlank();
         List<FormDoc> matched = new ArrayList<>();
         for (FormDoc doc : FORM_DOCS) {
             String text = (doc.name + " " + doc.menu + " " + doc.summary + " " + doc.fields + " " + doc.tips).toLowerCase();
             if (q.isBlank() || text.contains(q) || containsAny(q, doc.name, doc.menu, doc.summary, doc.fields)) matched.add(doc);
         }
         String formKnowledge = "";
-        if (!supplierRelated || !matched.isEmpty()) {
-            if (matched.isEmpty()) matched = FORM_DOCS.stream().limit(8).toList();
-            formKnowledge = matched.stream().limit(supplierRelated ? 3 : 10).map(FormDoc::format).collect(Collectors.joining("\n\n"));
-        }
-        return (supplierKnowledge + (supplierKnowledge.isBlank() || formKnowledge.isBlank() ? "" : "\n\n") + formKnowledge).trim();
+        if (matched.isEmpty()) matched = FORM_DOCS.stream().limit(8).toList();
+        formKnowledge = matched.stream().limit(10).map(FormDoc::format).collect(Collectors.joining("\n\n"));
+        return formKnowledge.trim();
     }
 
     private String retrieveSupplierKnowledge(String q) {
