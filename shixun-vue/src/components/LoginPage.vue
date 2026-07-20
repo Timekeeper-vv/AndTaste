@@ -356,6 +356,25 @@ onUnmounted(() => {
           <span>概念</span><i></i><span>设计</span><i></i><span>打样</span><i></i><span>量产</span><i></i><span>发售</span>
         </div>
         <p class="hero-flow-caption">系统支持从创意概念到设计生成、AI评审、打样准备、量产协同与上架发售的完整链路。</p>
+        <div class="launch-proof" aria-label="平台发布亮点">
+          <div><b>全流程</b><span>创意到交付一体化</span></div>
+          <div><b>多角色</b><span>审批、生产、仓储协同</span></div>
+          <div><b>可沉淀</b><span>资产、订单、数据长期留痕</span></div>
+        </div>
+        <div class="poster-preview" aria-hidden="true">
+          <div class="poster-card poster-card-main">
+            <small>LIVE OPERATIONS</small>
+            <strong>92</strong>
+            <span>经营健康指数</span>
+            <i></i>
+          </div>
+          <div class="poster-card poster-card-sub">
+            <small>CREATIVE ASSETS</small>
+            <strong>AI · SKU · BOM</strong>
+            <span>创意资产转生产方案</span>
+          </div>
+          <div class="poster-beam"></div>
+        </div>
       </div>
 
       <!-- Scroll indicator -->
@@ -749,6 +768,7 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   background: #020617;
+  isolation: isolate;
 }
 
 .hero-stage {
@@ -979,30 +999,30 @@ onUnmounted(() => {
 }
 
 .hero-title {
-  font-size: clamp(44px, 8vw, 86px);
-  font-weight: 800; line-height: 1.06;
+  font-size: clamp(50px, 8.8vw, 104px);
+  font-weight: 950; line-height: .98;
   color: #fff; margin: 0 0 22px;
-  letter-spacing: -1px;
+  letter-spacing: -4px;
   text-shadow: 0 4px 32px rgba(0,0,0,.5);
 }
 
 .hero-title-accent {
-  background: linear-gradient(135deg, #5eead4, #0891b2);
+  background: linear-gradient(135deg, #ffffff 0%, #99f6e4 36%, #a78bfa 78%, #38bdf8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 .hero-sub {
-  font-size: 16px; color: rgba(255,255,255,.62);
-  line-height: 1.7; max-width: 520px;
+  font-size: 17px; color: rgba(255,255,255,.72);
+  line-height: 1.8; max-width: 680px;
   margin: 0 auto 36px;
 }
 
 .hero-cta {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 14px 32px;
-  background: linear-gradient(135deg, #0d9488, #0891b2);
+  background: linear-gradient(135deg, #14b8a6, #38bdf8);
   color: #fff; border: none; border-radius: 12px;
   font-size: 15px; font-weight: 700; font-family: var(--font);
   letter-spacing: .5px; cursor: pointer;
@@ -1047,6 +1067,81 @@ onUnmounted(() => {
   color: rgba(255,255,255,.72);
   font-size: 14px;
   line-height: 1.7;
+}
+
+.poster-preview {
+  position: relative;
+  display: grid;
+  grid-template-columns: 170px 240px;
+  gap: 12px;
+  margin-top: 30px;
+  perspective: 900px;
+}
+.poster-card {
+  position: relative;
+  min-height: 108px;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 22px;
+  text-align: left;
+  background: linear-gradient(145deg, rgba(255,255,255,.18), rgba(255,255,255,.07));
+  box-shadow: 0 24px 70px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.12);
+  backdrop-filter: blur(20px) saturate(150%);
+  animation: posterFloat 6s ease-in-out infinite;
+}
+.poster-card-main { transform: rotateY(10deg) rotateX(4deg); }
+.poster-card-sub {
+  margin-top: 28px;
+  transform: rotateY(-10deg) rotateX(3deg);
+  animation-delay: -2.4s;
+}
+.poster-card small {
+  display: block;
+  color: rgba(165,243,252,.78);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .18em;
+}
+.poster-card strong {
+  display: block;
+  margin-top: 10px;
+  color: #fff;
+  font-size: 34px;
+  font-weight: 950;
+  letter-spacing: -.06em;
+}
+.poster-card-sub strong {
+  font-size: 18px;
+  letter-spacing: .02em;
+}
+.poster-card span {
+  display: block;
+  margin-top: 4px;
+  color: rgba(226,232,240,.72);
+  font-size: 11px;
+}
+.poster-card i {
+  position: absolute;
+  right: -32px;
+  bottom: -40px;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(94,234,212,.30), transparent 68%);
+}
+.poster-beam {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 390px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(94,234,212,.7), transparent);
+  transform: translate(-50%,-50%) rotate(-12deg);
+  filter: drop-shadow(0 0 18px rgba(94,234,212,.65));
+}
+@keyframes posterFloat {
+  0%,100% { translate: 0 0; }
+  50% { translate: 0 -8px; }
 }
 
 .scroll-hint {
@@ -2036,6 +2131,174 @@ onUnmounted(() => {
   color: #0d9488;
 }
 
+/* ══════════════════════════════════════
+   Brand Launch Preview Skin — official, dynamic, presentation-ready
+══════════════════════════════════════ */
+.landing {
+  background: #f7f3ea;
+}
+.hero {
+  min-height: 720px;
+  background:
+    linear-gradient(110deg, rgba(255,255,255,.96) 0 46%, rgba(255,255,255,.58) 47% 64%, transparent 65%),
+    radial-gradient(circle at 82% 18%, rgba(20,184,166,.20), transparent 26%),
+    radial-gradient(circle at 92% 82%, rgba(246,173,85,.22), transparent 32%),
+    linear-gradient(135deg, #fdfaf4 0%, #eef7f4 42%, #e8f0ff 100%);
+}
+.hero-stage {
+  background:
+    radial-gradient(circle at 78% 20%, rgba(20,184,166,.22), transparent 27%),
+    radial-gradient(circle at 84% 72%, rgba(251,146,60,.18), transparent 30%),
+    linear-gradient(135deg, #fdfaf4, #eef7f4 50%, #e8f0ff);
+}
+.hero-mesh,
+.hero-lines {
+  opacity: .18;
+  filter: blur(34px) saturate(120%);
+}
+.hero-grid {
+  opacity: .22;
+  background-image:
+    linear-gradient(rgba(15,23,42,.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,23,42,.055) 1px, transparent 1px);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0 46%, #000 62%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0 46%, #000 62%, transparent 100%);
+}
+.hero-overlay {
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.88), rgba(255,255,255,.42) 52%, rgba(255,255,255,.18)),
+    radial-gradient(circle at 78% 38%, rgba(255,255,255,.10), rgba(255,255,255,.62) 72%);
+}
+.hero-vignette {
+  background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(247,243,234,.30));
+}
+.glass-nav {
+  background: rgba(255,255,255,.78);
+  border-color: rgba(15,23,42,.08);
+  box-shadow: 0 18px 50px rgba(15,23,42,.08);
+}
+.nav-brand-name {
+  color: #0f172a;
+  font-weight: 900;
+}
+.nav-lang-toggle,
+.nav-btn-login {
+  color: #0f172a;
+  background: rgba(255,255,255,.72);
+  border-color: rgba(15,23,42,.10);
+}
+.nav-btn-signup {
+  color: #fff;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
+  box-shadow: 0 16px 32px rgba(20,184,166,.24);
+}
+.hero-body {
+  align-items: flex-start;
+  text-align: left;
+  width: min(1180px, calc(100% - 56px));
+  margin: 0 auto;
+  padding-top: 34px;
+}
+.hero-eyebrow {
+  color: #0f766e;
+}
+.hero-title {
+  max-width: 760px;
+  color: #0b1220;
+  text-shadow: none;
+  font-size: clamp(52px, 7vw, 94px);
+  letter-spacing: -5px;
+}
+.hero-title-accent {
+  background: linear-gradient(90deg, #0f766e 0%, #0b1220 46%, #b45309 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.hero-sub {
+  margin-left: 0;
+  max-width: 640px;
+  color: #475569;
+}
+.hero-cta {
+  color: #fff;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
+  box-shadow: 0 18px 38px rgba(20,184,166,.26);
+}
+.hero-flow {
+  color: #0f172a;
+  background: rgba(255,255,255,.76);
+  border-color: rgba(15,23,42,.08);
+  box-shadow: 0 14px 34px rgba(15,23,42,.08);
+}
+.hero-flow i {
+  background: linear-gradient(90deg, rgba(15,23,42,.12), rgba(20,184,166,.72));
+  animation: launchFlow 2.8s ease-in-out infinite;
+}
+.hero-flow-caption {
+  color: #64748b;
+}
+.launch-proof {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  width: min(680px, 100%);
+  margin-top: 24px;
+}
+.launch-proof div {
+  padding: 16px 18px;
+  border: 1px solid rgba(15,23,42,.08);
+  border-radius: 18px;
+  background: rgba(255,255,255,.72);
+  box-shadow: 0 16px 42px rgba(15,23,42,.07);
+  backdrop-filter: blur(16px);
+  animation: proofIn .55s ease both;
+}
+.launch-proof div:nth-child(2) { animation-delay: .08s; }
+.launch-proof div:nth-child(3) { animation-delay: .16s; }
+.launch-proof b {
+  display: block;
+  color: #0f766e;
+  font-size: 18px;
+  font-weight: 950;
+}
+.launch-proof span {
+  display: block;
+  margin-top: 5px;
+  color: #64748b;
+  font-size: 12px;
+}
+.poster-preview {
+  position: absolute;
+  right: max(42px, 7vw);
+  top: 50%;
+  transform: translateY(-39%);
+  grid-template-columns: 210px 280px;
+}
+.poster-card {
+  background: rgba(255,255,255,.82);
+  border-color: rgba(15,23,42,.08);
+  box-shadow: 0 30px 80px rgba(15,23,42,.13);
+}
+.poster-card small { color: #0f766e; }
+.poster-card strong { color: #0f172a; }
+.poster-card span { color: #64748b; }
+.poster-beam {
+  background: linear-gradient(90deg, transparent, rgba(20,184,166,.75), transparent);
+}
+.scroll-hint {
+  color: #64748b;
+}
+@keyframes launchFlow {
+  0%,100% { transform: scaleX(.55); opacity: .45; }
+  50% { transform: scaleX(1); opacity: 1; }
+}
+@keyframes proofIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .hero-mesh,
   .hero-grid,
@@ -2062,5 +2325,15 @@ onUnmounted(() => {
   .glass-nav { margin: 12px 14px 0; }
   .hero-title { font-size: 42px; }
   .mfield-row { grid-template-columns: 1fr; }
+}
+@media (max-width: 1120px) {
+  .poster-preview { display: none; }
+  .hero-body { align-items: center; text-align: center; }
+  .hero-sub { margin-left: auto; }
+}
+@media (max-width: 760px) {
+  .poster-preview { display: none; }
+  .hero-title { letter-spacing: -2px; }
+  .launch-proof { grid-template-columns: 1fr; }
 }
 </style>

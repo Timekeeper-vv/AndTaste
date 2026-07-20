@@ -78,6 +78,20 @@ CREATE TABLE IF NOT EXISTS workflow_application (
     deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除'
 ) COMMENT='统一申请单';
 
+-- 审批流增强字段：支持多级审批、流程配置、当前节点、转交、撤回、驳回重提等
+ALTER TABLE workflow_application ADD COLUMN flow_type VARCHAR(50) NOT NULL DEFAULT 'standard' COMMENT '审批流程类型';
+ALTER TABLE workflow_application ADD COLUMN flow_name VARCHAR(100) NULL COMMENT '审批流程名称';
+ALTER TABLE workflow_application ADD COLUMN flow_config_json JSON NULL COMMENT '审批流程配置快照';
+ALTER TABLE workflow_application ADD COLUMN current_step INT NOT NULL DEFAULT 0 COMMENT '当前审批节点序号，从0开始';
+ALTER TABLE workflow_application ADD COLUMN current_step_name VARCHAR(100) NULL COMMENT '当前审批节点名称';
+ALTER TABLE workflow_application ADD COLUMN current_handler VARCHAR(100) NULL COMMENT '当前处理人/转交对象';
+ALTER TABLE workflow_application ADD COLUMN current_approval_count INT NOT NULL DEFAULT 0 COMMENT '当前节点已审批人数';
+ALTER TABLE workflow_application ADD COLUMN resubmit_count INT NOT NULL DEFAULT 0 COMMENT '驳回后重新提交次数';
+ALTER TABLE workflow_application ADD COLUMN withdrawn_at DATETIME DEFAULT NULL COMMENT '撤回时间';
+ALTER TABLE workflow_application ADD COLUMN finished_at DATETIME DEFAULT NULL COMMENT '流程完成时间';
+CREATE INDEX idx_workflow_application_current_handler ON workflow_application(current_handler);
+CREATE INDEX idx_workflow_application_flow_type ON workflow_application(flow_type);
+
 CREATE TABLE IF NOT EXISTS workflow_approval_log (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     application_id BIGINT NOT NULL COMMENT '申请单ID',
@@ -88,3 +102,15 @@ CREATE TABLE IF NOT EXISTS workflow_approval_log (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
     INDEX idx_workflow_log_app_id (application_id)
 ) COMMENT='审批流日志';
+
+CREATE TABLE IF NOT EXISTS workflow_notification (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    application_id BIGINT NOT NULL COMMENT '申请单ID',
+    receiver VARCHAR(100) NOT NULL COMMENT '接收人/角色',
+    title VARCHAR(200) NOT NULL COMMENT '消息标题',
+    message VARCHAR(1000) NOT NULL COMMENT '消息内容',
+    read_flag TINYINT NOT NULL DEFAULT 0 COMMENT '是否已读',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_workflow_notice_receiver (receiver, read_flag),
+    INDEX idx_workflow_notice_app (application_id)
+) COMMENT='审批流消息提醒';

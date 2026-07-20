@@ -341,6 +341,10 @@ const pageLabels: Record<string, string> = {
 .app-shell {
   display: flex;
   min-height: 100vh;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(20,184,166,.13), transparent 26%),
+    radial-gradient(circle at 88% 8%, rgba(124,58,237,.10), transparent 30%),
+    linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%);
 }
 
 .app-body {
@@ -363,8 +367,11 @@ const pageLabels: Record<string, string> = {
   top: 0;
   z-index: 40;
   height: var(--header-h);
-  background: var(--c-surface);
-  border-bottom: 1px solid var(--c-border);
+  background: rgba(255,255,255,.72);
+  border-bottom: 1px solid rgba(148,163,184,.20);
+  box-shadow: 0 10px 34px rgba(15,23,42,.06);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -379,11 +386,11 @@ const pageLabels: Record<string, string> = {
 }
 
 .toggle-btn {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border: 1px solid var(--c-border);
-  border-radius: var(--r);
-  background: var(--c-surface);
+  border-radius: 12px;
+  background: rgba(255,255,255,.76);
   color: var(--c-text-2);
   cursor: pointer;
   display: flex;
@@ -392,7 +399,13 @@ const pageLabels: Record<string, string> = {
   transition: all .15s;
   flex-shrink: 0;
 }
-.toggle-btn:hover { background: var(--c-bg); color: var(--c-text); }
+.toggle-btn:hover {
+  transform: translateY(-1px);
+  background: #fff;
+  color: var(--c-primary-dark);
+  border-color: rgba(20,184,166,.26);
+  box-shadow: 0 12px 24px rgba(15,23,42,.08);
+}
 
 .breadcrumb {
   display: flex;
@@ -402,7 +415,11 @@ const pageLabels: Record<string, string> = {
 }
 .bc-root  { color: var(--c-text-3); }
 .bc-root svg { color: var(--c-text-3); }
-.bc-current { color: var(--c-text); font-weight: 500; }
+.bc-current {
+  color: var(--c-text);
+  font-weight: 800;
+  letter-spacing: -.01em;
+}
 
 
 .header-center-title {
@@ -413,10 +430,13 @@ const pageLabels: Record<string, string> = {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--c-text);
+  color: transparent;
   font-size: 15px;
-  font-weight: 800;
-  letter-spacing: .04em;
+  font-weight: 900;
+  letter-spacing: .06em;
+  background: linear-gradient(90deg, #0f172a, #0f766e 52%, #4f46e5);
+  -webkit-background-clip: text;
+  background-clip: text;
 }
 
 .header-right {
@@ -429,13 +449,18 @@ const pageLabels: Record<string, string> = {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 36px;
+  padding: 0 12px 0 5px;
+  border: 1px solid rgba(148,163,184,.20);
+  border-radius: 999px;
+  background: rgba(255,255,255,.72);
 }
 
 .user-avatar {
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: var(--c-primary);
+  background: linear-gradient(135deg, #14b8a6, #7c3aed);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
@@ -454,7 +479,30 @@ const pageLabels: Record<string, string> = {
 /* Main content */
 .app-main {
   flex: 1;
-  padding: 24px;
+  position: relative;
+  padding: 26px;
   overflow-y: auto;
+}
+
+.app-main::before {
+  content: '';
+  position: fixed;
+  inset: var(--header-h) 0 0 var(--sidebar-w);
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.35), transparent 38%),
+    radial-gradient(circle at 96% 0%, rgba(56,189,248,.12), transparent 28%);
+  transition: inset .2s ease;
+}
+
+.app-shell.collapsed .app-main::before {
+  left: var(--sidebar-collapsed-w);
+}
+
+@media (max-width: 920px) {
+  .header-center-title { display: none; }
+  .app-header { padding: 0 14px; }
+  .app-main { padding: 16px; }
+  .user-name { display: none; }
 }
 </style>

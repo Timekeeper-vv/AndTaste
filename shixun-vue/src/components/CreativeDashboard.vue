@@ -20,6 +20,9 @@ const done = computed(() => count('completed') + count('shipped'))
 const fulfillment = computed(() => orders.value.length ? Math.round(done.value / orders.value.length * 100) : 0)
 const health = computed(() => Math.max(0, 100 - Number(warehouse.value.alertCount || 0) * 5 - Number(logistics.value.exceptionCount || 0) * 8 - count('pending_confirm') * 2))
 const healthText = computed(() => health.value >= 90 ? '卓越' : health.value >= 75 ? '稳健' : health.value >= 60 ? '关注' : '预警')
+const orderProgress = computed(() => orders.value.length ? Math.round((count('confirmed') + count('producing') + count('ready_to_ship') + done.value) / orders.value.length * 100) : 0)
+const riskControl = computed(() => Math.max(0, Math.min(100, 100 - risks.value * 12)))
+const approvalResponse = computed(() => Math.max(0, Math.min(100, 100 - Number(workflow.value.pendingCount || 0) * 8)))
 const recentOrders = computed(() => orders.value.slice(0, 7))
 const maxPipeline = computed(() => Math.max(1, ...pipeline.value.map(i => i.value)))
 const statusText: Record<string, string> = { pending_confirm:'待确认', confirmed:'待下达', producing:'生产中', ready_to_ship:'待发货', shipped:'已发货', completed:'已完成' }
@@ -30,6 +33,30 @@ const pipeline = computed(() => [
   { label:'待发货', value:count('ready_to_ship'), color:'#14b8a6' },
   { label:'履约完成', value:done.value, color:'#10b981' }
 ])
+const gaugeCards = computed(() => [
+  { label:'履约完成率', value:fulfillment.value, tone:'#0f766e', desc:`${done.value} 单已完成 / 已发货`, foot:`${logistics.value.inTransitCount || 0} 单在途` },
+  { label:'订单推进率', value:orderProgress.value, tone:'#2563eb', desc:`${count('pending_confirm')} 单待客户确认`, foot:`${count('producing')} 单生产中` },
+  { label:'风险控制指数', value:riskControl.value, tone:risks.value ? '#e11d48' : '#10b981', desc:`${risks.value} 项供应链风险`, foot:`库存 ${warehouse.value.alertCount || 0} · 物流 ${logistics.value.exceptionCount || 0}` },
+  { label:'审批响应指数', value:approvalResponse.value, tone:'#d97706', desc:`${workflow.value.pendingCount || 0} 条审批待办`, foot:'连锁 / 财务 / 业务流转' }
+])
+const todoItems = computed(() => [
+  { title:'审批待处理', value:Number(workflow.value.pendingCount || 0), desc:'财务、连锁与业务申请', page:'approvalCenter', tone:'amber' },
+  { title:'客户待确认', value:count('pending_confirm'), desc:'报价与生产内容确认', page:'sampleProduction', tone:'blue' },
+  { title:'待下达生产', value:count('confirmed'), desc:'已确认订单等待执行', page:'bulkProduction', tone:'violet' },
+  { title:'风险待跟进', value:risks.value, desc:'库存预警与物流异常', page:'warehouseLogistics', tone:risks.value ? 'rose' : 'green' }
+])
+const alertItems = computed(() => [
+  { label:'库存预警', value:Number(warehouse.value.alertCount || 0), page:'warehouseLogistics', desc:'缺货、低库存、超储风险' },
+  { label:'物流异常', value:Number(logistics.value.exceptionCount || 0), page:'logistics', desc:'运输停滞、签收异常' },
+  { label:'审批积压', value:Number(workflow.value.pendingCount || 0), page:'approvalCenter', desc:'超过正常响应时间需关注' },
+].filter(i => i.value > 0))
+const recentActivities = computed(() => recentOrders.value.slice(0, 5).map(o => ({
+  id: o.id,
+  title: o.productName || '未命名产品',
+  meta: `${o.orderNo || '—'} · ${o.orderType === 'sample' ? '产品打样' : '大货生产'}`,
+  status: statusText[o.status] || o.status || '待处理',
+  amount: money(o.totalAmount)
+})))
 const actions = computed(() => [
   { code:'DESIGN 01', title:'2D 创意生图', desc:'Qwen3 优化提示词与 Tripo 商业出图', page:'creative2d', tone:'indigo' },
   { code:'DESIGN 02', title:'3D 辅助建模', desc:`${models.value.length} 项模型资产 · P/H 系列生成`, page:'creative3d', tone:'violet' },
@@ -65,18 +92,24 @@ onMounted(load)
       <div class="kicker"><i></i> AND TASTE · INTELLIGENT OPERATIONS</div>
       <h1>经营驾驶舱</h1>
       <p>从创意资产到生产交付，让每一笔订单、每一道工艺和每一次履约都有据可循。</p>
+      <div class="hero-meta">
+        <span><b>AI</b> 创意引擎在线</span>
+        <span><b>{{orders.length}}</b> 商业订单接入</span>
+        <span><b>{{assets.length}}</b> 数字资产沉淀</span>
+      </div>
       <div class="hero-actions">
         <button class="primary" @click="go('creative2d')">启动创意项目 <span>→</span></button>
         <button class="ghost" :disabled="loading" @click="load"><span :class="{spin:loading}">↻</span>{{loading?'数据同步中':'刷新经营数据'}}</button>
       </div>
-    </div>
-    <div class="health-card">
-      <header><div><small>BUSINESS HEALTH</small><strong>经营健康指数</strong></div><em><i></i> LIVE</em></header>
-      <div class="health-main">
-        <div class="ring" :style="{'--score': `${health * 3.6}deg`}"><div><b>{{health}}</b><span>/100</span></div></div>
-        <div><small>当前状态</small><strong>{{healthText}}</strong><p>{{risks?`存在 ${risks} 项供应链风险需要关注`:'生产、库存与履约运行稳定'}}</p></div>
+      <div class="release-flow" aria-label="发布会式业务流程">
+        <div><i>01</i><span>创意生成</span></div>
+        <em></em>
+        <div><i>02</i><span>智能评审</span></div>
+        <em></em>
+        <div><i>03</i><span>生产核算</span></div>
+        <em></em>
+        <div><i>04</i><span>交付履约</span></div>
       </div>
-      <footer><span>全链路实时监控</span><span>同步于 {{updatedAt}}</span></footer>
     </div>
   </section>
 
@@ -89,12 +122,61 @@ onMounted(load)
   </section>
 
   <section class="surface capabilities">
-    <div class="section-head"><div><small>CORE CAPABILITIES</small><h2>核心业务能力</h2><p>围绕文创产品商业化全流程，快速进入关键工作台。</p></div><div class="asset-total"><b>{{assets.length}}</b><span>数字资产沉淀</span></div></div>
+    <div class="section-head"><div><small>CORE CAPABILITIES</small><h2>核心业务能力</h2><p>围绕文创产品商业化全流程，快速进入关键工作台。</p></div></div>
     <div class="action-grid">
       <button v-for="a in actions" :key="a.page" :class="`tone-${a.tone}`" @click="go(a.page)">
         <small>{{a.code}}</small><i></i><h3>{{a.title}}</h3><p>{{a.desc}}</p><span>进入工作台 →</span>
       </button>
     </div>
+  </section>
+
+  <section class="surface gauge-section">
+    <div class="section-head">
+      <div><small>EXECUTIVE DASHBOARD</small><h2>实时运营仪表盘</h2><p>关键指标自动汇总，辅助判断订单执行、审批响应和供应链风险。</p></div>
+      <span class="sync-time">同步于 {{ updatedAt }}</span>
+    </div>
+    <div class="gauge-grid">
+      <article v-for="g in gaugeCards" :key="g.label" class="gauge-card" :style="{ '--tone': g.tone, '--gauge': `${g.value * 3.6}deg` }">
+        <div class="gauge-ring"><div><b>{{ g.value }}</b><i>%</i></div></div>
+        <div class="gauge-info">
+          <span>{{ g.label }}</span>
+          <strong>{{ g.desc }}</strong>
+          <small>{{ g.foot }}</small>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="ops-overview">
+    <article class="overview-card todo-card">
+      <div class="overview-head"><div><small>TODAY TODO</small><h2>今日经营待办</h2></div><button @click="load" :disabled="loading">{{ loading ? '同步中' : '刷新' }}</button></div>
+      <div class="todo-grid">
+        <button v-for="t in todoItems" :key="t.title" :class="`todo-${t.tone}`" @click="go(t.page)">
+          <span>{{ t.title }}</span>
+          <b>{{ t.value }}</b>
+          <small>{{ t.desc }}</small>
+        </button>
+      </div>
+    </article>
+    <article class="overview-card alert-card">
+      <div class="overview-head"><div><small>RISK WATCH</small><h2>异常提醒</h2></div></div>
+      <div v-if="alertItems.length" class="alert-list">
+        <button v-for="a in alertItems" :key="a.label" @click="go(a.page)">
+          <i></i><span><b>{{ a.label }} · {{ a.value }}</b><small>{{ a.desc }}</small></span><em>处理 →</em>
+        </button>
+      </div>
+      <div v-else class="safe-panel"><b>当前暂无异常</b><span>供应链、审批和履约状态稳定。</span></div>
+    </article>
+    <article class="overview-card activity-card">
+      <div class="overview-head"><div><small>RECENT ACTIVITY</small><h2>最近订单动态</h2></div><button @click="go('sampleProduction')">全部</button></div>
+      <div v-if="recentActivities.length" class="activity-list">
+        <button v-for="a in recentActivities" :key="a.id" @click="go('sampleProduction')">
+          <span><b>{{ a.title }}</b><small>{{ a.meta }}</small></span>
+          <em>{{ a.status }}</em>
+        </button>
+      </div>
+      <div v-else class="safe-panel"><b>暂无订单动态</b><span>创建第一张生产订单后将显示在这里。</span></div>
+    </article>
   </section>
 
   <div class="layout">
@@ -118,20 +200,6 @@ onMounted(load)
       <div class="insight" :class="{safe:!risks}"><i></i><span><b>{{risks?'建议优先处理供应链风险':'当前供应链运行稳定'}}</b><small>{{risks?`库存与物流共有 ${risks} 项异常需要跟进。`:'未发现库存或物流异常，建议关注待确认订单。'}}</small></span></div>
     </aside>
   </div>
-
-  <div class="layout lower">
-    <section class="surface assets-panel">
-      <div class="section-head"><div><small>CREATIVE ASSET LIBRARY</small><h2>创意资产矩阵</h2><p>AI 图片、3D 模型与生产方案持续沉淀为企业数字资产。</p></div><button class="link-btn" @click="go('creative2d')">进入创意设计 →</button></div>
-      <div class="asset-stats"><div><span>全部资产</span><b>{{assets.length}}</b><small>ALL ASSETS</small></div><div><span>图片资产</span><b>{{images.length}}</b><small>2D VISUALS</small></div><div><span>3D 模型</span><b>{{models.length}}</b><small>3D MODELS</small></div><div><span>BOM 方案</span><b>{{production.bomCount||0}}</b><small>PRODUCTION BOM</small></div><div><span>生产项目</span><b>{{workbench.sources?.length||0}}</b><small>ACTIVE PROJECTS</small></div></div>
-      <div v-if="images.length" class="gallery"><button v-for="a in images.slice(0,6)" :key="a.id" @click="go('creative2d')"><img :src="a.previewUrl||a.fileUrl" :alt="a.title||'创意资产'" @error="hideBroken"><span>{{a.title||'创意资产'}}</span></button></div>
-      <div v-else class="asset-empty">资产库等待第一份创意作品 <button @click="go('creative2d')">立即生成</button></div>
-    </section>
-    <aside class="surface operations">
-      <div class="section-head"><div><small>OPERATIONS HEALTH</small><h2>运营基础盘</h2><p>生产资源与履约能力</p></div></div>
-      <div class="op-grid"><div><span>BOM 方案</span><b>{{production.bomCount||0}}</b><small>物料库 {{production.materialCount||0}} 项</small></div><div><span>工艺路线</span><b>{{production.processCount||0}}</b><small>待采购 {{production.pendingPurchaseCount||0}} 项</small></div><div><span>可用库存</span><b>{{Number(warehouse.availableStock||0).toFixed(0)}}</b><small>{{warehouse.itemCount||0}} 个品类</small></div><div><span>物流履约</span><b>{{logistics.shipmentCount||0}}</b><small>{{logistics.inTransitCount||0}} 在途 · {{logistics.signedCount||0}} 签收</small></div></div>
-      <button class="wide-btn" @click="go('warehouseLogistics')">查看仓储物流全景 <span>→</span></button>
-    </aside>
-  </div>
 </div>
 </template>
 
@@ -142,4 +210,826 @@ onMounted(load)
 .layout{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(290px,.68fr);gap:16px;margin-bottom:16px}.layout.lower{grid-template-columns:minmax(0,1.45fr) minmax(300px,.55fr)}.link-btn{padding:8px 11px;border:1px solid #e1e6ed;border-radius:9px;color:#4f46e5;background:#fff;cursor:pointer;font-size:9px;font-weight:700}.pipeline{display:grid;grid-template-columns:repeat(5,1fr);gap:11px;margin:18px 0 13px;padding:13px;border:1px solid #edf0f5;border-radius:13px;background:#fafbfc}.pipeline>div>span{display:flex;justify-content:space-between;color:#6f798a;font-size:8px}.pipeline span b{color:#172033;font-size:14px}.pipeline>div>i{display:block;height:4px;margin-top:7px;overflow:hidden;border-radius:99px;background:#e9edf3}.pipeline em{display:block;height:100%;border-radius:99px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{padding:11px;border-bottom:1px solid #edf0f4;text-align:left;white-space:nowrap;font-size:10px}th{color:#929aaa;font-size:8px;letter-spacing:.05em}td{color:#596477}.type,.status{display:inline-flex;align-items:center;padding:4px 7px;border-radius:999px;color:#7c3aed;background:#f3e8ff;font-size:8px}.type.bulk{color:#2563eb;background:#dbeafe}.status{gap:5px;color:#64748b;background:#f1f5f9;font-style:normal}.status i{width:4px;height:4px;border-radius:50%;background:currentColor}.status.pending_confirm{color:#b45309;background:#fef3c7}.status.confirmed{color:#7c3aed;background:#f3e8ff}.status.producing{color:#2563eb;background:#dbeafe}.status.ready_to_ship{color:#0f766e;background:#ccfbf1}.status.shipped,.status.completed{color:#047857;background:#d1fae5}.empty{padding:30px;text-align:center}.empty p{color:#8a94a4;font-size:9px}.empty button{padding:7px 10px;border:0;border-radius:8px;color:#fff;background:#4f46e5;font-size:9px;cursor:pointer}.todo{min-width:34px;height:34px;display:grid;place-items:center;border-radius:11px;color:#e11d48;background:#fff1f2}.priorities>.section-head{margin-bottom:7px}.priorities>button{width:100%;padding:12px 0;display:grid;grid-template-columns:36px 1fr auto;align-items:center;gap:10px;border:0;border-bottom:1px solid #edf0f4;text-align:left;background:transparent;cursor:pointer}.priorities>button>i{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;font-style:normal}.amber{color:#b45309;background:#fef3c7}.violet{color:#7c3aed;background:#f3e8ff}.rose{color:#e11d48;background:#ffe4e6}.blue{color:#2563eb;background:#dbeafe}.priorities button span b,.priorities button span small{display:block}.priorities button span b{font-size:10px}.priorities button span small{margin-top:3px;color:#929baa;font-size:8px}.priorities button>strong{font-size:15px}.insight{display:flex;gap:9px;margin-top:15px;padding:12px;border:1px solid #fed7aa;border-radius:11px;background:#fffaf2}.insight.safe{border-color:#a7f3d0;background:#f0fdf4}.insight>i{width:7px;height:7px;flex:0 0 auto;margin-top:3px;border-radius:50%;background:#f97316;box-shadow:0 0 0 4px #ffedd5}.insight.safe>i{background:#10b981;box-shadow:0 0 0 4px #d1fae5}.insight b,.insight small{display:block}.insight b{font-size:9px}.insight small{margin-top:4px;color:#8d6b55;font-size:8px;line-height:1.5}
 .asset-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:18px}.asset-stats>div,.op-grid>div{padding:12px;border:1px solid #edf0f5;border-radius:11px;background:#fafbfc}.asset-stats span,.op-grid span{color:#657084;font-size:8px}.asset-stats b,.op-grid b{display:block;margin:6px 0 3px;font-size:21px}.asset-stats small,.op-grid small{color:#a1a9b6;font-size:6px;letter-spacing:.1em}.gallery{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:12px}.gallery button{position:relative;height:105px;padding:0;overflow:hidden;border:1px solid #e7eaf0;border-radius:10px;background:#eef1f5;cursor:pointer}.gallery img{width:100%;height:100%;object-fit:cover;transition:.3s}.gallery button:hover img{transform:scale(1.06)}.gallery span{position:absolute;inset:auto 0 0;padding:18px 7px 7px;overflow:hidden;color:#fff;background:linear-gradient(transparent,#030712d9);font-size:8px;text-overflow:ellipsis;white-space:nowrap}.asset-empty{margin-top:12px;padding:22px;text-align:center;border:1px dashed #d9deea;border-radius:11px;color:#8b95a6;background:#fafbfc;font-size:9px}.asset-empty button{margin-left:8px;padding:6px 9px;border:0;border-radius:7px;color:#fff;background:#4f46e5;cursor:pointer;font-size:8px}.op-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:17px}.wide-btn{width:100%;margin-top:11px;padding:10px 12px;display:flex;justify-content:space-between;border:1px solid #dfe4eb;border-radius:9px;color:#344054;background:#fff;cursor:pointer;font-size:9px;font-weight:700}.wide-btn:hover{color:#4f46e5;border-color:#a5b4fc}
 @media(max-width:1360px){.metrics{grid-template-columns:repeat(3,1fr)}.gallery{grid-template-columns:repeat(3,1fr)}}@media(max-width:1120px){.hero{grid-template-columns:1fr}.layout,.layout.lower{grid-template-columns:1fr}.action-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.hero{padding:27px 21px;border-radius:18px}.hero-actions{flex-direction:column}.metrics{grid-template-columns:1fr 1fr}.surface{padding:18px}.pipeline{grid-template-columns:1fr}.asset-stats{grid-template-columns:repeat(2,1fr)}.gallery{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){.metrics,.action-grid,.op-grid{grid-template-columns:1fr}.section-head{flex-direction:column}.health-main{align-items:flex-start}}
+
+/* Cinematic dashboard skin */
+.dashboard-page {
+  position: relative;
+  padding: 0;
+  color: #0b1220;
+  background:
+    radial-gradient(circle at 4% 2%, rgba(20,184,166,.20), transparent 28%),
+    radial-gradient(circle at 98% 8%, rgba(124,58,237,.16), transparent 32%),
+    linear-gradient(180deg, rgba(248,251,255,.92), rgba(238,244,255,.86));
+}
+.dashboard-page::before {
+  content: "";
+  position: fixed;
+  inset: 56px 0 0 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(15,23,42,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,23,42,.035) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(circle at 50% 20%, #000, transparent 70%);
+}
+.hero {
+  min-height: 360px;
+  border-radius: 32px;
+  padding: 48px;
+  background:
+    linear-gradient(120deg, rgba(2,6,23,.98), rgba(15,23,42,.95) 43%, rgba(30,41,59,.92)),
+    radial-gradient(circle at 86% 18%, rgba(20,184,166,.46), transparent 34%),
+    radial-gradient(circle at 50% 110%, rgba(124,58,237,.40), transparent 42%);
+  box-shadow: 0 34px 90px rgba(2,6,23,.28), inset 0 1px 0 rgba(255,255,255,.12);
+}
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 31px;
+  pointer-events: none;
+  background:
+    linear-gradient(115deg, transparent 0 46%, rgba(255,255,255,.10) 47%, transparent 48% 70%, rgba(94,234,212,.12) 71%, transparent 72%),
+    radial-gradient(circle at 18% 20%, rgba(255,255,255,.10), transparent 26%);
+}
+.hero::after {
+  content: "";
+  position: absolute;
+  right: 28%;
+  bottom: -90px;
+  width: 440px;
+  height: 170px;
+  border: 1px solid rgba(148,163,184,.20);
+  border-radius: 999px;
+  transform: rotate(-12deg);
+  box-shadow: 0 0 70px rgba(56,189,248,.13), inset 0 0 40px rgba(20,184,166,.10);
+}
+.grid-pattern { opacity: .22; background-size: 40px 40px; }
+.glow {
+  width: 560px;
+  height: 560px;
+  right: -190px;
+  top: -250px;
+  background: radial-gradient(circle, rgba(45,212,191,.42), rgba(124,58,237,.16) 36%, transparent 70%);
+  filter: blur(2px);
+}
+.kicker {
+  color: #a5f3fc;
+  letter-spacing: .24em;
+}
+.hero h1 {
+  font-size: clamp(44px, 5vw, 76px);
+  font-weight: 950;
+  letter-spacing: -.075em;
+  line-height: .98;
+  text-shadow: 0 18px 50px rgba(0,0,0,.35);
+}
+.hero-copy>p {
+  max-width: 720px;
+  color: rgba(226,232,240,.78);
+  font-size: 15px;
+}
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+.hero-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 999px;
+  color: rgba(226,232,240,.78);
+  background: rgba(255,255,255,.075);
+  backdrop-filter: blur(16px);
+  font-size: 11px;
+  font-weight: 700;
+}
+.hero-meta b { color: #5eead4; }
+.hero-actions .primary {
+  border: 0;
+  background: linear-gradient(135deg, #ffffff, #dffcff);
+  color: #07101f;
+  box-shadow: 0 18px 42px rgba(94,234,212,.20);
+}
+.hero-actions .ghost {
+  border-color: rgba(255,255,255,.18);
+  background: rgba(255,255,255,.08);
+  backdrop-filter: blur(14px);
+}
+.health-card {
+  border-radius: 24px;
+  background: linear-gradient(145deg, rgba(255,255,255,.18), rgba(255,255,255,.055));
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 24px 70px rgba(0,0,0,.18);
+}
+.ring {
+  width: 122px;
+  height: 122px;
+  background: conic-gradient(#5eead4 var(--score), rgba(255,255,255,.12) 0);
+  box-shadow: 0 0 42px rgba(45,212,191,.22);
+}
+.ring>div {
+  background: radial-gradient(circle at 50% 0%, #1e293b, #07101f);
+}
+.metrics { gap: 16px; margin: 18px 0 22px; }
+.metrics article {
+  min-height: 146px;
+  border-radius: 24px;
+  background: linear-gradient(145deg, rgba(255,255,255,.94), rgba(255,255,255,.70));
+  border-color: rgba(148,163,184,.18);
+  box-shadow: 0 18px 50px rgba(15,23,42,.08);
+  backdrop-filter: blur(18px) saturate(145%);
+}
+.metrics article::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--tone) 16%, transparent), transparent 48%);
+  opacity: .55;
+}
+.metrics article:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 28px 70px rgba(15,23,42,.14);
+}
+.metrics b { font-size: 34px; font-weight: 900; }
+.surface {
+  border-radius: 28px;
+  background: linear-gradient(145deg, rgba(255,255,255,.92), rgba(255,255,255,.72));
+  border: 1px solid rgba(148,163,184,.20);
+  box-shadow: 0 22px 58px rgba(15,23,42,.08);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+.section-head h2 { font-size: 22px; font-weight: 900; }
+.section-head>div>small { color: #0d9488; }
+.action-grid { gap: 14px; }
+.action-grid button {
+  min-height: 172px;
+  border-radius: 22px;
+  background:
+    linear-gradient(145deg, rgba(255,255,255,.96), rgba(255,255,255,.74)),
+    radial-gradient(circle at 90% 6%, var(--soft), transparent 36%);
+  box-shadow: 0 14px 34px rgba(15,23,42,.06);
+}
+.action-grid button:hover {
+  transform: translateY(-7px) scale(1.01);
+  box-shadow: 0 28px 58px rgba(15,23,42,.13);
+}
+.pipeline, .asset-stats>div, .op-grid>div {
+  border-color: rgba(148,163,184,.18);
+  background: rgba(248,250,252,.74);
+}
+@media(max-width:760px){.hero{padding:30px 22px;border-radius:24px}.hero-meta{display:none}}
+
+/* Brand launch dashboard preview — official presentation style */
+.dashboard-page {
+  background:
+    radial-gradient(circle at 14% -5%, rgba(20,184,166,.14), transparent 26%),
+    radial-gradient(circle at 100% 6%, rgba(245,158,11,.14), transparent 30%),
+    linear-gradient(180deg, #fbfaf7 0%, #f2f7f5 48%, #eef4ff 100%);
+}
+.dashboard-page::before {
+  opacity: .6;
+  background:
+    linear-gradient(rgba(15,23,42,.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,23,42,.028) 1px, transparent 1px);
+}
+.hero {
+  min-height: 420px;
+  grid-template-columns: minmax(0,1.2fr) minmax(360px,.68fr);
+  border-radius: 34px;
+  color: #0b1220;
+  background:
+    linear-gradient(115deg, rgba(255,255,255,.98) 0 52%, rgba(255,255,255,.74) 53% 66%, transparent 67%),
+    radial-gradient(circle at 88% 20%, rgba(20,184,166,.22), transparent 30%),
+    radial-gradient(circle at 88% 84%, rgba(245,158,11,.18), transparent 34%),
+    linear-gradient(135deg, #fffaf0 0%, #edf8f5 48%, #eaf1ff 100%);
+  box-shadow: 0 34px 90px rgba(15,23,42,.13);
+}
+.hero::before {
+  background:
+    linear-gradient(115deg, transparent 0 50%, rgba(15,23,42,.06) 51%, transparent 52% 72%, rgba(20,184,166,.13) 73%, transparent 74%),
+    radial-gradient(circle at 18% 16%, rgba(20,184,166,.10), transparent 28%);
+}
+.hero::after {
+  border-color: rgba(15,23,42,.08);
+  box-shadow: 0 0 70px rgba(20,184,166,.10), inset 0 0 40px rgba(255,255,255,.46);
+}
+.grid-pattern {
+  opacity: .16;
+  background-image:
+    linear-gradient(rgba(15,23,42,.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,23,42,.07) 1px, transparent 1px);
+  mask-image: linear-gradient(90deg, transparent 0 42%, #000 68%, transparent 100%);
+}
+.glow {
+  background: radial-gradient(circle, rgba(20,184,166,.22), rgba(245,158,11,.12) 42%, transparent 70%);
+}
+.kicker {
+  color: #0f766e;
+}
+.kicker i {
+  background: #0f766e;
+  box-shadow: 0 0 0 5px rgba(20,184,166,.12), 0 0 18px rgba(20,184,166,.35);
+}
+.hero h1 {
+  max-width: 760px;
+  color: #0b1220;
+  text-shadow: none;
+  font-size: clamp(48px, 6vw, 86px);
+}
+.hero-copy>p {
+  color: #475569;
+  font-size: 16px;
+}
+.hero-meta span {
+  color: #475569;
+  border-color: rgba(15,23,42,.08);
+  background: rgba(255,255,255,.72);
+  box-shadow: 0 12px 32px rgba(15,23,42,.06);
+}
+.hero-meta b { color: #0f766e; }
+.hero-actions .primary {
+  color: #fff;
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
+  box-shadow: 0 18px 38px rgba(20,184,166,.24);
+}
+.hero-actions .ghost {
+  color: #0f172a;
+  border-color: rgba(15,23,42,.10);
+  background: rgba(255,255,255,.72);
+}
+.release-flow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 26px;
+  max-width: 760px;
+}
+.release-flow div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 13px;
+  border: 1px solid rgba(15,23,42,.08);
+  border-radius: 999px;
+  background: rgba(255,255,255,.78);
+  box-shadow: 0 12px 28px rgba(15,23,42,.06);
+  animation: releaseStep .55s ease both;
+}
+.release-flow div:nth-of-type(2) { animation-delay: .08s; }
+.release-flow div:nth-of-type(3) { animation-delay: .16s; }
+.release-flow div:nth-of-type(4) { animation-delay: .24s; }
+.release-flow i {
+  color: #0f766e;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .08em;
+}
+.release-flow span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+.release-flow em {
+  width: 32px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(20,184,166,.10), rgba(20,184,166,.70));
+  animation: releaseLine 2.8s ease-in-out infinite;
+}
+.gauge-section {
+  margin-bottom: 16px;
+}
+.sync-time {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(15,23,42,.08);
+  border-radius: 999px;
+  color: #64748b;
+  background: rgba(255,255,255,.72);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.gauge-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 20px;
+}
+.gauge-card {
+  --tone: #0f766e;
+  --gauge: 0deg;
+  position: relative;
+  min-height: 170px;
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 16px;
+  align-items: center;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(15,23,42,.08);
+  border-radius: 24px;
+  background:
+    linear-gradient(145deg, rgba(255,255,255,.94), rgba(255,255,255,.74)),
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--tone) 14%, transparent), transparent 42%);
+  box-shadow: 0 18px 46px rgba(15,23,42,.08);
+  animation: launchCardIn .45s ease both;
+}
+.gauge-card:nth-child(2) { animation-delay: .06s; }
+.gauge-card:nth-child(3) { animation-delay: .12s; }
+.gauge-card:nth-child(4) { animation-delay: .18s; }
+.gauge-card::after {
+  content: "";
+  position: absolute;
+  right: -44px;
+  bottom: -54px;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--tone) 10%, transparent);
+  pointer-events: none;
+}
+.gauge-ring {
+  width: 96px;
+  height: 96px;
+  padding: 8px;
+  border-radius: 50%;
+  background: conic-gradient(var(--tone) var(--gauge), rgba(15,23,42,.08) 0);
+  box-shadow: inset 0 0 0 1px rgba(15,23,42,.04), 0 14px 30px color-mix(in srgb, var(--tone) 18%, transparent);
+}
+.gauge-ring > div {
+  height: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  border-radius: 50%;
+  background: #fff;
+  padding-top: 30px;
+}
+.gauge-ring b {
+  color: #0f172a;
+  font-size: 28px;
+  font-weight: 950;
+  letter-spacing: -.07em;
+  line-height: 1;
+}
+.gauge-ring i {
+  margin-left: 3px;
+  color: var(--tone);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+.gauge-info {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+.gauge-info span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .03em;
+}
+.gauge-info strong {
+  display: block;
+  margin-top: 10px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.45;
+}
+.gauge-info small {
+  display: block;
+  margin-top: 8px;
+  color: #94a3b8;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.ops-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, .8fr) minmax(300px, .9fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.overview-card {
+  position: relative;
+  overflow: hidden;
+  padding: 22px;
+  border: 1px solid rgba(15,23,42,.08);
+  border-radius: 28px;
+  background: linear-gradient(145deg, rgba(255,255,255,.96), rgba(255,255,255,.76));
+  box-shadow: 0 22px 58px rgba(15,23,42,.08);
+  backdrop-filter: blur(18px) saturate(145%);
+  animation: launchCardIn .45s ease both;
+}
+.overview-card::after {
+  content: "";
+  position: absolute;
+  right: -42px;
+  top: -52px;
+  width: 132px;
+  height: 132px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(20,184,166,.10), transparent 70%);
+  pointer-events: none;
+}
+.overview-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.overview-head small {
+  display: block;
+  color: #0f766e;
+  font-size: 8px;
+  font-weight: 950;
+  letter-spacing: .18em;
+}
+.overview-head h2 {
+  margin: 6px 0 0;
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 950;
+  letter-spacing: -.03em;
+}
+.overview-head button {
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid rgba(15,23,42,.08);
+  border-radius: 999px;
+  color: #334155;
+  background: rgba(255,255,255,.74);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 900;
+}
+.todo-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0,1fr));
+  gap: 10px;
+}
+.todo-grid button {
+  --tone:#0f766e;
+  min-height: 110px;
+  padding: 14px;
+  border: 1px solid rgba(15,23,42,.07);
+  border-radius: 18px;
+  text-align: left;
+  background:
+    linear-gradient(145deg, rgba(255,255,255,.94), rgba(248,250,252,.72)),
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--tone) 13%, transparent), transparent 48%);
+  cursor: pointer;
+  transition: .2s ease;
+}
+.todo-grid button:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 34px rgba(15,23,42,.10);
+}
+.todo-grid span {
+  display: block;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+}
+.todo-grid b {
+  display: block;
+  margin: 12px 0 7px;
+  color: #0f172a;
+  font-size: 26px;
+  font-weight: 950;
+  line-height: 1;
+}
+.todo-grid small {
+  color: #94a3b8;
+  font-size: 9px;
+  line-height: 1.45;
+}
+.todo-amber{--tone:#d97706!important}.todo-blue{--tone:#2563eb!important}.todo-violet{--tone:#7c3aed!important}.todo-rose{--tone:#e11d48!important}.todo-green{--tone:#10b981!important}
+.alert-list,
+.activity-list {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 9px;
+}
+.alert-list button,
+.activity-list button {
+  width: 100%;
+  min-height: 56px;
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(15,23,42,.07);
+  border-radius: 16px;
+  background: rgba(248,250,252,.72);
+  cursor: pointer;
+}
+.alert-list button {
+  grid-template-columns: 10px 1fr auto;
+  padding: 10px 12px;
+  text-align: left;
+}
+.alert-list i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e11d48;
+  box-shadow: 0 0 0 5px rgba(225,29,72,.10);
+}
+.alert-list b,
+.activity-list b {
+  display: block;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 950;
+}
+.alert-list small,
+.activity-list small {
+  display: block;
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 9px;
+}
+.alert-list em {
+  color: #0f766e;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+}
+.activity-list button {
+  grid-template-columns: 1fr auto;
+  padding: 11px 12px;
+  text-align: left;
+}
+.activity-list em {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #0f766e;
+  background: rgba(204,251,241,.52);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+}
+.safe-panel {
+  position: relative;
+  z-index: 1;
+  min-height: 128px;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  border: 1px dashed rgba(15,23,42,.10);
+  border-radius: 18px;
+  background: rgba(248,250,252,.62);
+}
+.safe-panel b {
+  color: #0f766e;
+  font-size: 15px;
+  font-weight: 950;
+}
+.safe-panel span {
+  margin-top: 6px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+.executive-board {
+  position: relative;
+  z-index: 1;
+  padding: 22px;
+  border: 1px solid rgba(15,23,42,.08);
+  border-radius: 28px;
+  background: rgba(255,255,255,.78);
+  box-shadow: 0 30px 76px rgba(15,23,42,.12);
+  backdrop-filter: blur(20px) saturate(145%);
+  animation: launchCardIn .52s ease both;
+}
+.executive-board::before {
+  content: "";
+  position: absolute;
+  right: -36px;
+  top: -42px;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(20,184,166,.14), transparent 68%);
+  pointer-events: none;
+}
+.executive-board header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(15,23,42,.08);
+}
+.executive-board header small {
+  display: block;
+  color: #0f766e;
+  font-size: 8px;
+  font-weight: 950;
+  letter-spacing: .18em;
+}
+.executive-board header strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 17px;
+  font-weight: 950;
+  letter-spacing: -.03em;
+}
+.executive-board header > span {
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #64748b;
+  background: rgba(248,250,252,.86);
+  font-size: 10px;
+  font-weight: 800;
+}
+.board-main {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 18px;
+  align-items: center;
+  margin-top: 18px;
+}
+.board-gauge {
+  --gauge: 0deg;
+  width: 132px;
+  height: 132px;
+  padding: 10px;
+  border-radius: 50%;
+  background:
+    conic-gradient(#0f766e var(--gauge), rgba(15,23,42,.08) 0),
+    #fff;
+  box-shadow: inset 0 0 0 1px rgba(15,23,42,.06), 0 18px 42px rgba(20,184,166,.16);
+}
+.board-gauge > div {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  border-radius: 50%;
+  background: #fff;
+}
+.board-gauge b {
+  color: #0f172a;
+  font-size: 35px;
+  font-weight: 950;
+  line-height: 1;
+  letter-spacing: -.07em;
+}
+.board-gauge i {
+  margin-left: 4px;
+  color: #0f766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+.board-gauge span {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+}
+.board-kpis {
+  display: grid;
+  gap: 9px;
+}
+.board-kpis > div {
+  padding: 11px 12px;
+  border: 1px solid rgba(15,23,42,.07);
+  border-radius: 16px;
+  background: rgba(248,250,252,.74);
+}
+.board-kpis span,
+.board-flow span {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+}
+.board-kpis b {
+  display: block;
+  margin-top: 3px;
+  color: #0f172a;
+  font-size: 21px;
+  font-weight: 950;
+  line-height: 1;
+}
+.board-kpis small {
+  display: block;
+  margin-top: 5px;
+  color: #94a3b8;
+  font-size: 9px;
+}
+.board-kpis .warn b { color: #e11d48; }
+.board-flow {
+  display: grid;
+  gap: 9px;
+  margin-top: 18px;
+}
+.board-flow > div {
+  display: grid;
+  grid-template-columns: 64px 1fr 24px;
+  gap: 10px;
+  align-items: center;
+}
+.board-flow i {
+  display: block;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(15,23,42,.07);
+}
+.board-flow em {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  transition: width .5s ease;
+}
+.board-flow b {
+  color: #334155;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 950;
+}
+.health-card {
+  color: #0b1220;
+  background: rgba(255,255,255,.78);
+  border-color: rgba(15,23,42,.08);
+  box-shadow: 0 28px 72px rgba(15,23,42,.12);
+}
+.health-card header small,
+.health-main>div:last-child small,
+.health-card footer {
+  color: #64748b;
+}
+.health-card header strong,
+.health-main>div:last-child strong {
+  color: #0f172a;
+}
+.health-card header em {
+  color: #0f766e;
+  border-color: rgba(20,184,166,.26);
+  background: rgba(204,251,241,.52);
+}
+.ring {
+  background: conic-gradient(#0f766e var(--score), rgba(15,23,42,.08) 0);
+}
+.ring>div {
+  background: #fff;
+}
+.ring b { color: #0f172a; }
+.ring span { color: #64748b; }
+.health-main p { color: #64748b; }
+.health-card footer {
+  border-top-color: rgba(15,23,42,.08);
+}
+.metrics article,
+.surface {
+  animation: launchCardIn .5s ease both;
+}
+.metrics article:nth-child(2) { animation-delay: .04s; }
+.metrics article:nth-child(3) { animation-delay: .08s; }
+.metrics article:nth-child(4) { animation-delay: .12s; }
+.metrics article:nth-child(5) { animation-delay: .16s; }
+@keyframes releaseStep {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes releaseLine {
+  0%,100% { transform: scaleX(.5); opacity: .35; }
+  50% { transform: scaleX(1); opacity: 1; }
+}
+@keyframes launchCardIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media(max-width:1280px){.ops-overview{grid-template-columns:1fr}.todo-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:1120px){.hero{grid-template-columns:1fr}.release-flow em{display:none}.executive-board{max-width:620px}.gauge-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:620px){.board-main{grid-template-columns:1fr}.board-gauge{margin:auto}.board-flow>div{grid-template-columns:58px 1fr 22px}.gauge-grid{grid-template-columns:1fr}.gauge-card{grid-template-columns:86px 1fr}.gauge-ring{width:86px;height:86px}.todo-grid{grid-template-columns:1fr}}
+
+/* The hero no longer hosts gauges; keep it clean and balanced. */
+.hero {
+  grid-template-columns: 1fr;
+}
+.hero-copy {
+  max-width: 920px;
+}
 </style>

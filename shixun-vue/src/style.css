@@ -1,18 +1,20 @@
 /* ============================================================
-   Design System — Smart Livestock Farm Management
-   Primary: Teal #0D9488 | Neutral: Slate | Grid: 8px
+   Design System — ZHIJIAN Cinematic SaaS
+   Deep space shell + emerald intelligence + violet creativity
    ============================================================ */
 
 :root {
-  --c-primary:       #0D9488;
+  --c-primary:       #14B8A6;
   --c-primary-dark:  #0F766E;
   --c-primary-light: #CCFBF1;
-  --c-accent:        #4F46E5;
-  --c-bg:            #F8FAFC;
-  --c-surface:       #FFFFFF;
-  --c-border:        #E2E8F0;
-  --c-border-light:  #F1F5F9;
-  --c-text:          #0F172A;
+  --c-accent:        #0EA5E9;
+  --c-accent-2:      #F59E0B;
+  --c-bg:            #F4F7FB;
+  --c-surface:       rgba(255, 255, 255, .86);
+  --c-surface-solid: #FFFFFF;
+  --c-border:        rgba(148, 163, 184, .22);
+  --c-border-light:  rgba(226, 232, 240, .72);
+  --c-text:          #0B1220;
   --c-text-2:        #64748B;
   --c-text-3:        #94A3B8;
   --c-success:       #059669;
@@ -26,15 +28,16 @@
   --c-purple:        #7C3AED;
   --c-purple-bg:     #F5F3FF;
 
-  --shadow-sm:  0 1px 2px rgba(0,0,0,.05);
-  --shadow:     0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
-  --shadow-md:  0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.05);
-  --shadow-lg:  0 10px 24px rgba(0,0,0,.08), 0 4px 8px rgba(0,0,0,.05);
+  --shadow-sm:  0 1px 2px rgba(15,23,42,.05);
+  --shadow:     0 10px 26px rgba(15,23,42,.08);
+  --shadow-md:  0 18px 46px rgba(15,23,42,.12);
+  --shadow-lg:  0 28px 78px rgba(15,23,42,.18);
+  --shadow-glow: 0 20px 60px rgba(20,184,166,.22);
 
-  --r-sm: 4px;
-  --r:    6px;
-  --r-md: 8px;
-  --r-lg: 12px;
+  --r-sm: 8px;
+  --r:    12px;
+  --r-md: 16px;
+  --r-lg: 24px;
 
   --sidebar-w:           240px;
   --sidebar-collapsed-w: 64px;
@@ -50,11 +53,27 @@ html { font-size: 14px; }
 
 body {
   font-family: var(--font);
-  background: var(--c-bg);
+  background:
+    radial-gradient(circle at 12% -8%, rgba(20,184,166,.12), transparent 24%),
+    radial-gradient(circle at 92% 8%, rgba(245,158,11,.10), transparent 26%),
+    linear-gradient(180deg, #fbfcfe 0%, var(--c-bg) 60%, #eef3f8 100%);
   color: var(--c-text);
   line-height: 1.5;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(15,23,42,.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,23,42,.028) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(180deg, rgba(0,0,0,.62), transparent 84%);
 }
 
 /* ── Typography ── */
@@ -70,14 +89,14 @@ p  { line-height: 1.6; }
   align-items: center;
   gap: 6px;
   border: 1px solid transparent;
-  border-radius: var(--r);
+  border-radius: 999px;
   padding: 0 16px;
   height: 36px;
   font-size: 14px;
   font-weight: 500;
   font-family: var(--font);
   cursor: pointer;
-  transition: background .15s, border-color .15s, color .15s, box-shadow .15s;
+  transition: transform .18s ease, background .18s, border-color .18s, color .18s, box-shadow .18s;
   white-space: nowrap;
   line-height: 1;
 }
@@ -88,18 +107,20 @@ p  { line-height: 1.6; }
 }
 
 .btn-primary {
-  background: var(--c-primary);
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
   color: #fff;
-  border-color: var(--c-primary);
+  border-color: transparent;
+  box-shadow: 0 14px 28px rgba(20,184,166,.24);
 }
-.btn-primary:hover { background: var(--c-primary-dark); border-color: var(--c-primary-dark); }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 18px 36px rgba(20,184,166,.32); }
 
 .btn-secondary {
-  background: var(--c-surface);
+  background: rgba(255,255,255,.72);
   color: var(--c-text-2);
   border-color: var(--c-border);
+  backdrop-filter: blur(14px);
 }
-.btn-secondary:hover { background: var(--c-bg); border-color: #CBD5E1; color: var(--c-text); }
+.btn-secondary:hover { transform: translateY(-1px); background: rgba(255,255,255,.95); border-color: rgba(20,184,166,.28); color: var(--c-text); }
 
 .btn-danger {
   background: var(--c-error-bg);
@@ -147,11 +168,11 @@ input, select, textarea {
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--c-border);
-  border-radius: var(--r);
+  border-radius: 12px;
   font-size: 14px;
   font-family: var(--font);
   color: var(--c-text);
-  background: var(--c-surface);
+  background: rgba(255,255,255,.86);
   transition: border-color .15s, box-shadow .15s;
   appearance: none;
 }
@@ -186,17 +207,18 @@ select {
 
 /* ── Card ── */
 .card {
-  background: var(--c-surface);
+  background: rgba(255,255,255,.82);
   border: 1px solid var(--c-border);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(20px) saturate(140%);
 }
 
 /* ── Table ── */
 table { width: 100%; border-collapse: collapse; }
 
 thead th {
-  background: var(--c-bg);
+  background: rgba(248,250,252,.88);
   padding: 0 16px;
   height: 40px;
   font-size: 12px;
@@ -223,7 +245,7 @@ tbody td {
 
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:nth-child(even) td { background: #FAFCFF; }
-tbody tr:hover td { background: #F0FDFA !important; }
+tbody tr:hover td { background: rgba(204,251,241,.46) !important; }
 
 .td-ops {
   display: flex;
