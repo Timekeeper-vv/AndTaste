@@ -36,21 +36,45 @@ async function sendMessage(textFromSuggestion = '') {
   scrollToBottom()
 
   const history = messages.value.slice(-11, -1).map(m => ({ role: m.role, content: m.content }))
+  const assistantIndex = messages.value.push({ role: 'assistant', content: '' }) - 1
   try {
-    const res = await fetch('/api/ai/chat', {
+    const res = await fetch('/api/ai/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, history, currentUser: props.currentUser })
     })
-    const data = await res.json()
-    messages.value.push({ role: 'assistant', content: data.reply || `抱歉，出现了错误：${data.error || '未知错误'}` })
-  } catch {
-    messages.value.push({ role: 'assistant', content: '网络错误，请检查后端服务是否正常运行。' })
+    if (!res.ok) throw new Error(await res.text())
+    await readTextStream(res, chunk => {
+      messages.value[assistantIndex].content += chunk
+      scrollToBottom()
+    })
+    if (!messages.value[assistantIndex].content.trim()) {
+      messages.value[assistantIndex].content = '连接不上大模型：返回内容为空。'
+    }
+  } catch (e: any) {
+    messages.value[assistantIndex].content = '连接不上大模型或后端服务：' + (e?.message || '未知错误')
   } finally {
     loading.value = false
     scrollToBottom()
   }
 }
+
+async function readTextStream(res: Response, onChunk: (chunk: string) => void) {
+  if (!res.body) {
+    onChunk(await res.text())
+    return
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    onChunk(decoder.decode(value, { stream: true }))
+  }
+  const tail = decoder.decode()
+  if (tail) onChunk(tail)
+}
+
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -115,7 +139,7 @@ function clearHistory() {
         <footer>
           <textarea v-model="inputText" rows="3" placeholder="输入问题，按 Enter 发送，Shift + Enter 换行…" :disabled="loading" @keydown="onKeydown"></textarea>
           <button :disabled="loading || !inputText.trim()" @click="sendMessage()">
-            {{ loading ? '查询中…' : '发送' }}
+            {{ loading ? '输出中…' : '发送' }}
           </button>
         </footer>
       </main>

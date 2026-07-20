@@ -85,7 +85,7 @@ public class ApprovalWorkflowAiService {
                     + "\n\n请基于上述真实工具返回生成最终中文回答。";
             return siliconFlow.chat(ANSWER_PROMPT, prompt, 0.2, 1200, 45);
         } catch (Exception e) {
-            return "我已经查询到审批中心数据库，但大模型总结服务暂时不可用。按当前规则，AI助手不能绕过大模型直接输出纯数据结果，请稍后重试。";
+            return "我已经查询到审批中心数据库，但连接不上大模型。按当前规则，AI助手不能绕过大模型直接输出纯数据结果，请稍后重试。";
         }
     }
 

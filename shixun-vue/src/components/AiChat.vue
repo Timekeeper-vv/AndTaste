@@ -29,31 +29,50 @@ async function sendMessage() {
   loading.value = true
   scrollToBottom()
 
-  // 发送给后端时携带最近 10 条历史（去掉当前这条，因为已在 message 字段）
   const history = messages.value.slice(-11, -1).map(m => ({
     role: m.role,
     content: m.content
   }))
+  const assistantIndex = messages.value.push({ role: 'assistant', content: '' }) - 1
 
   try {
-    const res = await fetch('/api/ai/chat', {
+    const res = await fetch('/api/ai/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, history, currentUser: props.currentUser })
     })
-    const data = await res.json()
-    if (data.reply) {
-      messages.value.push({ role: 'assistant', content: data.reply })
-    } else {
-      messages.value.push({ role: 'assistant', content: `抱歉，出现了错误：${data.error || '未知错误'}` })
+    if (!res.ok) throw new Error(await res.text())
+    await readTextStream(res, chunk => {
+      messages.value[assistantIndex].content += chunk
+      scrollToBottom()
+    })
+    if (!messages.value[assistantIndex].content.trim()) {
+      messages.value[assistantIndex].content = '连接不上大模型：返回内容为空。'
     }
-  } catch {
-    messages.value.push({ role: 'assistant', content: '网络错误，请检查后端服务是否正常运行。' })
+  } catch (e: any) {
+    messages.value[assistantIndex].content = '连接不上大模型或后端服务：' + (e?.message || '未知错误')
   } finally {
     loading.value = false
     scrollToBottom()
   }
 }
+
+async function readTextStream(res: Response, onChunk: (chunk: string) => void) {
+  if (!res.body) {
+    onChunk(await res.text())
+    return
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    onChunk(decoder.decode(value, { stream: true }))
+  }
+  const tail = decoder.decode()
+  if (tail) onChunk(tail)
+}
+
 
 function scrollToBottom() {
   nextTick(() => {

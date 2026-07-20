@@ -6,9 +6,12 @@ import com.example.shixun.service.SampleWorkOrderAiService;
 import com.example.shixun.service.SupplierTextToApiService;
 import com.example.shixun.service.WebSearchService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -195,8 +198,55 @@ public class AiChatController {
             String fallback = usedWeb && !webContext.isBlank()
                     ? fallbackWebAnswer(userMessage, context, webContext)
                     : fallbackAnswer(userMessage, context);
-            return ResponseEntity.ok(Map.of("reply", fallback, "source", usedWeb ? "web-search-fallback" : "local-form-kb", "warning", "大模型不可用，已使用本地能力回答：" + e.getMessage()));
+            return ResponseEntity.ok(Map.of("reply", fallback, "source", usedWeb ? "web-search-fallback" : "local-form-kb", "warning", "连接不上大模型，已使用本地能力回答：" + e.getMessage()));
         }
+    }
+
+
+    @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<StreamingResponseBody> chatStream(@RequestBody Map<String, Object> body) {
+        StreamingResponseBody stream = outputStream -> {
+            String reply;
+            try {
+                ResponseEntity<Map<String, Object>> response = chat(body);
+                Map<String, Object> payload = response.getBody();
+                if (payload == null) {
+                    reply = "连接不上大模型：服务没有返回有效内容。";
+                } else {
+                    reply = String.valueOf(payload.getOrDefault("reply", payload.getOrDefault("error", "连接不上大模型：服务没有返回有效内容。")));
+                }
+            } catch (Exception e) {
+                reply = "连接不上大模型：" + readableError(e) + "。";
+            }
+            writeTextStream(outputStream, reply);
+        };
+        return ResponseEntity.ok()
+                .contentType(new MediaType("text", "plain", StandardCharsets.UTF_8))
+                .body(stream);
+    }
+
+    private void writeTextStream(java.io.OutputStream outputStream, String text) throws java.io.IOException {
+        String value = text == null || text.isBlank() ? "连接不上大模型：返回内容为空。" : text;
+        int i = 0;
+        while (i < value.length()) {
+            int next = Math.min(value.length(), i + 2);
+            // 避免把代理对拆开。
+            if (next < value.length() && Character.isHighSurrogate(value.charAt(next - 1))) next++;
+            outputStream.write(value.substring(i, next).getBytes(StandardCharsets.UTF_8));
+            outputStream.flush();
+            i = next;
+            try { Thread.sleep(16); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+        }
+    }
+
+    private String readableError(Exception e) {
+        if (e == null) return "未知错误";
+        Throwable root = e;
+        while (root.getCause() != null) root = root.getCause();
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) message = e.getMessage();
+        if (message == null || message.isBlank()) return root.getClass().getSimpleName();
+        return message.length() > 160 ? message.substring(0, 160) : message;
     }
 
     @GetMapping("/search")

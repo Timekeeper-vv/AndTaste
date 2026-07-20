@@ -34,7 +34,7 @@ public class SupplierTextToApiService {
         } catch (Exception e) {
             plan = heuristicPlan(userQuestion);
             if ("none".equals(plan.tool())) {
-                return supplierGuardrail(userQuestion, "大模型语义理解暂时不可用。按AI助手规则，我不能绕过大模型直接输出纯供应商查询结果，请稍后重试。");
+                return supplierGuardrail(userQuestion, "连接不上大模型，供应商语义理解暂时不可用。按AI助手规则，我不能绕过大模型直接输出纯供应商查询结果，请稍后重试。");
             }
         }
 
@@ -71,7 +71,7 @@ public class SupplierTextToApiService {
                 // 最终用户可见回答必须由大模型基于真实工具结果组织，保证“AI助手”体验而不是纯查询工具。
                 reply = cleanLlmReply(siliconFlow.chat(SupplierAiPromptTemplates.ANSWER_SYSTEM_PROMPT, answerPrompt, 0.15, 900, 90));
             } catch (Exception answerError) {
-                reply = "我已经查询到供应商数据库，但大模型总结服务暂时不可用。按当前规则，AI助手不能绕过大模型直接输出纯数据结果，请稍后重试。";
+                reply = "我已经查询到供应商数据库，但连接不上大模型。按当前规则，AI助手不能绕过大模型直接输出纯数据结果，请稍后重试。";
             }
             return Optional.of(new ToolAnswer(reply, "text-to-api+llm:" + plan.tool(), plan.tool(), mapper.convertValue(request, Map.class), answerResult));
         } catch (Exception e) {

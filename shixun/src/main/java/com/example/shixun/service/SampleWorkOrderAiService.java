@@ -119,7 +119,7 @@ public class SampleWorkOrderAiService {
                 // 最终用户可见回答必须由大模型基于真实工具结果组织，保证“AI助手”体验而不是纯查询工具。
                 reply = siliconFlow.chat(ANSWER_PROMPT, answerPrompt, 0.2, 1200, 45);
             } catch (Exception e) {
-                reply = "我已经查询到打样工单数据库，但大模型总结服务暂时不可用。按当前规则，AI助手不能绕过大模型直接输出纯数据结果，请稍后重试。";
+                reply = "我已经查询到打样工单数据库，但连接不上大模型。按当前规则，AI助手不能绕过大模型直接输出纯数据结果，请稍后重试。";
             }
             return Optional.of(new ToolAnswer(reply, "text-to-api+llm:" + plan.tool(), plan.tool(), args, result));
         } catch (Exception e) {
