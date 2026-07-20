@@ -17,7 +17,11 @@ ALTER TABLE `user` ADD COLUMN `role` VARCHAR(20) NOT NULL DEFAULT 'admin';
 INSERT IGNORE INTO user (username, age, email, phone, password, role) VALUES
 ('superadmin', 30, 'superadmin@andtaste.com', '13800000001', '123456', 'admin'),
 ('approver01', 28, 'approver01@andtaste.com', '13800000002', '123456', 'technician'),
-('employee01', 24, 'employee01@andtaste.com', '13800000003', '123456', 'feeder');
+('employee01', 24, 'employee01@andtaste.com', '13800000003', '123456', 'feeder'),
+('审批员1', 28, 'approver1@andtaste.com', '13800000101', '123456', 'technician'),
+('审批员2', 28, 'approver2@andtaste.com', '13800000102', '123456', 'technician'),
+('审批员3', 28, 'approver3@andtaste.com', '13800000103', '123456', 'technician'),
+('审批员4', 28, 'approver4@andtaste.com', '13800000104', '123456', 'technician');
 
 -- 供应商银行账户表：AI 助手和供应商列表都从这里实时读取，不再依赖前端/AI 写死数据
 CREATE TABLE IF NOT EXISTS supplier_bank_accounts (
@@ -99,9 +103,17 @@ CREATE TABLE IF NOT EXISTS workflow_approval_log (
     operator VARCHAR(100) NOT NULL COMMENT '操作人',
     operator_role VARCHAR(20) NOT NULL COMMENT '操作人角色',
     comment TEXT COMMENT '操作意见',
+    step_index INT NULL COMMENT '审批节点序号',
+    step_name VARCHAR(100) NULL COMMENT '审批节点名称',
+    approval_round INT NOT NULL DEFAULT 0 COMMENT '审批轮次，对应重新提交次数',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
-    INDEX idx_workflow_log_app_id (application_id)
+    INDEX idx_workflow_log_app_id (application_id),
+    INDEX idx_workflow_log_step (application_id, action, step_index, approval_round)
 ) COMMENT='审批流日志';
+ALTER TABLE workflow_approval_log ADD COLUMN step_index INT NULL COMMENT '审批节点序号';
+ALTER TABLE workflow_approval_log ADD COLUMN step_name VARCHAR(100) NULL COMMENT '审批节点名称';
+ALTER TABLE workflow_approval_log ADD COLUMN approval_round INT NOT NULL DEFAULT 0 COMMENT '审批轮次，对应重新提交次数';
+CREATE INDEX idx_workflow_log_step ON workflow_approval_log(application_id, action, step_index, approval_round);
 
 CREATE TABLE IF NOT EXISTS workflow_notification (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

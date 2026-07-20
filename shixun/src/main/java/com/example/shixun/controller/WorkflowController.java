@@ -11,8 +11,10 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/workflows")
@@ -20,6 +22,7 @@ import java.util.Map;
 public class WorkflowController {
 
     private static final TypeReference<Map<String, String>> FORM_TYPE = new TypeReference<>() {};
+    private static final List<String> REQUIRED_APPROVERS = List.of("审批员1", "审批员2", "审批员3", "审批员4");
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
 
@@ -33,9 +36,9 @@ public class WorkflowController {
     public Map<String, Object> definitions() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("flows", List.of(
-                Map.of("key", "standard", "name", "标准审批", "desc", "一级主管审批，适合普通业务申请", "steps", flowToMap(stepsFor("standard"))),
-                Map.of("key", "twoLevel", "name", "两级审批", "desc", "主管审批 + 终审确认，适合财务、生产等关键事项", "steps", flowToMap(stepsFor("twoLevel"))),
-                Map.of("key", "countersign", "name", "会签审批", "desc", "多人会签后进入终审，适合重大或跨部门事项", "steps", flowToMap(stepsFor("countersign")))
+                Map.of("key", "standard", "name", "四人会签审批", "desc", "审批员1-4 全部同意后自动通过", "steps", flowToMap(stepsFor("standard"))),
+                Map.of("key", "twoLevel", "name", "四人会签审批", "desc", "审批员1-4 全部同意后自动通过，适合财务、生产等关键事项", "steps", flowToMap(stepsFor("twoLevel"))),
+                Map.of("key", "countersign", "name", "四人会签审批", "desc", "固定四名审批员会签，缺一不可", "steps", flowToMap(stepsFor("countersign")))
         ));
         result.put("categoryDefaults", Map.of(
                 "finance", "twoLevel",
@@ -115,7 +118,7 @@ public class WorkflowController {
                 appNo, req.category.trim(), req.typeKey.trim(), title, req.applicant.trim(), role, formJson, "pending", flowType, flowName(flowType), flowJson, 0, steps.get(0).name, handlerLabel(steps.get(0)), 0
         );
         Long id = jdbc.queryForObject("SELECT id FROM workflow_application WHERE app_no=?", Long.class, appNo);
-        insertLog(id, "submit", req.applicant.trim(), role, "提交申请");
+        insertLog(id, "submit", req.applicant.trim(), role, "提交申请", null, null, 0);
         notifyRoles(id, steps.get(0), "审批待办", title + " 等待处理");
         return loadApplication(id, true);
     }
@@ -137,6 +140,9 @@ public class WorkflowController {
         Map<String, Object> current = loadApplication(id, false);
         ensurePending(current);
         validateCurrentHandler(current, req);
+        if (isFixedApprovalStep(current)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "四人会签流程必须由审批员1-4本人依次处理，不支持转交");
+        }
         jdbc.update("UPDATE workflow_application SET current_handler=? WHERE id=?", req.target.trim(), id);
         insertLog(id, "transfer", req.operator.trim(), req.operatorRole.trim(), "转交给 " + req.target.trim() + (blank(req.comment) ? "" : "；" + req.comment.trim()));
         insertNotice(id, req.target.trim(), "审批转交", String.valueOf(current.get("title")) + " 已转交给你处理");
@@ -169,11 +175,12 @@ public class WorkflowController {
         if (!"admin".equals(role) && !applicant.equals(req.operator.trim())) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只能重新提交自己的申请");
         String flowType = normalizeFlowType(String.valueOf(current.get("flowType")), String.valueOf(current.get("category")), String.valueOf(current.get("type")));
         List<FlowStep> steps = stepsFor(flowType);
+        int nextRound = intValue(current.get("resubmitCount")) + 1;
         String title = blank(req.title) ? String.valueOf(current.get("title")) : req.title.trim();
         String formJson = req.fields == null ? toJson((Map<?, ?>) current.get("fields")) : toJson(req.fields);
         jdbc.update("UPDATE workflow_application SET title=?, form_data_json=?, status='pending', current_step=0, current_step_name=?, current_handler=?, current_approval_count=0, approver=NULL, approval_comment=NULL, approved_at=NULL, rejected_at=NULL, withdrawn_at=NULL, finished_at=NULL, resubmit_count=resubmit_count+1 WHERE id=?",
                 title, formJson, steps.get(0).name, handlerLabel(steps.get(0)), id);
-        insertLog(id, "resubmit", req.operator.trim(), req.operatorRole.trim(), blank(req.comment) ? "重新提交申请" : req.comment.trim());
+        insertLog(id, "resubmit", req.operator.trim(), req.operatorRole.trim(), blank(req.comment) ? "重新提交申请" : req.comment.trim(), null, null, nextRound);
         notifyRoles(id, steps.get(0), "重新提交待审批", title + " 已重新提交");
         return loadApplication(id, true);
     }
@@ -194,26 +201,51 @@ public class WorkflowController {
         if (stepIndex >= steps.size()) stepIndex = steps.size() - 1;
         FlowStep step = steps.get(stepIndex);
         String operatorRole = normalizeRole(req.operatorRole, "");
+        String operator = req.operator.trim();
+        int round = intValue(current.get("resubmitCount"));
+        if (!step.approvers.isEmpty()) {
+            if (!step.approvers.contains(operator)) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前节点仅允许审批员1-4处理");
+            }
+            Set<String> approvedOperators = approvedOperatorsForStep(id, stepIndex, round);
+            if (approvedOperators.contains(operator)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "你已经审批过该申请，请等待其他审批员处理");
+            }
+            String comment = blank(req.comment) ? "同意" : req.comment.trim();
+            insertLog(id, "approve", operator, operatorRole, step.name + "：" + comment, stepIndex, step.name, round);
+            int count = approvedOperators.size() + 1;
+            if (count < step.requiredCount) {
+                jdbc.update("UPDATE workflow_application SET current_approval_count=?, approver=?, approval_comment=? WHERE id=?", count, operator, comment, id);
+                notifyRemainingApprovers(id, step, approvedOperators, operator, String.valueOf(current.get("title")));
+                return loadApplication(id, true);
+            }
+            jdbc.update("UPDATE workflow_application SET status='approved', current_approval_count=?, approver=?, approval_comment=?, approved_at=CURRENT_TIMESTAMP, finished_at=CURRENT_TIMESTAMP, current_handler=NULL WHERE id=?",
+                    count, operator, comment, id);
+            syncSampleRequestStatus(id, "approved", operator);
+            syncBulkProductionStatus(id, "approved", operator);
+            insertNotice(id, String.valueOf(current.get("applicant")), "申请已通过", String.valueOf(current.get("title")) + " 已由审批员1-4全部会签通过");
+            return loadApplication(id, true);
+        }
         if (!step.roles.contains(operatorRole) && !"admin".equals(operatorRole)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前角色不能处理该审批节点");
         }
         int count = intValue(current.get("currentApprovalCount")) + 1;
         String comment = blank(req.comment) ? "同意" : req.comment.trim();
-        insertLog(id, "approve", req.operator.trim(), operatorRole, step.name + "：" + comment);
+        insertLog(id, "approve", operator, operatorRole, step.name + "：" + comment, stepIndex, step.name, intValue(current.get("resubmitCount")));
         if (count < step.requiredCount) {
-            jdbc.update("UPDATE workflow_application SET current_approval_count=?, approver=?, approval_comment=? WHERE id=?", count, req.operator.trim(), comment, id);
+            jdbc.update("UPDATE workflow_application SET current_approval_count=?, approver=?, approval_comment=? WHERE id=?", count, operator, comment, id);
             return loadApplication(id, true);
         }
         if (stepIndex + 1 < steps.size()) {
             FlowStep next = steps.get(stepIndex + 1);
             jdbc.update("UPDATE workflow_application SET current_step=?, current_step_name=?, current_handler=?, current_approval_count=0, approver=?, approval_comment=? WHERE id=?",
-                    stepIndex + 1, next.name, handlerLabel(next), req.operator.trim(), comment, id);
+                    stepIndex + 1, next.name, handlerLabel(next), operator, comment, id);
             notifyRoles(id, next, "审批待办", String.valueOf(current.get("title")) + " 已进入 " + next.name);
         } else {
             jdbc.update("UPDATE workflow_application SET status='approved', approver=?, approval_comment=?, approved_at=CURRENT_TIMESTAMP, finished_at=CURRENT_TIMESTAMP, current_handler=NULL WHERE id=?",
-                    req.operator.trim(), comment, id);
-            syncSampleRequestStatus(id, "approved", req.operator.trim());
-            syncBulkProductionStatus(id, "approved", req.operator.trim());
+                    operator, comment, id);
+            syncSampleRequestStatus(id, "approved", operator);
+            syncBulkProductionStatus(id, "approved", operator);
             insertNotice(id, String.valueOf(current.get("applicant")), "申请已通过", String.valueOf(current.get("title")) + " 已审批通过");
         }
         return loadApplication(id, true);
@@ -224,6 +256,7 @@ public class WorkflowController {
         Map<String, Object> current = loadApplication(id, false);
         ensurePending(current);
         validateCurrentHandler(current, req);
+        validateFixedApproverIfNeeded(id, current, req);
         String comment = blank(req.comment) ? "驳回" : req.comment.trim();
         jdbc.update("UPDATE workflow_application SET status='rejected', approver=?, approval_comment=?, rejected_at=CURRENT_TIMESTAMP, finished_at=CURRENT_TIMESTAMP, current_handler=NULL WHERE id=?",
                 req.operator.trim(), comment, id);
@@ -290,13 +323,22 @@ public class WorkflowController {
         item.put("withdrawnAt", ts(row.get("withdrawnAt")));
         item.put("finishedAt", ts(row.get("finishedAt")));
         item.put("flowType", row.get("flowType"));
-        item.put("flowName", row.get("flowName"));
-        item.put("flowConfig", parseJsonList(str(row.get("flowConfigJson"))));
-        item.put("currentStep", intValue(row.get("currentStep")));
-        item.put("currentStepName", row.get("currentStepName"));
+        String flowType = normalizeFlowType(str(row.get("flowType")), str(row.get("category")), str(row.get("typeKey")));
+        List<FlowStep> steps = stepsFor(flowType);
+        item.put("flowName", flowName(flowType));
+        item.put("flowConfig", flowToMap(steps));
+        int currentStep = Math.max(0, intValue(row.get("currentStep")));
+        if (currentStep >= steps.size()) currentStep = steps.size() - 1;
+        item.put("currentStep", currentStep);
+        item.put("currentStepName", steps.get(currentStep).name);
         item.put("currentHandler", row.get("currentHandler"));
-        item.put("currentApprovalCount", intValue(row.get("currentApprovalCount")));
         item.put("resubmitCount", intValue(row.get("resubmitCount")));
+        List<Map<String, Object>> progress = approvalProgress(id, currentStep, intValue(row.get("resubmitCount")), steps.get(currentStep));
+        int passedCount = (int) progress.stream().filter(p -> Boolean.TRUE.equals(p.get("approved"))).count();
+        item.put("approvalProgress", progress);
+        item.put("approvalRequiredCount", steps.get(currentStep).approvers.isEmpty() ? steps.get(currentStep).requiredCount : steps.get(currentStep).approvers.size());
+        item.put("approvalPassedCount", steps.get(currentStep).approvers.isEmpty() ? intValue(row.get("currentApprovalCount")) : passedCount);
+        item.put("currentApprovalCount", steps.get(currentStep).approvers.isEmpty() ? intValue(row.get("currentApprovalCount")) : passedCount);
         if (withLogs) {
             item.put("logs", logs(id));
             item.put("timeline", buildTimeline(item, logs(id)));
@@ -305,7 +347,7 @@ public class WorkflowController {
     }
 
     private List<Map<String, Object>> logs(Long id) {
-        return jdbc.queryForList("SELECT id, action, operator, operator_role operatorRole, comment, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_approval_log WHERE application_id=? ORDER BY id ASC", id);
+        return jdbc.queryForList("SELECT id, action, operator, operator_role operatorRole, comment, step_index stepIndex, step_name stepName, approval_round approvalRound, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_approval_log WHERE application_id=? ORDER BY id ASC", id);
     }
 
     private List<Map<String, Object>> buildTimeline(Map<String, Object> app, List<Map<String, Object>> logs) {
@@ -333,7 +375,12 @@ public class WorkflowController {
     }
 
     private void insertLog(Long applicationId, String action, String operator, String operatorRole, String comment) {
-        jdbc.update("INSERT INTO workflow_approval_log (application_id, action, operator, operator_role, comment) VALUES (?,?,?,?,?)", applicationId, action, operator, operatorRole, blank(comment) ? null : comment);
+        insertLog(applicationId, action, operator, operatorRole, comment, null, null, null);
+    }
+
+    private void insertLog(Long applicationId, String action, String operator, String operatorRole, String comment, Integer stepIndex, String stepName, Integer approvalRound) {
+        jdbc.update("INSERT INTO workflow_approval_log (application_id, action, operator, operator_role, comment, step_index, step_name, approval_round) VALUES (?,?,?,?,?,?,?,?)",
+                applicationId, action, operator, operatorRole, blank(comment) ? null : comment, stepIndex, blank(stepName) ? null : stepName, approvalRound == null ? 0 : approvalRound);
     }
 
     private void insertNotice(Long applicationId, String receiver, String title, String message) {
@@ -341,7 +388,19 @@ public class WorkflowController {
     }
 
     private void notifyRoles(Long applicationId, FlowStep step, String title, String message) {
+        if (!step.approvers.isEmpty()) {
+            for (String approver : step.approvers) insertNotice(applicationId, approver, title, message);
+            return;
+        }
         for (String role : step.roles) insertNotice(applicationId, role, title, message);
+    }
+
+    private void notifyRemainingApprovers(Long applicationId, FlowStep step, Set<String> approvedOperators, String currentOperator, String appTitle) {
+        for (String approver : step.approvers) {
+            if (!approvedOperators.contains(approver) && !approver.equals(currentOperator)) {
+                insertNotice(applicationId, approver, "会签待处理", appTitle + " 等待你的审批");
+            }
+        }
     }
 
     private long count(String sql) { Long value = jdbc.queryForObject(sql, Long.class); return value == null ? 0L : value; }
@@ -419,12 +478,8 @@ public class WorkflowController {
         return "standard";
     }
 
-    private String flowName(String flowType) { return "twoLevel".equals(flowType) ? "两级审批" : "countersign".equals(flowType) ? "会签审批" : "标准审批"; }
-
     private List<FlowStep> stepsFor(String flowType) {
-        if ("countersign".equals(flowType)) return List.of(new FlowStep("会签审批", List.of("technician", "admin"), "all", 2), new FlowStep("终审确认", List.of("admin"), "or", 1));
-        if ("twoLevel".equals(flowType)) return List.of(new FlowStep("主管审批", List.of("technician", "admin"), "or", 1), new FlowStep("终审确认", List.of("admin"), "or", 1));
-        return List.of(new FlowStep("主管审批", List.of("technician", "admin"), "or", 1));
+        return List.of(new FlowStep("四人会签审批", List.of("technician"), "all", REQUIRED_APPROVERS.size(), REQUIRED_APPROVERS));
     }
 
     private List<Map<String, Object>> flowToMap(List<FlowStep> steps) {
@@ -437,12 +492,15 @@ public class WorkflowController {
             m.put("roles", s.roles);
             m.put("mode", s.mode);
             m.put("requiredCount", s.requiredCount);
+            m.put("approvers", s.approvers);
             list.add(m);
         }
         return list;
     }
 
-    private String handlerLabel(FlowStep step) { return String.join("/", step.roles); }
+    private String flowName(String flowType) { return "四人会签审批"; }
+
+    private String handlerLabel(FlowStep step) { return step.approvers.isEmpty() ? String.join("/", step.roles) : String.join("/", step.approvers); }
 
     private void ensureWorkflowSchema() {
         String[] sqls = new String[] {
@@ -456,13 +514,71 @@ public class WorkflowController {
                 "ALTER TABLE workflow_application ADD COLUMN resubmit_count INT NOT NULL DEFAULT 0",
                 "ALTER TABLE workflow_application ADD COLUMN withdrawn_at DATETIME DEFAULT NULL",
                 "ALTER TABLE workflow_application ADD COLUMN finished_at DATETIME DEFAULT NULL",
+                "ALTER TABLE workflow_approval_log ADD COLUMN step_index INT NULL",
+                "ALTER TABLE workflow_approval_log ADD COLUMN step_name VARCHAR(100) NULL",
+                "ALTER TABLE workflow_approval_log ADD COLUMN approval_round INT NOT NULL DEFAULT 0",
+                "CREATE INDEX idx_workflow_log_step ON workflow_approval_log(application_id, action, step_index, approval_round)",
                 "CREATE TABLE IF NOT EXISTS workflow_notification (id BIGINT AUTO_INCREMENT PRIMARY KEY, application_id BIGINT NOT NULL, receiver VARCHAR(100) NOT NULL, title VARCHAR(200) NOT NULL, message VARCHAR(1000) NOT NULL, read_flag TINYINT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_workflow_notice_receiver (receiver, read_flag), INDEX idx_workflow_notice_app (application_id))"
         };
         for (String sql : sqls) { try { jdbc.execute(sql); } catch (Exception ignored) { } }
-        try { jdbc.update("UPDATE workflow_application SET flow_type=COALESCE(flow_type,'standard'), flow_name=COALESCE(flow_name,'标准审批'), current_step_name=COALESCE(current_step_name,'主管审批'), current_handler=COALESCE(current_handler,'technician/admin') WHERE deleted=0"); } catch (Exception ignored) { }
+        try { jdbc.update("UPDATE workflow_application SET flow_type=COALESCE(flow_type,'standard'), flow_name='四人会签审批', current_step=0, current_step_name='四人会签审批', current_handler=? WHERE deleted=0 AND status='pending'", String.join("/", REQUIRED_APPROVERS)); } catch (Exception ignored) { }
     }
 
-    private record FlowStep(String name, List<String> roles, String mode, int requiredCount) {}
+    private Set<String> approvedOperatorsForStep(Long id, int stepIndex, int round) {
+        return new LinkedHashSet<>(jdbc.queryForList("SELECT DISTINCT operator FROM workflow_approval_log WHERE application_id=? AND action='approve' AND step_index=? AND approval_round=? AND operator IN (?,?,?,?)",
+                String.class, id, stepIndex, round, REQUIRED_APPROVERS.get(0), REQUIRED_APPROVERS.get(1), REQUIRED_APPROVERS.get(2), REQUIRED_APPROVERS.get(3)));
+    }
+
+    private List<Map<String, Object>> approvalProgress(Long id, int stepIndex, int round, FlowStep step) {
+        if (step.approvers.isEmpty()) return List.of();
+        Map<String, Map<String, Object>> progressMap = new LinkedHashMap<>();
+        for (String approver : step.approvers) {
+            Map<String, Object> p = new LinkedHashMap<>();
+            p.put("name", approver);
+            p.put("approved", false);
+            p.put("time", null);
+            p.put("comment", null);
+            progressMap.put(approver, p);
+        }
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT operator, comment, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_approval_log WHERE application_id=? AND action='approve' AND step_index=? AND approval_round=? ORDER BY id ASC", id, stepIndex, round);
+        for (Map<String, Object> row : rows) {
+            String operator = str(row.get("operator"));
+            Map<String, Object> p = progressMap.get(operator);
+            if (p == null) continue;
+            p.put("approved", true);
+            p.put("time", row.get("createdAt"));
+            p.put("comment", stripStepPrefix(str(row.get("comment"))));
+        }
+        return new ArrayList<>(progressMap.values());
+    }
+
+    private void validateFixedApproverIfNeeded(Long id, Map<String, Object> current, WorkflowActionRequest req) {
+        String flowType = normalizeFlowType(String.valueOf(current.get("flowType")), String.valueOf(current.get("category")), String.valueOf(current.get("type")));
+        List<FlowStep> steps = stepsFor(flowType);
+        int stepIndex = Math.max(0, intValue(current.get("currentStep")));
+        if (stepIndex >= steps.size()) stepIndex = steps.size() - 1;
+        FlowStep step = steps.get(stepIndex);
+        String role = normalizeRole(req.operatorRole, "");
+        if (!step.approvers.isEmpty() && !step.approvers.contains(req.operator.trim()) && !"admin".equals(role)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前节点仅允许审批员1-4处理");
+        }
+    }
+
+    private boolean isFixedApprovalStep(Map<String, Object> current) {
+        String flowType = normalizeFlowType(String.valueOf(current.get("flowType")), String.valueOf(current.get("category")), String.valueOf(current.get("type")));
+        List<FlowStep> steps = stepsFor(flowType);
+        int stepIndex = Math.max(0, intValue(current.get("currentStep")));
+        if (stepIndex >= steps.size()) stepIndex = steps.size() - 1;
+        return !steps.get(stepIndex).approvers.isEmpty();
+    }
+
+    private String stripStepPrefix(String comment) {
+        if (blank(comment)) return "";
+        int index = comment.indexOf('：');
+        return index >= 0 && index + 1 < comment.length() ? comment.substring(index + 1) : comment;
+    }
+
+    private record FlowStep(String name, List<String> roles, String mode, int requiredCount, List<String> approvers) {}
 
     public static class WorkflowSubmitRequest {
         public String category;
