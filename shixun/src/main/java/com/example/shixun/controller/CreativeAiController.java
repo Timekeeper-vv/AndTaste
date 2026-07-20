@@ -168,7 +168,27 @@ public class CreativeAiController {
         String optimized=callChat(system,req.prompt.trim()).trim();
         int maxPromptLength = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? 1800 : 1024;
         if(optimized.length()>maxPromptLength)optimized=optimized.substring(0,maxPromptLength);
-        return Map.of("prompt",optimized,"source","siliconflow:"+chatModel,"target","imagen".equalsIgnoreCase(nullToEmpty(req.provider))?"google-imagen-4:text-to-image":"tripo:text-to-image");
+        String usageGuide = build2dPromptUsageGuide(req, optimized);
+        return Map.of(
+                "prompt", optimized,
+                "usageGuide", usageGuide,
+                "source", "siliconflow:" + chatModel,
+                "target", "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? "google-imagen-4:text-to-image" : "tripo:text-to-image"
+        );
+    }
+
+    private String build2dPromptUsageGuide(GenerateImageRequest req, String optimizedPrompt) {
+        try {
+            String provider = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? "Google Imagen 4" : "Tripo";
+            String system = "你是AI生图工作流说明专家。请根据用户原始需求和已优化Prompt，生成中文使用说明。只输出中文，不要Markdown代码块。要求结构清晰、简洁实用，包含：1）适用场景；2）生成前参数建议；3）如果结果不满意如何微调；4）版权/文字/打样注意事项。控制在260字以内。";
+            String user = "服务商：" + provider + "\n原始需求：" + nullToEmpty(req.prompt) + "\n已优化Prompt：" + nullToEmpty(optimizedPrompt);
+            String guide = callChat(system, user).trim();
+            guide = guide.replace("**", "").replace("__", "").replaceAll("(?m)^#+\\s*", "");
+            if(guide.length() > 600) guide = guide.substring(0, 600);
+            return guide;
+        } catch(Exception e) {
+            return "使用说明：该提示词适合直接用于当前2D生图服务商。建议先用默认方图和1K清晰度快速出草稿，确认主体、构图和包装文字方向后再切换高清参数。若画面不够官方，可补充“商业产品摄影、干净背景、真实材质、品牌级包装设计”；若文字不准确，请生成后人工复核并在设计软件中校正。最终用于打样或上架前，需确认版权、商标和包装标识合规。";
+        }
     }
 
     @PostMapping("/text-to-image")
