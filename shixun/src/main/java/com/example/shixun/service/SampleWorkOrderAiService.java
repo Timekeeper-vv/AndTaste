@@ -136,6 +136,13 @@ public class SampleWorkOrderAiService {
             return new ToolPlan("search_sample_work_orders", countArgs);
         }
         ObjectNode args = mapper.createObjectNode();
+        String countKeyword = extractCountKeyword(q);
+        if (!countKeyword.isBlank()) {
+            args.put("keyword", countKeyword);
+            args.put("is_count_only", true);
+            args.put("limit", 20);
+            return new ToolPlan("search_sample_work_orders", args);
+        }
         boolean ownerAggregate = q.contains("负责人") && (
                 q.contains("几个") || q.contains("多少") || q.contains("几位") || q.contains("有哪些")
                         || q.contains("哪几个") || q.contains("分别") || q.contains("各") || q.contains("统计") || q.contains("分布")
@@ -235,7 +242,24 @@ public class SampleWorkOrderAiService {
         if (q.contains("负责人") || q.contains("负责的") || q.contains("谁负责")) return false;
         if (q.contains("项目") && !(q.contains("项目一共") || q.contains("项目总数"))) return false;
         if (q.contains("产品") && !(q.contains("产品一共") || q.contains("产品总数"))) return false;
+        if (!extractCountKeyword(q).isBlank()) return false;
         return true;
+    }
+
+    private String extractCountKeyword(String q) {
+        boolean asksCount = q.contains("多少个") || q.contains("有几个") || q.contains("数量") || q.contains("几个");
+        if (!asksCount) return "";
+        if (!extractStatus(q).isBlank()) return "";
+        if (q.contains("负责人") || q.contains("谁负责")) return "";
+        String keyword = cleanupKeyword(q)
+                .replace("的", "")
+                .replace("单", "")
+                .replace("项目", "")
+                .replace("产品", "")
+                .trim();
+        if (keyword.length() < 2) return "";
+        if (List.of("明细", "全部", "所有", "总").contains(keyword)) return "";
+        return keyword;
     }
 
     private Map<String, Object> search(Map<String, Object> raw) {
@@ -253,9 +277,15 @@ public class SampleWorkOrderAiService {
         StringBuilder where = new StringBuilder(" WHERE deleted=0");
         List<Object> params = new ArrayList<>();
         if (!keyword.isBlank()) {
-            where.append(" AND (application_no LIKE ? OR project_name LIKE ? OR detail_project_name LIKE ? OR product_name LIKE ? OR product_type LIKE ? OR product_sub_type LIKE ? OR spec_flavor LIKE ? OR owner LIKE ? OR factory LIKE ? OR IFNULL(detail_remark,'') LIKE ?)");
-            String like = like(keyword);
-            for (int i = 0; i < 10; i++) params.add(like);
+            List<String> variants = keywordVariants(keyword);
+            where.append(" AND (");
+            for (int k = 0; k < variants.size(); k++) {
+                if (k > 0) where.append(" OR ");
+                where.append("(application_no LIKE ? OR project_name LIKE ? OR detail_project_name LIKE ? OR product_name LIKE ? OR product_type LIKE ? OR product_sub_type LIKE ? OR spec_flavor LIKE ? OR owner LIKE ? OR factory LIKE ? OR IFNULL(detail_remark,'') LIKE ?)");
+                String like = like(variants.get(k));
+                for (int i = 0; i < 10; i++) params.add(like);
+            }
+            where.append(")");
         }
         if (!status.isBlank()) { where.append(" AND work_order_status=?"); params.add(status); }
         if (!owner.isBlank()) { where.append(" AND owner LIKE ?"); params.add(like(owner)); }
@@ -284,10 +314,21 @@ public class SampleWorkOrderAiService {
                         "owner, factory, sample_cost_yuan sampleCostYuan, DATE_FORMAT(sample_file_provided_date, '%Y-%m-%d') AS sampleFileProvidedDate " +
                         "FROM supply_chain_sample_work_order" + where + " ORDER BY initiated_at DESC, id DESC LIMIT ?",
                 listParams.toArray());
-        if (countOnly) {
-            return Map.of("count", total == null ? 0 : total, "items", items, "query_params", query);
-        }
-        return Map.of("total", total == null ? 0 : total, "items", items, "query_params", query);
+        List<Map<String, Object>> statusSummary = jdbc.queryForList(
+                "SELECT COALESCE(NULLIF(TRIM(work_order_status), ''), '未填写') AS value, COUNT(*) AS count " +
+                        "FROM supply_chain_sample_work_order" + where + " GROUP BY COALESCE(NULLIF(TRIM(work_order_status), ''), '未填写') ORDER BY count DESC, value ASC",
+                params.toArray());
+        List<Map<String, Object>> ownerSummary = jdbc.queryForList(
+                "SELECT COALESCE(NULLIF(TRIM(owner), ''), '未填写') AS value, COUNT(*) AS count " +
+                        "FROM supply_chain_sample_work_order" + where + " GROUP BY COALESCE(NULLIF(TRIM(owner), ''), '未填写') ORDER BY count DESC, value ASC LIMIT 5",
+                params.toArray());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put(countOnly ? "count" : "total", total == null ? 0 : total);
+        result.put("items", items);
+        result.put("status_summary", statusSummary);
+        result.put("owner_summary", ownerSummary);
+        result.put("query_params", query);
+        return result;
     }
 
     private Map<String, Object> statistics(Map<String, Object> raw) {
@@ -341,7 +382,10 @@ public class SampleWorkOrderAiService {
                 String prefix = "当前共找到 " + n + " 个打样工单";
                 Object queryParams = map.get("query_params");
                 if (queryParams instanceof Map<?, ?> query && Boolean.TRUE.equals(query.get("is_count_only"))) {
-                    return prefix + "。";
+                    String scope = queryScope(query);
+                    String statusText = formatGroupSummary(map.get("status_summary"), "状态");
+                    String ownerText = formatGroupSummary(map.get("owner_summary"), "负责人");
+                    return scope + prefix + "。" + statusText + ownerText + relatedQuestions(query);
                 }
                 if (itemsObj instanceof List<?> items && !items.isEmpty()) {
                     String names = items.stream().limit(8).map(x -> {
@@ -410,6 +454,52 @@ public class SampleWorkOrderAiService {
         if (value == null) return "";
         String s = String.valueOf(value).trim().replaceAll("[\\p{Cntrl}]", "");
         return s.length() > 120 ? s.substring(0, 120) : s;
+    }
+
+    private List<String> keywordVariants(String keyword) {
+        String base = safe(keyword).replace("的", "").trim();
+        if (base.isBlank()) return List.of();
+        List<String> list = new ArrayList<>();
+        list.add(base);
+        if (base.contains("博物馆") && !base.contains("省博物馆")) {
+            list.add(base.replace("博物馆", "省博物馆"));
+        }
+        if (base.contains("省博物馆")) {
+            list.add(base.replace("省博物馆", "博物馆"));
+        }
+        return list.stream().filter(s -> !s.isBlank()).distinct().collect(Collectors.toList());
+    }
+
+    private String queryScope(Map<?, ?> query) {
+        List<String> filters = new ArrayList<>();
+        if (query.containsKey("keyword")) filters.add("关键词“" + display(query.get("keyword")) + "”");
+        if (query.containsKey("project_name")) filters.add("项目“" + display(query.get("project_name")) + "”");
+        if (query.containsKey("work_order_status")) filters.add("状态“" + display(query.get("work_order_status")) + "”");
+        if (query.containsKey("owner")) filters.add("负责人“" + display(query.get("owner")) + "”");
+        if (query.containsKey("product_type")) filters.add("产品类型“" + display(query.get("product_type")) + "”");
+        if (query.containsKey("order_type")) filters.add("订单类型“" + display(query.get("order_type")) + "”");
+        if (filters.isEmpty()) return "我查了打样工单明细库的全部有效记录，";
+        return "我按" + String.join("、", filters) + "查询了打样工单明细库，";
+    }
+
+    private String formatGroupSummary(Object groupObj, String label) {
+        if (!(groupObj instanceof List<?> groups) || groups.isEmpty()) return "";
+        String text = groups.stream().limit(5).map(g -> {
+            Map<?, ?> item = (Map<?, ?>) g;
+            return display(item.get("value")) + " " + display(item.get("count")) + "个";
+        }).collect(Collectors.joining("，"));
+        return "按" + label + "看：" + text + "。";
+    }
+
+    private String relatedQuestions(Map<?, ?> query) {
+        if (query.containsKey("keyword") || query.containsKey("project_name")) {
+            String project = display(query.containsKey("project_name") ? query.get("project_name") : query.get("keyword"));
+            return "你还可以继续问：“" + project + "进行中的打样有哪些？”、“" + project + "是谁负责？”、“" + project + "预计什么时候完成？”。";
+        }
+        if (query.containsKey("work_order_status")) {
+            return "你还可以继续问：“这些工单分别是谁负责？”、“按项目统计一下”、“列出最近的几条明细”。";
+        }
+        return "你还可以继续问：“江西省博物馆的打样单多少个？”、“进行中的打样有哪些？”、“按负责人统计一下”、“延期完成的有哪些？”。";
     }
 
     private String like(String v) { return "%" + v + "%"; }
