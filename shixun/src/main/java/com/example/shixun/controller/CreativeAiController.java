@@ -168,7 +168,7 @@ public class CreativeAiController {
         String optimized=callChat(system,req.prompt.trim()).trim();
         int maxPromptLength = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? 1800 : 1024;
         if(optimized.length()>maxPromptLength)optimized=optimized.substring(0,maxPromptLength);
-        String usageGuide = build2dPromptUsageGuide(req, optimized);
+        String usageGuide = buildProductUsageGuide(req, optimized);
         return Map.of(
                 "prompt", optimized,
                 "usageGuide", usageGuide,
@@ -177,17 +177,17 @@ public class CreativeAiController {
         );
     }
 
-    private String build2dPromptUsageGuide(GenerateImageRequest req, String optimizedPrompt) {
+    private String buildProductUsageGuide(GenerateImageRequest req, String optimizedPrompt) {
         try {
             String provider = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? "Google Imagen 4" : "Tripo";
-            String system = "你是AI生图工作流说明专家。请根据用户原始需求和已优化Prompt，生成中文使用说明。只输出中文，不要Markdown代码块。要求结构清晰、简洁实用，包含：1）适用场景；2）生成前参数建议；3）如果结果不满意如何微调；4）版权/文字/打样注意事项。控制在260字以内。";
-            String user = "服务商：" + provider + "\n原始需求：" + nullToEmpty(req.prompt) + "\n已优化Prompt：" + nullToEmpty(optimizedPrompt);
+            String system = "你是文创产品说明书文案专家。请根据用户原始产品需求和已优化的画面Prompt，生成“产品本身”的中文使用说明，而不是AI提示词使用说明。只输出中文，不要Markdown代码块。要求像正式商品说明/包装背标，结构清晰、可直接给客户或领导看。必须包含：1）产品定位；2）适用场景/适用人群；3）使用方法；4）保养或储存方式；5）安全/注意事项；6）一句官方感温馨提示。若产品是食品/包装概念，要写食用/储存/过敏或生产信息核验提示；若是钥匙扣、摆件、冰箱贴等非食品，要写佩戴/摆放/清洁/儿童误吞等注意事项。控制在350字以内。";
+            String user = "服务商：" + provider + "\n原始产品需求：" + nullToEmpty(req.prompt) + "\n画面Prompt：" + nullToEmpty(optimizedPrompt);
             String guide = callChat(system, user).trim();
             guide = guide.replace("**", "").replace("__", "").replaceAll("(?m)^#+\\s*", "");
-            if(guide.length() > 600) guide = guide.substring(0, 600);
+            if(guide.length() > 700) guide = guide.substring(0, 700);
             return guide;
         } catch(Exception e) {
-            return "使用说明：该提示词适合直接用于当前2D生图服务商。建议先用默认方图和1K清晰度快速出草稿，确认主体、构图和包装文字方向后再切换高清参数。若画面不够官方，可补充“商业产品摄影、干净背景、真实材质、品牌级包装设计”；若文字不准确，请生成后人工复核并在设计软件中校正。最终用于打样或上架前，需确认版权、商标和包装标识合规。";
+            return "产品使用说明：本产品适合作为文创礼品、陈列展示或日常使用场景使用。使用前请确认外观、尺寸、材质和包装标识是否符合实际打样版本；如为食品或食品包装类产品，请以最终生产标签、配料、净含量、保质期和执行标准为准。日常保存应避免高温、潮湿、暴晒和重压。儿童使用需成人陪同，避免误食小部件或包装材料。最终上市前请完成版权、商标、质检和包装合规核验。";
         }
     }
 
