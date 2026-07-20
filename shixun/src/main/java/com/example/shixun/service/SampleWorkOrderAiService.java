@@ -59,6 +59,7 @@ public class SampleWorkOrderAiService {
 
     private static final String ANSWER_PROMPT = """
 你是打样工单数据查询助手。你会收到用户原始问题、工具名称、工具参数和工具返回结果。
+重要产品规则：AI助手不是纯查询工具，最终回复必须由大模型基于真实数据库结果进行业务化总结，不能只机械复读字段。
 你必须只基于工具返回的真实数据库结果回答，禁止凭记忆编造项目、产品、数量、负责人、状态或日期。
 
 回答规则：
@@ -79,6 +80,9 @@ public class SampleWorkOrderAiService {
     }
 
     public Optional<ToolAnswer> tryAnswer(String userQuestion) {
+        String initialQuestion = safe(userQuestion);
+        if (!isLikelySampleQuestion(initialQuestion)) return Optional.empty();
+
         ToolPlan plan;
         try {
             plan = planToolCall(userQuestion);
@@ -111,17 +115,13 @@ public class SampleWorkOrderAiService {
                     + "\n\n请基于上述真实工具返回生成最终中文回答。";
 
             String reply;
-            if ("get_sample_work_order_statistics".equals(plan.tool())) {
-                // 聚合统计类问题用后端确定性回答，避免模型把真实统计结果整理错。
-                reply = deterministicAnswer(plan.tool(), result);
-            } else {
-                try {
-                    reply = siliconFlow.chat(ANSWER_PROMPT, answerPrompt, 0.2, 1200, 45);
-                } catch (Exception e) {
-                    reply = deterministicAnswer(plan.tool(), result);
-                }
+            try {
+                // 最终用户可见回答必须由大模型基于真实工具结果组织，保证“AI助手”体验而不是纯查询工具。
+                reply = siliconFlow.chat(ANSWER_PROMPT, answerPrompt, 0.2, 1200, 45);
+            } catch (Exception e) {
+                reply = "我已经查询到打样工单数据库，但大模型总结服务暂时不可用。按当前规则，AI助手不能绕过大模型直接输出纯数据结果，请稍后重试。";
             }
-            return Optional.of(new ToolAnswer(reply, "text-to-api:" + plan.tool(), plan.tool(), args, result));
+            return Optional.of(new ToolAnswer(reply, "text-to-api+llm:" + plan.tool(), plan.tool(), args, result));
         } catch (Exception e) {
             return guardrail(userQuestion, "打样工单数据库查询暂时失败，我不会编造数据。请稍后重试。");
         }

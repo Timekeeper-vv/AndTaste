@@ -1,5 +1,6 @@
 package com.example.shixun.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -13,9 +14,22 @@ import java.util.stream.Collectors;
 @Service
 public class ApprovalWorkflowAiService {
     private final JdbcTemplate jdbc;
+    private final SiliconFlowChatService siliconFlow;
+    private final ObjectMapper mapper;
 
-    public ApprovalWorkflowAiService(JdbcTemplate jdbc) {
+    private static final String ANSWER_PROMPT = """
+你是“之间味道AI助手”的审批中心业务分析助手。
+重要产品规则：AI助手不是纯查询工具。你必须基于后端真实数据库结果进行业务化总结，不能只机械复读字段。
+数据约束：所有审批数量、申请编号、申请人、状态、业务类型都必须来自工具返回 JSON，禁止编造。
+回答风格：纯文字短段落，先给结论，再说明你按什么条件查了审批中心，然后做一两句业务判断，最后给相关追问建议。
+审批规则：当前系统采用审批员1-4四人会签，四人全部通过后才算最终通过。
+不要使用Markdown表格、竖线表格或复杂符号。
+""";
+
+    public ApprovalWorkflowAiService(JdbcTemplate jdbc, SiliconFlowChatService siliconFlow, ObjectMapper mapper) {
         this.jdbc = jdbc;
+        this.siliconFlow = siliconFlow;
+        this.mapper = mapper;
     }
 
     public Optional<ToolAnswer> tryAnswer(String question) {
@@ -23,8 +37,8 @@ public class ApprovalWorkflowAiService {
         if (!isApprovalDataQuestion(q)) return Optional.empty();
         Map<String, Object> args = buildArgs(q);
         Map<String, Object> result = query(args);
-        String reply = answer(result);
-        return Optional.of(new ToolAnswer(reply, "text-to-api:approval-workflow", "search_approval_workflows", args, result));
+        String reply = llmAnswer(question, args, result);
+        return Optional.of(new ToolAnswer(reply, "text-to-api+llm:approval-workflow", "search_approval_workflows", args, result));
     }
 
     private boolean isApprovalDataQuestion(String q) {
@@ -59,6 +73,20 @@ public class ApprovalWorkflowAiService {
         args.put("list", listMode);
         args.put("limit", listMode ? 10 : 5);
         return args;
+    }
+
+
+    private String llmAnswer(String question, Map<String, Object> args, Map<String, Object> result) {
+        try {
+            String prompt = "用户原始问题：\n" + safe(question)
+                    + "\n\n工具名称：\nsearch_approval_workflows"
+                    + "\n\n工具参数：\n" + mapper.writeValueAsString(args)
+                    + "\n\n工具返回：\n" + mapper.writeValueAsString(result)
+                    + "\n\n请基于上述真实工具返回生成最终中文回答。";
+            return siliconFlow.chat(ANSWER_PROMPT, prompt, 0.2, 1200, 45);
+        } catch (Exception e) {
+            return "我已经查询到审批中心数据库，但大模型总结服务暂时不可用。按当前规则，AI助手不能绕过大模型直接输出纯数据结果，请稍后重试。";
+        }
     }
 
     private Map<String, Object> query(Map<String, Object> args) {

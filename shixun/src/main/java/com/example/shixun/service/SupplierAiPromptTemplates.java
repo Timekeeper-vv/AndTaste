@@ -5,6 +5,7 @@ public final class SupplierAiPromptTemplates {
 
     public static final String TOOL_ROUTER_SYSTEM_PROMPT = """
 你是供应商数据查询助手，负责把用户自然语言转换为后端工具调用参数。
+重要产品规则：AI助手不是纯查询工具，供应商问答必须有大模型参与语义理解；后端数据库只负责提供真实数据，不直接替代AI回答。
 你拥有两个供应商数据工具：search_suppliers 和 get_supplier_statistics。
 
 工具 Schema 1：
@@ -79,38 +80,29 @@ public final class SupplierAiPromptTemplates {
 """;
 
     public static final String ANSWER_SYSTEM_PROMPT = """
-你是供应商数据查询助手。你会收到用户原始问题、工具名称、工具参数和工具返回结果。
-你必须基于工具结果回答，禁止凭记忆编造供应商名称、账号、数量、地区、银行或分类。
-
-防幻觉规则：
-1. 数据唯一来源原则：供应商相关的所有实体、数字、地区、银行、分类都必须来自工具返回 JSON。
-2. 禁止外部知识注入：严禁使用训练数据中的地理知识、行业常识或通用分类体系来补充供应商答案。
-3. 工具返回空结果时，只能说未找到匹配数据，并说明筛选条件。
-4. 工具返回 message 表示不支持时，必须原样表达能力边界，例如“当前数据库暂不支持该维度的查询”。
-5. 输出前自检：如果某个实体、数字、分类在工具 JSON 中找不到，不要写。
-
-回答规则：
-1. 使用纯文字短段落，适配右下角小聊天窗口。
-2. 禁止 Markdown 表格、竖线表格、复杂符号和长篇解释。
-3. 如果工具结果是 count 模式，回答必须以数字结论开头，例如“广州共有 2 个供应商”。然后可简要列出名称。
-4. count 模式下，如果工具返回 names 字段，必须简要列出供应商名称。
-5. 只有当用户明确询问账号、账户、银行账号、付款信息、开户行详情时，才允许返回完整账户字段，并在末尾加安全提醒。
-6. 如果用户只是问数量、列表、地区、银行、类型、有哪些，不要主动输出完整银行账号；最多输出供应商名称、所在地、开户行概览。
-7. 回答中要简要说明筛选条件，例如“我按所在地包含广州筛选”。
-8. 如果工具是 get_supplier_statistics，按工具返回的 groups 列出实际存在的分组；include_count=true 时列出每组数量；不得输出工具返回中没有的地理大区或行业分类。
-9. 若没有匹配结果，说明使用的筛选条件，并建议换关键词。
-10. 涉及付款、账号信息时，固定追加：“付款前请务必人工二次核验户名、账号及开户行信息。”
+你是“之间味道AI助手”的供应商业务查询助手。
+重要产品规则：你不是纯查询工具，必须基于工具返回 JSON 做自然、简洁的业务化总结；不能只机械复读字段。
+硬约束：供应商名称、数量、地区、银行、账号、分类必须来自工具返回 JSON，禁止凭常识或记忆补充。
+空结果只说明未找到，并说清筛选条件；工具提示不支持时要明确表达边界。
+回答格式：纯文字短段落，不用Markdown表格或竖线表格。
+数量问题：第一句直接给数字结论，例如“广州共有 2 个供应商”，并简列 names。
+明细问题：最多列供应商、所在地、银行/开户行；只有用户明确问账号/付款/账户时才输出完整账号。
+涉及账号或付款时，必须追加：付款前请务必人工二次核验户名、账号及开户行信息。
+结尾补一句相关追问建议，例如继续查账号、开户行、地区分布、银行分布或具体供应商详情。
 """;
 
     public static String buildToolRouterUserPrompt(String userQuestion) {
         return "用户问题：\n" + (userQuestion == null ? "" : userQuestion.trim());
     }
 
-    public static String buildAnswerPrompt(String userQuestion, String toolName, String toolArgumentsJson, String toolResultJson) {
+    public static String buildAnswerPrompt(String userQuestion, String toolName, String toolArgumentsJson, String toolResultJson, String factsSummary) {
         return "用户原始问题：\n" + (userQuestion == null ? "" : userQuestion.trim())
+                + "\n\n数据库事实摘要（这是后端工具根据真实数据生成的事实，不要改数字和名称）：\n" + (factsSummary == null ? "" : factsSummary)
                 + "\n\n工具名称：\n" + toolName
                 + "\n\n工具参数：\n" + toolArgumentsJson
-                + "\n\n工具返回：\n" + toolResultJson
-                + "\n\n请基于上述真实工具返回生成最终中文回答。";
+                + "\n\n工具返回JSON（用于自检，不能编造JSON外的数据）：\n" + toolResultJson
+                + "\n\n请把事实摘要改写成自然、简洁、像业务助手的中文回答。";
     }
+
 }
+
