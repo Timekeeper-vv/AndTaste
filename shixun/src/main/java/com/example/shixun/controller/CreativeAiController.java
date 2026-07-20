@@ -62,6 +62,12 @@ public class CreativeAiController {
     @Value("${tripo.model.version:v3.1-20260211}")
     private String tripoModelVersion;
 
+    @Value("${modao.api.key:}")
+    private String modaoApiKey;
+
+    @Value("${modao.design.url:https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a}")
+    private String modaoDesignUrl;
+
     public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.mapper = mapper;
@@ -237,6 +243,44 @@ public class CreativeAiController {
             jdbc.update("UPDATE ai_generation_job SET status='failed', error_message=? WHERE id=?", e.getMessage(), jobId);
             throw e;
         }
+    }
+
+    @GetMapping("/modao/config")
+    public Map<String,Object> modaoConfig() {
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("provider", "Modao");
+        result.put("displayName", "墨刀 AI 设计");
+        result.put("configured", !blank(modaoApiKey) && modaoApiKey.startsWith("modao_"));
+        result.put("workspaceUrl", modaoDesignUrl);
+        result.put("mode", "external_workspace");
+        result.put("serviceReachable", !blank(modaoDesignUrl));
+        result.put("message", "当前接入为外部墨刀AI设计工作区：系统负责优化Prompt并打开墨刀页面，图片结果需在墨刀完成后人工下载/上传到资产库。");
+        return result;
+    }
+
+    @PostMapping("/modao/launch")
+    public Map<String,Object> modaoLaunch(@RequestBody GenerateImageRequest req) {
+        if(blank(modaoDesignUrl)) throw new IllegalStateException("未配置墨刀设计工作区链接 modao.design.url");
+        if(blank(modaoApiKey) || !modaoApiKey.startsWith("modao_")) throw new IllegalStateException("未配置墨刀令牌 modao.api.key，请在 shixun/application-local.properties 配置");
+        if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成设计提示词");
+        String prompt = req.prompt.trim();
+        if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
+        String jobNo = no("MDA");
+        Long jobId = createJob(jobNo, "external_design", "modao", "modao-ai-design", req.styleId, null, prompt, req.negativePrompt, "running", null, req.imageSize);
+        Map<String,Object> meta = new LinkedHashMap<>();
+        meta.put("provider", "modao");
+        meta.put("workspaceUrl", modaoDesignUrl);
+        meta.put("mode", "external_workspace");
+        jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=10 WHERE id=?", "modao-workspace", jobId);
+        return Map.of(
+                "jobId", jobId,
+                "jobNo", jobNo,
+                "provider", "modao",
+                "status", "external_workspace",
+                "workspaceUrl", modaoDesignUrl,
+                "prompt", prompt,
+                "message", "已准备墨刀AI设计Prompt。系统会打开墨刀工作区并复制Prompt，设计完成后请从墨刀下载图片并上传到资产库。"
+        );
     }
 
     @GetMapping("/tripo/config")
