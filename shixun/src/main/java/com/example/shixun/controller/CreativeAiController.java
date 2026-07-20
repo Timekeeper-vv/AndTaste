@@ -159,10 +159,16 @@ public class CreativeAiController {
     @PostMapping("/prompt/tripo-optimize")
     public Map<String,Object> optimizeTripoImagePrompt(@RequestBody GenerateImageRequest req) throws Exception {
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础创意描述");
-        String system="你是Tripo文本生图提示词优化专家。把用户的基础描述整理为一段可直接提交给Tripo text-to-image接口的高质量中文提示词。只输出最终提示词，不要标题、解释、反向提示词或Markdown。保持用户主体与意图，补充主体造型、材质、色彩、构图、镜头、光线、背景和商业产品表现，控制在800字符以内。";
+        String system;
+        if("imagen".equalsIgnoreCase(nullToEmpty(req.provider))) {
+            system = "You are a senior prompt writer for Google Imagen 4, specializing in nostalgic commercial product photography and premium packaging visuals. Rewrite the user's Chinese or rough idea into one polished English image-generation prompt. Only output the final English prompt, with no title, explanation, negative prompt, or Markdown. Use this reference structure and tone: an intimate close-up, warm soft late-afternoon sunlight, clear focal product on a realistic countertop/tabletop, richly described packaging material and typography, precise label text when provided, sharp focus on product details, shallow depth of field, subtle environmental hints in the background, aesthetic warmth, authenticity, and nostalgic appeal. Keep the user's actual product, region, brand elements, material, color, label text, and use case. Add commercial product-shot composition, tactile texture, realistic lighting, lens/depth-of-field language, and elegant background details. Avoid asking questions. Keep it within 900 English words.";
+        } else {
+            system="你是Tripo文本生图提示词优化专家。把用户的基础描述整理为一段可直接提交给Tripo text-to-image接口的高质量中文提示词。只输出最终提示词，不要标题、解释、反向提示词或Markdown。保持用户主体与意图，补充主体造型、材质、色彩、构图、镜头、光线、背景和商业产品表现，控制在800字符以内。";
+        }
         String optimized=callChat(system,req.prompt.trim()).trim();
-        if(optimized.length()>1024)optimized=optimized.substring(0,1024);
-        return Map.of("prompt",optimized,"source","siliconflow:"+chatModel,"target","tripo:text-to-image");
+        int maxPromptLength = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? 1800 : 1024;
+        if(optimized.length()>maxPromptLength)optimized=optimized.substring(0,maxPromptLength);
+        return Map.of("prompt",optimized,"source","siliconflow:"+chatModel,"target","imagen".equalsIgnoreCase(nullToEmpty(req.provider))?"google-imagen-4:text-to-image":"tripo:text-to-image");
     }
 
     @PostMapping("/text-to-image")
@@ -665,7 +671,7 @@ public class CreativeAiController {
             String ct=response.headers().firstValue("content-type").orElse("image/png");
             return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(MediaType.parseMediaType(ct)).body(response.body());
         }
-        Path publicDir=Path.of(System.getProperty("user.dir"),"..","shixun-vue","public").normalize().toAbsolutePath();
+        Path publicDir=vuePublicDir();
         String relative=url.startsWith("/")?url.substring(1):url; Path file=publicDir.resolve(relative).normalize();
         if(!file.startsWith(publicDir)||!Files.exists(file)) throw new IOException("图片文件不存在："+url);
         String lower=file.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -1366,6 +1372,7 @@ public class CreativeAiController {
 
     public static class GenerateImageRequest {
         public String title;
+        public String provider;
         public String prompt;
         public String negativePrompt;
         public Long styleId;
