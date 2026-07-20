@@ -62,6 +62,15 @@ public class CreativeAiController {
     @Value("${tripo.model.version:v3.1-20260211}")
     private String tripoModelVersion;
 
+    @Value("${replicate.api.key:}")
+    private String replicateApiKey;
+
+    @Value("${replicate.api.base-url:https://api.replicate.com/v1}")
+    private String replicateBaseUrl;
+
+    @Value("${replicate.imagen.model:google/imagen-4}")
+    private String replicateImagenModel;
+
     @Value("${modao.api.key:}")
     private String modaoApiKey;
 
@@ -248,6 +257,77 @@ public class CreativeAiController {
         } catch (Exception e) {
             jdbc.update("UPDATE ai_generation_job SET status='failed', error_message=? WHERE id=?", e.getMessage(), jobId);
             throw e;
+        }
+    }
+
+    @GetMapping("/imagen/config")
+    public Map<String,Object> imagenConfig() {
+        boolean configured = !blank(replicateApiKey) && !replicateApiKey.contains("YOUR_");
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("configured", configured);
+        result.put("provider", "Replicate");
+        result.put("displayName", "Google Imagen 4");
+        result.put("model", replicateImagenModel);
+        result.put("apiVersion", "v1");
+        result.put("serviceReachable", configured);
+        result.put("imageSizes", List.of("1K", "2K"));
+        result.put("aspectRatios", List.of("1:1", "16:9", "9:16", "4:3", "3:4"));
+        result.put("outputFormats", List.of("png", "jpg"));
+        result.put("message", "当前接入 Replicate google/imagen-4，生成结果会自动保存到系统资产库。");
+        return result;
+    }
+
+    @PostMapping("/imagen/text-to-image")
+    public Map<String,Object> imagenTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
+        if(blank(replicateApiKey) || replicateApiKey.contains("YOUR_")) throw new IllegalStateException("未配置 Replicate API Key：请在 shixun/application-local.properties 配置 replicate.api.key");
+        if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
+        String prompt = req.prompt.trim();
+        if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
+        String aspect = Set.of("1:1","16:9","9:16","4:3","3:4").contains(nullToEmpty(req.imagenAspectRatio)) ? req.imagenAspectRatio : "1:1";
+        String size = Set.of("1K","2K").contains(nullToEmpty(req.imagenImageSize)) ? req.imagenImageSize : "1K";
+        String format = Set.of("png","jpg").contains(nullToEmpty(req.imagenOutputFormat).toLowerCase(Locale.ROOT)) ? req.imagenOutputFormat.toLowerCase(Locale.ROOT) : "png";
+        String imagenPrompt = buildImagenPrompt(prompt);
+        String jobNo = no("IMG");
+        Long jobId = createJob(jobNo, "text_to_image", "replicate", replicateImagenModel, req.styleId, null, prompt, req.negativePrompt, "running", null, size + " " + aspect);
+        try {
+            JsonNode prediction = createImagenPrediction(imagenPrompt, aspect, size, format);
+            prediction = waitReplicatePrediction(prediction);
+            String status = prediction.path("status").asText("");
+            if("failed".equals(status) || "canceled".equals(status)) throw new IllegalStateException("Imagen 4 任务失败：" + prediction.path("error").asText(prediction.toString()));
+            if(!"succeeded".equals(status)) throw new IllegalStateException("Imagen 4 任务未完成，当前状态：" + status);
+            String remoteImage = replicateOutputUrl(prediction);
+            if(blank(remoteImage)) throw new IllegalStateException("Imagen 4 任务成功但未返回图片地址：" + prediction.toString());
+            String localImage = saveRemoteFile(remoteImage, "imagen4-image-", "." + format, "images");
+            Map<String,Object> meta = new LinkedHashMap<>();
+            meta.put("provider", "replicate");
+            meta.put("model", replicateImagenModel);
+            meta.put("predictionId", prediction.path("id").asText(""));
+            meta.put("remoteImage", remoteImage);
+            meta.put("aspectRatio", aspect);
+            meta.put("imageSize", size);
+            meta.put("outputFormat", format);
+            meta.put("promptForImagen", imagenPrompt);
+            Long assetId = createAsset("Google Imagen 4 2D创意图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, format, "Google Imagen 4,Replicate,2D创意生图,AI生成", meta);
+            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, prediction.path("id").asText(""), jobId);
+            Map<String,Object> out = new LinkedHashMap<>();
+            out.put("jobId", jobId);
+            out.put("jobNo", jobNo);
+            out.put("provider", "imagen");
+            out.put("status", "succeeded");
+            out.put("progress", 100);
+            out.put("assetId", assetId);
+            out.put("imageUrl", localImage);
+            out.put("previewUrl", localImage);
+            out.put("fileUrl", localImage);
+            out.put("remoteImage", remoteImage);
+            out.put("predictionId", prediction.path("id").asText(""));
+            out.put("model", replicateImagenModel);
+            out.put("source", "Google Imagen 4 · Replicate");
+            out.put("message", "Google Imagen 4 图片已生成，并已回传保存到系统资产库。");
+            return out;
+        } catch(Exception e) {
+            jdbc.update("UPDATE ai_generation_job SET status='failed',error_message=? WHERE id=?", safeMessage(e), jobId);
+            throw new IllegalStateException("Google Imagen 4 生成失败：" + safeMessage(e), e);
         }
     }
 
@@ -700,6 +780,99 @@ public class CreativeAiController {
         } catch(HttpTimeoutException e) { throw new IllegalStateException("连接Tripo接口超时，任务没有提交，请检查服务器外网",e); }
           catch(IOException e) { throw new IllegalStateException("无法连接Tripo接口，任务没有提交："+safeMessage(e),e); }
     }
+
+    private String buildImagenPrompt(String prompt) {
+        String base = prompt == null ? "" : prompt.trim();
+        if(blank(base)) return base;
+        try {
+            String system = "你是 Google Imagen 4 商业产品图提示词专家。把用户中文需求改写成英文生图 Prompt。只输出英文 Prompt，不要解释、标题或 Markdown。要求：主体清晰、商业产品摄影/海报质感、背景干净、高级审美、适合文创产品打样和电商展示；保留地名、文化元素、材质、颜色和产品类型。";
+            String optimized = callChat(system, base).trim();
+            if(!blank(optimized)) {
+                optimized = optimized.replaceAll("(?is)^```[a-z]*", "").replaceAll("(?is)```$", "").trim();
+                return optimized.length() > 1800 ? optimized.substring(0, 1800) : optimized;
+            }
+        } catch(Exception ignored) {
+            // SiliconFlow 不可用时不阻断 Imagen，直接使用用户已确认的提示词。
+        }
+        return base.length() > 1800 ? base.substring(0, 1800) : base;
+    }
+
+    private JsonNode createImagenPrediction(String prompt, String aspect, String size, String format) throws Exception {
+        Map<String,Object> input = new LinkedHashMap<>();
+        input.put("prompt", prompt);
+        input.put("aspect_ratio", aspect);
+        input.put("image_size", size);
+        input.put("output_format", format);
+        input.put("safety_filter_level", "block_only_high");
+        Map<String,Object> payload = new LinkedHashMap<>();
+        payload.put("input", input);
+        String pathModel = replicateImagenModel.startsWith("/") ? replicateImagenModel.substring(1) : replicateImagenModel;
+        String url = replicateBaseUrl.replaceAll("/$", "") + "/models/" + pathModel + "/predictions";
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(75))
+                .header("Authorization", "Bearer " + replicateApiKey.trim())
+                .header("Content-Type", "application/json")
+                .header("Prefer", "wait=60")
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
+                .build();
+        try {
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if(response.statusCode()<200 || response.statusCode()>=300) throw replicateHttpError(response.statusCode(), response.body());
+            return mapper.readTree(response.body());
+        } catch(HttpTimeoutException e) { throw new IllegalStateException("连接 Replicate Imagen 4 接口超时", e); }
+          catch(IOException e) { throw new IllegalStateException("无法连接 Replicate Imagen 4 接口：" + safeMessage(e), e); }
+    }
+
+    private JsonNode waitReplicatePrediction(JsonNode prediction) throws Exception {
+        String status = prediction.path("status").asText("");
+        if("succeeded".equals(status) || "failed".equals(status) || "canceled".equals(status)) return prediction;
+        String getUrl = prediction.path("urls").path("get").asText("");
+        String id = prediction.path("id").asText("");
+        if(blank(getUrl) && !blank(id)) getUrl = replicateBaseUrl.replaceAll("/$", "") + "/predictions/" + URLEncoder.encode(id, StandardCharsets.UTF_8);
+        if(blank(getUrl)) return prediction;
+        JsonNode current = prediction;
+        for(int i=0;i<24;i++) {
+            Thread.sleep(3000);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(getUrl))
+                    .timeout(Duration.ofSeconds(30))
+                    .header("Authorization", "Bearer " + replicateApiKey.trim())
+                    .GET()
+                    .build();
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if(response.statusCode()<200 || response.statusCode()>=300) throw replicateHttpError(response.statusCode(), response.body());
+            current = mapper.readTree(response.body());
+            status = current.path("status").asText("");
+            if("succeeded".equals(status) || "failed".equals(status) || "canceled".equals(status)) return current;
+        }
+        return current;
+    }
+
+    private String replicateOutputUrl(JsonNode prediction) {
+        JsonNode output = prediction.path("output");
+        if(output.isTextual()) return output.asText("");
+        if(output.isArray() && output.size() > 0) {
+            for(JsonNode item : output) {
+                if(item.isTextual() && looksLikeUrl(item.asText())) return item.asText();
+                String nested = findPreferredImageUrl(item);
+                if(!blank(nested)) return nested;
+            }
+        }
+        if(output.isObject()) return findPreferredImageUrl(output);
+        return "";
+    }
+
+    private IllegalStateException replicateHttpError(int status, String raw) {
+        try {
+            JsonNode root = mapper.readTree(raw);
+            String detail = root.path("detail").asText(root.path("error").asText(root.path("message").asText(raw)));
+            if(status == 401 || status == 403) return new IllegalStateException("Replicate API Key 无效或无权限：" + detail);
+            if(status == 402) return new IllegalStateException("Replicate 账户余额不足或未开通计费：" + detail);
+            return new IllegalStateException("Replicate Imagen 4 接口失败 HTTP " + status + "：" + detail);
+        } catch(Exception ignored) { return new IllegalStateException("Replicate Imagen 4 接口失败 HTTP " + status + "：" + raw); }
+    }
+
     private Map<String,Object> modaoGenerateImage(String prompt, String reference) throws Exception {
         Map<String,Object> args = new LinkedHashMap<>();
         args.put("user_input", prompt);
@@ -1206,6 +1379,9 @@ public class CreativeAiController {
         public String tripoTemplate;
         public Boolean tPose;
         public Boolean sketchToRender;
+        public String imagenAspectRatio;
+        public String imagenImageSize;
+        public String imagenOutputFormat;
     }
     public static class Generate3dRequest {
         public String mode;
