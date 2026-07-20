@@ -68,6 +68,12 @@ public class CreativeAiController {
     @Value("${modao.design.url:https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a}")
     private String modaoDesignUrl;
 
+    @Value("${modao.api.base-url:https://modao.cc}")
+    private String modaoBaseUrl;
+
+    @Value("${modao.chrome.path:/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}")
+    private String modaoChromePath;
+
     public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.mapper = mapper;
@@ -259,28 +265,47 @@ public class CreativeAiController {
     }
 
     @PostMapping("/modao/launch")
-    public Map<String,Object> modaoLaunch(@RequestBody GenerateImageRequest req) {
-        if(blank(modaoDesignUrl)) throw new IllegalStateException("未配置墨刀设计工作区链接 modao.design.url");
+    public Map<String,Object> modaoLaunch(@RequestBody GenerateImageRequest req) throws Exception {
         if(blank(modaoApiKey) || !modaoApiKey.startsWith("modao_")) throw new IllegalStateException("未配置墨刀令牌 modao.api.key，请在 shixun/application-local.properties 配置");
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成设计提示词");
         String prompt = req.prompt.trim();
         if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
         String jobNo = no("MDA");
-        Long jobId = createJob(jobNo, "external_design", "modao", "modao-ai-design", req.styleId, null, prompt, req.negativePrompt, "running", null, req.imageSize);
-        Map<String,Object> meta = new LinkedHashMap<>();
-        meta.put("provider", "modao");
-        meta.put("workspaceUrl", modaoDesignUrl);
-        meta.put("mode", "external_workspace");
-        jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=10 WHERE id=?", "modao-workspace", jobId);
-        return Map.of(
-                "jobId", jobId,
-                "jobNo", jobNo,
-                "provider", "modao",
-                "status", "external_workspace",
-                "workspaceUrl", modaoDesignUrl,
-                "prompt", prompt,
-                "message", "已准备墨刀AI设计Prompt。系统会打开墨刀工作区并复制Prompt，设计完成后请从墨刀下载图片并上传到资产库。"
-        );
+        Long jobId = createJob(jobNo, "text_to_image", "modao", "modao-gen-html-screenshot", req.styleId, null, prompt, req.negativePrompt, "running", null, req.imageSize);
+        try {
+            Map<String,Object> generated = modaoGenHtml(prompt, "生成1024x1024文创产品视觉图，适合电商主图/产品海报截图。只输出一个完整HTML页面，页面中必须有清晰主体、商业级构图、丰富质感。不要生成后台界面。" );
+            String html = str(generated.get("html"));
+            if(blank(html)) throw new IllegalStateException("墨刀未返回HTML内容");
+            String key = str(generated.get("key"));
+            String htmlUrl = saveGeneratedText(html, "modao-html-", ".html", "modao-html");
+            String localImage = renderHtmlToPng(htmlUrl, "modao-image-");
+            Map<String,Object> meta = new LinkedHashMap<>();
+            meta.put("provider", "modao");
+            meta.put("key", key);
+            meta.put("htmlUrl", htmlUrl);
+            meta.put("workspaceUrl", modaoDesignUrl);
+            meta.put("render", "chrome-headless-screenshot");
+            Long assetId = createAsset("墨刀AI 2D设计图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, "png", "墨刀,2D创意生图,AI生成", meta);
+            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, blank(key)?"modao-gen-html":key, jobId);
+            Map<String,Object> out = new LinkedHashMap<>();
+            out.put("jobId", jobId);
+            out.put("jobNo", jobNo);
+            out.put("provider", "modao");
+            out.put("status", "succeeded");
+            out.put("progress", 100);
+            out.put("assetId", assetId);
+            out.put("imageUrl", localImage);
+            out.put("previewUrl", localImage);
+            out.put("fileUrl", localImage);
+            out.put("htmlUrl", htmlUrl);
+            out.put("prompt", prompt);
+            out.put("source", "墨刀AI设计 · HTML渲染截图");
+            out.put("message", "墨刀AI设计已生成，并已回传保存到系统资产库。");
+            return out;
+        } catch(Exception e) {
+            jdbc.update("UPDATE ai_generation_job SET status='failed',error_message=? WHERE id=?", safeMessage(e), jobId);
+            throw new IllegalStateException("墨刀生成失败：" + safeMessage(e), e);
+        }
     }
 
     @GetMapping("/tripo/config")
@@ -671,6 +696,93 @@ public class CreativeAiController {
         } catch(HttpTimeoutException e) { throw new IllegalStateException("连接Tripo接口超时，任务没有提交，请检查服务器外网",e); }
           catch(IOException e) { throw new IllegalStateException("无法连接Tripo接口，任务没有提交："+safeMessage(e),e); }
     }
+    private Map<String,Object> modaoGenHtml(String prompt, String reference) throws Exception {
+        Map<String,Object> args = new LinkedHashMap<>();
+        args.put("user_input", prompt);
+        if(!blank(reference)) args.put("reference", reference);
+        Map<String,Object> payload = new LinkedHashMap<>();
+        payload.put("name", "gen_html");
+        payload.put("arguments", args);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(modaoBaseUrl.replaceAll("/$", "") + "/aihtml-go/mcp/gen_html"))
+                .timeout(Duration.ofSeconds(90))
+                .header("Authorization", "Bearer " + modaoApiKey.trim())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
+                .build();
+        try {
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if(response.statusCode()<200 || response.statusCode()>=300) throw modaoHttpError(response.statusCode(), response.body());
+            JsonNode root = mapper.readTree(response.body());
+            String html = root.path("html").asText("");
+            if(blank(html)) html = root.path("data").path("html").asText("");
+            if(blank(html) && root.path("content").isTextual()) html = extractHtml(root.path("content").asText());
+            if(blank(html)) html = extractHtml(response.body());
+            String key = root.path("key").asText(root.path("data").path("key").asText(""));
+            Map<String,Object> out = new LinkedHashMap<>();
+            out.put("html", html);
+            out.put("key", key);
+            out.put("raw", response.body());
+            return out;
+        } catch(HttpTimeoutException e) { throw new IllegalStateException("连接墨刀接口超时", e); }
+          catch(IOException e) { throw new IllegalStateException("无法连接墨刀接口：" + safeMessage(e), e); }
+    }
+
+    private IllegalStateException modaoHttpError(int status, String raw) {
+        try {
+            JsonNode root = mapper.readTree(raw);
+            String type = root.path("error_type").asText("");
+            String message = root.path("message").asText(root.path("error").asText(raw));
+            if("INVALID_TOKEN".equalsIgnoreCase(type)) return new IllegalStateException("墨刀连接失败：无效token。请在墨刀头像 → 令牌设置中重新创建 MCP/API 令牌");
+            return new IllegalStateException("墨刀接口失败 HTTP " + status + "：" + message);
+        } catch(Exception ignored) { return new IllegalStateException("墨刀接口失败 HTTP " + status + "：" + raw); }
+    }
+
+    private String extractHtml(String text) {
+        if(text == null) return "";
+        int start = text.indexOf("<!DOCTYPE html>");
+        if(start < 0) start = text.indexOf("<html");
+        int end = text.lastIndexOf("</html>");
+        if(start >= 0 && end >= start) return text.substring(start, end + 7);
+        return "";
+    }
+
+    private String saveGeneratedText(String text, String prefix, String suffix, String folder) throws Exception {
+        Path dir = Path.of("..", "shixun-vue", "public", "generated", folder).normalize();
+        Files.createDirectories(dir);
+        String file = prefix + System.currentTimeMillis() + suffix;
+        Files.writeString(dir.resolve(file), text, StandardCharsets.UTF_8);
+        return "/generated/" + folder + "/" + file;
+    }
+
+    private String renderHtmlToPng(String htmlUrl, String prefix) throws Exception {
+        Path publicDir = Path.of(System.getProperty("user.dir"), "..", "shixun-vue", "public").normalize().toAbsolutePath();
+        String rel = htmlUrl.startsWith("/") ? htmlUrl.substring(1) : htmlUrl;
+        Path htmlFile = publicDir.resolve(rel).normalize();
+        if(!htmlFile.startsWith(publicDir) || !Files.exists(htmlFile)) throw new IOException("墨刀HTML文件不存在：" + htmlUrl);
+        Path outDir = publicDir.resolve("generated/images");
+        Files.createDirectories(outDir);
+        Path png = outDir.resolve(prefix + System.currentTimeMillis() + ".png");
+        Path chrome = Path.of(modaoChromePath);
+        if(!Files.exists(chrome)) throw new IllegalStateException("找不到Chrome，无法把墨刀HTML渲染成图片：" + modaoChromePath);
+        List<String> cmd = List.of(
+                modaoChromePath,
+                "--headless=new",
+                "--disable-gpu",
+                "--no-sandbox",
+                "--hide-scrollbars",
+                "--window-size=1024,1024",
+                "--screenshot=" + png.toAbsolutePath(),
+                htmlFile.toUri().toString()
+        );
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        boolean finished = p.waitFor(45, java.util.concurrent.TimeUnit.SECONDS);
+        if(!finished) { p.destroyForcibly(); throw new IllegalStateException("Chrome渲染墨刀图片超时"); }
+        if(p.exitValue()!=0 || !Files.exists(png) || Files.size(png)==0) throw new IllegalStateException("Chrome渲染墨刀图片失败：" + output);
+        return "/generated/images/" + png.getFileName();
+    }
+
     private IllegalStateException tripoHttpError(String action,int status,String raw) {
         try {
             JsonNode root=mapper.readTree(raw); int code=root.path("code").asInt(-1); String message=root.path("message").asText(root.path("status").asText(raw));
