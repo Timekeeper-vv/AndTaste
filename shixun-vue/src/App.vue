@@ -27,6 +27,7 @@ import ApprovalCenter from './components/ApprovalCenter.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
 import GlobalAlert from './components/GlobalAlert.vue'
 import AiChat from './components/AiChat.vue'
+import AiAssistantPage from './components/AiAssistantPage.vue'
 
 // 角色兼容说明：
 // admin      = 超级管理员：拥有全部功能，包括账号权限、审批和系统配置
@@ -40,6 +41,7 @@ const SUPER_ADMIN_ROLES: Role[] = ['admin']
 const PAGE_ROLES: Record<string, Role[]> = {
   dashboard:    ALL_ROLES,
   approvalCenter:MANAGER_ROLES,
+  aiAssistant:  ALL_ROLES,
   studio:       STAFF_WORKFLOW_ROLES,
   creative2d:   STAFF_WORKFLOW_ROLES,
   creative3d:   STAFF_WORKFLOW_ROLES,
@@ -153,6 +155,7 @@ function onLogout(): void {
 const pageLabels: Record<string, string> = {
   dashboard:    '经营看板',
   approvalCenter:'审批中心',
+  aiAssistant:  '之间味道AI助手',
   studio:       '创意设计',
   creative2d:   '2D创意生图',
   creative3d:   '3D辅助建模',
@@ -266,6 +269,7 @@ const pageLabels: Record<string, string> = {
       <main class="app-main">
         <CreativeDashboard    v-if="currentPage === 'dashboard'"   @switch-page="p => { if (hasAccess(p, currentUser?.role)) currentPage = p as PageName }" @alert="showAlert" />
         <ApprovalCenter v-if="currentPage === 'approvalCenter'" :current-user="currentUser" @alert="showAlert" />
+        <AiAssistantPage v-if="currentPage === 'aiAssistant'" :current-user="currentUser" />
         <CreativeStudio v-if="currentPage === 'studio'" initial-view="image2d" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'creative2d'" initial-view="image2d" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'creative3d'" initial-view="model3d" @alert="showAlert" />
@@ -333,7 +337,7 @@ const pageLabels: Record<string, string> = {
   </div>
 
   <GlobalAlert :msg="alertMsg" :type="alertType" :visible="alertVisible" />
-  <AiChat v-if="currentUser" :current-user="currentUser" />
+  <AiChat v-if="currentUser && currentPage !== 'aiAssistant'" :current-user="currentUser" />
 </template>
 
 <style>

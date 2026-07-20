@@ -1,6 +1,7 @@
 package com.example.shixun.controller;
 
 import com.example.shixun.service.SiliconFlowChatService;
+import com.example.shixun.service.ApprovalWorkflowAiService;
 import com.example.shixun.service.SampleWorkOrderAiService;
 import com.example.shixun.service.SupplierTextToApiService;
 import com.example.shixun.service.WebSearchService;
@@ -23,6 +24,7 @@ public class AiChatController {
     private final WebSearchService webSearch;
     private final SupplierTextToApiService supplierTextToApi;
     private final SampleWorkOrderAiService sampleWorkOrderAi;
+    private final ApprovalWorkflowAiService approvalWorkflowAi;
 
     private static final String SYSTEM_PROMPT =
             "你是“之间味道-文创产品智能体平台”的AI业务助手，专注于文创产品业务。" +
@@ -98,12 +100,13 @@ public class AiChatController {
             new SupplierDoc("2024052000407","青岛益美鑫包装科技有限公司","对公账户","青岛益美鑫包装科技有限公司","37150198691000004147","中国建设银行","中国建设银行青岛中山路支行","山东省青岛市","")
     );
 
-    public AiChatController(SiliconFlowChatService siliconFlow, JdbcTemplate jdbc, WebSearchService webSearch, SupplierTextToApiService supplierTextToApi, SampleWorkOrderAiService sampleWorkOrderAi) {
+    public AiChatController(SiliconFlowChatService siliconFlow, JdbcTemplate jdbc, WebSearchService webSearch, SupplierTextToApiService supplierTextToApi, SampleWorkOrderAiService sampleWorkOrderAi, ApprovalWorkflowAiService approvalWorkflowAi) {
         this.siliconFlow = siliconFlow;
         this.jdbc = jdbc;
         this.webSearch = webSearch;
         this.supplierTextToApi = supplierTextToApi;
         this.sampleWorkOrderAi = sampleWorkOrderAi;
+        this.approvalWorkflowAi = approvalWorkflowAi;
     }
 
     @PostMapping("/chat")
@@ -118,6 +121,18 @@ public class AiChatController {
                 .limit(12)
                 .map(m -> ("assistant".equals(m.get("role")) ? "助手" : "用户") + "：" + m.getOrDefault("content", ""))
                 .collect(Collectors.joining("\n"));
+
+        var approvalToolAnswer = approvalWorkflowAi.tryAnswer(userMessage);
+        if (approvalToolAnswer.isPresent()) {
+            var answer = approvalToolAnswer.get();
+            return ResponseEntity.ok(Map.of(
+                    "reply", answer.reply(),
+                    "source", answer.source(),
+                    "tool", answer.toolName(),
+                    "toolArguments", answer.toolArguments(),
+                    "toolResult", answer.toolResult()
+            ));
+        }
 
         var sampleToolAnswer = sampleWorkOrderAi.tryAnswer(userMessage);
         if (sampleToolAnswer.isPresent()) {

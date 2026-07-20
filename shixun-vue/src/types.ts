@@ -8,6 +8,7 @@ export type AlertType = 'success' | 'error'
 export type PageName =
   | 'dashboard'
   | 'approvalCenter'
+  | 'aiAssistant'
   | 'studio'
   | 'creative2d'
   | 'creative3d'
