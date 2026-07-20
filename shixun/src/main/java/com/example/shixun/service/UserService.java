@@ -61,6 +61,19 @@ public class UserService {
         return CompletableFuture.completedFuture(userMapper.deleteById(id) > 0);
     }
 
+    @Async
+    public CompletableFuture<User> resetPassword(Long id, String newPassword) {
+        User existing = userMapper.findById(id);
+        if (existing == null) return CompletableFuture.completedFuture(null);
+        if (newPassword == null || newPassword.isBlank()) {
+            throw new IllegalArgumentException("新密码不能为空");
+        }
+        existing.setPassword(passwordEncoder.encode(newPassword));
+        userMapper.update(existing);
+        existing.setPassword(null);
+        return CompletableFuture.completedFuture(existing);
+    }
+
     public PageResult<User> findPage(String search, int page, int size) {
         int offset = Math.max(0, page - 1) * size;
         String s = (search != null && !search.isBlank()) ? search : null;

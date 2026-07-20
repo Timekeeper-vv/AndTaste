@@ -23,11 +23,13 @@ const roleOptions: Array<{ value: Role; label: string }> = [
 ]
 const roleLabelMap: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工' }
 const roleBadgeClass: Record<Role, string> = { admin: 'badge-admin', technician: 'badge-approver', feeder: 'badge-employee' }
+const demoPasswordAccounts = new Set(['superadmin', 'approver01', 'employee01', 'testuser', '审批员1', '审批员2', '审批员3', '审批员4'])
 const searchQuery = ref<string>('')
 const currentPage = ref<number>(1)
 const pageSize = ref<number>(10)
 const total = ref<number>(0)
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+const isAdmin = computed(() => props.currentUser?.role === 'admin')
 
 onMounted(loadUsers)
 
@@ -127,6 +129,30 @@ async function deleteUser(id: number, name: string) {
   }
 }
 
+async function resetPassword(u: UserRecord) {
+  if (!isAdmin.value) { emit('alert', '仅超级管理员可重置密码', 'error'); return }
+  if (!confirm(`确定将「${u.username}」的密码重置为 123456？`)) return
+  try {
+    const res = await fetch(`/api/users/${u.id}/reset-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Current-Role': props.currentUser?.role || 'admin',
+        'X-Current-User': props.currentUser?.username || 'admin',
+      },
+      body: JSON.stringify({ password: '123456' }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      emit('alert', `重置失败：${extractMsg(text)}`, 'error'); return
+    }
+    const data = await res.json()
+    emit('alert', `已重置 ${data.username}，新密码：${data.password}`, 'success')
+  } catch {
+    emit('alert', '网络错误', 'error')
+  }
+}
+
 function extractMsg(text) {
   try { const o = JSON.parse(text); return o.detail || o.message || text } catch { return text }
 }
@@ -140,6 +166,11 @@ function avatarBg(name) {
 
 function initial(name) { return name ? name.charAt(0).toUpperCase() : '?' }
 
+function passwordDisplay(u: UserRecord) {
+  if (!isAdmin.value) return '仅超管可见'
+  return demoPasswordAccounts.has(u.username) ? '123456' : '已加密存储'
+}
+
 </script>
 
 <template>
@@ -147,7 +178,7 @@ function initial(name) { return name ? name.charAt(0).toUpperCase() : '?' }
     <div class="page-header">
       <div>
         <h2 class="page-title">用户管理</h2>
-        <p class="page-desc">管理超级管理员、审批主管与员工账号权限</p>
+        <p class="page-desc">管理超级管理员、审批主管与员工账号权限。密码采用加密存储，演示账号显示默认密码，其他账号可由超管重置。</p>
       </div>
       <button class="btn btn-primary" @click="openAdd">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -184,6 +215,7 @@ function initial(name) { return name ? name.charAt(0).toUpperCase() : '?' }
               <th>年龄</th>
               <th>邮箱</th>
               <th>手机号</th>
+              <th>登录密码</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -203,11 +235,12 @@ function initial(name) { return name ? name.charAt(0).toUpperCase() : '?' }
                 <td><div class="sk sk-lg"></div></td>
                 <td><div class="sk sk-md"></div></td>
                 <td><div class="sk sk-md"></div></td>
+                <td><div class="sk sk-md"></div></td>
               </tr>
             </template>
 
             <tr v-else-if="!users.length">
-              <td colspan="7">
+              <td colspan="8">
                 <div class="empty-state">
                   <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--c-border)"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                   <p>{{ searchQuery ? '没有找到匹配的用户' : '暂无用户数据' }}</p>
@@ -228,10 +261,16 @@ function initial(name) { return name ? name.charAt(0).toUpperCase() : '?' }
               <td class="text-sm text-muted">{{ u.email ?? '—' }}</td>
               <td>{{ u.phone ?? '—' }}</td>
               <td>
+                <span class="password-pill" :class="{ muted: !demoPasswordAccounts.has(u.username) }">
+                  {{ passwordDisplay(u) }}
+                </span>
+              </td>
+              <td>
                 <div class="td-ops">
                   <button class="btn-edit" @click="openEdit(u.id)" :disabled="editingId !== null">
                     {{ editingId === u.id ? '加载中' : '编辑' }}
                   </button>
+                  <button v-if="isAdmin" class="btn-reset" @click="resetPassword(u)">重置密码</button>
                   <button class="btn-del" @click="deleteUser(u.id, u.username)">删除</button>
                 </div>
               </td>
@@ -284,6 +323,7 @@ function initial(name) { return name ? name.charAt(0).toUpperCase() : '?' }
         <div class="form-group" style="grid-column: 1 / -1">
           <label>密码 <span v-if="!isEdit" style="color:var(--c-error)">*</span></label>
           <input v-model="form.password" type="password" :placeholder="isEdit ? '不填则不修改密码' : '请设置密码'" />
+          <small class="role-help">出于安全原因，系统不保存可反查的明文密码；如忘记密码，超级管理员可在列表中一键重置为 123456。</small>
         </div>
       </div>
       <div class="modal-footer">
@@ -309,6 +349,35 @@ function initial(name) { return name ? name.charAt(0).toUpperCase() : '?' }
 .badge-approver { background: rgba(124,58,237,.12); color: #7c3aed; }
 .badge-employee { background: rgba(13,148,136,.12); color: #0d9488; }
 .role-help { display:block; margin-top:6px; font-size:12px; color:var(--c-text-3); line-height:1.4; }
+.password-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(16,185,129,.12);
+  color: #047857;
+  font-size: 12px;
+  font-weight: 800;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.password-pill.muted {
+  background: rgba(100,116,139,.10);
+  color: var(--c-text-3);
+  font-family: inherit;
+}
+.btn-reset {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(37,99,235,.18);
+  border-radius: 999px;
+  background: rgba(37,99,235,.08);
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.btn-reset:hover { background: #2563eb; color: #fff; border-color: #2563eb; }
 
 .user-avatar {
   width: 32px;

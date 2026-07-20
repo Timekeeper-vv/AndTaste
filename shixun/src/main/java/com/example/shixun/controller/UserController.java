@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -134,6 +135,36 @@ public class UserController {
                     throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
                 }
                 return ResponseEntity.<Void>noContent().build();
+            });
+    }
+
+    @PostMapping("/{id}/reset-password")
+    @Operation(summary = "重置用户密码", description = "仅超级管理员可操作；返回本次设置的新密码用于管理员告知用户")
+    public CompletableFuture<ResponseEntity<Map<String, Object>>> resetPassword(
+            @Parameter(description = "用户ID", example = "1") @PathVariable Long id,
+            @RequestHeader(value = "X-Current-Role", required = false) String currentRole,
+            @RequestBody(required = false) Map<String, String> body) {
+        requireAdmin(currentRole);
+        String newPassword = body == null ? null : body.get("password");
+        if (newPassword == null || newPassword.isBlank()) newPassword = "123456";
+        final String password = newPassword;
+        return userService.resetPassword(id, password)
+            .thenApply(user -> {
+                if (user == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("id", user.getId());
+                result.put("username", user.getUsername());
+                result.put("password", password);
+                result.put("message", "密码已重置");
+                return ResponseEntity.ok(result);
+            })
+            .exceptionally(ex -> {
+                Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
+                if (cause instanceof IllegalArgumentException) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, cause.getMessage());
+                }
+                if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+                throw new RuntimeException(cause);
             });
     }
 
