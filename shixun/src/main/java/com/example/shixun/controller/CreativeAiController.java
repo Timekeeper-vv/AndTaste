@@ -68,8 +68,8 @@ public class CreativeAiController {
     @Value("${modao.design.url:https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a}")
     private String modaoDesignUrl;
 
-    @Value("${modao.api.base-url:https://modao.cc}")
-    private String modaoBaseUrl;
+    @Value("${modao.mcp.url:https://modao.cc/agent-py/ai/mcp}")
+    private String modaoMcpUrl;
 
     @Value("${modao.chrome.path:/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}")
     private String modaoChromePath;
@@ -258,9 +258,10 @@ public class CreativeAiController {
         result.put("displayName", "墨刀 AI 设计");
         result.put("configured", !blank(modaoApiKey) && modaoApiKey.startsWith("modao_"));
         result.put("workspaceUrl", modaoDesignUrl);
-        result.put("mode", "external_workspace");
-        result.put("serviceReachable", !blank(modaoDesignUrl));
-        result.put("message", "当前接入为外部墨刀AI设计工作区：系统负责优化Prompt并打开墨刀页面，图片结果需在墨刀完成后人工下载/上传到资产库。");
+        result.put("mcpUrl", modaoMcpUrl);
+        result.put("mode", "streamable_http_mcp");
+        result.put("serviceReachable", !blank(modaoMcpUrl));
+        result.put("message", "当前接入墨刀 Streamable HTTP MCP：后端使用 modao-token 调用 generate_image，图片结果自动回传平台资产库。");
         return result;
     }
 
@@ -271,22 +272,24 @@ public class CreativeAiController {
         String prompt = req.prompt.trim();
         if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
         String jobNo = no("MDA");
-        Long jobId = createJob(jobNo, "text_to_image", "modao", "modao-gen-html-screenshot", req.styleId, null, prompt, req.negativePrompt, "running", null, req.imageSize);
+        Long jobId = createJob(jobNo, "text_to_image", "modao", "modao-generate-image", req.styleId, null, prompt, req.negativePrompt, "running", null, req.imageSize);
         try {
-            Map<String,Object> generated = modaoGenHtml(prompt, "生成1024x1024文创产品视觉图，适合电商主图/产品海报截图。只输出一个完整HTML页面，页面中必须有清晰主体、商业级构图、丰富质感。不要生成后台界面。" );
-            String html = str(generated.get("html"));
-            if(blank(html)) throw new IllegalStateException("墨刀未返回HTML内容");
-            String key = str(generated.get("key"));
-            String htmlUrl = saveGeneratedText(html, "modao-html-", ".html", "modao-html");
-            String localImage = renderHtmlToPng(htmlUrl, "modao-image-");
+            Map<String,Object> generated = modaoGenerateImage(prompt, "生成1024x1024文创产品视觉图，适合电商主图/产品海报截图。画面必须有清晰主体、商业级构图、丰富质感，不要生成后台界面。");
+            String imageUrl = str(generated.get("imageUrl"));
+            if(blank(imageUrl)) throw new IllegalStateException("墨刀 MCP 已连接，但 generate_image 未返回可下载图片链接；墨刀当前只返回了任务/预览链接，平台无法直接保存为图片。");
+            String key = str(generated.get("taskId"));
+            String localImage = saveModaoImage(imageUrl);
             Map<String,Object> meta = new LinkedHashMap<>();
             meta.put("provider", "modao");
             meta.put("key", key);
-            meta.put("htmlUrl", htmlUrl);
+            meta.put("remoteImage", imageUrl);
+            meta.put("previewUrl", generated.get("previewUrl"));
+            meta.put("taskUrl", generated.get("taskUrl"));
             meta.put("workspaceUrl", modaoDesignUrl);
-            meta.put("render", "chrome-headless-screenshot");
+            meta.put("mcpUrl", modaoMcpUrl);
+            meta.put("tool", "generate_image");
             Long assetId = createAsset("墨刀AI 2D设计图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, "png", "墨刀,2D创意生图,AI生成", meta);
-            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, blank(key)?"modao-gen-html":key, jobId);
+            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, blank(key)?"modao-generate-image":key, jobId);
             Map<String,Object> out = new LinkedHashMap<>();
             out.put("jobId", jobId);
             out.put("jobNo", jobNo);
@@ -297,9 +300,10 @@ public class CreativeAiController {
             out.put("imageUrl", localImage);
             out.put("previewUrl", localImage);
             out.put("fileUrl", localImage);
-            out.put("htmlUrl", htmlUrl);
+            out.put("remoteImage", imageUrl);
+            out.put("taskUrl", generated.get("taskUrl"));
             out.put("prompt", prompt);
-            out.put("source", "墨刀AI设计 · HTML渲染截图");
+            out.put("source", "墨刀AI设计 · MCP图片生成");
             out.put("message", "墨刀AI设计已生成，并已回传保存到系统资产库。");
             return out;
         } catch(Exception e) {
@@ -696,36 +700,117 @@ public class CreativeAiController {
         } catch(HttpTimeoutException e) { throw new IllegalStateException("连接Tripo接口超时，任务没有提交，请检查服务器外网",e); }
           catch(IOException e) { throw new IllegalStateException("无法连接Tripo接口，任务没有提交："+safeMessage(e),e); }
     }
-    private Map<String,Object> modaoGenHtml(String prompt, String reference) throws Exception {
+    private Map<String,Object> modaoGenerateImage(String prompt, String reference) throws Exception {
         Map<String,Object> args = new LinkedHashMap<>();
         args.put("user_input", prompt);
+        args.put("query", prompt);
+        args.put("client", "smart_pig");
         if(!blank(reference)) args.put("reference", reference);
+        JsonNode result = modaoCallTool("generate_image", args);
+        ensureModaoToolSuccess(result, "generate_image");
+        JsonNode structured = result.path("structuredContent");
+        String foundImage = findPreferredImageUrl(structured);
+        String imageUrl = isLikelyImageUrl(foundImage) ? foundImage : "";
+        String previewUrl = firstExistingUrl(structured, "preview_url", "previewUrl", "preview", "share_url", "shareUrl", "url");
+        String taskUrl = firstExistingUrl(structured, "task_url", "taskUrl", "task_link", "link", "workspace_url");
+        if(blank(taskUrl) && !blank(foundImage) && !isLikelyImageUrl(foundImage)) taskUrl = foundImage;
+        String taskId = firstText(structured, "task_id", "taskId", "id", "key");
+        if(blank(imageUrl)) {
+            JsonNode content = result.path("content");
+            if(content.isArray()) {
+                for(JsonNode item : content) {
+                    String text = item.path("text").asText("");
+                    if(blank(text)) continue;
+                    try {
+                        JsonNode parsed = mapper.readTree(text);
+                        String nestedImage = findPreferredImageUrl(parsed);
+                        if(blank(imageUrl) && isLikelyImageUrl(nestedImage)) imageUrl = nestedImage;
+                        if(blank(previewUrl)) previewUrl = firstExistingUrl(parsed, "preview_url", "previewUrl", "preview", "share_url", "shareUrl", "url");
+                        if(blank(taskUrl)) taskUrl = firstExistingUrl(parsed, "task_url", "taskUrl", "task_link", "link", "workspace_url");
+                        if(blank(taskUrl) && !blank(nestedImage) && !isLikelyImageUrl(nestedImage)) taskUrl = nestedImage;
+                        if(blank(taskId)) taskId = firstText(parsed, "task_id", "taskId", "id", "key");
+                    } catch(Exception ignored) {
+                        String textImage = findImageUrlInText(text);
+                        if(blank(imageUrl) && isLikelyImageUrl(textImage)) imageUrl = textImage;
+                        if(blank(previewUrl)) previewUrl = findAnyUrlInText(text);
+                    }
+                }
+            }
+        }
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("imageUrl", imageUrl);
+        out.put("previewUrl", previewUrl);
+        out.put("taskUrl", taskUrl);
+        out.put("taskId", taskId);
+        out.put("raw", result.toString());
+        return out;
+    }
+
+    private void ensureModaoToolSuccess(JsonNode result, String tool) {
+        JsonNode structured = result.path("structuredContent");
+        boolean failed = structured.has("success") && !structured.path("success").asBoolean(false);
+        String error = firstText(structured, "error", "error_type", "code");
+        String message = firstText(structured, "message", "status");
+        if(failed || !blank(error)) {
+            String detail = !blank(error) ? error : message;
+            if("insufficient_points".equalsIgnoreCase(detail) || "insufficient_points".equalsIgnoreCase(message))
+                throw new IllegalStateException("墨刀 MCP 已连接，但账号积分不足，请到墨刀充值/领取积分后再生成。");
+            throw new IllegalStateException("墨刀 MCP 工具 " + tool + " 返回失败：" + (!blank(detail) ? detail : structured.toString()));
+        }
+    }
+
+    private JsonNode modaoCallTool(String tool, Map<String,Object> args) throws Exception {
+        Map<String,Object> params = new LinkedHashMap<>();
+        params.put("name", tool);
+        params.put("arguments", args);
         Map<String,Object> payload = new LinkedHashMap<>();
-        payload.put("name", "gen_html");
-        payload.put("arguments", args);
+        payload.put("jsonrpc", "2.0");
+        payload.put("id", System.currentTimeMillis());
+        payload.put("method", "tools/call");
+        payload.put("params", params);
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(modaoBaseUrl.replaceAll("/$", "") + "/aihtml-go/mcp/gen_html"))
+                .uri(URI.create(modaoMcpUrl))
                 .timeout(Duration.ofSeconds(90))
-                .header("Authorization", "Bearer " + modaoApiKey.trim())
+                .header("modao-token", modaoApiKey.trim())
                 .header("Content-Type", "application/json")
+                .header("Accept", "application/json, text/event-stream")
                 .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
                 .build();
         try {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if(response.statusCode()<200 || response.statusCode()>=300) throw modaoHttpError(response.statusCode(), response.body());
-            JsonNode root = mapper.readTree(response.body());
-            String html = root.path("html").asText("");
-            if(blank(html)) html = root.path("data").path("html").asText("");
-            if(blank(html) && root.path("content").isTextual()) html = extractHtml(root.path("content").asText());
-            if(blank(html)) html = extractHtml(response.body());
-            String key = root.path("key").asText(root.path("data").path("key").asText(""));
-            Map<String,Object> out = new LinkedHashMap<>();
-            out.put("html", html);
-            out.put("key", key);
-            out.put("raw", response.body());
-            return out;
+            JsonNode root = parseMcpResponse(response.body());
+            if(root.path("error").isObject()) throw new IllegalStateException("墨刀 MCP 调用失败：" + root.path("error").path("message").asText(root.path("error").toString()));
+            JsonNode result = root.path("result");
+            if(result.path("isError").asBoolean(false)) throw new IllegalStateException("墨刀 MCP 工具失败：" + mcpContentText(result));
+            return result;
         } catch(HttpTimeoutException e) { throw new IllegalStateException("连接墨刀接口超时", e); }
           catch(IOException e) { throw new IllegalStateException("无法连接墨刀接口：" + safeMessage(e), e); }
+    }
+
+    private JsonNode parseMcpResponse(String raw) throws Exception {
+        String trimmed = raw == null ? "" : raw.trim();
+        if(trimmed.startsWith("{")) return mapper.readTree(trimmed);
+        JsonNode last = null;
+        for(String line : trimmed.split("\\R")) {
+            String s = line.trim();
+            if(!s.startsWith("data:")) continue;
+            String data = s.substring(5).trim();
+            if(data.isEmpty() || "[DONE]".equals(data)) continue;
+            last = mapper.readTree(data);
+        }
+        if(last == null) throw new IllegalStateException("墨刀 MCP 返回格式无法解析：" + trimmed);
+        return last;
+    }
+
+    private String mcpContentText(JsonNode result) {
+        StringBuilder sb = new StringBuilder();
+        JsonNode content = result.path("content");
+        if(content.isArray()) for(JsonNode item : content) {
+            String text = item.path("text").asText("");
+            if(!blank(text)) sb.append(text).append(' ');
+        }
+        return sb.length() == 0 ? result.toString() : sb.toString().trim();
     }
 
     private IllegalStateException modaoHttpError(int status, String raw) {
@@ -747,8 +832,118 @@ public class CreativeAiController {
         return "";
     }
 
+    private String findPreferredImageUrl(JsonNode node) {
+        String direct = firstExistingUrl(node,
+                "image_url", "imageUrl", "image", "img", "url",
+                "download_url", "downloadUrl", "file_url", "fileUrl",
+                "generated_image_url", "generatedImageUrl", "images");
+        if(isLikelyImageUrl(direct)) return direct;
+        List<String> urls = new ArrayList<>();
+        collectUrls(node, urls);
+        for(String u : urls) if(isLikelyImageUrl(u)) return u;
+        return urls.isEmpty() ? "" : urls.get(0);
+    }
+
+    private String firstExistingUrl(JsonNode node, String... keys) {
+        if(node == null || node.isMissingNode() || node.isNull()) return "";
+        for(String key : keys) {
+            JsonNode v = node.path(key);
+            if(v.isTextual() && looksLikeUrl(v.asText())) return v.asText();
+            if(v.isArray()) {
+                for(JsonNode item : v) {
+                    if(item.isTextual() && looksLikeUrl(item.asText())) return item.asText();
+                    String nested = findPreferredImageUrl(item);
+                    if(!blank(nested)) return nested;
+                }
+            }
+            if(v.isObject()) {
+                String nested = findPreferredImageUrl(v);
+                if(!blank(nested)) return nested;
+            }
+        }
+        return "";
+    }
+
+    private void collectUrls(JsonNode node, List<String> urls) {
+        if(node == null || node.isMissingNode() || node.isNull()) return;
+        if(node.isTextual()) {
+            String text = node.asText();
+            if(looksLikeUrl(text)) urls.add(text);
+            else {
+                String found = findAnyUrlInText(text);
+                if(!blank(found)) urls.add(found);
+            }
+            return;
+        }
+        if(node.isArray()) for(JsonNode item : node) collectUrls(item, urls);
+        if(node.isObject()) node.fields().forEachRemaining(e -> collectUrls(e.getValue(), urls));
+    }
+
+    private String findImageUrlInText(String text) {
+        if(blank(text)) return "";
+        List<String> urls = urlsInText(text);
+        for(String u : urls) if(isLikelyImageUrl(u)) return u;
+        return urls.isEmpty() ? "" : urls.get(0);
+    }
+
+    private String findAnyUrlInText(String text) {
+        List<String> urls = urlsInText(text);
+        return urls.isEmpty() ? "" : urls.get(0);
+    }
+
+    private List<String> urlsInText(String text) {
+        List<String> urls = new ArrayList<>();
+        if(blank(text)) return urls;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("https?://[^\\s\\\"'<>，。)）]+").matcher(text);
+        while(m.find()) urls.add(m.group());
+        return urls;
+    }
+
+    private boolean looksLikeUrl(String s) {
+        if(blank(s)) return false;
+        String v = s.trim();
+        return v.startsWith("http://") || v.startsWith("https://") || v.startsWith("data:image/");
+    }
+
+    private boolean isLikelyImageUrl(String s) {
+        if(blank(s)) return false;
+        String v = s.toLowerCase(Locale.ROOT);
+        return v.startsWith("data:image/") || v.contains(".png") || v.contains(".jpg") || v.contains(".jpeg") || v.contains(".webp") || v.contains(".gif");
+    }
+
+    private String saveModaoImage(String imageUrl) throws Exception {
+        if(imageUrl.startsWith("data:image/")) {
+            int comma = imageUrl.indexOf(',');
+            if(comma < 0) throw new IOException("墨刀返回的data图片格式不正确");
+            String meta = imageUrl.substring(0, comma).toLowerCase(Locale.ROOT);
+            String suffix = meta.contains("jpeg") ? ".jpg" : meta.contains("webp") ? ".webp" : ".png";
+            byte[] bytes = Base64.getDecoder().decode(imageUrl.substring(comma + 1));
+            Path dir = vuePublicDir().resolve("generated").resolve("images").normalize();
+            Files.createDirectories(dir);
+            String file = "modao-image-" + System.currentTimeMillis() + suffix;
+            Files.write(dir.resolve(file), bytes);
+            return "/generated/images/" + file;
+        }
+        return saveRemoteFile(imageUrl, "modao-image-", suffixFromUrl(imageUrl, ".png"), "images");
+    }
+
+    private Path vuePublicDir() {
+        Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        List<Path> candidates = List.of(
+                cwd.resolve("shixun-vue/public").normalize(),
+                cwd.resolve("../shixun-vue/public").normalize(),
+                cwd.resolve("public").normalize()
+        );
+        for(Path candidate : candidates) {
+            if(Files.exists(candidate)) return candidate;
+            Path parent = candidate.getParent();
+            if(parent != null && Files.exists(parent)) return candidate;
+        }
+        return cwd.resolve("../shixun-vue/public").normalize();
+    }
+
     private String saveGeneratedText(String text, String prefix, String suffix, String folder) throws Exception {
-        Path dir = Path.of("..", "shixun-vue", "public", "generated", folder).normalize();
+        Path dir = vuePublicDir().resolve("generated").resolve(folder).normalize();
         Files.createDirectories(dir);
         String file = prefix + System.currentTimeMillis() + suffix;
         Files.writeString(dir.resolve(file), text, StandardCharsets.UTF_8);
@@ -756,7 +951,7 @@ public class CreativeAiController {
     }
 
     private String renderHtmlToPng(String htmlUrl, String prefix) throws Exception {
-        Path publicDir = Path.of(System.getProperty("user.dir"), "..", "shixun-vue", "public").normalize().toAbsolutePath();
+        Path publicDir = vuePublicDir();
         String rel = htmlUrl.startsWith("/") ? htmlUrl.substring(1) : htmlUrl;
         Path htmlFile = publicDir.resolve(rel).normalize();
         if(!htmlFile.startsWith(publicDir) || !Files.exists(htmlFile)) throw new IOException("墨刀HTML文件不存在：" + htmlUrl);
@@ -792,14 +987,14 @@ public class CreativeAiController {
     }
     private void ensureTripoOk(JsonNode root,String raw){int code=root.path("code").asInt(0);if(code!=0)throw new IllegalStateException("Tripo错误 "+code+": "+root.path("message").asText(raw));}
     private boolean isPSeriesModel(String model){return "P1-20260311".equals(model)||"tripo-p1".equals(model);}
-    private Path resolvePublicAsset(String url)throws IOException{Path dir=Path.of(System.getProperty("user.dir"),"..","shixun-vue","public").normalize().toAbsolutePath();String rel=url.startsWith("/")?url.substring(1):url;Path file=dir.resolve(rel).normalize();if(!file.startsWith(dir)||!Files.exists(file))throw new IOException("参考图文件不存在："+url);return file;}
+    private Path resolvePublicAsset(String url)throws IOException{Path dir=vuePublicDir();String rel=url.startsWith("/")?url.substring(1):url;Path file=dir.resolve(rel).normalize();if(!file.startsWith(dir)||!Files.exists(file))throw new IOException("参考图文件不存在："+url);return file;}
     private String imageExtension(Path p){String n=p.getFileName().toString().toLowerCase(Locale.ROOT);return n.endsWith(".jpeg")?"jpg":n.substring(n.lastIndexOf('.')+1);}
     private String mapTripoStatus(String s){s=s.toLowerCase(Locale.ROOT);if(s.contains("success"))return "succeeded";if(s.contains("fail")||s.contains("cancel")||s.contains("banned")||s.contains("expired"))return "failed";return "running";}
     private String firstText(JsonNode n,String...keys){for(String k:keys){String v=n.path(k).asText("");if(!blank(v))return v;}return "";}
     private String firstUrl(JsonNode n,String...keys){for(String k:keys){JsonNode v=n.path(k);if(v.isTextual()&&!blank(v.asText()))return v.asText();if(v.isArray()&&v.size()>0&&v.get(0).isTextual())return v.get(0).asText();}return "";}
     private String safeMessage(Throwable e){String m=e.getMessage();return blank(m)?e.getClass().getSimpleName():m;}
     private String suffixFromUrl(String url,String fallback){try{String p=URI.create(url).getPath();int i=p.lastIndexOf('.');if(i>=0&&p.length()-i<=6)return p.substring(i).toLowerCase(Locale.ROOT);}catch(Exception ignored){}return fallback;}
-    private String saveRemoteFile(String url,String prefix,String suffix,String folder)throws Exception{HttpResponse<byte[]> r=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());if(r.statusCode()<200||r.statusCode()>=300)throw new IOException("下载Tripo文件失败 HTTP "+r.statusCode());Path dir=Path.of("..","shixun-vue","public","generated",folder).normalize();Files.createDirectories(dir);String file=prefix+System.currentTimeMillis()+suffix;Files.write(dir.resolve(file),r.body());return "/generated/"+folder+"/"+file;}
+    private String saveRemoteFile(String url,String prefix,String suffix,String folder)throws Exception{HttpResponse<byte[]> r=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());if(r.statusCode()<200||r.statusCode()>=300)throw new IOException("下载远程文件失败 HTTP "+r.statusCode());Path dir=vuePublicDir().resolve("generated").resolve(folder).normalize();Files.createDirectories(dir);String file=prefix+System.currentTimeMillis()+suffix;Files.write(dir.resolve(file),r.body());return "/generated/"+folder+"/"+file;}
     private Map<String,Object> completedTripoImageJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("assetId",a.get("id"));r.put("imageUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));r.put("model",job.get("modelName"));r.put("source","Tripo "+str(job.get("modelName")));return r;}
     private Map<String,Object> completedTripoJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("assetId",a.get("id"));r.put("modelUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));return r;}
     private boolean blank(String s){return s==null||s.trim().isEmpty();}
