@@ -129,6 +129,12 @@ public class SampleWorkOrderAiService {
 
     private ToolPlan normalizePlan(String userQuestion, ToolPlan plan) {
         String q = safe(userQuestion);
+        if (isOverallCountQuestion(q)) {
+            ObjectNode countArgs = mapper.createObjectNode();
+            countArgs.put("is_count_only", true);
+            countArgs.put("limit", 20);
+            return new ToolPlan("search_sample_work_orders", countArgs);
+        }
         ObjectNode args = mapper.createObjectNode();
         boolean ownerAggregate = q.contains("负责人") && (
                 q.contains("几个") || q.contains("多少") || q.contains("几位") || q.contains("有哪些")
@@ -183,7 +189,10 @@ public class SampleWorkOrderAiService {
         String project = extractBefore(q, "打样");
         if (project.isBlank()) project = extractBefore(q, "进度");
         if (!project.isBlank() && owner.isBlank() && status.isBlank()) args.put("keyword", project);
-        if (args.size() == 0) args.put("keyword", cleanupKeyword(q));
+        if (args.size() == 0) {
+            String keyword = cleanupKeyword(q);
+            if (!keyword.isBlank()) args.put("keyword", keyword);
+        }
         args.put("is_count_only", asksCount);
         args.put("limit", asksCount ? 20 : 10);
         return new ToolPlan("search_sample_work_orders", args);
@@ -210,9 +219,23 @@ public class SampleWorkOrderAiService {
     private String cleanupKeyword(String q) {
         return q.replace("打样工单", "").replace("打样明细", "").replace("打样申请", "")
                 .replace("打样", "").replace("工单", "").replace("样品", "")
+                .replace("明细", "").replace("一共", "").replace("总共", "").replace("总数", "").replace("全部", "").replace("当前", "")
                 .replace("有多少个", "").replace("有几个", "").replace("多少个", "").replace("几个", "")
+                .replace("数量", "").replace("多少", "").replace("共有", "").replace("共", "")
                 .replace("哪些", "").replace("查询", "").replace("查一下", "").replace("进度", "")
                 .replace("怎么样", "").replace("是什么", "").trim();
+    }
+
+    private boolean isOverallCountQuestion(String q) {
+        if (!isLikelySampleQuestion(q)) return false;
+        boolean asksCount = q.contains("一共") || q.contains("总共") || q.contains("总数") || q.contains("全部")
+                || q.contains("多少个") || q.contains("有几个") || q.contains("数量") || q.contains("共有") || q.contains("共多少");
+        if (!asksCount) return false;
+        if (!extractStatus(q).isBlank()) return false;
+        if (q.contains("负责人") || q.contains("负责的") || q.contains("谁负责")) return false;
+        if (q.contains("项目") && !(q.contains("项目一共") || q.contains("项目总数"))) return false;
+        if (q.contains("产品") && !(q.contains("产品一共") || q.contains("产品总数"))) return false;
+        return true;
     }
 
     private Map<String, Object> search(Map<String, Object> raw) {
@@ -316,6 +339,10 @@ public class SampleWorkOrderAiService {
             if (count != null || total != null) {
                 long n = Long.parseLong(String.valueOf(count != null ? count : total));
                 String prefix = "当前共找到 " + n + " 个打样工单";
+                Object queryParams = map.get("query_params");
+                if (queryParams instanceof Map<?, ?> query && Boolean.TRUE.equals(query.get("is_count_only"))) {
+                    return prefix + "。";
+                }
                 if (itemsObj instanceof List<?> items && !items.isEmpty()) {
                     String names = items.stream().limit(8).map(x -> {
                         Map<?, ?> item = (Map<?, ?>) x;
