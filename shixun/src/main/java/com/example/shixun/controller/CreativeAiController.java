@@ -151,9 +151,78 @@ public class CreativeAiController {
     @PostMapping("/prompt/tripo-3d-optimize")
     public Map<String,Object> optimizeTripo3dPrompt(@RequestBody Generate3dRequest req) throws Exception {
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础3D模型描述");
-        String system="你是Tripo文生3D提示词优化专家。把用户的基础描述整理成一段可直接提交给Tripo text-to-model接口的高质量中文提示词。只输出最终提示词，不要标题、解释或Markdown。保留用户主体，补充整体轮廓、比例、结构、部件、材质、表面细节、风格、真实用途以及便于3D重建的明确描述，避免复杂背景和二维构图词，控制在800字符以内。";
-        String optimized=callChat(system,req.prompt.trim()).trim(); if(optimized.length()>1024)optimized=optimized.substring(0,1024);
-        return Map.of("prompt",optimized,"source","siliconflow:"+chatModel,"target","tripo:text-to-model");
+        String template = normalizeTripo3dTemplate(req.promptTemplate);
+        String system = "You are a senior Tripo text-to-3D prompt engineer. Rewrite the user's rough idea into a high-detail English prompt for Tripo text-to-model. "
+                + "Output JSON only with keys: prompt, negativePrompt, usageTips. No Markdown. "
+                + "The prompt value must be English only; translate all Chinese product names, place names, materials, patterns and style words into natural English. Do not include Chinese characters in prompt unless the user explicitly requests visible Chinese label text on the model. "
+                + "The usageTips value must be Chinese, short and practical for the operator. "
+                + "The prompt must preserve the user's subject and practical use, avoid abstract adjectives alone, and describe concrete geometry, silhouette, materials, surface details, topology and production-ready 3D asset qualities. "
+                + "Always include clean topology, watertight mesh, no floating parts, ultra-detailed 3D asset, sharp geometry, 8k PBR textures, professional product visualization. "
+                + "Negative prompt should include low poly, blurry, flat texture, deformed, asymmetric, noisy mesh, broken topology, floating parts. "
+                + "Selected template: " + tripo3dTemplateName(template) + ". Template rules: " + tripo3dTemplateInstruction(template);
+        String content = callChat(system, req.prompt.trim()).trim();
+        String optimized;
+        String negative = "low poly, blurry, flat texture, deformed, asymmetric, noisy mesh, broken topology, floating parts, melted details, plastic look";
+        String usageTips = tripo3dTemplateTips(template);
+        try {
+            String json = content;
+            int start = json.indexOf('{'), end = json.lastIndexOf('}');
+            if(start >= 0 && end > start) json = json.substring(start, end + 1);
+            JsonNode n = mapper.readTree(json);
+            optimized = n.path("prompt").asText("");
+            if(!blank(n.path("negativePrompt").asText(""))) negative = n.path("negativePrompt").asText("");
+            if(!blank(n.path("usageTips").asText(""))) usageTips = n.path("usageTips").asText("");
+        } catch(Exception ignored) {
+            optimized = content.replaceAll("(?is)^```[a-z]*", "").replaceAll("(?is)```$", "").trim();
+        }
+        if(blank(optimized)) throw new IllegalStateException("Qwen3未返回有效3D提示词");
+        if(optimized.length()>1024) optimized=optimized.substring(0,1024);
+        if(negative.length()>255) negative=negative.substring(0,255);
+        if(usageTips.length()>500) usageTips=usageTips.substring(0,500);
+        return Map.of(
+                "prompt", optimized,
+                "negativePrompt", negative,
+                "template", template,
+                "templateName", tripo3dTemplateName(template),
+                "usageTips", usageTips,
+                "source", "siliconflow:"+chatModel,
+                "target", "tripo:text-to-model"
+        );
+    }
+
+    private String normalizeTripo3dTemplate(String template) {
+        String t = blank(template) ? "universal" : template.trim();
+        return Set.of("fantasy", "hard_surface", "oriental", "collectible", "universal").contains(t) ? t : "universal";
+    }
+
+    private String tripo3dTemplateName(String template) {
+        return switch (normalizeTripo3dTemplate(template)) {
+            case "fantasy" -> "史诗级奇幻/角色（高细节雕刻感）";
+            case "hard_surface" -> "硬核科幻/机械（高精度硬表面）";
+            case "oriental" -> "东方美学/国风（纹样与釉色）";
+            case "collectible" -> "潮玩/IP 手办（精致涂装与微缩感）";
+            default -> "万能产品模板（填空即用）";
+        };
+    }
+
+    private String tripo3dTemplateInstruction(String template) {
+        return switch (normalizeTripo3dTemplate(template)) {
+            case "fantasy" -> "Use ancient relic, creature, statue or armor language. Emphasize intricate carvings, rune engravings, weathered stone, gold filigree, ornamentation, volumetric lighting, museum quality artifact, photorealistic PBR materials.";
+            case "hard_surface" -> "Use hard-surface industrial design language. Emphasize beveled panels, seams, exposed hydraulic pistons, wiring, greeble details, brushed titanium, carbon fiber, ultra-sharp edges, studio lighting, 4k/8k texture fidelity.";
+            case "oriental" -> "Use Chinese/Eastern craft language. Emphasize cloisonné enamel, filigree wirework, glossy ceramic glaze, crackle finish, jade finial, carved relief patterns, traditional craftsmanship, cultural heritage artifact.";
+            case "collectible" -> "Use collectible toy / GK figurine language. Emphasize cute stylized proportions, miniature accessories, hand-painted resin texture, matte finish, metallic accents, tilt-shift product photography, softbox lighting, extremely fine surface details.";
+            default -> "Use the structure: A [adjective] [subject] made of [primary material] and [secondary material], featuring [specific surface detail/pattern], [art style] aesthetic, [lighting type] lighting, ultra-detailed 3D asset, 8k PBR textures, sharp geometry, professional product visualization.";
+        };
+    }
+
+    private String tripo3dTemplateTips(String template) {
+        return switch (normalizeTripo3dTemplate(template)) {
+            case "fantasy" -> "适合怪物、雕像、复杂盔甲、文物感摆件。建议描述具体雕刻、镶嵌、风化、符文和凹凸纹理，避免只写“酷/漂亮”。";
+            case "hard_surface" -> "适合机甲、武器、设备和工业产品。建议强调倒角、接缝、螺丝、液压、线缆、拉丝金属和硬表面分件。";
+            case "oriental" -> "适合国风器物、瓷器、景泰蓝、文博衍生品。材质要写具体：釉面、开片、掐丝、玉石、金属包边，避免塑料感。";
+            case "collectible" -> "适合盲盒、IP手办、钥匙扣和微缩摆件。建议写清比例、姿态、涂装、配件、底座和哑光/金属局部材质。";
+            default -> "适合普通产品快速转3D。先生成基础形态，再追加材质、纹样、PBR、clean topology、watertight mesh 等细节词进行二次优化。";
+        };
     }
 
     @PostMapping("/prompt/tripo-optimize")
@@ -1413,6 +1482,7 @@ public class CreativeAiController {
     public static class Generate3dRequest {
         public String mode;
         public String modelVersion;
+        public String promptTemplate;
         public String prompt;
         public String negativePrompt;
         public Long inputAssetId;

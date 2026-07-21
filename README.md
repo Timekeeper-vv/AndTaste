@@ -83,6 +83,8 @@ flowchart LR
 - 单张参考图生成 3D
 - 多视图生成 3D
 - Qwen3 文生 3D 提示词优化
+  - 支持选择 5 类优化模板：万能产品、史诗奇幻/角色、硬核科幻/机械、东方美学/国风、潮玩/IP 手办
+  - 模板会自动注入 `PBR`、`8k textures`、`clean topology`、`watertight mesh`、`no floating parts` 等 Tripo 友好关键词，并同步生成 Negative Prompt
 - 展示 Tripo API 可用积分与当前连接模型
 - 支持 P 系列和 H 系列模型选择
 - 根据模型能力动态开放精度、贴图、面数和拓扑参数
