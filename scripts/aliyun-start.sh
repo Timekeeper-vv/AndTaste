@@ -14,7 +14,10 @@ DB_HOST="${DB_HOST:-127.0.0.1}"; DB_PORT="${DB_PORT:-3306}"; DB_NAME="${DB_NAME:
 DB_PASSWORD="${DB_PASSWORD:-ChangeMe_123456}"; MYSQL_ADMIN_USER="${MYSQL_ADMIN_USER:-root}"; MYSQL_ADMIN_PASSWORD="${MYSQL_ADMIN_PASSWORD:-}"
 SILICONFLOW_API_KEY="${SILICONFLOW_API_KEY:-}"; SILICONFLOW_CHAT_MODEL="${SILICONFLOW_CHAT_MODEL:-Qwen/Qwen3-32B}"
 SILICONFLOW_IMAGE_MODEL="${SILICONFLOW_IMAGE_MODEL:-Kwai-Kolors/Kolors}"; SILICONFLOW_IMAGE_EDIT_MODEL="${SILICONFLOW_IMAGE_EDIT_MODEL:-Qwen/Qwen-Image-Edit-2509}"
-QWEN_API_KEY="${QWEN_API_KEY:-}"; TRIPO_API_KEY="${TRIPO_API_KEY:-}"; TRIPO_API_BASE_URL="${TRIPO_API_BASE_URL:-https://openapi.tripo3d.com/v3}"; TRIPO_MODEL_VERSION="${TRIPO_MODEL_VERSION:-v3.1-20260211}"; KUAIDI100_CUSTOMER="${KUAIDI100_CUSTOMER:-}"; KUAIDI100_KEY="${KUAIDI100_KEY:-}"; KUAIDI100_CALLBACK_URL="${KUAIDI100_CALLBACK_URL:-}"; KUAIDI100_SALT="${KUAIDI100_SALT:-}"
+QWEN_API_KEY="${QWEN_API_KEY:-}"; TRIPO_API_KEY="${TRIPO_API_KEY:-}"; TRIPO_API_BASE_URL="${TRIPO_API_BASE_URL:-https://openapi.tripo3d.com/v3}"; TRIPO_MODEL_VERSION="${TRIPO_MODEL_VERSION:-v3.1-20260211}"
+REPLICATE_API_KEY="${REPLICATE_API_KEY:-}"; REPLICATE_API_BASE_URL="${REPLICATE_API_BASE_URL:-https://api.replicate.com/v1}"; REPLICATE_IMAGEN_MODEL="${REPLICATE_IMAGEN_MODEL:-google/imagen-4}"
+MODAO_API_KEY="${MODAO_API_KEY:-}"; MODAO_DESIGN_URL="${MODAO_DESIGN_URL:-https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a}"; MODAO_MCP_URL="${MODAO_MCP_URL:-https://modao.cc/agent-py/ai/mcp}"; MODAO_CHROME_PATH="${MODAO_CHROME_PATH:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+KUAIDI100_CUSTOMER="${KUAIDI100_CUSTOMER:-}"; KUAIDI100_KEY="${KUAIDI100_KEY:-}"; KUAIDI100_CALLBACK_URL="${KUAIDI100_CALLBACK_URL:-}"; KUAIDI100_SALT="${KUAIDI100_SALT:-}"
 JAR_FILE=""
 
 info(){ echo -e "\033[1;34m[INFO]\033[0m $*"; }; ok(){ echo -e "\033[1;32m[OK]\033[0m $*"; }; warn(){ echo -e "\033[1;33m[WARN]\033[0m $*"; }; die(){ echo -e "\033[1;31m[ERR]\033[0m $*" >&2; exit 1; }
@@ -52,6 +55,14 @@ check_deps(){ need java; need npm; need curl; need git; }
 write_config(){
   [ -f "$ENV_FILE" ] || warn "未找到 $ENV_FILE，正在使用默认值；正式部署请先复制 deploy/env.example"
   mkdir -p "$LOG_DIR" "$RUN_DIR"
+  existing_prop(){
+    local key="$1" file="$BACKEND_DIR/application-local.properties"
+    [ -f "$file" ] || return 0
+    awk -F= -v k="$key" '$1==k { sub(/^[^=]*=/, ""); v=$0 } END { print v }' "$file"
+  }
+  # production 会重写 application-local.properties；如果 .env 未配置，尽量保留已手工写入的第三方密钥。
+  [ -n "$REPLICATE_API_KEY" ] || REPLICATE_API_KEY="$(existing_prop "replicate.api.key" || true)"
+  [ -n "$MODAO_API_KEY" ] || MODAO_API_KEY="$(existing_prop "modao.api.key" || true)"
   cat > "$BACKEND_DIR/application-local.properties" <<CFG
 server.address=0.0.0.0
 server.port=$APP_PORT
@@ -67,6 +78,13 @@ siliconflow.image.edit.model=$SILICONFLOW_IMAGE_EDIT_MODEL
 tripo.api.key=$TRIPO_API_KEY
 tripo.api.base-url=$TRIPO_API_BASE_URL
 tripo.model.version=$TRIPO_MODEL_VERSION
+replicate.api.key=$REPLICATE_API_KEY
+replicate.api.base-url=$REPLICATE_API_BASE_URL
+replicate.imagen.model=$REPLICATE_IMAGEN_MODEL
+modao.api.key=$MODAO_API_KEY
+modao.design.url=$MODAO_DESIGN_URL
+modao.mcp.url=$MODAO_MCP_URL
+modao.chrome.path=$MODAO_CHROME_PATH
 kuaidi100.customer=$KUAIDI100_CUSTOMER
 kuaidi100.key=$KUAIDI100_KEY
 kuaidi100.callback-url=$KUAIDI100_CALLBACK_URL

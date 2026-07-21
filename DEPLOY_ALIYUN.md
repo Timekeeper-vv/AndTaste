@@ -53,6 +53,7 @@ MYSQL_ADMIN_USER=root
 MYSQL_ADMIN_PASSWORD=
 DOMAIN=你的域名或_
 SILICONFLOW_API_KEY=你的密钥
+REPLICATE_API_KEY=你的r8开头Replicate密钥
 ```
 
 使用阿里云 RDS 时：
@@ -177,3 +178,25 @@ bash scripts/aliyun-start.sh production
 ```
 
 在“创意设计 → 3D辅助建模”上传产品参考图，系统会提交Tripo图生3D任务，自动轮询进度，并将完成的GLB模型和预览图下载到本系统资产目录，避免Tripo临时下载地址过期。
+
+## 11. Google Imagen 4 / 墨刀 2D 生图配置
+
+一键部署脚本会根据项目根目录 `.env` 生成 `shixun/application-local.properties`。因此生产环境不要只手工改 `application-local.properties`，否则下次执行 `bash scripts/aliyun-start.sh production` 可能被覆盖；请优先写入 `.env`：
+
+```dotenv
+REPLICATE_API_KEY=你的r8开头Replicate密钥
+REPLICATE_API_BASE_URL=https://api.replicate.com/v1
+REPLICATE_IMAGEN_MODEL=google/imagen-4
+
+MODAO_API_KEY=你的墨刀令牌
+MODAO_DESIGN_URL=https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a
+MODAO_MCP_URL=https://modao.cc/agent-py/ai/mcp
+```
+
+重新部署后可验证 Imagen 4 是否生效：
+
+```bash
+curl -s http://127.0.0.1:8080/api/creative/ai/imagen/config
+```
+
+返回 `"configured":true` 表示 2D 生图的 Google Imagen 4 按钮可用。

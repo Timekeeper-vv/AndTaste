@@ -653,6 +653,22 @@ tripo.model.version=v3.1-20260211
 
 系统会在后端调用 Tripo，前端不会直接持有 API Key。2D 图片与 3D 模型生成均采用异步任务机制，生成完成后文件会下载至服务器并登记到 `digital_asset` 资产表。
 
+### Google Imagen 4 / 墨刀 2D 生图
+
+生产环境一键部署时请写到项目根目录 `.env`，脚本会自动生成后端本地配置：
+
+```dotenv
+REPLICATE_API_KEY=你的r8开头Replicate密钥
+REPLICATE_API_BASE_URL=https://api.replicate.com/v1
+REPLICATE_IMAGEN_MODEL=google/imagen-4
+
+MODAO_API_KEY=你的墨刀令牌
+MODAO_DESIGN_URL=https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a
+MODAO_MCP_URL=https://modao.cc/agent-py/ai/mcp
+```
+
+不要只手工改 `shixun/application-local.properties` 后再执行生产部署，因为部署脚本会重写该文件；若 `.env` 中未配置，脚本会尽量保留已有本地密钥。
+
 ### Qwen3 / SiliconFlow
 
 ```properties
