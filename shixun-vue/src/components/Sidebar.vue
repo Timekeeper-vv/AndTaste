@@ -9,13 +9,14 @@ interface MenuGroup { group: string; items: MenuItem[] }
 const props = defineProps<{ currentUser: User; currentPage: PageName; collapsed: boolean }>()
 const emit = defineEmits<{ 'switch-page': [page: PageName]; 'logout': []; 'toggle': [] }>()
 
-const roleLabels: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工' }
-const roleColors: Record<Role, string> = { admin: '#ef4444', technician: '#7c3aed', feeder: '#0d9488' }
+const roleLabels: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工', designer: '设计师' }
+const roleColors: Record<Role, string> = { admin: '#ef4444', technician: '#7c3aed', feeder: '#0d9488', designer: '#2563eb' }
 
 const ALL_ROLES: Role[] = ['admin', 'technician', 'feeder']
 const MANAGER_ROLES: Role[] = ['admin', 'technician']
 const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'technician', 'feeder']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
+const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'technician', 'feeder', 'designer']
 
 const allMenus: MenuGroup[] = [
   { group: '总览', items: [
@@ -25,9 +26,9 @@ const allMenus: MenuGroup[] = [
   ]},
   { group: '创意与生产', items: [
     { key: 'studio', label: '创意设计', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l1.8 5.4L19 9l-5.2 1.6L12 16l-1.8-5.4L5 9l5.2-1.6L12 2z"/><path d="M19 15l.9 2.7L22 19l-2.1.7L19 22l-.9-2.3L16 19l2.1-1.3L19 15z"/></svg>` },
-    { key: 'creative2d', label: '2D创意生图', parentKey: 'studio', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
-    { key: 'creative3d', label: '3D辅助建模', parentKey: 'studio', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
-    { key: 'creativeReview', label: '智能评估', parentKey: 'studio', roles: MANAGER_ROLES, icon: `<svg></svg>` },
+    { key: 'creative2d', label: '2D创意生图', parentKey: 'studio', roles: CREATIVE_DESIGN_ROLES, icon: `<svg></svg>` },
+    { key: 'creative3d', label: '3D辅助建模', parentKey: 'studio', roles: CREATIVE_DESIGN_ROLES, icon: `<svg></svg>` },
+    { key: 'creativeReview', label: '智能评估', parentKey: 'studio', roles: CREATIVE_DESIGN_ROLES, icon: `<svg></svg>` },
     { key: 'scaleUp', label: '生产管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h16"/><path d="M7 16V8"/><path d="M12 16V5"/><path d="M17 16v-3"/></svg>` },
     { key: 'createProductionProject', label: '创建项目', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
     { key: 'production', label: '智能成本核算引擎', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><path d="M6 3v18"/><path d="M18 3v10"/></svg>` },

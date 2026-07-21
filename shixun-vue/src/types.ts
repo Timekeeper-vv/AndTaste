@@ -2,7 +2,7 @@
  * 角色编码保持兼容历史数据：
  * admin=超级管理员，technician=审批主管，feeder=员工。
  */
-export type Role = 'admin' | 'technician' | 'feeder'
+export type Role = 'admin' | 'technician' | 'feeder' | 'designer'
 export type AlertType = 'success' | 'error'
 
 export type PageName =

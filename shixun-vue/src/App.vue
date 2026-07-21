@@ -33,19 +33,21 @@ import AiAssistantPage from './components/AiAssistantPage.vue'
 // admin      = 超级管理员：拥有全部功能，包括账号权限、审批和系统配置
 // technician = 审批主管：可查看业务模块并处理审批，但不能管理账号角色
 // feeder     = 员工：可制作内容、发起/提交申请，不能审批和管理账号
+// designer   = 设计师：仅可使用创意设计下的 2D、3D、智能评估三个功能
 const ALL_ROLES: Role[] = ['admin', 'technician', 'feeder']
 const MANAGER_ROLES: Role[] = ['admin', 'technician']
 const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'technician', 'feeder']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
+const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'technician', 'feeder', 'designer']
 
 const PAGE_ROLES: Record<string, Role[]> = {
   dashboard:    ALL_ROLES,
   approvalCenter:MANAGER_ROLES,
   aiAssistant:  ALL_ROLES,
   studio:       STAFF_WORKFLOW_ROLES,
-  creative2d:   STAFF_WORKFLOW_ROLES,
-  creative3d:   STAFF_WORKFLOW_ROLES,
-  creativeReview:MANAGER_ROLES,
+  creative2d:   CREATIVE_DESIGN_ROLES,
+  creative3d:   CREATIVE_DESIGN_ROLES,
+  creativeReview:CREATIVE_DESIGN_ROLES,
   chain:        STAFF_WORKFLOW_ROLES,
   chainMarketing:STAFF_WORKFLOW_ROLES,
   chainNewProduct:STAFF_WORKFLOW_ROLES,
@@ -144,7 +146,7 @@ function showAlert(msg: string, type: AlertType = 'success'): void {
 function onLogin(user: User): void {
   currentUser.value = user
   sessionStorage.setItem('currentUser', JSON.stringify(user))
-  currentPage.value = 'dashboard'
+  currentPage.value = firstAllowedPage(user.role || 'admin')
 }
 
 function onLogout(): void {

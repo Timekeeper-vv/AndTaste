@@ -26,6 +26,7 @@ public class DataInitializer {
             ensureApprover(userService, userMapper, "审批员2", "approver2@andtaste.com", "13800000102");
             ensureApprover(userService, userMapper, "审批员3", "approver3@andtaste.com", "13800000103");
             ensureApprover(userService, userMapper, "审批员4", "approver4@andtaste.com", "13800000104");
+            ensureDesigner(userService, userMapper, encoder);
 
             // 修复 schema.sql 直接插入的明文密码：BCrypt 哈希以 $2 开头，不是则说明是明文
             userService.findAll().join().forEach(u -> {
@@ -49,5 +50,30 @@ public class DataInitializer {
         u.setPassword("123456");
         u.setRole("technician");
         userService.save(u).join();
+    }
+
+    private void ensureDesigner(UserService userService, UserMapper userMapper, BCryptPasswordEncoder encoder) {
+        User existing = userMapper.findByUsername("designer");
+        if (existing == null) {
+            User u = new User();
+            u.setUsername("designer");
+            u.setAge(25);
+            u.setEmail("designer@andtaste.com");
+            u.setPhone("13800000999");
+            u.setPassword("123456");
+            u.setRole("designer");
+            userService.save(u).join();
+            return;
+        }
+        boolean changed = false;
+        if (!"designer".equals(existing.getRole())) { existing.setRole("designer"); changed = true; }
+        if (existing.getPassword() == null || !encoder.matches("123456", existing.getPassword())) {
+            existing.setPassword(encoder.encode("123456"));
+            changed = true;
+        }
+        if (existing.getAge() == null || existing.getAge() <= 0) { existing.setAge(25); changed = true; }
+        if (existing.getEmail() == null || existing.getEmail().isBlank()) { existing.setEmail("designer@andtaste.com"); changed = true; }
+        if (existing.getPhone() == null || existing.getPhone().isBlank()) { existing.setPhone("13800000999"); changed = true; }
+        if (changed) userMapper.update(existing);
     }
 }
