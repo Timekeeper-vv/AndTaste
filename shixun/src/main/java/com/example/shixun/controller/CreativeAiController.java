@@ -934,7 +934,7 @@ public class CreativeAiController {
                                                          @RequestParam(required=false) String status,
                                                          @RequestParam(required=false,defaultValue="100") int size) {
         requireCreativeAdmin(role);
-        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND COALESCE(a.source_type,'ai_generated')<>'upload'");
+        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND (a.asset_type='model' OR COALESCE(a.source_type,'ai_generated')<>'upload')");
         List<Object> args=new ArrayList<>();
         if(userId!=null){sql.append(" AND a.created_by=?");args.add(userId);}
         if(!blank(status)){sql.append(" AND a.status=?");args.add(status);}
@@ -949,7 +949,7 @@ public class CreativeAiController {
                                                             @RequestParam(required=false) String keyword,
                                                             @RequestParam(required=false,defaultValue="200") int size) {
         requireCreativeAdmin(role);
-        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt,a.updated_at updatedAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.status='approved' AND a.asset_type IN ('image','model') AND COALESCE(a.source_type,'ai_generated')<>'upload'");
+        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt,a.updated_at updatedAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.status='approved' AND a.asset_type IN ('image','model') AND (a.asset_type='model' OR COALESCE(a.source_type,'ai_generated')<>'upload')");
         List<Object> args=new ArrayList<>();
         if(userId!=null){sql.append(" AND a.created_by=?");args.add(userId);}
         if(!blank(type) && Set.of("image","model").contains(type)){sql.append(" AND a.asset_type=?");args.add(type);}
@@ -979,7 +979,7 @@ public class CreativeAiController {
         List<Map<String,Object>> userRows=jdbc.queryForList("SELECT id,role FROM user WHERE id=? LIMIT 1", userId);
         if(userRows.isEmpty() || !"user".equals(String.valueOf(userRows.get(0).get("role")))) throw new IllegalStateException("仅C端用户可提交自己的作品审核");
         String note=body==null?"":nullToEmpty(body.get("note"));
-        int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND COALESCE(source_type,'ai_generated')<>'upload' AND COALESCE(status,'draft')<>'approved'", blank(note)?";用户提交审核":";用户提交审核-"+note, id, userId);
+        int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND (asset_type='model' OR COALESCE(source_type,'ai_generated')<>'upload') AND COALESCE(status,'draft')<>'approved'", blank(note)?";用户提交审核":";用户提交审核-"+note, id, userId);
         if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已审核通过");
         return Map.of("success",true,"id",id,"status","review","message","作品已提交给审核员");
     }
