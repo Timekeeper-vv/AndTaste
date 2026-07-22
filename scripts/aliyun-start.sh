@@ -15,6 +15,7 @@ DB_PASSWORD="${DB_PASSWORD:-ChangeMe_123456}"; MYSQL_ADMIN_USER="${MYSQL_ADMIN_U
 SILICONFLOW_API_KEY="${SILICONFLOW_API_KEY:-}"; SILICONFLOW_CHAT_MODEL="${SILICONFLOW_CHAT_MODEL:-Qwen/Qwen3-32B}"
 SILICONFLOW_IMAGE_MODEL="${SILICONFLOW_IMAGE_MODEL:-Kwai-Kolors/Kolors}"; SILICONFLOW_IMAGE_EDIT_MODEL="${SILICONFLOW_IMAGE_EDIT_MODEL:-Qwen/Qwen-Image-Edit-2509}"
 QWEN_API_KEY="${QWEN_API_KEY:-}"; TRIPO_API_KEY="${TRIPO_API_KEY:-}"; TRIPO_API_BASE_URL="${TRIPO_API_BASE_URL:-https://openapi.tripo3d.com/v3}"; TRIPO_CONVERT_BASE_URL="${TRIPO_CONVERT_BASE_URL:-https://api.tripo3d.ai/v2/openapi}"; TRIPO_MODEL_VERSION="${TRIPO_MODEL_VERSION:-v3.1-20260211}"
+MODEL_CONVERT_PREFER_LOCAL="${MODEL_CONVERT_PREFER_LOCAL:-true}"; MODEL_CONVERT_BLENDER_COMMAND="${MODEL_CONVERT_BLENDER_COMMAND:-blender}"; MODEL_CONVERT_ASSIMP_COMMAND="${MODEL_CONVERT_ASSIMP_COMMAND:-assimp}"; MODEL_CONVERT_TIMEOUT_SECONDS="${MODEL_CONVERT_TIMEOUT_SECONDS:-300}"
 REPLICATE_API_KEY="${REPLICATE_API_KEY:-}"; REPLICATE_API_BASE_URL="${REPLICATE_API_BASE_URL:-https://api.replicate.com/v1}"; REPLICATE_IMAGEN_MODEL="${REPLICATE_IMAGEN_MODEL:-google/imagen-4}"
 MODAO_API_KEY="${MODAO_API_KEY:-}"; MODAO_DESIGN_URL="${MODAO_DESIGN_URL:-https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a}"; MODAO_MCP_URL="${MODAO_MCP_URL:-https://modao.cc/agent-py/ai/mcp}"; MODAO_CHROME_PATH="${MODAO_CHROME_PATH:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 KUAIDI100_CUSTOMER="${KUAIDI100_CUSTOMER:-}"; KUAIDI100_KEY="${KUAIDI100_KEY:-}"; KUAIDI100_CALLBACK_URL="${KUAIDI100_CALLBACK_URL:-}"; KUAIDI100_SALT="${KUAIDI100_SALT:-}"
@@ -29,6 +30,7 @@ install_deps(){
   if command -v apt-get >/dev/null 2>&1; then
     run_root apt-get update
     run_root apt-get install -y openjdk-17-jdk git curl ca-certificates gnupg unzip lsof nginx mysql-client
+    run_root apt-get install -y blender assimp-utils || warn "Blender/assimp 安装失败；OBJ/STL本地转换需后续手动安装"
     if [ "${INSTALL_LOCAL_MYSQL:-true}" = "true" ]; then run_root apt-get install -y mysql-server; run_root systemctl enable --now mysql; fi
     if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'Number(process.versions.node.split(`.`)[0])' 2>/dev/null || echo 0)" -lt 22 ]; then
       curl -fsSL https://deb.nodesource.com/setup_22.x | run_root bash -
@@ -37,6 +39,7 @@ install_deps(){
   elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
     PM=dnf; command -v dnf >/dev/null 2>&1 || PM=yum
     run_root "$PM" install -y java-17-openjdk java-17-openjdk-devel git curl ca-certificates unzip lsof nginx mysql
+    run_root "$PM" install -y blender assimp || warn "Blender/assimp 安装失败；OBJ/STL本地转换需后续手动安装"
     if [ "${INSTALL_LOCAL_MYSQL:-true}" = "true" ]; then
       run_root "$PM" install -y mysql-server || run_root "$PM" install -y community-mysql-server
       run_root systemctl enable --now mysqld
@@ -50,7 +53,7 @@ install_deps(){
   java -version; node -v; npm -v; ok "服务器环境安装完成"
 }
 
-check_deps(){ need java; need npm; need curl; need git; }
+check_deps(){ need java; need npm; need curl; need git; command -v "$MODEL_CONVERT_BLENDER_COMMAND" >/dev/null 2>&1 || command -v "$MODEL_CONVERT_ASSIMP_COMMAND" >/dev/null 2>&1 || warn "未检测到 Blender/assimp；GLB可正常下载，OBJ/STL本地转换需安装转换器"; }
 
 write_config(){
   [ -f "$ENV_FILE" ] || warn "未找到 $ENV_FILE，正在使用默认值；正式部署请先复制 deploy/env.example"
@@ -79,6 +82,10 @@ tripo.api.key=$TRIPO_API_KEY
 tripo.api.base-url=$TRIPO_API_BASE_URL
 tripo.convert.base-url=$TRIPO_CONVERT_BASE_URL
 tripo.model.version=$TRIPO_MODEL_VERSION
+model.convert.prefer-local=$MODEL_CONVERT_PREFER_LOCAL
+model.convert.blender-command=$MODEL_CONVERT_BLENDER_COMMAND
+model.convert.assimp-command=$MODEL_CONVERT_ASSIMP_COMMAND
+model.convert.timeout-seconds=$MODEL_CONVERT_TIMEOUT_SECONDS
 replicate.api.key=$REPLICATE_API_KEY
 replicate.api.base-url=$REPLICATE_API_BASE_URL
 replicate.imagen.model=$REPLICATE_IMAGEN_MODEL

@@ -33,6 +33,9 @@ import java.time.LocalDateTime;
 import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @RestController
 @RequestMapping("/api/creative/ai")
@@ -62,6 +65,18 @@ public class CreativeAiController {
 
     @Value("${tripo.convert.base-url:https://api.tripo3d.ai/v2/openapi}")
     private String tripoConvertBaseUrl;
+
+    @Value("${model.convert.prefer-local:true}")
+    private boolean modelConvertPreferLocal;
+
+    @Value("${model.convert.blender-command:blender}")
+    private String modelConvertBlenderCommand;
+
+    @Value("${model.convert.assimp-command:assimp}")
+    private String modelConvertAssimpCommand;
+
+    @Value("${model.convert.timeout-seconds:300}")
+    private long modelConvertTimeoutSeconds;
 
     @Value("${tripo.model.version:v3.1-20260211}")
     private String tripoModelVersion;
@@ -1513,7 +1528,131 @@ public class CreativeAiController {
         if("GLB".equals(fmt)||fmt.equals(currentFormat)) return asset;
         List<Map<String,Object>> cached=jdbc.queryForList("SELECT id,asset_no assetNo,title,asset_type assetType,file_url fileUrl,preview_url previewUrl,prompt,parent_asset_id parentAssetId,format,tags,metadata_json metadataJson FROM digital_asset WHERE asset_type='model' AND parent_asset_id=? AND UPPER(format)=? ORDER BY id DESC LIMIT 1",id,fmt);
         if(!cached.isEmpty()) return cached.get(0);
+        if(modelConvertPreferLocal) {
+            try { return convertModelFormatLocally(asset,fmt); }
+            catch(Exception localError) {
+                if(blank(tripoApiKey)||tripoApiKey.contains("YOUR_")) throw localError;
+                try { return convertTripoModelFormat(asset,fmt); }
+                catch(Exception tripoError) { throw new IllegalStateException("本地模型转换失败："+safeMessage(localError)+"；Tripo在线转换也失败："+safeMessage(tripoError),tripoError); }
+            }
+        }
         return convertTripoModelFormat(asset,fmt);
+    }
+
+    private Map<String,Object> convertModelFormatLocally(Map<String,Object> source,String fmt) throws Exception {
+        Long sourceId=((Number)source.get("id")).longValue();
+        String preview=str(source.get("previewUrl"));
+        Path publicDir=vuePublicDir();
+        Path modelsDir=publicDir.resolve("generated").resolve("models").normalize();
+        Files.createDirectories(modelsDir);
+        Path sourceFile=null; boolean deleteSourceFile=false; Path workDir=null;
+        try {
+            sourceFile=resolveModelSourceFile(source);
+            if(sourceFile==null) { sourceFile=downloadModelToTemp(source); deleteSourceFile=true; }
+            String stamp=String.valueOf(System.currentTimeMillis());
+            String localModel;
+            if("OBJ".equals(fmt)) {
+                workDir=modelsDir.resolve("convert-"+sourceId+"-"+stamp).normalize();
+                Files.createDirectories(workDir);
+                Path obj=workDir.resolve("model.obj");
+                runLocalModelConverter(sourceFile,obj,fmt);
+                if(!Files.exists(obj)||Files.size(obj)==0) throw new IllegalStateException("OBJ转换完成但没有生成有效文件");
+                Path zip=modelsDir.resolve("and-taste-3d-"+sourceId+"-obj-"+stamp+".zip").normalize();
+                zipDirectory(workDir,zip);
+                deleteDirectoryQuietly(workDir); workDir=null;
+                localModel="/generated/models/"+zip.getFileName();
+            } else {
+                Path stl=modelsDir.resolve("and-taste-3d-"+sourceId+"-stl-"+stamp+".stl").normalize();
+                runLocalModelConverter(sourceFile,stl,fmt);
+                if(!Files.exists(stl)||Files.size(stl)==0) throw new IllegalStateException("STL转换完成但没有生成有效文件");
+                localModel="/generated/models/"+stl.getFileName();
+            }
+            Map<String,Object> meta=new LinkedHashMap<>();
+            meta.put("provider",commandAvailable(modelConvertBlenderCommand)?"local-blender":"local-assimp");
+            meta.put("convertedFromAssetId",sourceId);
+            meta.put("sourceFile",str(source.get("fileUrl")));
+            meta.put("format",fmt);
+            Long assetId=createAsset("3D模型 "+fmt+"格式","model","converted",localModel,blank(preview)?null:preview,str(source.get("prompt")),null,null,sourceId,fmt.toLowerCase(Locale.ROOT),"3D模型,本地格式转换,"+fmt,meta);
+            return jdbc.queryForMap("SELECT id,asset_no assetNo,title,asset_type assetType,file_url fileUrl,preview_url previewUrl,prompt,parent_asset_id parentAssetId,format,tags,metadata_json metadataJson FROM digital_asset WHERE id=?",assetId);
+        } finally {
+            if(deleteSourceFile&&sourceFile!=null) try{Files.deleteIfExists(sourceFile);}catch(Exception ignored){}
+            if(workDir!=null) deleteDirectoryQuietly(workDir);
+        }
+    }
+
+    private Path resolveModelSourceFile(Map<String,Object> source) throws IOException {
+        String url=str(source.get("fileUrl"));
+        if(blank(url)||url.startsWith("http://")||url.startsWith("https://")) return null;
+        Path publicDir=vuePublicDir();
+        String rel=url.startsWith("/")?url.substring(1):url;
+        Path file=publicDir.resolve(rel).normalize();
+        if(!file.startsWith(publicDir)||!Files.exists(file)) throw new IOException("模型源文件不存在："+url);
+        return file;
+    }
+
+    private Path downloadModelToTemp(Map<String,Object> source) throws Exception {
+        String url=str(source.get("fileUrl"));
+        if(blank(url)||!(url.startsWith("http://")||url.startsWith("https://"))) throw new IOException("模型源文件地址无效："+url);
+        HttpResponse<byte[]> r=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());
+        if(r.statusCode()<200||r.statusCode()>=300) throw new IOException("下载模型源文件失败 HTTP "+r.statusCode());
+        Path tmp=Files.createTempFile("and-taste-model-source-",".glb");
+        Files.write(tmp,r.body());
+        return tmp;
+    }
+
+    private void runLocalModelConverter(Path input,Path output,String fmt) throws Exception {
+        Path log=output.getParent().resolve("convert-"+fmt.toLowerCase(Locale.ROOT)+".log");
+        List<String> cmd;
+        if(commandAvailable(modelConvertBlenderCommand)) {
+            Path script=modelConvertScriptPath();
+            cmd=List.of(modelConvertBlenderCommand,"-b","--python",script.toString(),"--",input.toString(),output.toString(),fmt);
+        } else if(commandAvailable(modelConvertAssimpCommand)) {
+            cmd=List.of(modelConvertAssimpCommand,"export",input.toString(),output.toString());
+        } else {
+            throw new IllegalStateException("服务器未安装模型转换器。请安装 Blender（推荐）或 assimp，并确认命令可执行：blender / assimp");
+        }
+        ProcessBuilder pb=new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(log.toFile());
+        Process p=pb.start();
+        boolean finished=p.waitFor(Math.max(60,modelConvertTimeoutSeconds),java.util.concurrent.TimeUnit.SECONDS);
+        if(!finished) { p.destroyForcibly(); throw new IllegalStateException("模型本地转换超时，请稍后重试或检查模型大小"); }
+        String out=Files.exists(log)?Files.readString(log,StandardCharsets.UTF_8):"";
+        if(p.exitValue()!=0) throw new IllegalStateException("模型本地转换失败："+out);
+    }
+
+    private boolean commandAvailable(String command) {
+        if(blank(command)) return false;
+        try {
+            Process p=new ProcessBuilder(command,"--version").redirectErrorStream(true).start();
+            boolean ok=p.waitFor(8,java.util.concurrent.TimeUnit.SECONDS);
+            if(!ok) p.destroyForcibly();
+            return ok&&p.exitValue()==0;
+        } catch(Exception ignored) { return false; }
+    }
+
+    private Path modelConvertScriptPath() throws IOException {
+        Path cwd=Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        List<Path> candidates=List.of(cwd.resolve("scripts/model-convert-blender.py"),cwd.resolve("../scripts/model-convert-blender.py"),cwd.resolve("model-convert-blender.py"));
+        for(Path p:candidates) if(Files.exists(p)) return p;
+        throw new IOException("找不到 Blender 模型转换脚本 scripts/model-convert-blender.py");
+    }
+
+    private void zipDirectory(Path dir,Path zipFile) throws IOException {
+        try(ZipOutputStream zos=new ZipOutputStream(Files.newOutputStream(zipFile)); Stream<Path> paths=Files.walk(dir)) {
+            Iterator<Path> it=paths.filter(Files::isRegularFile).iterator();
+            while(it.hasNext()) {
+                Path file=it.next();
+                String name=dir.relativize(file).toString().replace('\\','/');
+                zos.putNextEntry(new ZipEntry(name));
+                Files.copy(file,zos);
+                zos.closeEntry();
+            }
+        }
+    }
+
+    private void deleteDirectoryQuietly(Path dir) {
+        try(Stream<Path> paths=Files.walk(dir)) {
+            paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});
+        } catch(Exception ignored) {}
     }
 
     private Map<String,Object> convertTripoModelFormat(Map<String,Object> source,String fmt) throws Exception {
