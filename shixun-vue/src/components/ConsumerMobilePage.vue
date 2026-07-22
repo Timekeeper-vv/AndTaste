@@ -31,6 +31,7 @@ const modelViewerLoaded = ref(false)
 const previewDownloadFormat = ref<'GLB' | 'OBJ' | 'STL'>('GLB')
 const previewDownloading = ref(false)
 const submittedAssetIds = ref<Set<number>>(new Set())
+const submittingAssetIds = ref<Set<number>>(new Set())
 
 const imageForm = reactive({
   rawPrompt: '一款适合年轻游客的城市味道文创礼盒，温暖、精致、有官方文创质感',
@@ -111,10 +112,11 @@ function workStatusLabel(a: any): string { return workStatusText[String(a?.statu
 function workStatusClass(a: any): string { const s = String(a?.status || 'draft'); return s === 'approved' ? 'approved' : s === 'rejected' ? 'rejected' : s === 'review' ? 'review' : 'draft' }
 function assetIdOf(a: any): number { return Number(a?.id || a?.assetId || 0) }
 function isSubmittedForReview(a: any): boolean { const id = assetIdOf(a); return !!id && submittedAssetIds.value.has(id) }
+function isSubmittingForReview(a: any): boolean { const id = assetIdOf(a); return !!id && submittingAssetIds.value.has(id) }
 function canSubmitReview(a: any): boolean {
   const id = assetIdOf(a)
-  const st = String(a?.status || 'draft')
-  return !!id && !isSubmittedForReview(a) && a?.sourceType !== 'upload' && st !== 'review' && st !== 'approved'
+  const st = String(a?.assetStatus || a?.status || 'draft')
+  return !!id && !isSubmittedForReview(a) && !isSubmittingForReview(a) && a?.sourceType !== 'upload' && st !== 'review' && st !== 'approved'
 }
 
 async function submitAssetForReview(a: any) {
@@ -123,16 +125,25 @@ async function submitAssetForReview(a: any) {
     emit('alert', '作品ID不存在，无法提交审核', 'error')
     return
   }
+  if (!props.currentUser?.id) {
+    emit('alert', '当前登录信息缺少用户ID，请退出后重新登录 user 账号再提交', 'error')
+    return
+  }
+  submittingAssetIds.value = new Set([...submittingAssetIds.value, id])
   try {
     const r = await fetch(`/api/creative/ai/consumer-assets/${id}/submit-review?currentUserId=${props.currentUser.id}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'X-Current-Role': props.currentUser.role,
+        'X-Current-Role': 'user',
         'X-Current-User-Id': String(props.currentUser.id),
         'X-Current-User': props.currentUser.username,
       },
-      body: JSON.stringify({ note: 'C端用户主动提交审核' }),
+      body: JSON.stringify({
+        note: 'C端用户主动提交审核',
+        currentUserId: String(props.currentUser.id),
+        currentUsername: props.currentUser.username,
+      }),
     })
     if (!r.ok) {
       const err = await r.json().catch(() => null)
@@ -144,6 +155,10 @@ async function submitAssetForReview(a: any) {
     emit('alert', '已提交给审核员，请等待审核结果', 'success')
   } catch (e: any) {
     emit('alert', '提交审核失败：' + (e?.message || e), 'error')
+  } finally {
+    const next = new Set(submittingAssetIds.value)
+    next.delete(id)
+    submittingAssetIds.value = next
   }
 }
 
@@ -512,7 +527,8 @@ function closeModelPreview() {
           <p v-if="imageForm.usageGuide">{{ imageForm.usageGuide }}</p>
           <div class="result-actions">
             <a v-if="imageResult.imageUrl || imageResult.fileUrl" :href="imageResult.imageUrl || imageResult.fileUrl" target="_blank" rel="noopener">查看原图</a>
-            <button v-if="canSubmitReview(imageResult)" type="button" @click="submitAssetForReview(imageResult)">提交审核</button>
+            <button v-if="canSubmitReview(imageResult)" type="button" @click.stop="submitAssetForReview(imageResult)">提交审核</button>
+            <span v-else-if="isSubmittingForReview(imageResult)" class="submitted-tip">提交中...</span>
             <span v-else-if="isSubmittedForReview(imageResult) || imageResult.status === 'review'" class="submitted-tip">已提交审核</span>
           </div>
         </div>
@@ -557,7 +573,8 @@ function closeModelPreview() {
           <b>3D模型已生成</b>
           <div class="result-actions">
             <button type="button" @click="openModelPreview(modelResult)">预览模型</button>
-            <button v-if="canSubmitReview(modelResult)" type="button" @click="submitAssetForReview(modelResult)">提交审核</button>
+            <button v-if="canSubmitReview(modelResult)" type="button" @click.stop="submitAssetForReview(modelResult)">提交审核</button>
+            <span v-else-if="isSubmittingForReview(modelResult)" class="submitted-tip">提交中...</span>
             <span v-else-if="isSubmittedForReview(modelResult) || modelResult.status === 'review'" class="submitted-tip">已提交审核</span>
           </div>
         </div>
@@ -574,15 +591,17 @@ function closeModelPreview() {
           <img :src="a.previewUrl || a.fileUrl" alt="作品图片" />
           <span class="work-status" :class="workStatusClass(a)">{{ workStatusLabel(a) }}</span>
           <b>{{ displayAssetTitle(a) }}</b>
-          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click="submitAssetForReview(a)">提交审核</button>
+          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交审核</button>
+          <span v-else-if="isSubmittingForReview(a)" class="submitted-tip">提交中...</span>
         </article>
         <article v-for="a in recentModels" :key="`model-${a.id}`">
           <img v-if="modelPreviewImage(a)" :src="modelPreviewImage(a)" alt="3D作品预览" />
           <div v-else class="model-tile">3D</div>
           <span class="work-status" :class="workStatusClass(a)">{{ workStatusLabel(a) }}</span>
           <b>{{ displayAssetTitle(a) }}</b>
-          <button type="button" @click="openModelPreview(a)">预览</button>
-          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click="submitAssetForReview(a)">提交审核</button>
+          <button type="button" @click.stop="openModelPreview(a)">预览</button>
+          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交审核</button>
+          <span v-else-if="isSubmittingForReview(a)" class="submitted-tip">提交中...</span>
         </article>
       </div>
       <p v-if="!recentImages.length && !recentModels.length" class="empty">暂无作品</p>

@@ -518,7 +518,11 @@ public class CreativeAiController {
             out.put("provider", "imagen");
             out.put("status", "succeeded");
             out.put("progress", 100);
+            out.put("id", assetId);
             out.put("assetId", assetId);
+            out.put("assetType", "image");
+            out.put("sourceType", "ai_generated");
+            out.put("assetStatus", "draft");
             out.put("imageUrl", localImage);
             out.put("previewUrl", localImage);
             out.put("fileUrl", localImage);
@@ -930,7 +934,7 @@ public class CreativeAiController {
                                                          @RequestParam(required=false) String status,
                                                          @RequestParam(required=false,defaultValue="100") int size) {
         requireCreativeAdmin(role);
-        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND a.source_type<>'upload'");
+        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND COALESCE(a.source_type,'ai_generated')<>'upload'");
         List<Object> args=new ArrayList<>();
         if(userId!=null){sql.append(" AND a.created_by=?");args.add(userId);}
         if(!blank(status)){sql.append(" AND a.status=?");args.add(status);}
@@ -942,13 +946,24 @@ public class CreativeAiController {
     public Map<String,Object> submitConsumerAssetReview(@PathVariable Long id,
                                                         @RequestHeader(value="X-Current-Role",required=false) String role,
                                                         @RequestHeader(value="X-Current-User-Id",required=false) Long headerUserId,
+                                                        @RequestHeader(value="X-Current-User",required=false) String headerUsername,
                                                         @RequestParam(required=false) Long currentUserId,
+                                                        @RequestParam(required=false) String currentUsername,
                                                         @RequestBody(required=false) Map<String,String> body) {
         Long userId=currentUserId==null?headerUserId:currentUserId;
-        if(!"user".equals(role)) throw new IllegalStateException("仅C端用户可提交自己的作品审核");
+        if(userId==null && body!=null && !blank(body.get("currentUserId"))) {
+            try { userId=Long.parseLong(body.get("currentUserId").trim()); } catch(Exception ignored) {}
+        }
+        String username=blank(currentUsername)?headerUsername:currentUsername;
+        if(userId==null && !blank(username)) {
+            List<Map<String,Object>> users=jdbc.queryForList("SELECT id FROM user WHERE username=? AND role='user' LIMIT 1", username.trim());
+            if(!users.isEmpty() && users.get(0).get("id") instanceof Number) userId=((Number)users.get(0).get("id")).longValue();
+        }
         if(userId==null) throw new IllegalArgumentException("缺少当前用户ID，无法提交审核");
+        List<Map<String,Object>> userRows=jdbc.queryForList("SELECT id,role FROM user WHERE id=? LIMIT 1", userId);
+        if(userRows.isEmpty() || !"user".equals(String.valueOf(userRows.get(0).get("role")))) throw new IllegalStateException("仅C端用户可提交自己的作品审核");
         String note=body==null?"":nullToEmpty(body.get("note"));
-        int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND source_type<>'upload' AND status<>'approved'", blank(note)?";用户提交审核":";用户提交审核-"+note, id, userId);
+        int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND COALESCE(source_type,'ai_generated')<>'upload' AND COALESCE(status,'draft')<>'approved'", blank(note)?";用户提交审核":";用户提交审核-"+note, id, userId);
         if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已审核通过");
         return Map.of("success",true,"id",id,"status","review","message","作品已提交给审核员");
     }
@@ -1216,7 +1231,11 @@ public class CreativeAiController {
         out.put("provider", "jimeng");
         out.put("status", "succeeded");
         out.put("progress", 100);
+        out.put("id", assetId);
         out.put("assetId", assetId);
+        out.put("assetType", "image");
+        out.put("sourceType", "ai_generated");
+        out.put("assetStatus", "draft");
         out.put("imageUrl", localImage);
         out.put("previewUrl", localImage);
         out.put("fileUrl", localImage);
@@ -1641,7 +1660,7 @@ public class CreativeAiController {
     private String suffixFromUrl(String url,String fallback){try{String p=URI.create(url).getPath();int i=p.lastIndexOf('.');if(i>=0&&p.length()-i<=6)return p.substring(i).toLowerCase(Locale.ROOT);}catch(Exception ignored){}return fallback;}
     private String saveRemoteFile(String url,String prefix,String suffix,String folder)throws Exception{HttpResponse<byte[]> r=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());if(r.statusCode()<200||r.statusCode()>=300)throw new IOException("下载远程文件失败 HTTP "+r.statusCode());Path dir=vuePublicDir().resolve("generated").resolve(folder).normalize();Files.createDirectories(dir);String file=prefix+System.currentTimeMillis()+suffix;Files.write(dir.resolve(file),r.body());return "/generated/"+folder+"/"+file;}
     private Map<String,Object> completedTripoImageJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("assetId",a.get("id"));r.put("imageUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));r.put("model",job.get("modelName"));r.put("source","Tripo "+str(job.get("modelName")));return r;}
-    private Map<String,Object> completedTripoJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("assetId",a.get("id"));r.put("modelUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));return r;}
+    private Map<String,Object> completedTripoJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,asset_type assetType,source_type sourceType,status assetStatus,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("id",a.get("id"));r.put("assetId",a.get("id"));r.put("assetType",a.get("assetType"));r.put("sourceType",a.get("sourceType"));r.put("assetStatus",a.get("assetStatus"));r.put("modelUrl",a.get("fileUrl"));r.put("fileUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));return r;}
     private boolean blank(String s){return s==null||s.trim().isEmpty();}
     private String str(Object o){return o==null?"":String.valueOf(o);}
 
