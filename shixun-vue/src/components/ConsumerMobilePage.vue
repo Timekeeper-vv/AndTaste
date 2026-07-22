@@ -24,6 +24,10 @@ const modelProgress = ref(0)
 const modelTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const imageAnchor = ref<HTMLElement | null>(null)
 const modelAnchor = ref<HTMLElement | null>(null)
+const previewAsset = ref<any | null>(null)
+const previewReady = ref(false)
+const previewLoadFailed = ref(false)
+const modelViewerLoaded = ref(false)
 
 const imageForm = reactive({
   rawPrompt: '一款适合年轻游客的城市味道文创礼盒，温暖、精致、有官方文创质感',
@@ -45,6 +49,19 @@ const modelForm = reactive({
 const recentImages = computed(() => assets.value.filter(x => x.assetType === 'image').slice(0, 8))
 const recentModels = computed(() => assets.value.filter(x => x.assetType === 'model').slice(0, 8))
 const canGenerateModel = computed(() => modelForm.mode === 'image_to_model' ? !!modelForm.inputAssetId : !!modelForm.rawPrompt.trim())
+const previewModelUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/model-content` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || '')
+const previewDownloadUrl = computed(() => previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
+
+function displayAssetTitle(a: any): string {
+  const title = String(a?.title || '')
+  if (title.includes('参考图')) return '参考图'
+  return a?.assetType === 'model' ? '3D作品' : '产品图作品'
+}
+
+function modelPreviewImage(a: any): string {
+  return a?.previewUrl || ''
+}
+
 function setStage(text: string, nextPhase: Phase) {
   stage.value = text
   phase.value = nextPhase
@@ -55,6 +72,7 @@ onBeforeUnmount(() => {
   if (modelTimer.value) clearTimeout(modelTimer.value)
   if (imagePreviewUrl.value.startsWith('blob:')) URL.revokeObjectURL(imagePreviewUrl.value)
   if (uploadPreviewUrl.value.startsWith('blob:')) URL.revokeObjectURL(uploadPreviewUrl.value)
+  document.body.style.overflow = ''
 })
 
 async function json(url: string) {
@@ -295,6 +313,41 @@ function openUrl(url?: string) {
   if (!url) return
   window.open(url, '_blank', 'noopener,noreferrer')
 }
+
+async function ensureModelViewer() {
+  if (modelViewerLoaded.value) return
+  await import('@google/model-viewer')
+  modelViewerLoaded.value = true
+}
+
+async function openModelPreview(a?: any) {
+  const asset = a || modelResult.value
+  if (!asset?.id && !asset?.assetId && !asset?.fileUrl && !asset?.modelUrl) {
+    emit('alert', '模型文件暂不可预览', 'error')
+    return
+  }
+  previewAsset.value = {
+    ...asset,
+    id: asset.id || asset.assetId,
+    fileUrl: asset.fileUrl || asset.modelUrl,
+  }
+  previewReady.value = false
+  previewLoadFailed.value = false
+  document.body.style.overflow = 'hidden'
+  try {
+    await ensureModelViewer()
+  } catch (e: any) {
+    previewLoadFailed.value = true
+    emit('alert', '3D预览组件加载失败，请稍后重试', 'error')
+  }
+}
+
+function closeModelPreview() {
+  previewAsset.value = null
+  previewReady.value = false
+  previewLoadFailed.value = false
+  document.body.style.overflow = ''
+}
 </script>
 
 <template>
@@ -408,7 +461,7 @@ function openUrl(url?: string) {
         <img v-if="modelResult.previewUrl" :src="modelResult.previewUrl" alt="3D模型预览" />
         <div class="result-info">
           <b>3D模型已生成</b>
-          <button type="button" @click="openUrl(modelResult.modelUrl)">打开模型文件</button>
+          <button type="button" @click="openModelPreview(modelResult)">预览模型</button>
         </div>
       </article>
     </section>
@@ -421,16 +474,64 @@ function openUrl(url?: string) {
       <div class="gallery">
         <article v-for="a in recentImages" :key="`img-${a.id}`">
           <img :src="a.previewUrl || a.fileUrl" alt="作品图片" />
-          <b>{{ a.title || 'AI图片' }}</b>
+          <b>{{ displayAssetTitle(a) }}</b>
         </article>
         <article v-for="a in recentModels" :key="`model-${a.id}`">
-          <div class="model-tile">3D</div>
-          <b>{{ a.title || 'AI模型' }}</b>
-          <button type="button" @click="openUrl(a.fileUrl)">打开</button>
+          <img v-if="modelPreviewImage(a)" :src="modelPreviewImage(a)" alt="3D作品预览" />
+          <div v-else class="model-tile">3D</div>
+          <b>{{ displayAssetTitle(a) }}</b>
+          <button type="button" @click="openModelPreview(a)">预览</button>
         </article>
       </div>
       <p v-if="!recentImages.length && !recentModels.length" class="empty">暂无作品</p>
     </section>
+
+    <Teleport to="body">
+      <section v-if="previewAsset" class="model-preview-modal" @click.self="closeModelPreview">
+        <div class="model-preview-top">
+          <button type="button" class="preview-back" @click="closeModelPreview">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18 9 12l6-6"/></svg>
+            返回
+          </button>
+          <div>
+            <b>3D作品预览</b>
+            <span>拖动旋转 · 双指缩放</span>
+          </div>
+        </div>
+
+        <div class="model-viewer-wrap">
+          <model-viewer
+            class="model-viewer"
+            :src="previewModelUrl"
+            :poster="previewAsset.previewUrl || ''"
+            alt="3D模型预览"
+            camera-controls
+            auto-rotate
+            interaction-prompt="auto"
+            shadow-intensity="0.8"
+            exposure="1"
+            environment-image="neutral"
+            ar
+            @load="previewReady = true"
+            @error="previewLoadFailed = true"
+          >
+          </model-viewer>
+          <div v-if="!previewReady && !previewLoadFailed" class="model-loading">
+            <i></i>
+            <span>模型加载中</span>
+          </div>
+          <div v-if="previewLoadFailed" class="model-error">
+            <b>暂时无法预览</b>
+            <span>可以先下载模型文件，或稍后再试。</span>
+          </div>
+        </div>
+
+        <div class="model-preview-bottom">
+          <button type="button" @click="closeModelPreview">完成</button>
+          <a :href="previewDownloadUrl" target="_blank" rel="noopener">下载文件</a>
+        </div>
+      </section>
+    </Teleport>
   </main>
 </template>
 
@@ -1041,6 +1142,319 @@ function openUrl(url?: string) {
     right:auto;
     width:432px;
     transform:translateX(-50%);
+  }
+}
+</style>
+
+<style scoped>
+/* Must stay last: fixes the C-end mobile layout after older style blocks. */
+.consumer-shell.immersive-shell{
+  min-height:100dvh !important;
+  padding:0 14px 28px !important;
+  overflow-x:hidden !important;
+  background:linear-gradient(180deg,#fbf6ef 0%,#f1e8df 52%,#ece0d5 100%) !important;
+  color:#201a17 !important;
+}
+.consumer-shell.immersive-shell *,
+.consumer-shell.immersive-shell *::before,
+.consumer-shell.immersive-shell *::after{
+  box-sizing:border-box !important;
+}
+.consumer-shell.immersive-shell .ambient-layer,
+.consumer-shell.immersive-shell .hero-glass,
+.consumer-shell.immersive-shell .workflow-strip,
+.consumer-shell.immersive-shell .live-console,
+.consumer-shell.immersive-shell .service-pill,
+.consumer-shell.immersive-shell .mini-note{
+  display:none !important;
+}
+.consumer-shell.immersive-shell .consumer-top{
+  position:sticky !important;
+  top:0 !important;
+  z-index:20 !important;
+  margin:0 -14px !important;
+  padding:12px 16px !important;
+  background:rgba(251,246,239,.94) !important;
+  color:#201a17 !important;
+  border-bottom:1px solid rgba(87,65,44,.08) !important;
+}
+.consumer-shell.immersive-shell .brand span{ color:#8a7161 !important; }
+.consumer-shell.immersive-shell .icon-btn{
+  width:38px !important;
+  height:38px !important;
+  flex:0 0 38px !important;
+  border-radius:12px !important;
+  background:#fffaf5 !important;
+  color:#201a17 !important;
+  box-shadow:0 8px 22px rgba(58,39,25,.08) !important;
+}
+.consumer-shell.immersive-shell .hero{
+  min-height:188px !important;
+  margin:14px 0 12px !important;
+  padding:22px 18px 18px !important;
+  border-radius:24px !important;
+  background:radial-gradient(circle at 92% 18%,rgba(255,255,255,.18),transparent 94px),linear-gradient(135deg,#241814 0%,#713e2d 60%,#af6840 100%) !important;
+  box-shadow:0 18px 44px rgba(78,48,29,.18) !important;
+}
+.consumer-shell.immersive-shell .hero:after{ display:none !important; }
+.consumer-shell.immersive-shell .hero span{
+  margin:0 0 11px !important;
+  color:#fff !important;
+}
+.consumer-shell.immersive-shell .hero h1{
+  max-width:10em !important;
+  margin:0 0 8px !important;
+  font-size:30px !important;
+  line-height:1.08 !important;
+}
+.consumer-shell.immersive-shell .hero p{
+  max-width:24em !important;
+  margin:0 0 15px !important;
+  color:rgba(255,255,255,.82) !important;
+  font-size:13px !important;
+  line-height:1.55 !important;
+}
+.consumer-shell.immersive-shell .hero-actions{
+  display:grid !important;
+  grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+  gap:10px !important;
+}
+.consumer-shell.immersive-shell .hero-actions button{
+  width:100% !important;
+  min-width:0 !important;
+  height:42px !important;
+  border-radius:14px !important;
+}
+.consumer-shell.immersive-shell .quick-tabs{
+  position:static !important;
+  left:auto !important;
+  right:auto !important;
+  bottom:auto !important;
+  width:100% !important;
+  transform:none !important;
+  display:grid !important;
+  grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+  gap:6px !important;
+  margin:0 0 12px !important;
+  padding:7px !important;
+  border-radius:18px !important;
+  background:rgba(255,250,245,.94) !important;
+  border:1px solid rgba(87,65,44,.12) !important;
+  box-shadow:0 10px 28px rgba(57,38,26,.08) !important;
+}
+.consumer-shell.immersive-shell .quick-tabs button{
+  min-width:0 !important;
+  height:48px !important;
+  min-height:0 !important;
+  padding:0 4px !important;
+  border-radius:13px !important;
+  font-size:11px !important;
+  white-space:normal !important;
+}
+.consumer-shell.immersive-shell .quick-tabs button.active{
+  background:#201a17 !important;
+  color:#fff !important;
+}
+.consumer-shell.immersive-shell .creation-panel{
+  width:100% !important;
+  margin:0 !important;
+  padding:17px !important;
+  border-radius:24px !important;
+  background:rgba(255,255,255,.95) !important;
+  border:1px solid rgba(87,65,44,.1) !important;
+  box-shadow:0 16px 38px rgba(58,39,25,.09) !important;
+}
+.consumer-shell.immersive-shell .section-head{
+  margin:0 0 12px !important;
+}
+.consumer-shell.immersive-shell .section-head b{
+  font-size:20px !important;
+  line-height:1.2 !important;
+}
+.consumer-shell.immersive-shell textarea{
+  width:100% !important;
+  min-height:124px !important;
+  max-height:210px !important;
+  border-radius:18px !important;
+  font-size:15px !important;
+}
+.consumer-shell.immersive-shell .chips,
+.consumer-shell.immersive-shell .chips.compact{
+  grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+}
+.consumer-shell.immersive-shell .mode-switch{
+  grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+}
+.consumer-shell.immersive-shell .chips button,
+.consumer-shell.immersive-shell .mode-switch button{
+  min-width:0 !important;
+  min-height:40px !important;
+  padding:0 6px !important;
+  border-radius:14px !important;
+  font-size:13px !important;
+  line-height:1.15 !important;
+  white-space:normal !important;
+}
+.consumer-shell.immersive-shell .primary{
+  min-height:54px !important;
+  border-radius:18px !important;
+  background:#b4532a !important;
+  box-shadow:0 12px 26px rgba(180,83,42,.24) !important;
+}
+.consumer-shell.immersive-shell .primary.green{
+  background:#0f766e !important;
+  box-shadow:0 12px 26px rgba(15,118,110,.2) !important;
+}
+.consumer-shell.immersive-shell .upload-box{
+  min-height:168px !important;
+  border-radius:20px !important;
+}
+.consumer-shell.immersive-shell .upload-box img{
+  width:100% !important;
+  height:210px !important;
+  object-fit:cover !important;
+}
+.consumer-shell.immersive-shell .gallery{
+  grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+}
+.consumer-shell.immersive-shell .gallery article{
+  min-width:0 !important;
+}
+.consumer-shell.immersive-shell .gallery article > button{
+  width:calc(100% - 18px) !important;
+}
+.model-preview-modal{
+  position:fixed !important;
+  inset:0 !important;
+  z-index:9999 !important;
+  display:flex !important;
+  flex-direction:column !important;
+  padding:calc(env(safe-area-inset-top,0px) + 12px) 14px calc(env(safe-area-inset-bottom,0px) + 14px) !important;
+  background:
+    radial-gradient(circle at 70% 12%,rgba(180,83,42,.28),transparent 180px),
+    linear-gradient(180deg,#17100d 0%,#2a1d18 100%) !important;
+  color:#fff !important;
+}
+.model-preview-top{
+  display:flex !important;
+  align-items:center !important;
+  gap:12px !important;
+  flex:0 0 auto !important;
+}
+.model-preview-top b,
+.model-preview-top span{
+  display:block !important;
+}
+.model-preview-top b{
+  font-size:17px !important;
+  line-height:1.2 !important;
+}
+.model-preview-top span{
+  margin-top:3px !important;
+  color:rgba(255,255,255,.58) !important;
+  font-size:12px !important;
+}
+.preview-back{
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:3px !important;
+  height:40px !important;
+  padding:0 12px 0 8px !important;
+  border:1px solid rgba(255,255,255,.13) !important;
+  border-radius:999px !important;
+  background:rgba(255,255,255,.08) !important;
+  color:#fff !important;
+  font-weight:800 !important;
+}
+.preview-back svg{
+  width:20px !important;
+  height:20px !important;
+}
+.model-viewer-wrap{
+  position:relative !important;
+  flex:1 1 auto !important;
+  min-height:0 !important;
+  margin:14px 0 !important;
+  overflow:hidden !important;
+  border:1px solid rgba(255,255,255,.1) !important;
+  border-radius:28px !important;
+  background:
+    radial-gradient(circle at 50% 45%,rgba(255,255,255,.08),transparent 210px),
+    linear-gradient(180deg,#30231d,#15100d) !important;
+  box-shadow:0 24px 80px rgba(0,0,0,.28) !important;
+}
+.model-viewer{
+  display:block !important;
+  width:100% !important;
+  height:100% !important;
+  min-height:420px !important;
+  --poster-color:transparent;
+  background:transparent !important;
+}
+.model-loading,
+.model-error{
+  position:absolute !important;
+  left:50% !important;
+  top:50% !important;
+  transform:translate(-50%,-50%) !important;
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:10px !important;
+  padding:18px !important;
+  border-radius:20px !important;
+  background:rgba(0,0,0,.24) !important;
+  color:#fff !important;
+  text-align:center !important;
+  backdrop-filter:blur(14px) !important;
+}
+.model-loading i{
+  width:28px !important;
+  height:28px !important;
+  border:3px solid rgba(255,255,255,.2) !important;
+  border-top-color:#fff !important;
+  border-radius:50% !important;
+  animation:modelSpin .85s linear infinite !important;
+}
+.model-error span{
+  max-width:14em !important;
+  color:rgba(255,255,255,.68) !important;
+  font-size:12px !important;
+  line-height:1.5 !important;
+}
+.model-preview-bottom{
+  display:grid !important;
+  grid-template-columns:1fr 1fr !important;
+  gap:10px !important;
+  flex:0 0 auto !important;
+}
+.model-preview-bottom button,
+.model-preview-bottom a{
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  min-height:50px !important;
+  border:1px solid rgba(255,255,255,.14) !important;
+  border-radius:18px !important;
+  background:rgba(255,255,255,.1) !important;
+  color:#fff !important;
+  text-decoration:none !important;
+  font-size:15px !important;
+  font-weight:900 !important;
+}
+.model-preview-bottom a{
+  border-color:#c27643 !important;
+  background:#c27643 !important;
+}
+@keyframes modelSpin{
+  to{ transform:rotate(360deg); }
+}
+@media(min-width:720px){
+  .consumer-shell.immersive-shell{
+    max-width:460px !important;
+    margin:0 auto !important;
+    box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15) !important;
   }
 }
 </style>

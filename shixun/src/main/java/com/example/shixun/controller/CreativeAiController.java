@@ -768,6 +768,24 @@ public class CreativeAiController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(type).body(Files.readAllBytes(file));
     }
 
+    @GetMapping("/assets/{id}/model-content")
+    public ResponseEntity<byte[]> assetModelContent(@PathVariable Long id) throws Exception {
+        Map<String,Object> asset=jdbc.queryForMap("SELECT asset_type assetType,file_url fileUrl,format FROM digital_asset WHERE id=?",id);
+        if(!"model".equals(String.valueOf(asset.get("assetType")))) throw new IOException("该资产不是3D模型："+id);
+        String url=String.valueOf(asset.get("fileUrl"));
+        if(blank(url)) throw new IOException("模型文件地址不存在："+id);
+        MediaType glbType=MediaType.parseMediaType("model/gltf-binary");
+        if(url.startsWith("http://")||url.startsWith("https://")) {
+            HttpResponse<byte[]> response=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());
+            if(response.statusCode()<200||response.statusCode()>=300) throw new IOException("读取模型失败 HTTP "+response.statusCode());
+            return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(glbType).body(response.body());
+        }
+        Path publicDir=vuePublicDir();
+        String relative=url.startsWith("/")?url.substring(1):url; Path file=publicDir.resolve(relative).normalize();
+        if(!file.startsWith(publicDir)||!Files.exists(file)) throw new IOException("模型文件不存在："+url);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(glbType).body(Files.readAllBytes(file));
+    }
+
     @GetMapping("/assets")
     public List<Map<String, Object>> assets(@RequestParam(required = false) String type) {
         if (type != null && !type.isBlank()) return jdbc.queryForList("SELECT id, asset_no assetNo, title, asset_type assetType, source_type sourceType, file_url fileUrl, preview_url previewUrl, prompt, style_id styleId, parent_asset_id parentAssetId, version_no versionNo, status, format, tags, created_at createdAt FROM digital_asset WHERE asset_type=? ORDER BY id DESC", type);
