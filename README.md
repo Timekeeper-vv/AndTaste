@@ -95,7 +95,7 @@ flowchart LR
   - `GLB`：系统标准模型格式，适合网页/手机实时预览
   - `OBJ`：适合设计软件继续编辑，系统会打包为 zip
   - `STL`：适合 3D 打印、打样
-  - OBJ/STL 优先由服务器本地 Blender/Assimp 从 GLB 转换并缓存，后续重复下载不再重复转换
+  - OBJ/STL 优先由服务器本地 Blender/Assimp 从 GLB 转换并缓存；若未安装 Blender/Assimp，会使用项目内置的 Node + three 基础转换兜底，后续重复下载不再重复转换
 
 当前支持的模型选项：
 

@@ -69,11 +69,17 @@ public class CreativeAiController {
     @Value("${model.convert.prefer-local:true}")
     private boolean modelConvertPreferLocal;
 
+    @Value("${model.convert.fallback-tripo:false}")
+    private boolean modelConvertFallbackTripo;
+
     @Value("${model.convert.blender-command:blender}")
     private String modelConvertBlenderCommand;
 
     @Value("${model.convert.assimp-command:assimp}")
     private String modelConvertAssimpCommand;
+
+    @Value("${model.convert.node-command:node}")
+    private String modelConvertNodeCommand;
 
     @Value("${model.convert.timeout-seconds:300}")
     private long modelConvertTimeoutSeconds;
@@ -1531,6 +1537,7 @@ public class CreativeAiController {
         if(modelConvertPreferLocal) {
             try { return convertModelFormatLocally(asset,fmt); }
             catch(Exception localError) {
+                if(!modelConvertFallbackTripo) throw localError;
                 if(blank(tripoApiKey)||tripoApiKey.contains("YOUR_")) throw localError;
                 try { return convertTripoModelFormat(asset,fmt); }
                 catch(Exception tripoError) { throw new IllegalStateException("本地模型转换失败："+safeMessage(localError)+"；Tripo在线转换也失败："+safeMessage(tripoError),tripoError); }
@@ -1568,7 +1575,7 @@ public class CreativeAiController {
                 localModel="/generated/models/"+stl.getFileName();
             }
             Map<String,Object> meta=new LinkedHashMap<>();
-            meta.put("provider",commandAvailable(modelConvertBlenderCommand)?"local-blender":"local-assimp");
+            meta.put("provider",commandAvailable(modelConvertBlenderCommand)?"local-blender":commandAvailable(modelConvertAssimpCommand)?"local-assimp":"local-three");
             meta.put("convertedFromAssetId",sourceId);
             meta.put("sourceFile",str(source.get("fileUrl")));
             meta.put("format",fmt);
@@ -1608,8 +1615,11 @@ public class CreativeAiController {
             cmd=List.of(modelConvertBlenderCommand,"-b","--python",script.toString(),"--",input.toString(),output.toString(),fmt);
         } else if(commandAvailable(modelConvertAssimpCommand)) {
             cmd=List.of(modelConvertAssimpCommand,"export",input.toString(),output.toString());
+        } else if(commandAvailable(modelConvertNodeCommand)) {
+            Path script=modelConvertNodeScriptPath();
+            cmd=List.of(modelConvertNodeCommand,script.toString(),input.toString(),output.toString(),fmt);
         } else {
-            throw new IllegalStateException("服务器未安装模型转换器。请安装 Blender（推荐）或 assimp，并确认命令可执行：blender / assimp");
+            throw new IllegalStateException("服务器未安装模型转换器。请安装 Blender（推荐）、assimp，或确认 Node 可执行并已安装前端依赖");
         }
         ProcessBuilder pb=new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(log.toFile());
         Process p=pb.start();
@@ -1634,6 +1644,13 @@ public class CreativeAiController {
         List<Path> candidates=List.of(cwd.resolve("scripts/model-convert-blender.py"),cwd.resolve("../scripts/model-convert-blender.py"),cwd.resolve("model-convert-blender.py"));
         for(Path p:candidates) if(Files.exists(p)) return p;
         throw new IOException("找不到 Blender 模型转换脚本 scripts/model-convert-blender.py");
+    }
+
+    private Path modelConvertNodeScriptPath() throws IOException {
+        Path cwd=Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        List<Path> candidates=List.of(cwd.resolve("shixun-vue/scripts/model-convert-three.mjs"),cwd.resolve("../shixun-vue/scripts/model-convert-three.mjs"),cwd.resolve("scripts/model-convert-three.mjs"));
+        for(Path p:candidates) if(Files.exists(p)) return p;
+        throw new IOException("找不到 Node 模型转换脚本 shixun-vue/scripts/model-convert-three.mjs");
     }
 
     private void zipDirectory(Path dir,Path zipFile) throws IOException {

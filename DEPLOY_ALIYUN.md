@@ -171,8 +171,10 @@ TRIPO_MODEL_VERSION=v3.1-20260211
 
 # 下载 OBJ/STL 时优先服务器本地转换 GLB -> OBJ/STL
 MODEL_CONVERT_PREFER_LOCAL=true
+MODEL_CONVERT_FALLBACK_TRIPO=false
 MODEL_CONVERT_BLENDER_COMMAND=blender
 MODEL_CONVERT_ASSIMP_COMMAND=assimp
+MODEL_CONVERT_NODE_COMMAND=node
 MODEL_CONVERT_TIMEOUT_SECONDS=300
 ```
 
@@ -185,7 +187,7 @@ bash scripts/aliyun-start.sh production
 
 在“创意设计 → 3D辅助建模”上传产品参考图，系统会提交Tripo图生3D任务，自动轮询进度，并将完成的GLB模型和预览图下载到本系统资产目录，避免Tripo临时下载地址过期。
 
-模型预览仍使用 GLB；下载 OBJ/STL 时后端会优先调用服务器本地 Blender（推荐）或 assimp 转换，并把转换结果登记到资产库缓存。若提示“服务器未安装模型转换器”，请先执行：
+模型预览仍使用 GLB；下载 OBJ/STL 时后端会优先调用服务器本地 Blender（推荐）或 assimp 转换，并把转换结果登记到资产库缓存。若服务器没有 Blender/assimp，系统会使用项目内置 Node + three 做基础几何转换兜底；如果仍提示“服务器未安装模型转换器”，请先执行：
 
 ```bash
 cd /opt/smart_pig
