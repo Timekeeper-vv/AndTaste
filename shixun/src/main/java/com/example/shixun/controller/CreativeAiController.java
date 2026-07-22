@@ -221,13 +221,32 @@ public class CreativeAiController {
         requireCreativeAdmin(role);
         Long userId=body==null||blank(body.get("userId"))?null:Long.parseLong(body.get("userId").trim());
         if(userId==null) throw new IllegalArgumentException("请选择C端用户");
-        BigDecimal amount=new BigDecimal(nullToEmpty(body.get("amount")).trim());
+        if(body==null||blank(body.get("amount"))) throw new IllegalArgumentException("请填写充值额度");
+        BigDecimal amount=new BigDecimal(body.get("amount").trim());
         if(amount.compareTo(BigDecimal.ZERO)<=0) throw new IllegalArgumentException("充值额度必须大于0");
         String remark=body==null?"":nullToEmpty(body.get("remark"));
         Long txId=rechargeCredit(userId,amount,blank(operator)?"admin":operator,remark);
         Map<String,Object> out=new LinkedHashMap<>(creditAccountMap(userId));
         out.put("transactionId",txId);
         out.put("message","充值成功");
+        return out;
+    }
+
+    @PostMapping("/consumer-credits/admin/set-balance")
+    public Map<String,Object> setConsumerCreditBalance(@RequestHeader(value="X-Current-Role",required=false) String role,
+                                                       @RequestHeader(value="X-Current-User",required=false) String operator,
+                                                       @RequestBody Map<String,String> body) {
+        requireCreativeAdmin(role);
+        Long userId=body==null||blank(body.get("userId"))?null:Long.parseLong(body.get("userId").trim());
+        if(userId==null) throw new IllegalArgumentException("请选择C端用户");
+        if(body==null||blank(body.get("balance"))) throw new IllegalArgumentException("请填写目标余额");
+        BigDecimal balance=new BigDecimal(body.get("balance").trim());
+        if(balance.compareTo(BigDecimal.ZERO)<0) throw new IllegalArgumentException("目标余额不能小于0");
+        String remark=body==null?"":nullToEmpty(body.get("remark"));
+        Long txId=setCreditBalance(userId,balance,blank(operator)?"admin":operator,remark);
+        Map<String,Object> out=new LinkedHashMap<>(creditAccountMap(userId));
+        out.put("transactionId",txId);
+        out.put("message","额度设置成功");
         return out;
     }
 
@@ -2089,6 +2108,22 @@ public class CreativeAiController {
         jdbc.update(con -> {
             PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_credit_transaction (transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)",Statement.RETURN_GENERATED_KEYS);
             ps.setString(1,no("CRT"));ps.setLong(2,userId);ps.setString(3,"admin_recharge");ps.setBigDecimal(4,amount);ps.setString(5,"recharge");ps.setString(6,"completed");ps.setBigDecimal(7,before);ps.setBigDecimal(8,after);ps.setString(9,blank(remark)?"管理员充值":remark);ps.setString(10,operator);
+            return ps;
+        },kh);
+        return Objects.requireNonNull(kh.getKey()).longValue();
+    }
+
+    private synchronized Long setCreditBalance(Long userId,BigDecimal targetBalance,String operator,String remark) {
+        ensureConsumerCreditAccount(userId);
+        Map<String,Object> account=jdbc.queryForMap("SELECT balance FROM consumer_credit_account WHERE user_id=?",userId);
+        BigDecimal before=toDecimal(account.get("balance"));
+        BigDecimal after=targetBalance;
+        BigDecimal delta=after.subtract(before);
+        jdbc.update("UPDATE consumer_credit_account SET balance=? WHERE user_id=?",after,userId);
+        KeyHolder kh=new GeneratedKeyHolder();
+        jdbc.update(con -> {
+            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_credit_transaction (transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)",Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1,no("CRT"));ps.setLong(2,userId);ps.setString(3,"admin_set_balance");ps.setBigDecimal(4,delta.abs());ps.setString(5,"adjust");ps.setString(6,"completed");ps.setBigDecimal(7,before);ps.setBigDecimal(8,after);ps.setString(9,blank(remark)?"管理员直接设置额度余额":remark);ps.setString(10,operator);
             return ps;
         },kh);
         return Objects.requireNonNull(kh.getKey()).longValue();

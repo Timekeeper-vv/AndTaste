@@ -24,7 +24,6 @@ const allMenus: MenuGroup[] = [
     { key: 'approvalCenter', label: '审批中心', roles: MANAGER_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>` },
     { key: 'consumerWorksReview', label: 'C端用户作品审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'consumerAssetInventory', label: 'C端用户端库存', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
-    { key: 'consumerCreditManagement', label: 'C端额度管理', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'aiAssistant', label: '之间味道AI助手', roles: ALL_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 0-7 7v3a7 7 0 0 0 14 0V9a7 7 0 0 0-7-7Z"/><path d="M8 10h.01"/><path d="M16 10h.01"/><path d="M9 15c1.5 1 4.5 1 6 0"/><path d="M4 19l3-2"/><path d="M20 19l-3-2"/></svg>` },
   ]},
   { group: '创意与生产', items: [
@@ -107,6 +106,7 @@ const allMenus: MenuGroup[] = [
     { key: 'financePettyCashWriteoff', label: '备用金核销', parentKey: 'finance', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
   ]},
   { group: '系统', items: [
+    { key: 'consumerCreditManagement', label: 'C端额度管理', roles: SUPER_ADMIN_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>` },
     { key: 'users', label: '账号权限', roles: SUPER_ADMIN_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>` },
   ]},
 ]
