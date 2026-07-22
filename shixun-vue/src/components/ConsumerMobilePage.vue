@@ -29,6 +29,7 @@ const previewReady = ref(false)
 const previewLoadFailed = ref(false)
 const modelViewerLoaded = ref(false)
 const previewDownloadFormat = ref<'GLB' | 'OBJ' | 'STL'>('GLB')
+const previewDownloading = ref(false)
 
 const imageForm = reactive({
   rawPrompt: '一款适合年轻游客的城市味道文创礼盒，温暖、精致、有官方文创质感',
@@ -52,6 +53,47 @@ const recentModels = computed(() => assets.value.filter(x => x.assetType === 'mo
 const canGenerateModel = computed(() => modelForm.mode === 'image_to_model' ? !!modelForm.inputAssetId : !!modelForm.rawPrompt.trim())
 const previewModelUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/model-content` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || '')
 const previewDownloadUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/download-model?format=${previewDownloadFormat.value}` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
+
+async function downloadPreviewModel() {
+  const url = previewDownloadUrl.value
+  const format = previewDownloadFormat.value
+  const id = previewAsset.value?.id || Date.now()
+  if (!url) {
+    emit('alert', '模型文件暂不可下载', 'error')
+    return
+  }
+  previewDownloading.value = true
+  emit('alert', format === 'GLB' ? '正在准备模型文件…' : `正在转换为 ${format} 格式，首次可能需要1-2分钟`, 'success')
+  try {
+    const response = await fetch(url, { cache: 'no-store' })
+    if (!response.ok) {
+      let message = ''
+      try {
+        const contentType = response.headers.get('content-type') || ''
+        message = contentType.includes('application/json') ? (await response.json()).message : await response.text()
+      } catch {}
+      throw new Error(message || `HTTP ${response.status}`)
+    }
+    const blob = await response.blob()
+    const disposition = response.headers.get('content-disposition') || ''
+    const matched = /filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i.exec(disposition)
+    const filename = matched ? decodeURIComponent(matched[1] || matched[2]) : `and-taste-3d-${id}-${format.toLowerCase()}.${format.toLowerCase()}`
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1500)
+    emit('alert', `已开始下载 ${format} 模型`, 'success')
+    await load()
+  } catch (error: any) {
+    emit('alert', `下载失败：${error?.message || error}`, 'error')
+  } finally {
+    previewDownloading.value = false
+  }
+}
 
 function displayAssetTitle(a: any): string {
   const title = String(a?.title || '')
@@ -538,7 +580,7 @@ function closeModelPreview() {
               <option value="STL">STL</option>
             </select>
           </label>
-          <a :href="previewDownloadUrl" target="_blank" rel="noopener">下载{{ previewDownloadFormat }}</a>
+          <button type="button" class="download-action" :disabled="previewDownloading" @click="downloadPreviewModel">{{ previewDownloading ? '处理中' : `下载${previewDownloadFormat}` }}</button>
         </div>
       </section>
     </Teleport>
@@ -1441,6 +1483,7 @@ function closeModelPreview() {
 }
 .model-preview-bottom button,
 .model-preview-bottom a,
+.model-preview-bottom .download-action,
 .format-select{
   display:flex !important;
   align-items:center !important;
@@ -1477,7 +1520,8 @@ function closeModelPreview() {
 .format-select option{
   color:#111827 !important;
 }
-.model-preview-bottom a{
+.model-preview-bottom a,
+.model-preview-bottom .download-action{
   border-color:#c27643 !important;
   background:#c27643 !important;
 }
