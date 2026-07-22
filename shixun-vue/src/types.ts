@@ -8,6 +8,7 @@ export type AlertType = 'success' | 'error'
 export type PageName =
   | 'dashboard'
   | 'approvalCenter'
+  | 'consumerWorksReview'
   | 'aiAssistant'
   | 'consumerMobile'
   | 'studio'

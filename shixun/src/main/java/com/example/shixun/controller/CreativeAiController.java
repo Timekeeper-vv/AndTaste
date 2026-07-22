@@ -112,6 +112,8 @@ public class CreativeAiController {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS design_review_report (id BIGINT AUTO_INCREMENT PRIMARY KEY, review_id BIGINT NOT NULL UNIQUE, report_json JSON NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='智能评估完整报告留存'");
+        try { this.jdbc.execute("ALTER TABLE digital_asset ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
+        try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
@@ -427,6 +429,7 @@ public class CreativeAiController {
             meta.put("imageSize", size);
             meta.put("outputFormat", format);
             meta.put("promptForImagen", imagenPrompt);
+            if(req.currentUserId!=null){meta.put("createdByUserId",req.currentUserId);meta.put("consumerWork",true);}
             Long assetId = createAsset("Google Imagen 4 2D创意图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, format, "Google Imagen 4,Replicate,2D创意生图,AI生成", meta);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, prediction.path("id").asText(""), jobId);
             Map<String,Object> out = new LinkedHashMap<>();
@@ -642,6 +645,7 @@ public class CreativeAiController {
         Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
                 primaryInputAssetId, req.prompt, req.negativePrompt, "running", null,
                 Boolean.TRUE.equals(req.quad) ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
+        assignJobOwner(jobId, req.currentUserId);
         jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
         Map<String,Object> response = new LinkedHashMap<>();
         response.put("jobId", jobId); response.put("jobNo", jobNo); response.put("taskId", taskId);
@@ -695,7 +699,7 @@ public class CreativeAiController {
 
     @GetMapping("/tripo/tasks/{jobId}")
     public synchronized Map<String,Object> tripoTask(@PathVariable Long jobId) throws Exception {
-        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage FROM ai_generation_job WHERE id=?",jobId);
+        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage,created_by createdBy FROM ai_generation_job WHERE id=?",jobId);
         String taskId=str(job.get("externalTaskId")); if(blank(taskId))throw new IllegalStateException("任务没有Tripo task_id");
         if(job.get("outputAssetId")!=null) return completedTripoJob(jobId,job);
         String response=tripoJson("GET","/tasks/"+URLEncoder.encode(taskId,StandardCharsets.UTF_8),null);
@@ -711,9 +715,10 @@ public class CreativeAiController {
             Long inputId=job.get("inputAssetId") instanceof Number ? ((Number)job.get("inputAssetId")).longValue() : null;
             String modelName=jdbc.queryForObject("SELECT model_name FROM ai_generation_job WHERE id=?",String.class,jobId);
             Map<String,Object> metadata=new LinkedHashMap<>(); metadata.put("provider","tripo"); metadata.put("taskId",taskId); metadata.put("remoteModel",modelUrl); metadata.put("modelVersion",modelName);
+            if(job.get("createdBy") instanceof Number){metadata.put("createdByUserId",((Number)job.get("createdBy")).longValue());metadata.put("consumerWork",true);}
             Long assetId=createAsset("Tripo "+modelName+" 3D模型","model","ai_generated",localModel,localPreview,String.valueOf(jdbc.queryForObject("SELECT prompt FROM ai_generation_job WHERE id=?",String.class,jobId)),null,null,inputId,suffixFromUrl(modelUrl,".glb").replace(".",""),"Tripo,3D模型,"+modelName,metadata);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100 WHERE id=?",assetId,jobId);
-            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage FROM ai_generation_job WHERE id=?",jobId);
+            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage,created_by createdBy FROM ai_generation_job WHERE id=?",jobId);
             return completedTripoJob(jobId,job);
         }
         Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);return out;
@@ -744,7 +749,8 @@ public class CreativeAiController {
     @PostMapping(value = "/assets/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> uploadAsset(@RequestParam("file") MultipartFile file,
                                            @RequestParam(required = false) String title,
-                                           @RequestParam(required = false) String tags) throws Exception {
+                                           @RequestParam(required = false) String tags,
+                                           @RequestParam(required = false) Long currentUserId) throws Exception {
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("请选择要上传的图片");
         String original = file.getOriginalFilename() == null ? "upload.png" : file.getOriginalFilename();
         String lower = original.toLowerCase(Locale.ROOT);
@@ -758,6 +764,9 @@ public class CreativeAiController {
         Path target = dir.resolve(fileName);
         Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
         String url = "/uploads/" + fileName;
+        Map<String,Object> meta=new LinkedHashMap<>();
+        meta.put("uploadName", original); meta.put("size", file.getSize()); meta.put("contentType", file.getContentType() == null ? "" : file.getContentType());
+        if(currentUserId!=null){meta.put("createdByUserId",currentUserId);meta.put("consumerReference",true);}
         Long assetId = createAsset(
                 title == null || title.isBlank() ? original : title,
                 "image",
@@ -770,7 +779,7 @@ public class CreativeAiController {
                 null,
                 ext.replace(".", ""),
                 tags == null || tags.isBlank() ? "参考图,上传" : tags,
-                Map.of("uploadName", original, "size", file.getSize(), "contentType", file.getContentType() == null ? "" : file.getContentType())
+                meta
         );
         return Map.of("assetId", assetId, "url", url, "title", title == null || title.isBlank() ? original : title);
     }
@@ -819,9 +828,49 @@ public class CreativeAiController {
     }
 
     @GetMapping("/assets")
-    public List<Map<String, Object>> assets(@RequestParam(required = false) String type) {
-        if (type != null && !type.isBlank()) return jdbc.queryForList("SELECT id, asset_no assetNo, title, asset_type assetType, source_type sourceType, file_url fileUrl, preview_url previewUrl, prompt, style_id styleId, parent_asset_id parentAssetId, version_no versionNo, status, format, tags, created_at createdAt FROM digital_asset WHERE asset_type=? ORDER BY id DESC", type);
-        return jdbc.queryForList("SELECT id, asset_no assetNo, title, asset_type assetType, source_type sourceType, file_url fileUrl, preview_url previewUrl, prompt, style_id styleId, parent_asset_id parentAssetId, version_no versionNo, status, format, tags, created_at createdAt FROM digital_asset ORDER BY id DESC LIMIT 100");
+    public List<Map<String, Object>> assets(@RequestParam(required = false) String type,
+                                            @RequestParam(required = false) Long currentUserId,
+                                            @RequestParam(required = false) String role,
+                                            @RequestHeader(value = "X-Current-Role", required = false) String headerRole,
+                                            @RequestHeader(value = "X-Current-User-Id", required = false) Long headerUserId) {
+        String actualRole=blank(role)?headerRole:role; Long actualUserId=currentUserId==null?headerUserId:currentUserId;
+        String cols="id, asset_no assetNo, title, asset_type assetType, source_type sourceType, file_url fileUrl, preview_url previewUrl, prompt, style_id styleId, parent_asset_id parentAssetId, version_no versionNo, status, format, tags, created_by createdBy, created_at createdAt";
+        if("user".equals(actualRole)){
+            if(actualUserId==null) return List.of();
+            if (type != null && !type.isBlank()) return jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE asset_type=? AND created_by=? ORDER BY id DESC", type, actualUserId);
+            return jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE created_by=? ORDER BY id DESC LIMIT 100", actualUserId);
+        }
+        if (type != null && !type.isBlank()) return jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE asset_type=? ORDER BY id DESC", type);
+        return jdbc.queryForList("SELECT "+cols+" FROM digital_asset ORDER BY id DESC LIMIT 100");
+    }
+
+    @GetMapping("/consumer-assets/review")
+    public List<Map<String,Object>> consumerAssetsReview(@RequestHeader(value="X-Current-Role",required=false) String role,
+                                                         @RequestParam(required=false) Long userId,
+                                                         @RequestParam(required=false) String status,
+                                                         @RequestParam(required=false,defaultValue="100") int size) {
+        requireCreativeAdmin(role);
+        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND a.source_type<>'upload'");
+        List<Object> args=new ArrayList<>();
+        if(userId!=null){sql.append(" AND a.created_by=?");args.add(userId);}
+        if(!blank(status)){sql.append(" AND a.status=?");args.add(status);}
+        sql.append(" ORDER BY a.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,500)));
+        return jdbc.queryForList(sql.toString(),args.toArray());
+    }
+
+    @PutMapping("/consumer-assets/{id}/review")
+    public Map<String,Object> reviewConsumerAsset(@PathVariable Long id,
+                                                  @RequestHeader(value="X-Current-Role",required=false) String role,
+                                                  @RequestHeader(value="X-Current-User",required=false) String operatorHeader,
+                                                  @RequestBody Map<String,String> body) {
+        requireCreativeAdmin(role);
+        String status=body==null?"":nullToEmpty(body.get("status")).trim();
+        if(!Set.of("approved","rejected","review").contains(status)) throw new IllegalArgumentException("审核状态只能是 approved / rejected / review");
+        String operator=blank(body==null?null:body.get("operator"))?operatorHeader:body.get("operator");
+        String comment=body==null?"":nullToEmpty(body.get("comment"));
+        int n=jdbc.update("UPDATE digital_asset a SET a.status=?, a.tags=CONCAT(COALESCE(a.tags,''), ?) WHERE a.id=? AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')",status,";审核:"+status+(blank(comment)?"":"-"+comment),id);
+        if(n==0) throw new IllegalArgumentException("作品不存在或不是C端用户作品");
+        return Map.of("success",true,"id",id,"status",status,"operator",blank(operator)?"admin":operator,"message","审核状态已更新");
     }
 
     @PostMapping("/reviews")
@@ -1495,12 +1544,30 @@ public class CreativeAiController {
         KeyHolder kh = new GeneratedKeyHolder();
         String assetNo = no("AST");
         String metaJson = mapper.writeValueAsString(meta == null ? Map.of() : meta);
+        String initialStatus = meta != null && Boolean.TRUE.equals(meta.get("consumerWork")) ? "review" : "draft";
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("INSERT INTO digital_asset (asset_no,title,asset_type,source_type,file_url,preview_url,prompt,negative_prompt,style_id,parent_asset_id,format,tags,metadata_json,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
-            ps.setString(1, assetNo); ps.setString(2, title); ps.setString(3, type); ps.setString(4, sourceType == null ? "ai_generated" : sourceType); ps.setString(5, fileUrl); ps.setString(6, previewUrl); ps.setString(7, prompt); ps.setString(8, negative); if (styleId == null) ps.setNull(9, java.sql.Types.BIGINT); else ps.setLong(9, styleId); if (parentAssetId == null) ps.setNull(10, java.sql.Types.BIGINT); else ps.setLong(10, parentAssetId); ps.setString(11, format); ps.setString(12, tags); ps.setString(13, metaJson); ps.setString(14, "draft");
+            ps.setString(1, assetNo); ps.setString(2, title); ps.setString(3, type); ps.setString(4, sourceType == null ? "ai_generated" : sourceType); ps.setString(5, fileUrl); ps.setString(6, previewUrl); ps.setString(7, prompt); ps.setString(8, negative); if (styleId == null) ps.setNull(9, java.sql.Types.BIGINT); else ps.setLong(9, styleId); if (parentAssetId == null) ps.setNull(10, java.sql.Types.BIGINT); else ps.setLong(10, parentAssetId); ps.setString(11, format); ps.setString(12, tags); ps.setString(13, metaJson); ps.setString(14, initialStatus);
             return ps;
         }, kh);
-        return Objects.requireNonNull(kh.getKey()).longValue();
+        Long assetId=Objects.requireNonNull(kh.getKey()).longValue();
+        Object owner=meta==null?null:meta.get("createdByUserId");
+        if(owner instanceof Number) assignAssetOwner(assetId,((Number)owner).longValue());
+        return assetId;
+    }
+
+    private void assignAssetOwner(Long assetId, Long userId) {
+        if(assetId==null||userId==null) return;
+        try { jdbc.update("UPDATE digital_asset SET created_by=? WHERE id=?", userId, assetId); } catch(Exception ignored) {}
+    }
+
+    private void assignJobOwner(Long jobId, Long userId) {
+        if(jobId==null||userId==null) return;
+        try { jdbc.update("UPDATE ai_generation_job SET created_by=? WHERE id=?", userId, jobId); } catch(Exception ignored) {}
+    }
+
+    private void requireCreativeAdmin(String role) {
+        if(!"admin".equals(role)) throw new IllegalStateException("仅超级管理员可审核C端用户作品");
     }
 
     private Long createJob(String jobNo, String type, String provider, String model, Long styleId, Long inputAssetId, String prompt, String negative, String status, String error, String exportFormats) {
@@ -1755,6 +1822,7 @@ public class CreativeAiController {
         public String imagenAspectRatio;
         public String imagenImageSize;
         public String imagenOutputFormat;
+        public Long currentUserId;
     }
     public static class Generate3dRequest {
         public String mode;
@@ -1782,5 +1850,6 @@ public class CreativeAiController {
         public Long modelSeed;
         public Long imageSeed;
         public Long textureSeed;
+        public Long currentUserId;
     }
 }
