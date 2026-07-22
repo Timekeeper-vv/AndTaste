@@ -17,7 +17,7 @@ SILICONFLOW_IMAGE_MODEL="${SILICONFLOW_IMAGE_MODEL:-Kwai-Kolors/Kolors}"; SILICO
 QWEN_API_KEY="${QWEN_API_KEY:-}"; TRIPO_API_KEY="${TRIPO_API_KEY:-}"; TRIPO_API_BASE_URL="${TRIPO_API_BASE_URL:-https://openapi.tripo3d.com/v3}"; TRIPO_CONVERT_BASE_URL="${TRIPO_CONVERT_BASE_URL:-https://api.tripo3d.ai/v2/openapi}"; TRIPO_MODEL_VERSION="${TRIPO_MODEL_VERSION:-v3.1-20260211}"
 MODEL_CONVERT_PREFER_LOCAL="${MODEL_CONVERT_PREFER_LOCAL:-true}"; MODEL_CONVERT_FALLBACK_TRIPO="${MODEL_CONVERT_FALLBACK_TRIPO:-false}"; MODEL_CONVERT_BLENDER_COMMAND="${MODEL_CONVERT_BLENDER_COMMAND:-blender}"; MODEL_CONVERT_ASSIMP_COMMAND="${MODEL_CONVERT_ASSIMP_COMMAND:-assimp}"; MODEL_CONVERT_NODE_COMMAND="${MODEL_CONVERT_NODE_COMMAND:-node}"; MODEL_CONVERT_TIMEOUT_SECONDS="${MODEL_CONVERT_TIMEOUT_SECONDS:-300}"
 REPLICATE_API_KEY="${REPLICATE_API_KEY:-}"; REPLICATE_API_BASE_URL="${REPLICATE_API_BASE_URL:-https://api.replicate.com/v1}"; REPLICATE_IMAGEN_MODEL="${REPLICATE_IMAGEN_MODEL:-google/imagen-4}"
-JIMENG_API_KEY="${JIMENG_API_KEY:-}"; JIMENG_API_BASE_URL="${JIMENG_API_BASE_URL:-https://visual.volcengineapi.com}"; JIMENG_REQ_KEY="${JIMENG_REQ_KEY:-jimeng_seedream46_cvtob}"; JIMENG_POLL_MAX_SECONDS="${JIMENG_POLL_MAX_SECONDS:-180}"
+JIMENG_API_KEY="${JIMENG_API_KEY:-}"; JIMENG_ACCESS_KEY_ID="${JIMENG_ACCESS_KEY_ID:-}"; JIMENG_SECRET_ACCESS_KEY="${JIMENG_SECRET_ACCESS_KEY:-}"; JIMENG_REGION="${JIMENG_REGION:-cn-north-1}"; JIMENG_SERVICE="${JIMENG_SERVICE:-cv}"; JIMENG_API_BASE_URL="${JIMENG_API_BASE_URL:-https://visual.volcengineapi.com}"; JIMENG_REQ_KEY="${JIMENG_REQ_KEY:-jimeng_seedream46_cvtob}"; JIMENG_POLL_MAX_SECONDS="${JIMENG_POLL_MAX_SECONDS:-180}"
 MODAO_API_KEY="${MODAO_API_KEY:-}"; MODAO_DESIGN_URL="${MODAO_DESIGN_URL:-https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a}"; MODAO_MCP_URL="${MODAO_MCP_URL:-https://modao.cc/agent-py/ai/mcp}"; MODAO_CHROME_PATH="${MODAO_CHROME_PATH:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 KUAIDI100_CUSTOMER="${KUAIDI100_CUSTOMER:-}"; KUAIDI100_KEY="${KUAIDI100_KEY:-}"; KUAIDI100_CALLBACK_URL="${KUAIDI100_CALLBACK_URL:-}"; KUAIDI100_SALT="${KUAIDI100_SALT:-}"
 JAR_FILE=""
@@ -67,6 +67,8 @@ write_config(){
   # production 会重写 application-local.properties；如果 .env 未配置，尽量保留已手工写入的第三方密钥。
   [ -n "$REPLICATE_API_KEY" ] || REPLICATE_API_KEY="$(existing_prop "replicate.api.key" || true)"
   [ -n "$JIMENG_API_KEY" ] || JIMENG_API_KEY="$(existing_prop "jimeng.api.key" || true)"
+  [ -n "$JIMENG_ACCESS_KEY_ID" ] || JIMENG_ACCESS_KEY_ID="$(existing_prop "jimeng.access-key-id" || true)"
+  [ -n "$JIMENG_SECRET_ACCESS_KEY" ] || JIMENG_SECRET_ACCESS_KEY="$(existing_prop "jimeng.secret-access-key" || true)"
   [ -n "$MODAO_API_KEY" ] || MODAO_API_KEY="$(existing_prop "modao.api.key" || true)"
   cat > "$BACKEND_DIR/application-local.properties" <<CFG
 server.address=0.0.0.0
@@ -94,6 +96,10 @@ replicate.api.key=$REPLICATE_API_KEY
 replicate.api.base-url=$REPLICATE_API_BASE_URL
 replicate.imagen.model=$REPLICATE_IMAGEN_MODEL
 jimeng.api.key=$JIMENG_API_KEY
+jimeng.access-key-id=$JIMENG_ACCESS_KEY_ID
+jimeng.secret-access-key=$JIMENG_SECRET_ACCESS_KEY
+jimeng.region=$JIMENG_REGION
+jimeng.service=$JIMENG_SERVICE
 jimeng.api.base-url=$JIMENG_API_BASE_URL
 jimeng.req-key=$JIMENG_REQ_KEY
 jimeng.poll.max-seconds=$JIMENG_POLL_MAX_SECONDS

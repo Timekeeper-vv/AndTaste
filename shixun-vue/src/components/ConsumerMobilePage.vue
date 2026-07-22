@@ -219,7 +219,7 @@ async function generateImage() {
     return
   }
   if (!imageConfig.value.configured) {
-    emit('alert', '即梦AI图片生成服务未配置，请联系管理员', 'error')
+    emit('alert', '即梦AI签名鉴权未配置，请联系管理员配置火山AccessKeyId和SecretAccessKey', 'error')
     return
   }
   busy.value = true

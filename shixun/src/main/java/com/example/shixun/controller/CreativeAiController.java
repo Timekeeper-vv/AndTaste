@@ -17,6 +17,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.MessageDigest;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -98,6 +101,18 @@ public class CreativeAiController {
 
     @Value("${jimeng.api.key:}")
     private String jimengApiKey;
+
+    @Value("${jimeng.access-key-id:}")
+    private String jimengAccessKeyId;
+
+    @Value("${jimeng.secret-access-key:}")
+    private String jimengSecretAccessKey;
+
+    @Value("${jimeng.region:cn-north-1}")
+    private String jimengRegion;
+
+    @Value("${jimeng.service:cv}")
+    private String jimengService;
 
     @Value("${jimeng.api.base-url:https://visual.volcengineapi.com}")
     private String jimengBaseUrl;
@@ -396,24 +411,26 @@ public class CreativeAiController {
 
     @GetMapping("/jimeng/config")
     public Map<String,Object> jimengConfig() {
-        boolean configured = !blank(jimengApiKey) && !jimengApiKey.contains("YOUR_");
+        boolean signatureConfigured = !blank(jimengAccessKeyId) && !blank(jimengSecretAccessKey) && !jimengAccessKeyId.contains("YOUR_") && !jimengSecretAccessKey.contains("YOUR_");
+        boolean bearerOnly = !signatureConfigured && !blank(jimengApiKey) && !jimengApiKey.contains("YOUR_");
         Map<String,Object> result = new LinkedHashMap<>();
-        result.put("configured", configured);
+        result.put("configured", signatureConfigured);
         result.put("provider", "Volcengine");
+        result.put("authMode", signatureConfigured ? "volcengine-signature" : (bearerOnly ? "api-key-not-supported-by-this-endpoint" : "missing"));
         result.put("displayName", "即梦AI-图片生成4.6");
         result.put("model", jimengReqKey);
         result.put("apiVersion", "CVSync2AsyncSubmitTask 2022-08-31");
-        result.put("serviceReachable", configured);
+        result.put("serviceReachable", signatureConfigured);
         result.put("imageSizes", List.of("1K", "2K"));
         result.put("aspectRatios", List.of("1:1", "16:9", "9:16", "4:3", "3:4"));
         result.put("outputFormats", List.of("png", "jpg"));
-        result.put("message", "当前首选接入火山引擎即梦AI-图片生成4.6，生成结果会自动保存到系统资产库。参考接口：CVSync2AsyncSubmitTask / CVSync2AsyncGetResult。");
+        result.put("message", signatureConfigured ? "当前首选接入火山引擎即梦AI-图片生成4.6，使用火山公共签名鉴权，生成结果会自动保存到系统资产库。" : (bearerOnly ? "检测到 jimeng.api.key，但该视觉接口需要 AccessKeyId + SecretAccessKey 签名鉴权；请配置 jimeng.access-key-id 和 jimeng.secret-access-key。" : "未配置火山引擎 AccessKeyId / SecretAccessKey。"));
         return result;
     }
 
     @PostMapping("/jimeng/text-to-image")
     public Map<String,Object> jimengTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
-        if(blank(jimengApiKey) || jimengApiKey.contains("YOUR_")) throw new IllegalStateException("未配置火山引擎即梦 API Key：请在 shixun/application-local.properties 配置 jimeng.api.key");
+        if(blank(jimengAccessKeyId) || blank(jimengSecretAccessKey)) throw new IllegalStateException("即梦视觉接口需要火山引擎 AccessKeyId + SecretAccessKey 签名鉴权，不支持直接使用 Vx 开头的 API Key。请在 shixun/application-local.properties 配置 jimeng.access-key-id 和 jimeng.secret-access-key");
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
         String prompt = req.prompt.trim();
         if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
@@ -1131,13 +1148,14 @@ public class CreativeAiController {
     }
 
     private JsonNode jimengPost(String url, Map<String,Object> payload, String actionName) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder()
+        String body = mapper.writeValueAsString(payload);
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .timeout(Duration.ofSeconds(75))
-                .header("Authorization", "Bearer " + jimengApiKey.trim())
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
-                .build();
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        signVolcengineRequest(builder, URI.create(url), body);
+        HttpRequest request = builder.build();
         try {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if(response.statusCode()<200 || response.statusCode()>=300) throw jimengHttpError(response.statusCode(), response.body(), actionName);
@@ -1207,6 +1225,37 @@ public class CreativeAiController {
         out.put("message", "即梦AI 4.6 图片已生成，并已回传保存到系统资产库。用户端可继续提交审核。");
         return out;
     }
+
+    private void signVolcengineRequest(HttpRequest.Builder builder, URI uri, String body) throws Exception {
+        String host = uri.getHost();
+        String xDate = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"));
+        String shortDate = xDate.substring(0, 8);
+        String payloadHash = sha256Hex(body);
+        String canonicalQuery = canonicalQuery(uri.getRawQuery());
+        String signedHeaders = "content-type;host;x-content-sha256;x-date";
+        String canonicalHeaders = "content-type:application/json\n" + "host:" + host + "\n" + "x-content-sha256:" + payloadHash + "\n" + "x-date:" + xDate + "\n";
+        String canonicalRequest = "POST\n/\n" + canonicalQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash;
+        String credentialScope = shortDate + "/" + jimengRegion + "/" + jimengService + "/request";
+        String stringToSign = "HMAC-SHA256\n" + xDate + "\n" + credentialScope + "\n" + sha256Hex(canonicalRequest);
+        byte[] signingKey = hmac(hmac(hmac(hmac(jimengSecretAccessKey.getBytes(StandardCharsets.UTF_8), shortDate), jimengRegion), jimengService), "request");
+        String signature = hex(hmac(signingKey, stringToSign));
+        String authorization = "HMAC-SHA256 Credential=" + jimengAccessKeyId.trim() + "/" + credentialScope + ", SignedHeaders=" + signedHeaders + ", Signature=" + signature;
+        builder.header("Host", host)
+                .header("X-Date", xDate)
+                .header("X-Content-Sha256", payloadHash)
+                .header("Authorization", authorization);
+    }
+
+    private String canonicalQuery(String rawQuery) {
+        if(blank(rawQuery)) return "";
+        List<String> parts = new ArrayList<>(Arrays.asList(rawQuery.split("&")));
+        parts.sort(String::compareTo);
+        return String.join("&", parts);
+    }
+
+    private String sha256Hex(String s) throws Exception { return hex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8))); }
+    private byte[] hmac(byte[] key, String data) throws Exception { Mac mac=Mac.getInstance("HmacSHA256"); mac.init(new SecretKeySpec(key,"HmacSHA256")); return mac.doFinal(data.getBytes(StandardCharsets.UTF_8)); }
+    private String hex(byte[] bytes) { StringBuilder sb=new StringBuilder(bytes.length*2); for(byte b:bytes) sb.append(String.format("%02x", b & 0xff)); return sb.toString(); }
 
     private IllegalStateException jimengHttpError(int status, String raw, String actionName) {
         try {
