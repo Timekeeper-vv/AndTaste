@@ -21,10 +21,11 @@ const roleOptions: Array<{ value: Role; label: string }> = [
   { value: 'technician', label: '审批主管' },
   { value: 'feeder',     label: '员工' },
   { value: 'designer',   label: '设计师' },
+  { value: 'user',       label: 'C端用户' },
 ]
-const roleLabelMap: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工', designer: '设计师' }
-const roleBadgeClass: Record<Role, string> = { admin: 'badge-admin', technician: 'badge-approver', feeder: 'badge-employee', designer: 'badge-designer' }
-const demoPasswordAccounts = new Set(['superadmin', 'approver01', 'employee01', 'testuser', '审批员1', '审批员2', '审批员3', '审批员4', 'designer'])
+const roleLabelMap: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工', designer: '设计师', user: 'C端用户' }
+const roleBadgeClass: Record<Role, string> = { admin: 'badge-admin', technician: 'badge-approver', feeder: 'badge-employee', designer: 'badge-designer', user: 'badge-user' }
+const demoPasswordAccounts = new Set(['superadmin', 'approver01', 'employee01', 'testuser', '审批员1', '审批员2', '审批员3', '审批员4', 'designer', 'user'])
 const searchQuery = ref<string>('')
 const currentPage = ref<number>(1)
 const pageSize = ref<number>(10)
@@ -319,7 +320,7 @@ function passwordDisplay(u: UserRecord) {
           <select v-model="form.role" required>
             <option v-for="opt in roleOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
-          <small class="role-help">超管可管理全部；审批主管负责审核申请；员工负责业务申请；设计师仅可使用创意设计三个功能。</small>
+          <small class="role-help">超管可管理全部；审批主管负责审核申请；员工负责业务申请；设计师仅可使用创意设计三个功能；C端用户进入手机端轻量创作页。</small>
         </div>
         <div class="form-group" style="grid-column: 1 / -1">
           <label>密码 <span v-if="!isEdit" style="color:var(--c-error)">*</span></label>
@@ -350,6 +351,7 @@ function passwordDisplay(u: UserRecord) {
 .badge-approver { background: rgba(124,58,237,.12); color: #7c3aed; }
 .badge-employee { background: rgba(13,148,136,.12); color: #0d9488; }
 .badge-designer { background: rgba(37,99,235,.12); color: #2563eb; }
+.badge-user     { background: rgba(180,83,42,.12); color: #b4532a; }
 .role-help { display:block; margin-top:6px; font-size:12px; color:var(--c-text-3); line-height:1.4; }
 .password-pill {
   display: inline-flex;

@@ -28,19 +28,23 @@ import NotificationPanel from './components/NotificationPanel.vue'
 import GlobalAlert from './components/GlobalAlert.vue'
 import AiChat from './components/AiChat.vue'
 import AiAssistantPage from './components/AiAssistantPage.vue'
+import ConsumerMobilePage from './components/ConsumerMobilePage.vue'
 
 // 角色兼容说明：
 // admin      = 超级管理员：拥有全部功能，包括账号权限、审批和系统配置
 // technician = 审批主管：可查看业务模块并处理审批，但不能管理账号角色
 // feeder     = 员工：可制作内容、发起/提交申请，不能审批和管理账号
 // designer   = 设计师：仅可使用创意设计下的 2D、3D、智能评估三个功能
+// user       = C端用户：仅进入手机端轻量创作界面
 const ALL_ROLES: Role[] = ['admin', 'technician', 'feeder']
 const MANAGER_ROLES: Role[] = ['admin', 'technician']
 const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'technician', 'feeder']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
 const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'technician', 'feeder', 'designer']
+const CONSUMER_ROLES: Role[] = ['user']
 
 const PAGE_ROLES: Record<string, Role[]> = {
+  consumerMobile:CONSUMER_ROLES,
   dashboard:    ALL_ROLES,
   approvalCenter:MANAGER_ROLES,
   aiAssistant:  ALL_ROLES,
@@ -113,7 +117,7 @@ function hasAccess(page: string, role?: Role): boolean {
 }
 
 function firstAllowedPage(role: Role): PageName {
-  return (Object.keys(PAGE_ROLES).find(p => hasAccess(p, role)) || 'marketplace') as PageName
+  return (Object.keys(PAGE_ROLES).find(p => hasAccess(p, role)) || 'dashboard') as PageName
 }
 
 const currentUser = ref<User | null>(null)
@@ -155,6 +159,7 @@ function onLogout(): void {
 }
 
 const pageLabels: Record<string, string> = {
+  consumerMobile:'文创灵感工坊',
   dashboard:    '经营看板',
   approvalCenter:'审批中心',
   aiAssistant:  '之间味道AI助手',
@@ -225,6 +230,13 @@ const pageLabels: Record<string, string> = {
 
 <template>
   <LoginPage v-if="!currentUser" @login="onLogin" />
+
+  <ConsumerMobilePage
+    v-else-if="currentUser.role === 'user'"
+    :current-user="currentUser"
+    @alert="showAlert"
+    @logout="onLogout"
+  />
 
   <div v-else class="app-shell" :class="{ collapsed: sidebarCollapsed }">
     <!-- Sidebar -->
@@ -339,7 +351,7 @@ const pageLabels: Record<string, string> = {
   </div>
 
   <GlobalAlert :msg="alertMsg" :type="alertType" :visible="alertVisible" />
-  <AiChat v-if="currentUser && currentPage !== 'aiAssistant'" :current-user="currentUser" />
+  <AiChat v-if="currentUser && currentUser.role !== 'user' && currentPage !== 'aiAssistant'" :current-user="currentUser" />
 </template>
 
 <style>

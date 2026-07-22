@@ -27,6 +27,7 @@ public class DataInitializer {
             ensureApprover(userService, userMapper, "审批员3", "approver3@andtaste.com", "13800000103");
             ensureApprover(userService, userMapper, "审批员4", "approver4@andtaste.com", "13800000104");
             ensureDesigner(userService, userMapper, encoder);
+            ensureConsumerUser(userService, userMapper, encoder);
 
             // 修复 schema.sql 直接插入的明文密码：BCrypt 哈希以 $2 开头，不是则说明是明文
             userService.findAll().join().forEach(u -> {
@@ -74,6 +75,31 @@ public class DataInitializer {
         if (existing.getAge() == null || existing.getAge() <= 0) { existing.setAge(25); changed = true; }
         if (existing.getEmail() == null || existing.getEmail().isBlank()) { existing.setEmail("designer@andtaste.com"); changed = true; }
         if (existing.getPhone() == null || existing.getPhone().isBlank()) { existing.setPhone("13800000999"); changed = true; }
+        if (changed) userMapper.update(existing);
+    }
+
+    private void ensureConsumerUser(UserService userService, UserMapper userMapper, BCryptPasswordEncoder encoder) {
+        User existing = userMapper.findByUsername("user");
+        if (existing == null) {
+            User u = new User();
+            u.setUsername("user");
+            u.setAge(22);
+            u.setEmail("user@andtaste.com");
+            u.setPhone("13800000888");
+            u.setPassword("123456");
+            u.setRole("user");
+            userService.save(u).join();
+            return;
+        }
+        boolean changed = false;
+        if (!"user".equals(existing.getRole())) { existing.setRole("user"); changed = true; }
+        if (existing.getPassword() == null || !encoder.matches("123456", existing.getPassword())) {
+            existing.setPassword(encoder.encode("123456"));
+            changed = true;
+        }
+        if (existing.getAge() == null || existing.getAge() <= 0) { existing.setAge(22); changed = true; }
+        if (existing.getEmail() == null || existing.getEmail().isBlank()) { existing.setEmail("user@andtaste.com"); changed = true; }
+        if (existing.getPhone() == null || existing.getPhone().isBlank()) { existing.setPhone("13800000888"); changed = true; }
         if (changed) userMapper.update(existing);
     }
 }

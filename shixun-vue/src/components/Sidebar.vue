@@ -9,8 +9,8 @@ interface MenuGroup { group: string; items: MenuItem[] }
 const props = defineProps<{ currentUser: User; currentPage: PageName; collapsed: boolean }>()
 const emit = defineEmits<{ 'switch-page': [page: PageName]; 'logout': []; 'toggle': [] }>()
 
-const roleLabels: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工', designer: '设计师' }
-const roleColors: Record<Role, string> = { admin: '#ef4444', technician: '#7c3aed', feeder: '#0d9488', designer: '#2563eb' }
+const roleLabels: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工', designer: '设计师', user: 'C端用户' }
+const roleColors: Record<Role, string> = { admin: '#ef4444', technician: '#7c3aed', feeder: '#0d9488', designer: '#2563eb', user: '#b4532a' }
 
 const ALL_ROLES: Role[] = ['admin', 'technician', 'feeder']
 const MANAGER_ROLES: Role[] = ['admin', 'technician']

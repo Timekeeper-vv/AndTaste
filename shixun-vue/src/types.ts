@@ -1,14 +1,15 @@
 /**
  * 角色编码保持兼容历史数据：
- * admin=超级管理员，technician=审批主管，feeder=员工。
+ * admin=超级管理员，technician=审批主管，feeder=员工，designer=设计师，user=C端用户。
  */
-export type Role = 'admin' | 'technician' | 'feeder' | 'designer'
+export type Role = 'admin' | 'technician' | 'feeder' | 'designer' | 'user'
 export type AlertType = 'success' | 'error'
 
 export type PageName =
   | 'dashboard'
   | 'approvalCenter'
   | 'aiAssistant'
+  | 'consumerMobile'
   | 'studio'
   | 'creative2d'
   | 'creative3d'
