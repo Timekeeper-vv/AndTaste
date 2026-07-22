@@ -28,6 +28,7 @@ const previewAsset = ref<any | null>(null)
 const previewReady = ref(false)
 const previewLoadFailed = ref(false)
 const modelViewerLoaded = ref(false)
+const previewDownloadFormat = ref<'GLB' | 'OBJ' | 'STL'>('GLB')
 
 const imageForm = reactive({
   rawPrompt: '一款适合年轻游客的城市味道文创礼盒，温暖、精致、有官方文创质感',
@@ -50,7 +51,7 @@ const recentImages = computed(() => assets.value.filter(x => x.assetType === 'im
 const recentModels = computed(() => assets.value.filter(x => x.assetType === 'model').slice(0, 8))
 const canGenerateModel = computed(() => modelForm.mode === 'image_to_model' ? !!modelForm.inputAssetId : !!modelForm.rawPrompt.trim())
 const previewModelUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/model-content` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || '')
-const previewDownloadUrl = computed(() => previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
+const previewDownloadUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/download-model?format=${previewDownloadFormat.value}` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
 
 function displayAssetTitle(a: any): string {
   const title = String(a?.title || '')
@@ -333,6 +334,7 @@ async function openModelPreview(a?: any) {
   }
   previewReady.value = false
   previewLoadFailed.value = false
+  previewDownloadFormat.value = 'GLB'
   document.body.style.overflow = 'hidden'
   try {
     await ensureModelViewer()
@@ -528,7 +530,15 @@ function closeModelPreview() {
 
         <div class="model-preview-bottom">
           <button type="button" @click="closeModelPreview">完成</button>
-          <a :href="previewDownloadUrl" target="_blank" rel="noopener">下载文件</a>
+          <label class="format-select">
+            <span>下载格式</span>
+            <select v-model="previewDownloadFormat">
+              <option value="GLB">GLB</option>
+              <option value="OBJ">OBJ</option>
+              <option value="STL">STL</option>
+            </select>
+          </label>
+          <a :href="previewDownloadUrl" target="_blank" rel="noopener">下载{{ previewDownloadFormat }}</a>
         </div>
       </section>
     </Teleport>
@@ -1425,12 +1435,13 @@ function closeModelPreview() {
 }
 .model-preview-bottom{
   display:grid !important;
-  grid-template-columns:1fr 1fr !important;
+  grid-template-columns:1fr 1fr 1fr !important;
   gap:10px !important;
   flex:0 0 auto !important;
 }
 .model-preview-bottom button,
-.model-preview-bottom a{
+.model-preview-bottom a,
+.format-select{
   display:flex !important;
   align-items:center !important;
   justify-content:center !important;
@@ -1442,6 +1453,29 @@ function closeModelPreview() {
   text-decoration:none !important;
   font-size:15px !important;
   font-weight:900 !important;
+}
+.format-select{
+  flex-direction:column !important;
+  gap:2px !important;
+  padding:5px 8px !important;
+}
+.format-select span{
+  color:rgba(255,255,255,.58) !important;
+  font-size:10px !important;
+  line-height:1 !important;
+}
+.format-select select{
+  width:100% !important;
+  border:0 !important;
+  background:transparent !important;
+  color:#fff !important;
+  font-size:15px !important;
+  font-weight:900 !important;
+  text-align:center !important;
+  outline:none !important;
+}
+.format-select option{
+  color:#111827 !important;
 }
 .model-preview-bottom a{
   border-color:#c27643 !important;

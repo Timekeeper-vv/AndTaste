@@ -7,6 +7,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -58,6 +59,9 @@ public class CreativeAiController {
 
     @Value("${tripo.api.base-url:https://openapi.tripo3d.com/v3}")
     private String tripoBaseUrl;
+
+    @Value("${tripo.convert.base-url:https://api.tripo3d.ai/v2/openapi}")
+    private String tripoConvertBaseUrl;
 
     @Value("${tripo.model.version:v3.1-20260211}")
     private String tripoModelVersion;
@@ -786,6 +790,13 @@ public class CreativeAiController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(glbType).body(Files.readAllBytes(file));
     }
 
+    @GetMapping("/assets/{id}/download-model")
+    public ResponseEntity<byte[]> downloadModel(@PathVariable Long id,@RequestParam(defaultValue="GLB") String format) throws Exception {
+        String fmt=normalizeModelFormat(format);
+        Map<String,Object> asset=resolveDownloadableModelAsset(id,fmt);
+        return modelDownloadResponse(asset,fmt);
+    }
+
     @GetMapping("/assets")
     public List<Map<String, Object>> assets(@RequestParam(required = false) String type) {
         if (type != null && !type.isBlank()) return jdbc.queryForList("SELECT id, asset_no assetNo, title, asset_type assetType, source_type sourceType, file_url fileUrl, preview_url previewUrl, prompt, style_id styleId, parent_asset_id parentAssetId, version_no versionNo, status, format, tags, created_at createdAt FROM digital_asset WHERE asset_type=? ORDER BY id DESC", type);
@@ -892,6 +903,18 @@ public class CreativeAiController {
             return r.body();
         } catch(HttpTimeoutException e) { throw new IllegalStateException("连接Tripo接口超时，任务没有提交，请检查服务器外网",e); }
           catch(IOException e) { throw new IllegalStateException("无法连接Tripo接口，任务没有提交："+safeMessage(e),e); }
+    }
+
+    private String tripoConvertJson(String method,String path,String body)throws Exception {
+        String base=tripoConvertBaseUrl.replaceAll("/$","");
+        HttpRequest.Builder b=HttpRequest.newBuilder().uri(URI.create(base+path)).timeout(Duration.ofSeconds(60)).header("Authorization","Bearer "+tripoApiKey.trim()).header("Content-Type","application/json");
+        if("POST".equals(method)) b.POST(HttpRequest.BodyPublishers.ofString(body==null?"{}":body)); else b.GET();
+        try {
+            HttpResponse<String> r=http.send(b.build(),HttpResponse.BodyHandlers.ofString());
+            if(r.statusCode()<200||r.statusCode()>=300) throw tripoHttpError("模型格式转换",r.statusCode(),r.body());
+            return r.body();
+        } catch(HttpTimeoutException e) { throw new IllegalStateException("Tripo模型格式转换超时，请稍后重试",e); }
+          catch(IOException e) { throw new IllegalStateException("无法连接Tripo模型格式转换接口："+safeMessage(e),e); }
     }
 
     private String buildImagenPrompt(String prompt) {
@@ -1471,6 +1494,86 @@ public class CreativeAiController {
 
     private String no(String prefix) { return prefix + DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(LocalDateTime.now()) + (int)(Math.random()*900+100); }
     private String nullToEmpty(String s) { return s == null ? "" : s; }
+
+    private String normalizeModelFormat(String format) {
+        String f=blank(format)?"GLB":format.trim().toUpperCase(Locale.ROOT);
+        if(!Set.of("GLB","OBJ","STL").contains(f)) throw new IllegalArgumentException("暂只支持下载 GLB / OBJ / STL 格式");
+        return f;
+    }
+
+    private Map<String,Object> resolveDownloadableModelAsset(Long id,String fmt) throws Exception {
+        Map<String,Object> asset=jdbc.queryForMap("SELECT id,asset_no assetNo,title,asset_type assetType,source_type sourceType,file_url fileUrl,preview_url previewUrl,prompt,parent_asset_id parentAssetId,format,tags,metadata_json metadataJson FROM digital_asset WHERE id=?",id);
+        if(!"model".equals(String.valueOf(asset.get("assetType")))) throw new IOException("该资产不是3D模型："+id);
+        String currentFormat=str(asset.get("format")).toUpperCase(Locale.ROOT);
+        if(asset.get("parentAssetId") instanceof Number&&"converted".equals(str(asset.get("sourceType")))){
+            Map<String,Object> parent=jdbc.queryForMap("SELECT id,asset_no assetNo,title,asset_type assetType,source_type sourceType,file_url fileUrl,preview_url previewUrl,prompt,parent_asset_id parentAssetId,format,tags,metadata_json metadataJson FROM digital_asset WHERE id=?",((Number)asset.get("parentAssetId")).longValue());
+            if("GLB".equals(fmt)) return parent;
+            asset=parent; id=((Number)parent.get("id")).longValue(); currentFormat=str(parent.get("format")).toUpperCase(Locale.ROOT);
+        }
+        if("GLB".equals(fmt)||fmt.equals(currentFormat)) return asset;
+        List<Map<String,Object>> cached=jdbc.queryForList("SELECT id,asset_no assetNo,title,asset_type assetType,file_url fileUrl,preview_url previewUrl,prompt,parent_asset_id parentAssetId,format,tags,metadata_json metadataJson FROM digital_asset WHERE asset_type='model' AND parent_asset_id=? AND UPPER(format)=? ORDER BY id DESC LIMIT 1",id,fmt);
+        if(!cached.isEmpty()) return cached.get(0);
+        return convertTripoModelFormat(asset,fmt);
+    }
+
+    private Map<String,Object> convertTripoModelFormat(Map<String,Object> source,String fmt) throws Exception {
+        if(blank(tripoApiKey)||tripoApiKey.contains("YOUR_")) throw new IllegalStateException("未配置 tripo.api.key，无法转换模型格式");
+        String taskId=extractTaskId(source.get("metadataJson"));
+        if(blank(taskId)) throw new IllegalStateException("旧模型缺少Tripo任务ID，暂不能在线转换为 "+fmt+"；请重新生成模型后下载该格式");
+        Map<String,Object> body=new LinkedHashMap<>(); body.put("type","convert_model"); body.put("format",fmt); body.put("original_model_task_id",taskId);
+        String raw=tripoConvertJson("POST","/task",mapper.writeValueAsString(body)); JsonNode root=mapper.readTree(raw); ensureTripoOk(root,raw);
+        String convertTaskId=root.path("data").path("task_id").asText(root.path("data").path("taskId").asText(""));
+        if(blank(convertTaskId)) throw new IllegalStateException("Tripo未返回格式转换任务ID："+raw);
+        String remoteModel=""; String preview=str(source.get("previewUrl"));
+        for(int i=0;i<60;i++){
+            Thread.sleep(2000);
+            String check=tripoConvertJson("GET","/task/"+URLEncoder.encode(convertTaskId,StandardCharsets.UTF_8),null);
+            JsonNode checkRoot=mapper.readTree(check); ensureTripoOk(checkRoot,check); JsonNode data=checkRoot.path("data");
+            String status=mapTripoStatus(data.path("status").asText("running"));
+            if("failed".equals(status)) throw new IllegalStateException("Tripo模型格式转换失败："+data.path("error").asText(data.path("message").asText(check)));
+            if("succeeded".equals(status)){
+                JsonNode output=data.path("output");
+                remoteModel=firstUrl(output,"model","model_url","download_url","url","result","base_model","pbr_model",fmt.toLowerCase(Locale.ROOT)+"_model","model_urls");
+                if(blank(remoteModel)) remoteModel=firstUrl(data,"model","model_url","download_url","url","result");
+                break;
+            }
+        }
+        if(blank(remoteModel)) throw new IllegalStateException("Tripo模型格式转换超时，请稍后重试下载 "+fmt);
+        String defaultSuffix="OBJ".equals(fmt)?".zip":"."+fmt.toLowerCase(Locale.ROOT);
+        String localModel=saveRemoteFile(remoteModel,"tripo-"+fmt.toLowerCase(Locale.ROOT)+"-",suffixFromUrl(remoteModel,defaultSuffix),"models");
+        Long sourceId=((Number)source.get("id")).longValue();
+        Map<String,Object> meta=new LinkedHashMap<>(); meta.put("provider","tripo"); meta.put("convertedFromAssetId",sourceId); meta.put("sourceTaskId",taskId); meta.put("conversionTaskId",convertTaskId); meta.put("remoteModel",remoteModel); meta.put("format",fmt);
+        Long assetId=createAsset("3D模型 "+fmt+"格式","model","converted",localModel,blank(preview)?null:preview,str(source.get("prompt")),null,null,sourceId,fmt.toLowerCase(Locale.ROOT),"3D模型,格式转换,"+fmt,meta);
+        return jdbc.queryForMap("SELECT id,asset_no assetNo,title,asset_type assetType,file_url fileUrl,preview_url previewUrl,prompt,parent_asset_id parentAssetId,format,tags,metadata_json metadataJson FROM digital_asset WHERE id=?",assetId);
+    }
+
+    private String extractTaskId(Object metadataJson) {
+        try {
+            if(metadataJson==null||blank(String.valueOf(metadataJson))) return "";
+            JsonNode n=mapper.readTree(String.valueOf(metadataJson));
+            return firstNonBlank(n.path("taskId").asText(""),n.path("sourceTaskId").asText(""),n.path("externalTaskId").asText(""));
+        } catch(Exception ignored) { return ""; }
+    }
+
+    private String firstNonBlank(String... values) { for(String v:values) if(!blank(v)) return v; return ""; }
+
+    private ResponseEntity<byte[]> modelDownloadResponse(Map<String,Object> asset,String fmt) throws Exception {
+        String url=str(asset.get("fileUrl")); if(blank(url)) throw new IOException("模型文件地址不存在");
+        byte[] bytes; String lower=url.toLowerCase(Locale.ROOT);
+        if(url.startsWith("http://")||url.startsWith("https://")){
+            HttpResponse<byte[]> response=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());
+            if(response.statusCode()<200||response.statusCode()>=300) throw new IOException("读取模型失败 HTTP "+response.statusCode());
+            bytes=response.body();
+        } else {
+            Path publicDir=vuePublicDir(); String relative=url.startsWith("/")?url.substring(1):url; Path file=publicDir.resolve(relative).normalize();
+            if(!file.startsWith(publicDir)||!Files.exists(file)) throw new IOException("模型文件不存在："+url);
+            bytes=Files.readAllBytes(file); lower=file.getFileName().toString().toLowerCase(Locale.ROOT);
+        }
+        MediaType type=lower.endsWith(".zip")?MediaType.parseMediaType("application/zip"):"STL".equals(fmt)?MediaType.parseMediaType("model/stl"):"OBJ".equals(fmt)?MediaType.parseMediaType("model/obj"):MediaType.parseMediaType("model/gltf-binary");
+        String suffix=lower.endsWith(".zip")?".zip":"."+fmt.toLowerCase(Locale.ROOT);
+        String filename="and-taste-3d-"+asset.get("id")+"-"+fmt.toLowerCase(Locale.ROOT)+suffix;
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(type).header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=\""+filename+"\"").body(bytes);
+    }
 
     public static class ReviewRequest {
         public Long assetId;
