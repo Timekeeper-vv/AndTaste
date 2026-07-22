@@ -96,6 +96,18 @@ public class CreativeAiController {
     @Value("${replicate.imagen.model:google/imagen-4}")
     private String replicateImagenModel;
 
+    @Value("${jimeng.api.key:}")
+    private String jimengApiKey;
+
+    @Value("${jimeng.api.base-url:https://visual.volcengineapi.com}")
+    private String jimengBaseUrl;
+
+    @Value("${jimeng.req-key:jimeng_seedream46_cvtob}")
+    private String jimengReqKey;
+
+    @Value("${jimeng.poll.max-seconds:180}")
+    private long jimengPollMaxSeconds;
+
     @Value("${modao.api.key:}")
     private String modaoApiKey;
 
@@ -379,6 +391,55 @@ public class CreativeAiController {
         } catch (Exception e) {
             jdbc.update("UPDATE ai_generation_job SET status='failed', error_message=? WHERE id=?", e.getMessage(), jobId);
             throw e;
+        }
+    }
+
+    @GetMapping("/jimeng/config")
+    public Map<String,Object> jimengConfig() {
+        boolean configured = !blank(jimengApiKey) && !jimengApiKey.contains("YOUR_");
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("configured", configured);
+        result.put("provider", "Volcengine");
+        result.put("displayName", "即梦AI-图片生成4.6");
+        result.put("model", jimengReqKey);
+        result.put("apiVersion", "CVSync2AsyncSubmitTask 2022-08-31");
+        result.put("serviceReachable", configured);
+        result.put("imageSizes", List.of("1K", "2K"));
+        result.put("aspectRatios", List.of("1:1", "16:9", "9:16", "4:3", "3:4"));
+        result.put("outputFormats", List.of("png", "jpg"));
+        result.put("message", "当前首选接入火山引擎即梦AI-图片生成4.6，生成结果会自动保存到系统资产库。参考接口：CVSync2AsyncSubmitTask / CVSync2AsyncGetResult。");
+        return result;
+    }
+
+    @PostMapping("/jimeng/text-to-image")
+    public Map<String,Object> jimengTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
+        if(blank(jimengApiKey) || jimengApiKey.contains("YOUR_")) throw new IllegalStateException("未配置火山引擎即梦 API Key：请在 shixun/application-local.properties 配置 jimeng.api.key");
+        if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
+        String prompt = req.prompt.trim();
+        if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
+        String aspect = Set.of("1:1","16:9","9:16","4:3","3:4").contains(nullToEmpty(req.imagenAspectRatio)) ? req.imagenAspectRatio : "1:1";
+        String size = Set.of("1K","2K").contains(nullToEmpty(req.imagenImageSize)) ? req.imagenImageSize : "1K";
+        String format = Set.of("png","jpg").contains(nullToEmpty(req.imagenOutputFormat).toLowerCase(Locale.ROOT)) ? req.imagenOutputFormat.toLowerCase(Locale.ROOT) : "png";
+        int[] wh = jimengDimensions(aspect, size);
+        String finalPrompt = buildJimengPrompt(prompt);
+        String jobNo = no("JMG");
+        Long jobId = createJob(jobNo, "text_to_image", "jimeng", jimengReqKey, req.styleId, null, prompt, req.negativePrompt, "running", null, size + " " + aspect);
+        try {
+            JsonNode submit = submitJimengTask(finalPrompt, wh[0], wh[1], req.seed, format);
+            String taskId = firstNonBlank(submit.path("data").path("task_id").asText(""), submit.path("data").path("taskId").asText(""), submit.path("task_id").asText(""), submit.path("taskId").asText(""));
+            if(blank(taskId)) {
+                String immediate = extractJimengImageUrl(submit);
+                if(!blank(immediate)) return finishJimengImage(jobId, jobNo, "", immediate, prompt, finalPrompt, req, aspect, size, format, wh);
+                throw new IllegalStateException("即梦提交成功但未返回 task_id：" + submit.toString());
+            }
+            jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=10 WHERE id=?", taskId, jobId);
+            JsonNode result = waitJimengTask(taskId);
+            String remoteImage = extractJimengImageUrl(result);
+            if(blank(remoteImage)) throw new IllegalStateException("即梦任务完成但未返回图片地址：" + result.toString());
+            return finishJimengImage(jobId, jobNo, taskId, remoteImage, prompt, finalPrompt, req, aspect, size, format, wh);
+        } catch(Exception e) {
+            jdbc.update("UPDATE ai_generation_job SET status='failed',error_message=? WHERE id=?", safeMessage(e), jobId);
+            throw new IllegalStateException("即梦AI-图片生成4.6 失败：" + safeMessage(e), e);
         }
     }
 
@@ -1016,6 +1077,144 @@ public class CreativeAiController {
             // SiliconFlow 不可用时不阻断 Imagen，直接使用用户已确认的提示词。
         }
         return base.length() > 1800 ? base.substring(0, 1800) : base;
+    }
+
+    private String buildJimengPrompt(String prompt) {
+        String p = nullToEmpty(prompt).trim();
+        if(p.toLowerCase(Locale.ROOT).contains("product") || p.contains("产品") || p.contains("文创")) return p;
+        return p + "\nCommercial cultural creative product design, official brand quality, clean product photography, detailed material, premium packaging and manufacturable prototype.";
+    }
+
+    private int[] jimengDimensions(String aspect, String size) {
+        boolean high = "2K".equals(size);
+        return switch (aspect) {
+            case "16:9" -> high ? new int[]{2048, 1152} : new int[]{1664, 936};
+            case "9:16" -> high ? new int[]{1152, 2048} : new int[]{936, 1664};
+            case "4:3" -> high ? new int[]{2048, 1536} : new int[]{1472, 1104};
+            case "3:4" -> high ? new int[]{1536, 2048} : new int[]{1104, 1472};
+            default -> high ? new int[]{2048, 2048} : new int[]{1328, 1328};
+        };
+    }
+
+    private JsonNode submitJimengTask(String prompt, int width, int height, Long seed, String format) throws Exception {
+        Map<String,Object> payload = new LinkedHashMap<>();
+        payload.put("req_key", jimengReqKey);
+        payload.put("prompt", prompt);
+        payload.put("width", width);
+        payload.put("height", height);
+        payload.put("seed", seed == null ? -1 : seed);
+        payload.put("return_url", true);
+        payload.put("use_pre_llm", true);
+        payload.put("use_sr", true);
+        payload.put("output_format", "jpg".equals(format) ? "jpeg" : "png");
+        String url = jimengBaseUrl.replaceAll("/$", "") + "?Action=CVSync2AsyncSubmitTask&Version=2022-08-31";
+        return jimengPost(url, payload, "提交任务");
+    }
+
+    private JsonNode waitJimengTask(String taskId) throws Exception {
+        long deadline = System.currentTimeMillis() + Math.max(30, jimengPollMaxSeconds) * 1000L;
+        JsonNode last = mapper.createObjectNode();
+        while(System.currentTimeMillis() < deadline) {
+            Thread.sleep(3000);
+            Map<String,Object> payload = new LinkedHashMap<>();
+            payload.put("req_key", jimengReqKey);
+            payload.put("task_id", taskId);
+            payload.put("req_json", "{\"return_url\":true}");
+            String url = jimengBaseUrl.replaceAll("/$", "") + "?Action=CVSync2AsyncGetResult&Version=2022-08-31";
+            last = jimengPost(url, payload, "查询结果");
+            String status = firstNonBlank(last.path("data").path("status").asText(""), last.path("status").asText(""));
+            if("done".equalsIgnoreCase(status) || "succeeded".equalsIgnoreCase(status) || "success".equalsIgnoreCase(status)) return last;
+            if("failed".equalsIgnoreCase(status) || "error".equalsIgnoreCase(status)) throw new IllegalStateException("即梦任务失败：" + last.toString());
+            if(!blank(extractJimengImageUrl(last))) return last;
+        }
+        throw new IllegalStateException("即梦任务超时，请稍后重试；最后状态：" + last.toString());
+    }
+
+    private JsonNode jimengPost(String url, Map<String,Object> payload, String actionName) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(75))
+                .header("Authorization", "Bearer " + jimengApiKey.trim())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
+                .build();
+        try {
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if(response.statusCode()<200 || response.statusCode()>=300) throw jimengHttpError(response.statusCode(), response.body(), actionName);
+            JsonNode root = mapper.readTree(response.body());
+            int code = root.path("code").asInt(root.path("ResponseMetadata").path("Error").isMissingNode() ? 10000 : -1);
+            if(code != 0 && code != 10000) throw new IllegalStateException("即梦" + actionName + "返回错误：" + response.body());
+            JsonNode error = root.path("ResponseMetadata").path("Error");
+            if(!error.isMissingNode() && !blank(error.path("Message").asText(""))) throw new IllegalStateException("即梦" + actionName + "返回错误：" + error.path("Message").asText(root.toString()));
+            return root;
+        } catch(HttpTimeoutException e) { throw new IllegalStateException("连接火山引擎即梦接口超时", e); }
+          catch(IOException e) { throw new IllegalStateException("无法连接火山引擎即梦接口：" + safeMessage(e), e); }
+    }
+
+    private String extractJimengImageUrl(JsonNode root) {
+        String direct = firstUrl(root.path("data"), "image_urls", "image_url", "url", "result_url");
+        if(!blank(direct)) return direct;
+        direct = firstUrl(root, "image_urls", "image_url", "url", "result_url");
+        if(!blank(direct)) return direct;
+        JsonNode arr = root.path("data").path("binary_data_base64");
+        if(arr.isArray() && arr.size() > 0 && arr.get(0).isTextual()) return saveBase64JimengImage(arr.get(0).asText());
+        if(arr.isTextual() && !blank(arr.asText())) return saveBase64JimengImage(arr.asText());
+        return "";
+    }
+
+    private String saveBase64JimengImage(String b64) {
+        try {
+            String clean = b64.contains(",") ? b64.substring(b64.indexOf(',') + 1) : b64;
+            byte[] bytes = Base64.getDecoder().decode(clean);
+            Path dir = vuePublicDir().resolve("generated").resolve("images").normalize();
+            Files.createDirectories(dir);
+            String file = "jimeng-image-" + System.currentTimeMillis() + ".png";
+            Files.write(dir.resolve(file), bytes);
+            return "/generated/images/" + file;
+        } catch(Exception ignored) { return ""; }
+    }
+
+    private Map<String,Object> finishJimengImage(Long jobId, String jobNo, String taskId, String remoteImage, String prompt, String finalPrompt, GenerateImageRequest req, String aspect, String size, String format, int[] wh) throws Exception {
+        String localImage = looksLikeUrl(remoteImage) ? saveRemoteFile(remoteImage, "jimeng-image-", "." + format, "images") : remoteImage;
+        Map<String,Object> meta = new LinkedHashMap<>();
+        meta.put("provider", "jimeng");
+        meta.put("model", jimengReqKey);
+        meta.put("taskId", taskId);
+        meta.put("remoteImage", remoteImage);
+        meta.put("aspectRatio", aspect);
+        meta.put("imageSize", size);
+        meta.put("width", wh[0]);
+        meta.put("height", wh[1]);
+        meta.put("outputFormat", format);
+        meta.put("promptForJimeng", finalPrompt);
+        if(req.currentUserId!=null){meta.put("createdByUserId",req.currentUserId);meta.put("consumerWork",true);}
+        Long assetId = createAsset("即梦AI 4.6 2D创意图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, format, "即梦AI,火山引擎,2D创意生图,AI生成", meta);
+        jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, taskId, jobId);
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("jobId", jobId);
+        out.put("jobNo", jobNo);
+        out.put("provider", "jimeng");
+        out.put("status", "succeeded");
+        out.put("progress", 100);
+        out.put("assetId", assetId);
+        out.put("imageUrl", localImage);
+        out.put("previewUrl", localImage);
+        out.put("fileUrl", localImage);
+        out.put("remoteImage", remoteImage);
+        out.put("taskId", taskId);
+        out.put("model", jimengReqKey);
+        out.put("source", "火山引擎 · 即梦AI-图片生成4.6");
+        out.put("message", "即梦AI 4.6 图片已生成，并已回传保存到系统资产库。用户端可继续提交审核。");
+        return out;
+    }
+
+    private IllegalStateException jimengHttpError(int status, String raw, String actionName) {
+        try {
+            JsonNode root = mapper.readTree(raw);
+            String detail = root.path("message").asText(root.path("error").asText(root.path("ResponseMetadata").path("Error").path("Message").asText(raw)));
+            if(status == 401 || status == 403) return new IllegalStateException("火山引擎即梦 API Key 无效或无权限：" + detail);
+            return new IllegalStateException("即梦" + actionName + "接口失败 HTTP " + status + "：" + detail);
+        } catch(Exception ignored) { return new IllegalStateException("即梦" + actionName + "接口失败 HTTP " + status + "：" + raw); }
     }
 
     private JsonNode createImagenPrediction(String prompt, String aspect, String size, String format) throws Exception {

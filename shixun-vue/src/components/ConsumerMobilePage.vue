@@ -170,7 +170,7 @@ async function load() {
   try {
     const assetParams = new URLSearchParams({ role: 'user', currentUserId: String(props.currentUser.id) })
     const [i, t, a] = await Promise.all([
-      json('/api/creative/ai/imagen/config'),
+      json('/api/creative/ai/jimeng/config'),
       json('/api/creative/ai/tripo/config'),
       json(`/api/creative/ai/assets?${assetParams}`),
     ])
@@ -202,7 +202,7 @@ async function optimizeImagePrompt() {
   const r = await fetch('/api/creative/ai/prompt/tripo-optimize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: source, provider: 'imagen' }),
+    body: JSON.stringify({ prompt: source, provider: 'jimeng' }),
   })
   if (!r.ok) {
     const err = await r.json().catch(() => null)
@@ -219,7 +219,7 @@ async function generateImage() {
     return
   }
   if (!imageConfig.value.configured) {
-    emit('alert', '图片生成服务未配置，请联系管理员', 'error')
+    emit('alert', '即梦AI图片生成服务未配置，请联系管理员', 'error')
     return
   }
   busy.value = true
@@ -228,11 +228,11 @@ async function generateImage() {
   try {
     await optimizeImagePrompt()
     setStage('正在生成图片', 'generate')
-    const r = await fetch('/api/creative/ai/imagen/text-to-image', {
+    const r = await fetch('/api/creative/ai/jimeng/text-to-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        provider: 'imagen',
+        provider: 'jimeng',
         rawPrompt: imageForm.rawPrompt,
         prompt: imageForm.prompt,
         imagenAspectRatio: imageForm.imagenAspectRatio,
