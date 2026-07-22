@@ -303,7 +303,8 @@ function openUrl(url?: string) {
 </script>
 
 <template>
-  <main class="consumer-shell">
+  <main class="consumer-shell immersive-shell">
+    <div class="ambient-layer"></div>
     <header class="consumer-top">
       <div class="brand">
         <img :src="andTasteLogo" alt="之间味道" />
@@ -318,6 +319,10 @@ function openUrl(url?: string) {
     </header>
 
     <section class="hero">
+      <div class="hero-glass">
+        <img :src="andTasteLogo" alt="之间味道" />
+        <strong>AndTaste AI</strong>
+      </div>
       <span>{{ props.currentUser.username }}</span>
       <h1>把一个想法变成官方感文创产品</h1>
       <p>输入一句话，系统会先自动优化提示词，再直接交给 Google Imagen 4 或 Tripo 生成，并回传到作品库。</p>
@@ -335,6 +340,14 @@ function openUrl(url?: string) {
       <div class="workflow-chip" :class="{ active: phase === 'save' || phase === 'done' }"><b>03</b><span>保存</span></div>
     </section>
 
+    <section class="live-console">
+      <div>
+        <span>{{ serviceReadyText }}</span>
+        <b>{{ stage || flowLabel }}</b>
+      </div>
+      <i :class="{ active: busy }"></i>
+    </section>
+
     <nav class="quick-tabs">
       <button type="button" :class="{active:tab==='image'}" @click="tab='image'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 13 2.5-2.5L15 15l1-1 3 3"/><circle cx="8" cy="9" r="1"/></svg>
@@ -350,7 +363,7 @@ function openUrl(url?: string) {
       </button>
     </nav>
 
-    <section v-if="tab==='image'" class="panel">
+    <section v-if="tab==='image'" class="panel creation-panel">
       <div class="section-head">
         <span>AI IMAGE</span>
         <b>产品图生成</b>
@@ -391,7 +404,7 @@ function openUrl(url?: string) {
       </article>
     </section>
 
-    <section v-if="tab==='model'" class="panel">
+    <section v-if="tab==='model'" class="panel creation-panel">
       <div class="section-head">
         <span>AI MODEL</span>
         <b>轻量3D建模</b>
@@ -439,7 +452,7 @@ function openUrl(url?: string) {
       </article>
     </section>
 
-    <section v-if="tab==='gallery'" class="panel">
+    <section v-if="tab==='gallery'" class="panel creation-panel">
       <div class="section-head">
         <span>MY WORKS</span>
         <b>最近作品</b>
@@ -463,6 +476,250 @@ function openUrl(url?: string) {
 
 <style scoped>
 .consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
+</style>
+
+<style scoped>
+.immersive-shell{
+  position:relative;
+  min-height:100dvh;
+  overflow-x:hidden;
+  background:
+    linear-gradient(180deg,#17100d 0,#2a1b15 34%,#f5eee5 34.5%,#eee3d8 100%);
+  padding:0 14px 104px;
+}
+.ambient-layer{
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  background:
+    radial-gradient(circle at 76px 108px,rgba(255,255,255,.16),transparent 80px),
+    radial-gradient(circle at 86% 15%,rgba(194,118,67,.38),transparent 160px),
+    radial-gradient(circle at 18% 42%,rgba(15,118,110,.18),transparent 150px);
+  mix-blend-mode:screen;
+  opacity:.92;
+  z-index:0;
+}
+.immersive-shell>*:not(.ambient-layer){
+  position:relative;
+  z-index:1;
+}
+.immersive-shell .consumer-top{
+  margin:0 -14px;
+  padding:14px 16px 10px;
+  border:0;
+  background:linear-gradient(180deg,rgba(23,16,13,.94),rgba(23,16,13,.62));
+  color:#fff;
+}
+.immersive-shell .brand span{
+  color:rgba(255,255,255,.64);
+}
+.immersive-shell .icon-btn{
+  background:rgba(255,255,255,.12);
+  color:#fff;
+  box-shadow:none;
+  backdrop-filter:blur(12px);
+}
+.immersive-shell .hero{
+  min-height:430px;
+  margin:0 -14px;
+  padding:92px 22px 28px;
+  border-radius:0 0 34px 34px;
+  background:
+    linear-gradient(180deg,rgba(23,16,13,.15),rgba(23,16,13,.76)),
+    radial-gradient(circle at 72% 18%,rgba(255,221,186,.24),transparent 130px),
+    radial-gradient(circle at 16% 70%,rgba(20,184,166,.16),transparent 120px),
+    linear-gradient(135deg,#211510 0%,#5a3024 48%,#b86b3b 100%);
+  box-shadow:0 28px 64px rgba(48,29,19,.38);
+  justify-content:flex-end;
+}
+.immersive-shell .hero:after{
+  right:-34px;
+  top:50px;
+  width:220px;
+  height:220px;
+  background:
+    linear-gradient(145deg,rgba(255,255,255,.18),rgba(255,255,255,.02)),
+    radial-gradient(circle at 35% 30%,rgba(255,244,220,.16),transparent 46%);
+  border:1px solid rgba(255,255,255,.12);
+  box-shadow:-110px 138px 0 rgba(255,255,255,.055);
+}
+.hero-glass{
+  position:absolute;
+  top:18px;
+  left:22px;
+  right:22px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:10px 12px;
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:18px;
+  background:rgba(255,255,255,.09);
+  backdrop-filter:blur(18px);
+}
+.hero-glass img{
+  width:34px;
+  height:34px;
+  border-radius:10px;
+  object-fit:cover;
+}
+.hero-glass strong{
+  color:#fff;
+  letter-spacing:.02em;
+}
+.immersive-shell .hero span{
+  margin-bottom:10px;
+  background:rgba(255,255,255,.15);
+}
+.immersive-shell .hero h1{
+  max-width:10.5ch;
+  margin:0 0 14px;
+  font-size:38px;
+  line-height:1.04;
+  text-wrap:balance;
+}
+.immersive-shell .hero p{
+  max-width:29ch;
+  margin-bottom:20px;
+  color:rgba(255,255,255,.82);
+}
+.immersive-shell .hero-actions button{
+  min-width:122px;
+  height:44px;
+  border-radius:14px;
+  background:rgba(255,255,255,.13);
+}
+.immersive-shell .workflow-strip{
+  margin:-28px 2px 12px;
+  padding:10px;
+  border-radius:20px;
+  background:rgba(255,250,244,.92);
+  backdrop-filter:blur(18px);
+  box-shadow:0 18px 46px rgba(52,34,22,.18);
+}
+.immersive-shell .workflow-chip{
+  justify-content:center;
+  gap:6px;
+}
+.immersive-shell .workflow-chip b{
+  width:28px;
+  height:28px;
+  background:#efe1d5;
+}
+.immersive-shell .workflow-chip.active b{
+  background:#17100d;
+}
+.live-console{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  margin:0 2px 12px;
+  padding:14px 16px;
+  border-radius:20px;
+  background:linear-gradient(135deg,#231813,#3a241b);
+  color:#fff;
+  box-shadow:0 18px 44px rgba(50,31,20,.22);
+}
+.live-console span{
+  display:block;
+  margin-bottom:4px;
+  color:rgba(255,255,255,.58);
+  font-size:11px;
+}
+.live-console b{
+  display:block;
+  color:#fff;
+  font-size:13px;
+  line-height:1.35;
+}
+.live-console i{
+  width:14px;
+  height:14px;
+  border-radius:50%;
+  background:#22c55e;
+  box-shadow:0 0 0 7px rgba(34,197,94,.12);
+  flex:0 0 auto;
+}
+.live-console i.active{
+  animation:pulseLive 1s infinite ease-in-out;
+}
+@keyframes pulseLive{
+  0%,100%{transform:scale(.86);opacity:.65}
+  50%{transform:scale(1.08);opacity:1}
+}
+.immersive-shell .creation-panel{
+  margin-top:12px;
+  padding:18px;
+  border-radius:28px;
+  background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(255,250,245,.9));
+  border:1px solid rgba(122,92,68,.14);
+  box-shadow:0 24px 60px rgba(58,39,25,.12);
+}
+.immersive-shell .section-head b{
+  font-size:21px;
+}
+.immersive-shell .service-pill{
+  border-radius:18px;
+  background:#fff8ef;
+}
+.immersive-shell textarea{
+  min-height:150px;
+  border-radius:20px;
+  background:#fffdf9;
+  font-size:16px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.8);
+}
+.immersive-shell .chips button,
+.immersive-shell .mode-switch button{
+  border-radius:16px;
+}
+.immersive-shell .primary{
+  border-radius:20px;
+  min-height:60px;
+  background:linear-gradient(135deg,#17100d,#0f766e 52%,#19a092);
+  box-shadow:0 22px 42px rgba(15,118,110,.24);
+}
+.immersive-shell .primary.green{
+  background:linear-gradient(135deg,#17211f,#0f766e 58%,#1ca18f);
+}
+.immersive-shell .upload-box{
+  min-height:210px;
+  border-radius:24px;
+}
+.immersive-shell .quick-tabs{
+  left:16px;
+  right:16px;
+  bottom:14px;
+  border-radius:24px;
+  padding:8px;
+  background:rgba(255,250,245,.9);
+  border:1px solid rgba(93,70,52,.16);
+  box-shadow:0 22px 64px rgba(45,30,20,.22);
+}
+.immersive-shell .quick-tabs button{
+  border-radius:18px;
+}
+.immersive-shell .quick-tabs button.active{
+  background:linear-gradient(180deg,#17100d,#31231d);
+}
+@media(min-width:720px){
+  .immersive-shell{
+    max-width:460px;
+    margin:0 auto;
+    box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15);
+  }
+  .immersive-shell .hero{
+    margin-left:-14px;
+    margin-right:-14px;
+  }
+  .immersive-shell .quick-tabs{
+    left:50%;
+    right:auto;
+    width:428px;
+    transform:translateX(-50%);
+  }
+}
 </style>
 
 <style scoped>
