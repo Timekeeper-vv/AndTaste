@@ -167,7 +167,7 @@ public class CreativeAiController {
     @PostMapping("/prompt/ai")
     public Map<String, Object> aiProductPrompt(@RequestBody GenerateImageRequest req) throws Exception {
         Map<String, Object> style = style(req.styleId);
-        String system = "你是文创产品原型图提示词专家。你的任务是把用户的基础需求转成适合AI生图模型使用的高质量产品原型图Prompt。必须清晰、可执行、偏商业产品视觉，不要输出解释。";
+        String system = "You are a cultural creative product image prompt expert. Convert the user's requirements into a high-quality ENGLISH prompt for AI image generation. The prompt must be clear, executable, commercial, photorealistic or premium product-visual oriented. Output Chinese section markers only if required by the parser, but the positive prompt content itself must be English.";
         String user = "请根据以下信息生成一段用于AI生成文创产品原型图的中文提示词，并补充一段反向提示词。\n" +
                 "作品/产品名：" + nullToEmpty(req.title) + "\n" +
                 "产品类型：" + nullToEmpty(req.productType) + "\n" +
@@ -282,12 +282,14 @@ public class CreativeAiController {
     @PostMapping("/prompt/tripo-optimize")
     public Map<String,Object> optimizeTripoImagePrompt(@RequestBody GenerateImageRequest req) throws Exception {
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础创意描述");
-        String system;
-        if("imagen".equalsIgnoreCase(nullToEmpty(req.provider))) {
-            system = "You are a senior prompt writer for Google Imagen 4, specializing in nostalgic commercial product photography and premium packaging visuals. Rewrite the user's Chinese or rough idea into one polished English image-generation prompt. Only output the final English prompt, with no title, explanation, negative prompt, or Markdown. Use this reference structure and tone: an intimate close-up, warm soft late-afternoon sunlight, clear focal product on a realistic countertop/tabletop, richly described packaging material and typography, precise label text when provided, sharp focus on product details, shallow depth of field, subtle environmental hints in the background, aesthetic warmth, authenticity, and nostalgic appeal. Keep the user's actual product, region, brand elements, material, color, label text, and use case. Add commercial product-shot composition, tactile texture, realistic lighting, lens/depth-of-field language, and elegant background details. Avoid asking questions. Keep it within 900 English words.";
-        } else {
-            system="你是Tripo文本生图提示词优化专家。把用户的基础描述整理为一段可直接提交给Tripo text-to-image接口的高质量中文提示词。只输出最终提示词，不要标题、解释、反向提示词或Markdown。保持用户主体与意图，补充主体造型、材质、色彩、构图、镜头、光线、背景和商业产品表现，控制在800字符以内。";
-        }
+        String provider = nullToEmpty(req.provider).toLowerCase(Locale.ROOT);
+        String system = "You are a senior English prompt writer for premium AI image generation, specializing in cinematic commercial product photography, official brand visuals, cultural creative products, packaging concepts, and realistic lifestyle scenes. "
+                + "Rewrite the user's Chinese or rough idea into ONE polished English image-generation prompt. Output the final English prompt only: no title, no explanation, no negative prompt, no Markdown, no Chinese characters unless the user explicitly asks for visible Chinese text printed on the product. "
+                + "Use this reference template and tone: A photo of a computer screen displaying a Spotify playlist during golden-hour evening light in a living room with many green plants in the background. The playlist says GPT-image-2. The caption is \"this new image model from OpenAI is dope.\" The artists are Replicate. The songs are themed around open-source AI and machine learning. The account name is Replicate. Use the Replicate logo as the profile picture and artist image. "
+                + "Follow the same structure: clear photographic subject, specific environment, warm cinematic lighting, exact visible text when provided, brand/profile/logo placement when relevant, detailed product or interface contents, realistic background objects, premium composition, shallow depth of field, tactile materials, sharp focal details, official and trustworthy visual tone. "
+                + "Preserve the user's actual product, place, cultural theme, brand elements, materials, colors, label text, audience, and use case. If the user provides Chinese product/region names, translate them naturally into English unless they are meant to appear as printed text. "
+                + "For packaging or product concepts, describe the package shape, paper/plastic/metal/ceramic texture, typography, illustration style, net weight or label copy if supplied, countertop/tabletop/studio setting, lens, depth of field, and commercial product-shot quality. "
+                + "Keep it concise but rich, within 900 English words. Target provider: " + (blank(provider) ? "general" : provider) + ".";
         String optimized=callChat(system,req.prompt.trim()).trim();
         int maxPromptLength = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? 1800 : 1024;
         if(optimized.length()>maxPromptLength)optimized=optimized.substring(0,maxPromptLength);
@@ -296,7 +298,7 @@ public class CreativeAiController {
                 "prompt", optimized,
                 "usageGuide", usageGuide,
                 "source", "siliconflow:" + chatModel,
-                "target", "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? "google-imagen-4:text-to-image" : "tripo:text-to-image"
+                "target", switch (provider) { case "jimeng" -> "jimeng-seedream-4.6:text-to-image"; case "imagen" -> "google-imagen-4:text-to-image"; case "modao" -> "modao:text-to-image"; default -> "tripo:text-to-image"; }
         );
     }
 
