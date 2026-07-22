@@ -10,6 +10,7 @@ export type PageName =
   | 'approvalCenter'
   | 'consumerWorksReview'
   | 'consumerAssetInventory'
+  | 'consumerCreditManagement'
   | 'aiAssistant'
   | 'consumerMobile'
   | 'studio'

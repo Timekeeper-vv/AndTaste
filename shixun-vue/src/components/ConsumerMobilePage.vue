@@ -15,6 +15,8 @@ const stage = ref('')
 const phase = ref<Phase>('idle')
 const imageConfig = ref<any>({})
 const tripoConfig = ref<any>({})
+const creditAccount = ref<any>(null)
+const creditRules = ref<any>({})
 const assets = ref<any[]>([])
 const imageResult = ref<any>(null)
 const modelResult = ref<any>(null)
@@ -55,7 +57,12 @@ const recentImages = computed(() => assets.value.filter(x => x.assetType === 'im
 const recentModels = computed(() => assets.value.filter(x => x.assetType === 'model').slice(0, 8))
 const canGenerateModel = computed(() => modelForm.mode === 'image_to_model' ? !!modelForm.inputAssetId : !!modelForm.rawPrompt.trim())
 const previewModelUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/model-content` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || '')
-const previewDownloadUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/download-model?format=${previewDownloadFormat.value}` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
+const previewDownloadUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/download-model?format=${previewDownloadFormat.value}&currentUserId=${props.currentUser.id}` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
+
+const creditBalance = computed(() => Number(creditAccount.value?.balance ?? 0))
+const imageCost = computed(() => Number(creditRules.value?.image2d ?? 1))
+const modelCost = computed(() => modelForm.mode === 'image_to_model' ? Number(creditRules.value?.imageTo3d ?? 10) : Number(creditRules.value?.textTo3d ?? 8))
+const convertCost = computed(() => Number(creditRules.value?.modelConvert ?? 1))
 
 async function downloadPreviewModel() {
   const url = previewDownloadUrl.value
@@ -68,7 +75,14 @@ async function downloadPreviewModel() {
   previewDownloading.value = true
   emit('alert', format === 'GLB' ? '正在准备模型文件…' : `正在转换为 ${format} 格式，首次可能需要1-2分钟`, 'success')
   try {
-    const response = await fetch(url, { cache: 'no-store' })
+    const response = await fetch(url, {
+      cache: 'no-store',
+      headers: {
+        'X-Current-Role': 'user',
+        'X-Current-User-Id': String(props.currentUser.id),
+        'X-Current-User': props.currentUser.username,
+      },
+    })
     if (!response.ok) {
       let message = ''
       try {
@@ -185,14 +199,17 @@ async function json(url: string) {
 async function load() {
   try {
     const assetParams = new URLSearchParams({ role: 'user', currentUserId: String(props.currentUser.id) })
-    const [i, t, a] = await Promise.all([
+    const [i, t, a, c] = await Promise.all([
       json('/api/creative/ai/jimeng/config'),
       json('/api/creative/ai/tripo/config'),
       json(`/api/creative/ai/assets?${assetParams}`),
+      json(`/api/creative/ai/consumer-credits/account?currentUserId=${props.currentUser.id}`),
     ])
     imageConfig.value = i
     tripoConfig.value = t
     assets.value = Array.isArray(a) ? a : []
+    creditAccount.value = c
+    creditRules.value = c?.rules || {}
   } catch (e: any) {
     emit('alert', '加载移动创作页失败：' + (e?.message || e), 'error')
   }
@@ -262,6 +279,7 @@ async function generateImage() {
       throw new Error(err?.message || `HTTP ${r.status}`)
     }
     const d = await r.json()
+    if (d.creditAccount) creditAccount.value = d.creditAccount
     imageResult.value = d
     setStage('正在保存作品', 'save')
     await prepareAssetPreview(d.assetId, 'image')
@@ -377,6 +395,7 @@ async function generateModel() {
       throw new Error(err?.message || `HTTP ${r.status}`)
     }
     const d = await r.json()
+    if (d.creditAccount) creditAccount.value = d.creditAccount
     emit('alert', '已开始生成3D模型', 'success')
     await pollModel(d.jobId)
   } catch (e: any) {
@@ -399,6 +418,7 @@ async function pollModel(jobId: number) {
     modelProgress.value = Number(d.progress || 0)
     setStage(d.status === 'succeeded' ? '3D模型已完成' : `正在生成3D模型 ${modelProgress.value || 0}%`, d.status === 'succeeded' ? 'save' : 'generate')
     if (d.status === 'succeeded') {
+      if (d.creditAccount) creditAccount.value = d.creditAccount
       modelResult.value = d
       busy.value = false
       stage.value = ''
@@ -478,7 +498,7 @@ function closeModelPreview() {
     </header>
 
     <section class="hero">
-      <span>{{ props.currentUser.username }}</span>
+      <span>{{ props.currentUser.username }} · 剩余额度 {{ creditBalance }} 点</span>
       <h1>把想法变成文创作品</h1>
       <p>输入一句话，选择图片或3D，系统会自动完成创作并保存。</p>
       <div class="hero-actions">
@@ -523,7 +543,7 @@ function closeModelPreview() {
       </div>
       <button type="button" class="primary" :disabled="busy" @click="generateImage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>
-        {{ busy && tab==='image' ? stage || '正在生成' : '一键生成并保存图片' }}
+        {{ busy && tab==='image' ? stage || '正在生成' : `一键生成并保存图片 · ${imageCost}点` }}
       </button>
 
       <article v-if="imageResult" ref="imageAnchor" class="result-card">
@@ -571,7 +591,7 @@ function closeModelPreview() {
 
       <button type="button" class="primary green" :disabled="busy || !canGenerateModel" @click="generateModel">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 8 4.5v9L12 20l-8-4.5v-9L12 2Z"/></svg>
-        {{ busy && tab==='model' ? stage || '正在生成' : '一键生成并保存3D' }}
+        {{ busy && tab==='model' ? stage || '正在生成' : `一键生成并保存3D · ${modelCost}点` }}
       </button>
       <div v-if="busy && tab==='model'" class="progress">
         <span :style="{ width: `${Math.max(12, modelProgress)}%` }"></span>
@@ -667,7 +687,7 @@ function closeModelPreview() {
               <option value="STL">STL</option>
             </select>
           </label>
-          <button type="button" class="download-action" :disabled="previewDownloading" @click="downloadPreviewModel">{{ previewDownloading ? '处理中' : `下载${previewDownloadFormat}` }}</button>
+          <button type="button" class="download-action" :disabled="previewDownloading" @click="downloadPreviewModel">{{ previewDownloading ? '处理中' : `下载${previewDownloadFormat}${previewDownloadFormat==='GLB'?'':` · ${convertCost}点`}` }}</button>
         </div>
       </section>
     </Teleport>

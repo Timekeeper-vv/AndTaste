@@ -90,6 +90,9 @@ public class CreativeAiController {
     @Value("${tripo.model.version:v3.1-20260211}")
     private String tripoModelVersion;
 
+    @Value("${consumer.credit.initial-balance:100}")
+    private BigDecimal consumerCreditInitialBalance;
+
     @Value("${replicate.api.key:}")
     private String replicateApiKey;
 
@@ -139,8 +142,11 @@ public class CreativeAiController {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS design_review_report (id BIGINT AUTO_INCREMENT PRIMARY KEY, review_id BIGINT NOT NULL UNIQUE, report_json JSON NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='智能评估完整报告留存'");
+        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_account (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL UNIQUE, balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, frozen_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_recharged DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_consumed DECIMAL(12,2) NOT NULL DEFAULT 0.00, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='C端用户额度账户'");
+        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_transaction (id BIGINT AUTO_INCREMENT PRIMARY KEY, transaction_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NULL, job_id BIGINT NULL, biz_type VARCHAR(50) NOT NULL, amount DECIMAL(12,2) NOT NULL, direction VARCHAR(20) NOT NULL, status VARCHAR(30) NOT NULL, balance_before DECIMAL(12,2) NOT NULL DEFAULT 0.00, balance_after DECIMAL(12,2) NOT NULL DEFAULT 0.00, remark VARCHAR(500), operator VARCHAR(80), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_credit_user(user_id), INDEX idx_credit_status(status), INDEX idx_credit_biz(biz_type)) COMMENT='C端用户额度流水'");
         try { this.jdbc.execute("ALTER TABLE digital_asset ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
         try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
+        try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN credit_transaction_id BIGINT NULL"); } catch (Exception ignored) {}
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
@@ -158,6 +164,71 @@ public class CreativeAiController {
     @GetMapping("/styles")
     public List<Map<String, Object>> styles() {
         return jdbc.queryForList("SELECT id, name, description, base_prompt basePrompt, negative_prompt negativePrompt, palette, cultural_guardrails culturalGuardrails FROM brand_style_profile WHERE enabled=1 ORDER BY id");
+    }
+
+    @GetMapping("/consumer-credits/rules")
+    public Map<String,Object> consumerCreditRules() {
+        return Map.of(
+                "image2d", consumerCreditCost("image2d"),
+                "imageTo3d", consumerCreditCost("image_to_3d"),
+                "textTo3d", consumerCreditCost("text_to_3d"),
+                "modelConvert", consumerCreditCost("model_convert"),
+                "unit", "点"
+        );
+    }
+
+    @GetMapping("/consumer-credits/account")
+    public Map<String,Object> consumerCreditAccount(@RequestParam(required=false) Long currentUserId,
+                                                    @RequestHeader(value="X-Current-User-Id",required=false) Long headerUserId) {
+        Long userId=currentUserId==null?headerUserId:currentUserId;
+        if(userId==null) throw new IllegalArgumentException("缺少当前用户ID");
+        ensureConsumerCreditAccount(userId);
+        return creditAccountMap(userId);
+    }
+
+    @GetMapping("/consumer-credits/admin/accounts")
+    public List<Map<String,Object>> consumerCreditAccounts(@RequestHeader(value="X-Current-Role",required=false) String role,
+                                                           @RequestParam(required=false) String search,
+                                                           @RequestParam(required=false,defaultValue="200") int size) {
+        requireCreativeAdmin(role);
+        StringBuilder sql=new StringBuilder("SELECT u.id userId,u.username,u.phone,u.email,COALESCE(a.balance,0) balance,COALESCE(a.frozen_balance,0) frozenBalance,COALESCE(a.total_recharged,0) totalRecharged,COALESCE(a.total_consumed,0) totalConsumed,a.updated_at updatedAt FROM user u LEFT JOIN consumer_credit_account a ON a.user_id=u.id WHERE u.role='user'");
+        List<Object> args=new ArrayList<>();
+        if(!blank(search)){sql.append(" AND (u.username LIKE ? OR u.phone LIKE ? OR CAST(u.id AS CHAR) LIKE ?)");String kw="%"+search.trim()+"%";args.add(kw);args.add(kw);args.add(kw);}
+        sql.append(" ORDER BY u.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,1000)));
+        List<Map<String,Object>> rows=jdbc.queryForList(sql.toString(),args.toArray());
+        rows.forEach(r -> ensureConsumerCreditAccount(((Number)r.get("userId")).longValue()));
+        return jdbc.queryForList(sql.toString(),args.toArray());
+    }
+
+    @GetMapping("/consumer-credits/admin/transactions")
+    public List<Map<String,Object>> consumerCreditTransactions(@RequestHeader(value="X-Current-Role",required=false) String role,
+                                                               @RequestParam(required=false) Long userId,
+                                                               @RequestParam(required=false) String status,
+                                                               @RequestParam(required=false,defaultValue="300") int size) {
+        requireCreativeAdmin(role);
+        StringBuilder sql=new StringBuilder("SELECT t.id,t.transaction_no transactionNo,t.user_id userId,u.username,t.asset_id assetId,t.job_id jobId,t.biz_type bizType,t.amount,t.direction,t.status,t.balance_before balanceBefore,t.balance_after balanceAfter,t.remark,t.operator,t.created_at createdAt,t.updated_at updatedAt FROM consumer_credit_transaction t LEFT JOIN user u ON u.id=t.user_id WHERE 1=1");
+        List<Object> args=new ArrayList<>();
+        if(userId!=null){sql.append(" AND t.user_id=?");args.add(userId);}
+        if(!blank(status)){sql.append(" AND t.status=?");args.add(status.trim());}
+        sql.append(" ORDER BY t.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,1000)));
+        return jdbc.queryForList(sql.toString(),args.toArray());
+    }
+
+    @PostMapping("/consumer-credits/admin/recharge")
+    public Map<String,Object> rechargeConsumerCredit(@RequestHeader(value="X-Current-Role",required=false) String role,
+                                                     @RequestHeader(value="X-Current-User",required=false) String operator,
+                                                     @RequestBody Map<String,String> body) {
+        requireCreativeAdmin(role);
+        Long userId=body==null||blank(body.get("userId"))?null:Long.parseLong(body.get("userId").trim());
+        if(userId==null) throw new IllegalArgumentException("请选择C端用户");
+        BigDecimal amount=new BigDecimal(nullToEmpty(body.get("amount")).trim());
+        if(amount.compareTo(BigDecimal.ZERO)<=0) throw new IllegalArgumentException("充值额度必须大于0");
+        String remark=body==null?"":nullToEmpty(body.get("remark"));
+        Long txId=rechargeCredit(userId,amount,blank(operator)?"admin":operator,remark);
+        Map<String,Object> out=new LinkedHashMap<>(creditAccountMap(userId));
+        out.put("transactionId",txId);
+        out.put("message","充值成功");
+        return out;
     }
 
     @PostMapping("/prompt/compose")
@@ -447,8 +518,10 @@ public class CreativeAiController {
         String format = Set.of("png","jpg").contains(nullToEmpty(req.imagenOutputFormat).toLowerCase(Locale.ROOT)) ? req.imagenOutputFormat.toLowerCase(Locale.ROOT) : "png";
         int[] wh = jimengDimensions(aspect, size);
         String finalPrompt = buildJimengPrompt(prompt);
+        Long creditTxId = req.currentUserId==null?null:reserveConsumerCredit(req.currentUserId,"image2d",consumerCreditCost("image2d"),"C端2D图片生成预扣");
         String jobNo = no("JMG");
         Long jobId = createJob(jobNo, "text_to_image", "jimeng", jimengReqKey, req.styleId, null, prompt, req.negativePrompt, "running", null, size + " " + aspect);
+        linkCreditTransaction(creditTxId,jobId,null);
         try {
             JsonNode submit = submitJimengTask(finalPrompt, wh[0], wh[1], req.seed, format);
             String taskId = firstNonBlank(submit.path("data").path("task_id").asText(""), submit.path("data").path("taskId").asText(""), submit.path("task_id").asText(""), submit.path("taskId").asText(""));
@@ -464,6 +537,7 @@ public class CreativeAiController {
             return finishJimengImage(jobId, jobNo, taskId, remoteImage, prompt, finalPrompt, req, aspect, size, format, wh);
         } catch(Exception e) {
             jdbc.update("UPDATE ai_generation_job SET status='failed',error_message=? WHERE id=?", safeMessage(e), jobId);
+            refundConsumerCredit(creditTxId,safeMessage(e));
             throw new IllegalStateException("即梦AI-图片生成4.6 失败：" + safeMessage(e), e);
         }
     }
@@ -696,58 +770,66 @@ public class CreativeAiController {
         Map<String,Object> taskBody = new LinkedHashMap<>();
         taskBody.put("model", selectedModel);
         Long primaryInputAssetId = req.inputAssetId;
+        Long creditTxId = consumerRequest ? reserveConsumerCredit(req.currentUserId,"text_to_model".equals(mode)?"text_to_3d":"image_to_3d",consumerCreditCost("text_to_model".equals(mode)?"text_to_3d":"image_to_3d"),"C端3D生成预扣") : null;
 
-        if("text_to_model".equals(mode)) {
-            if(blank(req.prompt)) throw new IllegalArgumentException("文生3D模式必须填写模型描述");
-            if(req.prompt.trim().length() > 1024) throw new IllegalArgumentException("模型描述不能超过1024个字符");
-            if(!blank(req.negativePrompt) && req.negativePrompt.trim().length() > 255) throw new IllegalArgumentException("反向提示词不能超过255个字符");
-            taskBody.put("prompt", req.prompt.trim());
-            if(!blank(req.negativePrompt)) taskBody.put("negative_prompt", req.negativePrompt.trim());
-        } else if("multiview_to_model".equals(mode)) {
-            if(req.multiviewAssetIds == null || req.multiviewAssetIds.get("front") == null)
-                throw new IllegalArgumentException("多视图建模必须上传正面图");
-            long viewCount = List.of("front", "left", "back", "right").stream().filter(v -> req.multiviewAssetIds.get(v) != null).count();
-            if(viewCount < 2) throw new IllegalArgumentException("多视图建模至少需要正面图和另一个视角，共2张图片");
-            List<Map<String,String>> inputs = new ArrayList<>();
-            for(String view : List.of("front", "left", "back", "right")) {
-                Long assetId = req.multiviewAssetIds.get(view);
-                if(assetId == null) continue;
-                Path image = resolveAssetImage(assetId);
-                inputs.add(Map.of(view, uploadToTripo(image)));
-                if(primaryInputAssetId == null) primaryInputAssetId = assetId;
+        try {
+            if("text_to_model".equals(mode)) {
+                if(blank(req.prompt)) throw new IllegalArgumentException("文生3D模式必须填写模型描述");
+                if(req.prompt.trim().length() > 1024) throw new IllegalArgumentException("模型描述不能超过1024个字符");
+                if(!blank(req.negativePrompt) && req.negativePrompt.trim().length() > 255) throw new IllegalArgumentException("反向提示词不能超过255个字符");
+                taskBody.put("prompt", req.prompt.trim());
+                if(!blank(req.negativePrompt)) taskBody.put("negative_prompt", req.negativePrompt.trim());
+            } else if("multiview_to_model".equals(mode)) {
+                if(req.multiviewAssetIds == null || req.multiviewAssetIds.get("front") == null)
+                    throw new IllegalArgumentException("多视图建模必须上传正面图");
+                long viewCount = List.of("front", "left", "back", "right").stream().filter(v -> req.multiviewAssetIds.get(v) != null).count();
+                if(viewCount < 2) throw new IllegalArgumentException("多视图建模至少需要正面图和另一个视角，共2张图片");
+                List<Map<String,String>> inputs = new ArrayList<>();
+                for(String view : List.of("front", "left", "back", "right")) {
+                    Long assetId = req.multiviewAssetIds.get(view);
+                    if(assetId == null) continue;
+                    Path image = resolveAssetImage(assetId);
+                    inputs.add(Map.of(view, uploadToTripo(image)));
+                    if(primaryInputAssetId == null) primaryInputAssetId = assetId;
+                }
+                taskBody.put("inputs", inputs);
+            } else {
+                if(req.inputAssetId == null) throw new IllegalArgumentException("请先上传2D参考图");
+                Path image = resolveAssetImage(req.inputAssetId);
+                taskBody.put("input", uploadToTripo(image));
+                req.prompt = null;
+                req.negativePrompt = null;
             }
-            taskBody.put("inputs", inputs);
-        } else {
-            if(req.inputAssetId == null) throw new IllegalArgumentException("请先上传2D参考图");
-            Path image = resolveAssetImage(req.inputAssetId);
-            taskBody.put("input", uploadToTripo(image));
-            req.prompt = null;
-            req.negativePrompt = null;
+
+            applyTripoQualityOptions(taskBody, req, mode, selectedModel);
+            String generationPath = "text_to_model".equals(mode) ? "/generation/text-to-model" :
+                    "multiview_to_model".equals(mode) ? "/generation/multiview-to-model" : "/generation/image-to-model";
+            String taskResponse = tripoJson("POST", generationPath, mapper.writeValueAsString(taskBody));
+            JsonNode root = mapper.readTree(taskResponse);
+            ensureTripoOk(root, taskResponse);
+            String taskId = root.path("data").path("task_id").asText(root.path("data").path("taskId").asText(""));
+            if(blank(taskId)) throw new IllegalStateException("Tripo未返回task_id：" + taskResponse);
+
+            String jobNo = no("T3D");
+            String storedPrompt = "image_to_model".equals(mode) ? "" : req.prompt;
+            String storedNegativePrompt = "image_to_model".equals(mode) ? "" : req.negativePrompt;
+            Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
+                    primaryInputAssetId, storedPrompt, storedNegativePrompt, "running", null,
+                    Boolean.TRUE.equals(req.quad) ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
+            assignJobOwner(jobId, req.currentUserId);
+            linkCreditTransaction(creditTxId,jobId,null);
+            jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
+            Map<String,Object> response = new LinkedHashMap<>();
+            response.put("jobId", jobId); response.put("jobNo", jobNo); response.put("taskId", taskId);
+            response.put("status", "running"); response.put("progress", 0); response.put("provider", "tripo");
+            response.put("modelVersion", selectedModel); response.put("qualityPreset", isPSeriesModel(selectedModel)?"p-series":"standard");
+            if(req.currentUserId!=null) response.put("creditAccount", creditAccountMap(req.currentUserId));
+            response.put("message", "Tripo "+selectedModel+"任务已提交");
+            return response;
+        } catch(Exception e) {
+            refundConsumerCredit(creditTxId,safeMessage(e));
+            throw e;
         }
-
-        applyTripoQualityOptions(taskBody, req, mode, selectedModel);
-        String generationPath = "text_to_model".equals(mode) ? "/generation/text-to-model" :
-                "multiview_to_model".equals(mode) ? "/generation/multiview-to-model" : "/generation/image-to-model";
-        String taskResponse = tripoJson("POST", generationPath, mapper.writeValueAsString(taskBody));
-        JsonNode root = mapper.readTree(taskResponse);
-        ensureTripoOk(root, taskResponse);
-        String taskId = root.path("data").path("task_id").asText(root.path("data").path("taskId").asText(""));
-        if(blank(taskId)) throw new IllegalStateException("Tripo未返回task_id：" + taskResponse);
-
-        String jobNo = no("T3D");
-        String storedPrompt = "image_to_model".equals(mode) ? "" : req.prompt;
-        String storedNegativePrompt = "image_to_model".equals(mode) ? "" : req.negativePrompt;
-        Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
-                primaryInputAssetId, storedPrompt, storedNegativePrompt, "running", null,
-                Boolean.TRUE.equals(req.quad) ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
-        assignJobOwner(jobId, req.currentUserId);
-        jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
-        Map<String,Object> response = new LinkedHashMap<>();
-        response.put("jobId", jobId); response.put("jobNo", jobNo); response.put("taskId", taskId);
-        response.put("status", "running"); response.put("progress", 0); response.put("provider", "tripo");
-        response.put("modelVersion", selectedModel); response.put("qualityPreset", isPSeriesModel(selectedModel)?"p-series":"standard");
-        response.put("message", "Tripo "+selectedModel+"任务已提交");
-        return response;
     }
 
     private Path resolveAssetImage(Long assetId) throws IOException {
@@ -794,7 +876,7 @@ public class CreativeAiController {
 
     @GetMapping("/tripo/tasks/{jobId}")
     public synchronized Map<String,Object> tripoTask(@PathVariable Long jobId) throws Exception {
-        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage,created_by createdBy FROM ai_generation_job WHERE id=?",jobId);
+        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
         String taskId=str(job.get("externalTaskId")); if(blank(taskId))throw new IllegalStateException("任务没有Tripo task_id");
         if(job.get("outputAssetId")!=null) return completedTripoJob(jobId,job);
         String response=tripoJson("GET","/tasks/"+URLEncoder.encode(taskId,StandardCharsets.UTF_8),null);
@@ -802,6 +884,7 @@ public class CreativeAiController {
         String remoteStatus=data.path("status").asText("unknown"); int progress=data.path("progress").asInt(0);
         String localStatus=mapTripoStatus(remoteStatus); String error=data.path("error").asText(data.path("message").asText(""));
         if(!"succeeded".equals(localStatus)) jdbc.update("UPDATE ai_generation_job SET status=?,progress=?,error_message=? WHERE id=?",localStatus,progress,blank(error)?null:error,jobId);
+        if("failed".equals(localStatus)) refundConsumerCredit(job.get("creditTransactionId") instanceof Number?((Number)job.get("creditTransactionId")).longValue():null, blank(error)?"3D生成失败":error);
         if("succeeded".equals(localStatus)) {
             JsonNode output=data.path("output"); String modelUrl=firstUrl(output,"model_url","pbr_model","model","base_model","glb_model","model_urls"); String previewUrl=firstUrl(output,"rendered_image_url","rendered_image","image","preview_image");
             if(blank(modelUrl)) throw new IllegalStateException("Tripo任务成功但没有返回模型地址："+response);
@@ -813,7 +896,8 @@ public class CreativeAiController {
             if(job.get("createdBy") instanceof Number){metadata.put("createdByUserId",((Number)job.get("createdBy")).longValue());metadata.put("consumerWork",true);}
             Long assetId=createAsset("Tripo "+modelName+" 3D模型","model","ai_generated",localModel,localPreview,String.valueOf(jdbc.queryForObject("SELECT prompt FROM ai_generation_job WHERE id=?",String.class,jobId)),null,null,inputId,suffixFromUrl(modelUrl,".glb").replace(".",""),"Tripo,3D模型,"+modelName,metadata);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100 WHERE id=?",assetId,jobId);
-            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage,created_by createdBy FROM ai_generation_job WHERE id=?",jobId);
+            completeConsumerCredit(job.get("creditTransactionId") instanceof Number?((Number)job.get("creditTransactionId")).longValue():null,jobId,assetId);
+            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
             return completedTripoJob(jobId,job);
         }
         Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);return out;
@@ -912,10 +996,24 @@ public class CreativeAiController {
     }
 
     @GetMapping("/assets/{id}/download-model")
-    public ResponseEntity<byte[]> downloadModel(@PathVariable Long id,@RequestParam(defaultValue="GLB") String format) throws Exception {
+    public ResponseEntity<byte[]> downloadModel(@PathVariable Long id,
+                                                @RequestParam(defaultValue="GLB") String format,
+                                                @RequestParam(required=false) Long currentUserId,
+                                                @RequestHeader(value="X-Current-Role",required=false) String role,
+                                                @RequestHeader(value="X-Current-User-Id",required=false) Long headerUserId) throws Exception {
         String fmt=normalizeModelFormat(format);
-        Map<String,Object> asset=resolveDownloadableModelAsset(id,fmt);
-        return modelDownloadResponse(asset,fmt);
+        Long userId=currentUserId==null?headerUserId:currentUserId;
+        boolean chargeUser=!"GLB".equals(fmt)&&userId!=null&&"user".equals(role);
+        Long creditTxId=chargeUser?reserveConsumerCredit(userId,"model_convert",consumerCreditCost("model_convert"),"C端3D模型"+fmt+"格式下载/转换预扣"):null;
+        try {
+            Map<String,Object> asset=resolveDownloadableModelAsset(id,fmt);
+            ResponseEntity<byte[]> response=modelDownloadResponse(asset,fmt);
+            completeConsumerCredit(creditTxId,null,asset.get("id") instanceof Number?((Number)asset.get("id")).longValue():id);
+            return response;
+        } catch(Exception e) {
+            refundConsumerCredit(creditTxId,safeMessage(e));
+            throw e;
+        }
     }
 
     @GetMapping("/assets")
@@ -1248,6 +1346,7 @@ public class CreativeAiController {
         if(req.currentUserId!=null){meta.put("createdByUserId",req.currentUserId);meta.put("consumerWork",true);}
         Long assetId = createAsset("即梦AI 4.6 2D创意图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, format, "即梦AI,火山引擎,2D创意生图,AI生成", meta);
         jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, taskId, jobId);
+        completeConsumerCredit(creditTransactionIdForJob(jobId),jobId,assetId);
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("jobId", jobId);
         out.put("jobNo", jobNo);
@@ -1265,6 +1364,7 @@ public class CreativeAiController {
         out.put("remoteImage", remoteImage);
         out.put("taskId", taskId);
         out.put("model", jimengReqKey);
+        if(req.currentUserId!=null) out.put("creditAccount", creditAccountMap(req.currentUserId));
         out.put("source", "火山引擎 · 即梦AI-图片生成4.6");
         out.put("message", "即梦AI 4.6 图片已生成，并已回传保存到系统资产库。用户端可继续提交审核。");
         return out;
@@ -1699,7 +1799,7 @@ public class CreativeAiController {
     private String suffixFromUrl(String url,String fallback){try{String p=URI.create(url).getPath();int i=p.lastIndexOf('.');if(i>=0&&p.length()-i<=6)return p.substring(i).toLowerCase(Locale.ROOT);}catch(Exception ignored){}return fallback;}
     private String saveRemoteFile(String url,String prefix,String suffix,String folder)throws Exception{HttpResponse<byte[]> r=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());if(r.statusCode()<200||r.statusCode()>=300)throw new IOException("下载远程文件失败 HTTP "+r.statusCode());Path dir=vuePublicDir().resolve("generated").resolve(folder).normalize();Files.createDirectories(dir);String file=prefix+System.currentTimeMillis()+suffix;Files.write(dir.resolve(file),r.body());return "/generated/"+folder+"/"+file;}
     private Map<String,Object> completedTripoImageJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("assetId",a.get("id"));r.put("imageUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));r.put("model",job.get("modelName"));r.put("source","Tripo "+str(job.get("modelName")));return r;}
-    private Map<String,Object> completedTripoJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,asset_type assetType,source_type sourceType,status assetStatus,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("id",a.get("id"));r.put("assetId",a.get("id"));r.put("assetType",a.get("assetType"));r.put("sourceType",a.get("sourceType"));r.put("assetStatus",a.get("assetStatus"));r.put("modelUrl",a.get("fileUrl"));r.put("fileUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));return r;}
+    private Map<String,Object> completedTripoJob(Long jobId,Map<String,Object> job){Map<String,Object>a=jdbc.queryForMap("SELECT id,title,asset_type assetType,source_type sourceType,status assetStatus,file_url fileUrl,preview_url previewUrl,format,created_at createdAt FROM digital_asset WHERE id=?",job.get("outputAssetId"));Map<String,Object>r=new LinkedHashMap<>();r.put("jobId",jobId);r.put("jobNo",job.get("jobNo"));r.put("taskId",job.get("externalTaskId"));r.put("status","succeeded");r.put("progress",100);r.put("id",a.get("id"));r.put("assetId",a.get("id"));r.put("assetType",a.get("assetType"));r.put("sourceType",a.get("sourceType"));r.put("assetStatus",a.get("assetStatus"));r.put("modelUrl",a.get("fileUrl"));r.put("fileUrl",a.get("fileUrl"));r.put("previewUrl",a.get("previewUrl"));r.put("format",a.get("format"));if(job.get("createdBy") instanceof Number)r.put("creditAccount",creditAccountMap(((Number)job.get("createdBy")).longValue()));return r;}
     private boolean blank(String s){return s==null||s.trim().isEmpty();}
     private String str(Object o){return o==null?"":String.valueOf(o);}
 
@@ -1890,6 +1990,118 @@ public class CreativeAiController {
     private void requireCreativeAdmin(String role) {
         if(!"admin".equals(role)) throw new IllegalStateException("仅超级管理员可审核C端用户作品");
     }
+
+    private BigDecimal consumerCreditCost(String bizType) {
+        return switch (nullToEmpty(bizType)) {
+            case "image2d" -> BigDecimal.valueOf(1);
+            case "image_to_3d" -> BigDecimal.valueOf(10);
+            case "text_to_3d" -> BigDecimal.valueOf(8);
+            case "model_convert" -> BigDecimal.valueOf(1);
+            default -> BigDecimal.ZERO;
+        };
+    }
+
+    private void requireConsumerUser(Long userId) {
+        if(userId==null) throw new IllegalArgumentException("缺少C端用户ID");
+        List<Map<String,Object>> rows=jdbc.queryForList("SELECT id,role FROM user WHERE id=? LIMIT 1",userId);
+        if(rows.isEmpty()||!"user".equals(String.valueOf(rows.get(0).get("role")))) throw new IllegalStateException("仅C端用户可使用额度账户");
+    }
+
+    private synchronized void ensureConsumerCreditAccount(Long userId) {
+        requireConsumerUser(userId);
+        Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM consumer_credit_account WHERE user_id=?",Integer.class,userId);
+        if(count==null||count==0) {
+            BigDecimal initial=consumerCreditInitialBalance==null?BigDecimal.ZERO:consumerCreditInitialBalance;
+            jdbc.update("INSERT INTO consumer_credit_account (user_id,balance,total_recharged) VALUES (?,?,?)",userId,initial.max(BigDecimal.ZERO),initial.max(BigDecimal.ZERO));
+            if(initial.compareTo(BigDecimal.ZERO)>0) {
+                jdbc.update("INSERT INTO consumer_credit_transaction (transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        no("CRT"),userId,"initial",initial,"recharge","completed",BigDecimal.ZERO,initial,"系统初始化赠送额度","system");
+            }
+        }
+    }
+
+    private Map<String,Object> creditAccountMap(Long userId) {
+        Map<String,Object> row=jdbc.queryForMap("SELECT a.user_id userId,u.username,a.balance,a.frozen_balance frozenBalance,a.total_recharged totalRecharged,a.total_consumed totalConsumed,a.updated_at updatedAt FROM consumer_credit_account a JOIN user u ON u.id=a.user_id WHERE a.user_id=?",userId);
+        Map<String,Object> out=new LinkedHashMap<>(row);
+        out.put("rules",consumerCreditRules());
+        return out;
+    }
+
+    private synchronized Long reserveConsumerCredit(Long userId,String bizType,BigDecimal amount,String remark) {
+        if(userId==null||amount==null||amount.compareTo(BigDecimal.ZERO)<=0) return null;
+        ensureConsumerCreditAccount(userId);
+        Map<String,Object> account=jdbc.queryForMap("SELECT id,balance,frozen_balance frozenBalance FROM consumer_credit_account WHERE user_id=? FOR UPDATE",userId);
+        BigDecimal balance=toDecimal(account.get("balance"));
+        if(balance.compareTo(amount)<0) throw new IllegalStateException("额度不足：当前剩余 "+plain(balance)+" 点，本次需要 "+plain(amount)+" 点，请联系管理员充值");
+        BigDecimal after=balance.subtract(amount);
+        jdbc.update("UPDATE consumer_credit_account SET balance=?,frozen_balance=frozen_balance+? WHERE user_id=?",after,amount,userId);
+        KeyHolder kh=new GeneratedKeyHolder();
+        jdbc.update(con -> {
+            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_credit_transaction (transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)",Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1,no("CRT"));ps.setLong(2,userId);ps.setString(3,bizType);ps.setBigDecimal(4,amount);ps.setString(5,"consume");ps.setString(6,"pending");ps.setBigDecimal(7,balance);ps.setBigDecimal(8,after);ps.setString(9,remark);ps.setString(10,"system");
+            return ps;
+        },kh);
+        return Objects.requireNonNull(kh.getKey()).longValue();
+    }
+
+    private synchronized void linkCreditTransaction(Long txId,Long jobId,Long assetId) {
+        if(txId==null) return;
+        jdbc.update("UPDATE consumer_credit_transaction SET job_id=COALESCE(?,job_id),asset_id=COALESCE(?,asset_id) WHERE id=?",jobId,assetId,txId);
+        if(jobId!=null) try{jdbc.update("UPDATE ai_generation_job SET credit_transaction_id=? WHERE id=?",txId,jobId);}catch(Exception ignored){}
+    }
+
+    private Long creditTransactionIdForJob(Long jobId) {
+        if(jobId==null) return null;
+        try {
+            Object v=jdbc.queryForObject("SELECT credit_transaction_id FROM ai_generation_job WHERE id=?",Object.class,jobId);
+            return v instanceof Number ? ((Number)v).longValue() : null;
+        } catch(Exception ignored) { return null; }
+    }
+
+    private synchronized void completeConsumerCredit(Long txId,Long jobId,Long assetId) {
+        if(txId==null) return;
+        List<Map<String,Object>> rows=jdbc.queryForList("SELECT id,user_id userId,amount,status FROM consumer_credit_transaction WHERE id=? LIMIT 1",txId);
+        if(rows.isEmpty()||!"pending".equals(String.valueOf(rows.get(0).get("status")))) return;
+        Long userId=((Number)rows.get(0).get("userId")).longValue();
+        BigDecimal amount=toDecimal(rows.get(0).get("amount"));
+        jdbc.update("UPDATE consumer_credit_account SET frozen_balance=GREATEST(0,frozen_balance-?),total_consumed=total_consumed+? WHERE user_id=?",amount,amount,userId);
+        jdbc.update("UPDATE consumer_credit_transaction SET status='completed',job_id=COALESCE(?,job_id),asset_id=COALESCE(?,asset_id),remark=CONCAT(COALESCE(remark,''),';已完成扣费') WHERE id=?",jobId,assetId,txId);
+    }
+
+    private synchronized void refundConsumerCredit(Long txId,String reason) {
+        if(txId==null) return;
+        List<Map<String,Object>> rows=jdbc.queryForList("SELECT id,user_id userId,amount,status FROM consumer_credit_transaction WHERE id=? LIMIT 1",txId);
+        if(rows.isEmpty()||!"pending".equals(String.valueOf(rows.get(0).get("status")))) return;
+        Long userId=((Number)rows.get(0).get("userId")).longValue();
+        BigDecimal amount=toDecimal(rows.get(0).get("amount"));
+        jdbc.update("UPDATE consumer_credit_account SET balance=balance+?,frozen_balance=GREATEST(0,frozen_balance-?) WHERE user_id=?",amount,amount,userId);
+        Map<String,Object> account=jdbc.queryForMap("SELECT balance FROM consumer_credit_account WHERE user_id=?",userId);
+        jdbc.update("UPDATE consumer_credit_transaction SET status='refunded',balance_after=?,remark=CONCAT(COALESCE(remark,''),?) WHERE id=?",toDecimal(account.get("balance")),";失败退回-"+nullToEmpty(reason),txId);
+    }
+
+    private synchronized Long rechargeCredit(Long userId,BigDecimal amount,String operator,String remark) {
+        ensureConsumerCreditAccount(userId);
+        Map<String,Object> account=jdbc.queryForMap("SELECT balance FROM consumer_credit_account WHERE user_id=?",userId);
+        BigDecimal before=toDecimal(account.get("balance"));
+        BigDecimal after=before.add(amount);
+        jdbc.update("UPDATE consumer_credit_account SET balance=?,total_recharged=total_recharged+? WHERE user_id=?",after,amount,userId);
+        KeyHolder kh=new GeneratedKeyHolder();
+        jdbc.update(con -> {
+            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_credit_transaction (transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)",Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1,no("CRT"));ps.setLong(2,userId);ps.setString(3,"admin_recharge");ps.setBigDecimal(4,amount);ps.setString(5,"recharge");ps.setString(6,"completed");ps.setBigDecimal(7,before);ps.setBigDecimal(8,after);ps.setString(9,blank(remark)?"管理员充值":remark);ps.setString(10,operator);
+            return ps;
+        },kh);
+        return Objects.requireNonNull(kh.getKey()).longValue();
+    }
+
+    private BigDecimal toDecimal(Object v) {
+        if(v instanceof BigDecimal b) return b;
+        if(v instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
+        if(v==null||blank(String.valueOf(v))) return BigDecimal.ZERO;
+        return new BigDecimal(String.valueOf(v));
+    }
+
+    private String plain(BigDecimal v) { return v.stripTrailingZeros().toPlainString(); }
 
     private Long createJob(String jobNo, String type, String provider, String model, Long styleId, Long inputAssetId, String prompt, String negative, String status, String error, String exportFormats) {
         KeyHolder kh = new GeneratedKeyHolder();
