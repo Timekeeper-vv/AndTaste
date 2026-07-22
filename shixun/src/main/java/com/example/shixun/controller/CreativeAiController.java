@@ -149,6 +149,12 @@ public class CreativeAiController {
         return Map.of("success", false, "message", e.getMessage() == null ? "请求处理失败" : e.getMessage());
     }
 
+    @ExceptionHandler(IOException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String,Object> ioBusinessError(IOException e) {
+        return Map.of("success", false, "message", e.getMessage() == null ? "文件读取失败" : e.getMessage());
+    }
+
     @GetMapping("/styles")
     public List<Map<String, Object>> styles() {
         return jdbc.queryForList("SELECT id, name, description, base_prompt basePrompt, negative_prompt negativePrompt, palette, cultural_guardrails culturalGuardrails FROM brand_style_profile WHERE enabled=1 ORDER BY id");
@@ -842,7 +848,7 @@ public class CreativeAiController {
         if (!(lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp"))) {
             throw new IllegalArgumentException("当前仅支持 PNG/JPG/WEBP 图片");
         }
-        Path dir = Path.of(System.getProperty("user.dir"), "..", "shixun-vue", "public", "uploads").normalize().toAbsolutePath();
+        Path dir = vuePublicDir().resolve("uploads").normalize();
         Files.createDirectories(dir);
         String fileName = "ref-" + System.currentTimeMillis() + ext;
         Path target = dir.resolve(fileName);
@@ -878,9 +884,7 @@ public class CreativeAiController {
             String ct=response.headers().firstValue("content-type").orElse("image/png");
             return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(MediaType.parseMediaType(ct)).body(response.body());
         }
-        Path publicDir=vuePublicDir();
-        String relative=url.startsWith("/")?url.substring(1):url; Path file=publicDir.resolve(relative).normalize();
-        if(!file.startsWith(publicDir)||!Files.exists(file)) throw new IOException("图片文件不存在："+url);
+        Path file=resolvePublicAssetFile(url,"图片文件不存在：");
         String lower=file.getFileName().toString().toLowerCase(Locale.ROOT);
         MediaType type=lower.endsWith(".jpg")||lower.endsWith(".jpeg")?MediaType.IMAGE_JPEG:lower.endsWith(".webp")?MediaType.parseMediaType("image/webp"):MediaType.IMAGE_PNG;
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(type).body(Files.readAllBytes(file));
@@ -898,9 +902,7 @@ public class CreativeAiController {
             if(response.statusCode()<200||response.statusCode()>=300) throw new IOException("读取模型失败 HTTP "+response.statusCode());
             return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(glbType).body(response.body());
         }
-        Path publicDir=vuePublicDir();
-        String relative=url.startsWith("/")?url.substring(1):url; Path file=publicDir.resolve(relative).normalize();
-        if(!file.startsWith(publicDir)||!Files.exists(file)) throw new IOException("模型文件不存在："+url);
+        Path file=resolvePublicAssetFile(url,"模型文件不存在：");
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(glbType).body(Files.readAllBytes(file));
     }
 
@@ -1622,6 +1624,22 @@ public class CreativeAiController {
         return cwd.resolve("../shixun-vue/public").normalize();
     }
 
+    private Path resolvePublicAssetFile(String url, String errorPrefix) throws IOException {
+        if(blank(url)) throw new IOException(errorPrefix + url);
+        String relative = url.startsWith("/") ? url.substring(1) : url;
+        Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        List<Path> publicDirs = new ArrayList<>();
+        publicDirs.add(vuePublicDir());
+        publicDirs.add(cwd.resolve("shixun-vue/public").normalize());
+        publicDirs.add(cwd.resolve("../shixun-vue/public").normalize());
+        publicDirs.add(cwd.resolve("public").normalize());
+        for (Path publicDir : publicDirs) {
+            Path file = publicDir.resolve(relative).normalize();
+            if (file.startsWith(publicDir) && Files.exists(file)) return file;
+        }
+        throw new IOException(errorPrefix + url);
+    }
+
     private String saveGeneratedText(String text, String prefix, String suffix, String folder) throws Exception {
         Path dir = vuePublicDir().resolve("generated").resolve(folder).normalize();
         Files.createDirectories(dir);
@@ -1822,10 +1840,7 @@ public class CreativeAiController {
         Map<String, Object> asset = jdbc.queryForMap("SELECT file_url fileUrl, preview_url previewUrl, format FROM digital_asset WHERE id=?", assetId);
         String url = String.valueOf(asset.get("fileUrl") == null ? asset.get("previewUrl") : asset.get("fileUrl"));
         if (url.startsWith("http://") || url.startsWith("https://")) return url;
-        Path publicDir = Path.of(System.getProperty("user.dir"), "..", "shixun-vue", "public").normalize().toAbsolutePath();
-        String relative = url.startsWith("/") ? url.substring(1) : url;
-        Path file = publicDir.resolve(relative).normalize();
-        if (!file.startsWith(publicDir) || !Files.exists(file)) throw new IOException("参考图文件不存在：" + url);
+        Path file = resolvePublicAssetFile(url, "参考图文件不存在：");
         String lower = file.getFileName().toString().toLowerCase(Locale.ROOT);
         String mime = lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "image/jpeg" : lower.endsWith(".webp") ? "image/webp" : "image/png";
         return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(Files.readAllBytes(file));
@@ -1834,7 +1849,7 @@ public class CreativeAiController {
     private String saveRemoteImage(String url, String prefix, String suffix) throws IOException, InterruptedException {
         HttpResponse<byte[]> response = http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
         if (response.statusCode() < 200 || response.statusCode() >= 300) throw new IOException("下载生成图片失败 HTTP " + response.statusCode());
-        Path dir = Path.of("..", "shixun-vue", "public", "generated").normalize();
+        Path dir = vuePublicDir().resolve("generated").normalize();
         Files.createDirectories(dir);
         String file = prefix + System.currentTimeMillis() + suffix;
         Files.write(dir.resolve(file), response.body());
@@ -1958,11 +1973,7 @@ public class CreativeAiController {
     private Path resolveModelSourceFile(Map<String,Object> source) throws IOException {
         String url=str(source.get("fileUrl"));
         if(blank(url)||url.startsWith("http://")||url.startsWith("https://")) return null;
-        Path publicDir=vuePublicDir();
-        String rel=url.startsWith("/")?url.substring(1):url;
-        Path file=publicDir.resolve(rel).normalize();
-        if(!file.startsWith(publicDir)||!Files.exists(file)) throw new IOException("模型源文件不存在："+url);
-        return file;
+        return resolvePublicAssetFile(url,"模型源文件不存在：");
     }
 
     private Path downloadModelToTemp(Map<String,Object> source) throws Exception {
