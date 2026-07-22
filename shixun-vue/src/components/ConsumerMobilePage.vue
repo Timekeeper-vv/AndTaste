@@ -45,11 +45,6 @@ const modelForm = reactive({
 const recentImages = computed(() => assets.value.filter(x => x.assetType === 'image').slice(0, 8))
 const recentModels = computed(() => assets.value.filter(x => x.assetType === 'model').slice(0, 8))
 const canGenerateModel = computed(() => modelForm.mode === 'image_to_model' ? !!modelForm.inputAssetId : !!modelForm.rawPrompt.trim())
-const flowLabel = computed(() => tab.value === 'image' ? 'Qwen优化 -> Google Imagen 4 -> 自动保存' : 'Qwen优化 -> Tripo建模 -> 自动保存')
-const serviceReadyText = computed(() => tab.value === 'image'
-  ? (imageConfig.value.configured ? 'Google Imagen 4 已就绪' : 'Google Imagen 4 未配置')
-  : (tripoConfig.value.configured && tripoConfig.value.serviceReachable ? 'Tripo 已就绪' : 'Tripo 未就绪'))
-
 function setStage(text: string, nextPhase: Phase) {
   stage.value = text
   phase.value = nextPhase
@@ -120,15 +115,15 @@ async function generateImage() {
     return
   }
   if (!imageConfig.value.configured) {
-    emit('alert', 'Google Imagen 4 未配置，先检查服务器 REPLICATE_API_KEY', 'error')
+    emit('alert', '图片生成服务未配置，请联系管理员', 'error')
     return
   }
   busy.value = true
   imageResult.value = null
-  setStage('Qwen正在优化图片提示词', 'optimize')
+  setStage('正在优化创意', 'optimize')
   try {
     await optimizeImagePrompt()
-    setStage('Google Imagen 4 正在生成产品图', 'generate')
+    setStage('正在生成图片', 'generate')
     const r = await fetch('/api/creative/ai/imagen/text-to-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -147,7 +142,7 @@ async function generateImage() {
     }
     const d = await r.json()
     imageResult.value = d
-    setStage('正在保存并回传图片', 'save')
+    setStage('正在保存作品', 'save')
     await prepareAssetPreview(d.assetId, 'image')
     await load()
     await nextTick()
@@ -205,7 +200,7 @@ async function optimizeModelPrompt() {
 
 async function generateModel() {
   if (!tripoConfig.value.configured || !tripoConfig.value.serviceReachable) {
-    emit('alert', 'Tripo 未配置或暂不可用', 'error')
+    emit('alert', '3D生成服务暂不可用，请联系管理员', 'error')
     return
   }
   if (!canGenerateModel.value) {
@@ -215,10 +210,10 @@ async function generateModel() {
   busy.value = true
   modelResult.value = null
   modelProgress.value = 0
-  setStage('Qwen正在优化3D提示词', 'optimize')
+  setStage('正在优化创意', 'optimize')
   try {
     await optimizeModelPrompt()
-    setStage('正在自动提交 Tripo 任务', 'generate')
+    setStage('正在生成3D模型', 'generate')
     const body = {
       mode: modelForm.mode,
       modelVersion: tripoConfig.value.modelVersion || 'v3.1-20260211',
@@ -254,7 +249,7 @@ async function generateModel() {
       throw new Error(err?.message || `HTTP ${r.status}`)
     }
     const d = await r.json()
-    emit('alert', '3D任务已提交', 'success')
+    emit('alert', '已开始生成3D模型', 'success')
     await pollModel(d.jobId)
   } catch (e: any) {
     busy.value = false
@@ -274,7 +269,7 @@ async function pollModel(jobId: number) {
     }
     const d = await r.json()
     modelProgress.value = Number(d.progress || 0)
-    setStage(d.status === 'succeeded' ? '3D模型已完成' : `Tripo 正在建模 ${modelProgress.value || 0}%`, d.status === 'succeeded' ? 'save' : 'generate')
+    setStage(d.status === 'succeeded' ? '3D模型已完成' : `正在生成3D模型 ${modelProgress.value || 0}%`, d.status === 'succeeded' ? 'save' : 'generate')
     if (d.status === 'succeeded') {
       modelResult.value = d
       busy.value = false
@@ -286,7 +281,7 @@ async function pollModel(jobId: number) {
       emit('alert', '3D模型已生成并保存', 'success')
       return
     }
-    if (d.status === 'failed') throw new Error(d.errorMessage || 'Tripo任务失败')
+    if (d.status === 'failed') throw new Error(d.errorMessage || '3D生成失败')
     modelTimer.value = setTimeout(() => pollModel(jobId), 3000)
   } catch (e: any) {
     busy.value = false
@@ -319,33 +314,13 @@ function openUrl(url?: string) {
     </header>
 
     <section class="hero">
-      <div class="hero-glass">
-        <img :src="andTasteLogo" alt="之间味道" />
-        <strong>AndTaste AI</strong>
-      </div>
       <span>{{ props.currentUser.username }}</span>
-      <h1>把一个想法变成官方感文创产品</h1>
-      <p>输入一句话，系统会先自动优化提示词，再直接交给 Google Imagen 4 或 Tripo 生成，并回传到作品库。</p>
+      <h1>把想法变成文创作品</h1>
+      <p>输入一句话，选择图片或3D，系统会自动完成创作并保存。</p>
       <div class="hero-actions">
         <button type="button" @click="tab='image'">生成图片</button>
         <button type="button" @click="tab='model'">生成3D</button>
       </div>
-    </section>
-
-    <section class="workflow-strip">
-      <div class="workflow-chip" :class="{ active: phase === 'optimize' }"><b>01</b><span>Qwen</span></div>
-      <div class="workflow-arrow">→</div>
-      <div class="workflow-chip" :class="{ active: phase === 'generate' }"><b>02</b><span>{{ tab === 'image' ? 'Google' : 'Tripo' }}</span></div>
-      <div class="workflow-arrow">→</div>
-      <div class="workflow-chip" :class="{ active: phase === 'save' || phase === 'done' }"><b>03</b><span>保存</span></div>
-    </section>
-
-    <section class="live-console">
-      <div>
-        <span>{{ serviceReadyText }}</span>
-        <b>{{ stage || flowLabel }}</b>
-      </div>
-      <i :class="{ active: busy }"></i>
     </section>
 
     <nav class="quick-tabs">
@@ -365,14 +340,8 @@ function openUrl(url?: string) {
 
     <section v-if="tab==='image'" class="panel creation-panel">
       <div class="section-head">
-        <span>AI IMAGE</span>
+        <span>IMAGE</span>
         <b>产品图生成</b>
-      </div>
-      <div class="service-pill">
-        <i></i>
-        <span>服务商</span>
-        <b>Google Imagen 4</b>
-        <em>{{ serviceReadyText }}</em>
       </div>
       <label>
         <span>你想做什么</span>
@@ -388,7 +357,6 @@ function openUrl(url?: string) {
         <button type="button" :class="{active:imageForm.imagenAspectRatio==='9:16'}" @click="imageForm.imagenAspectRatio='9:16'">手机海报</button>
         <button type="button" :class="{active:imageForm.imagenAspectRatio==='16:9'}" @click="imageForm.imagenAspectRatio='16:9'">横版</button>
       </div>
-      <div class="mini-note">{{ flowLabel }}</div>
       <button type="button" class="primary" :disabled="busy" @click="generateImage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>
         {{ busy && tab==='image' ? stage || '正在生成' : '一键生成并保存图片' }}
@@ -406,20 +374,13 @@ function openUrl(url?: string) {
 
     <section v-if="tab==='model'" class="panel creation-panel">
       <div class="section-head">
-        <span>AI MODEL</span>
+        <span>3D</span>
         <b>轻量3D建模</b>
-      </div>
-      <div class="service-pill teal">
-        <i></i>
-        <span>服务商</span>
-        <b>Tripo</b>
-        <em>{{ serviceReadyText }}</em>
       </div>
       <div class="mode-switch">
         <button type="button" :class="{active:modelForm.mode==='image_to_model'}" @click="modelForm.mode='image_to_model'">拍照/上传生成</button>
         <button type="button" :class="{active:modelForm.mode==='text_to_model'}" @click="modelForm.mode='text_to_model'">文字生成</button>
       </div>
-      <div class="mini-note">只保留简单输入，系统自动先优化提示词，再提交 Tripo。</div>
 
       <label v-if="modelForm.mode==='image_to_model'" class="upload-box">
         <input type="file" accept="image/*" @change="uploadReference" />
@@ -454,10 +415,9 @@ function openUrl(url?: string) {
 
     <section v-if="tab==='gallery'" class="panel creation-panel">
       <div class="section-head">
-        <span>MY WORKS</span>
+        <span>WORKS</span>
         <b>最近作品</b>
       </div>
-      <div class="mini-note">图片和3D结果都会自动回到作品库，方便手机直接查看。</div>
       <div class="gallery">
         <article v-for="a in recentImages" :key="`img-${a.id}`">
           <img :src="a.previewUrl || a.fileUrl" alt="作品图片" />
@@ -476,6 +436,79 @@ function openUrl(url?: string) {
 
 <style scoped>
 .consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
+</style>
+
+<style scoped>
+.immersive-shell{
+  background:linear-gradient(180deg,#f7f0e8 0%,#eee4da 100%);
+  padding:0 14px 104px;
+}
+.ambient-layer{
+  opacity:.45;
+  mix-blend-mode:normal;
+}
+.immersive-shell .consumer-top{
+  background:rgba(247,240,232,.86);
+  color:#201a17;
+  backdrop-filter:blur(18px);
+  border-bottom:1px solid rgba(87,65,44,.08);
+}
+.immersive-shell .brand span{
+  color:#8a7161;
+}
+.immersive-shell .icon-btn{
+  background:#fffaf5;
+  color:#201a17;
+  box-shadow:0 8px 24px rgba(58,39,25,.08);
+}
+.immersive-shell .hero{
+  min-height:248px;
+  margin:10px 0 14px;
+  padding:24px 18px;
+  border-radius:28px;
+  background:
+    radial-gradient(circle at 82% 18%,rgba(255,255,255,.18),transparent 110px),
+    linear-gradient(135deg,#221713,#6b3a29 58%,#ad6840);
+  box-shadow:0 22px 54px rgba(77,48,29,.2);
+}
+.immersive-shell .hero:after{
+  width:150px;
+  height:150px;
+  right:-24px;
+  top:18px;
+  opacity:.72;
+}
+.immersive-shell .hero h1{
+  max-width:11ch;
+  font-size:32px;
+}
+.immersive-shell .hero p{
+  max-width:24ch;
+  margin-bottom:18px;
+  font-size:13px;
+}
+.immersive-shell .hero-actions button{
+  min-width:104px;
+  height:42px;
+}
+.immersive-shell .creation-panel{
+  margin-top:12px;
+  border-radius:24px;
+  box-shadow:0 18px 44px rgba(58,39,25,.1);
+}
+.immersive-shell .section-head{
+  margin-bottom:14px;
+}
+.immersive-shell .section-head span{
+  font-size:10px;
+  letter-spacing:1.8px;
+}
+.immersive-shell textarea{
+  min-height:138px;
+}
+.immersive-shell .primary{
+  min-height:56px;
+}
 </style>
 
 <style scoped>
