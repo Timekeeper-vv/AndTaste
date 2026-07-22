@@ -7,10 +7,12 @@ const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error']; logout: [] }>()
 
 type Tab = 'image' | 'model' | 'gallery'
+type Phase = 'idle' | 'optimize' | 'generate' | 'save' | 'done'
 
 const tab = ref<Tab>('image')
 const busy = ref(false)
 const stage = ref('')
+const phase = ref<Phase>('idle')
 const imageConfig = ref<any>({})
 const tripoConfig = ref<any>({})
 const assets = ref<any[]>([])
@@ -43,6 +45,15 @@ const modelForm = reactive({
 const recentImages = computed(() => assets.value.filter(x => x.assetType === 'image').slice(0, 8))
 const recentModels = computed(() => assets.value.filter(x => x.assetType === 'model').slice(0, 8))
 const canGenerateModel = computed(() => modelForm.mode === 'image_to_model' ? !!modelForm.inputAssetId : !!modelForm.rawPrompt.trim())
+const flowLabel = computed(() => tab.value === 'image' ? 'Qwen优化 -> Google Imagen 4 -> 自动保存' : 'Qwen优化 -> Tripo建模 -> 自动保存')
+const serviceReadyText = computed(() => tab.value === 'image'
+  ? (imageConfig.value.configured ? 'Google Imagen 4 已就绪' : 'Google Imagen 4 未配置')
+  : (tripoConfig.value.configured && tripoConfig.value.serviceReachable ? 'Tripo 已就绪' : 'Tripo 未就绪'))
+
+function setStage(text: string, nextPhase: Phase) {
+  stage.value = text
+  phase.value = nextPhase
+}
 
 onMounted(load)
 onBeforeUnmount(() => {
@@ -114,10 +125,10 @@ async function generateImage() {
   }
   busy.value = true
   imageResult.value = null
-  stage.value = '正在整理创意'
+  setStage('Qwen正在优化图片提示词', 'optimize')
   try {
     await optimizeImagePrompt()
-    stage.value = '正在生成图片'
+    setStage('Google Imagen 4 正在生成产品图', 'generate')
     const r = await fetch('/api/creative/ai/imagen/text-to-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -136,13 +147,15 @@ async function generateImage() {
     }
     const d = await r.json()
     imageResult.value = d
-    stage.value = '正在回传图片'
+    setStage('正在保存并回传图片', 'save')
     await prepareAssetPreview(d.assetId, 'image')
     await load()
     await nextTick()
     imageAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    phase.value = 'done'
     emit('alert', '图片已生成并保存到资产库', 'success')
   } catch (e: any) {
+    phase.value = 'idle'
     emit('alert', '生成图片失败：' + (e?.message || e), 'error')
   } finally {
     busy.value = false
@@ -154,7 +167,7 @@ async function uploadReference(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
   if (!file) return
   busy.value = true
-  stage.value = '正在上传参考图'
+  setStage('正在上传参考图', 'save')
   try {
     const fd = new FormData()
     fd.append('file', file)
@@ -171,6 +184,7 @@ async function uploadReference(e: Event) {
   } finally {
     busy.value = false
     stage.value = ''
+    phase.value = 'idle'
   }
 }
 
@@ -201,10 +215,10 @@ async function generateModel() {
   busy.value = true
   modelResult.value = null
   modelProgress.value = 0
-  stage.value = '正在准备3D任务'
+  setStage('Qwen正在优化3D提示词', 'optimize')
   try {
     await optimizeModelPrompt()
-    stage.value = '正在提交3D任务'
+    setStage('正在自动提交 Tripo 任务', 'generate')
     const body = {
       mode: modelForm.mode,
       modelVersion: tripoConfig.value.modelVersion || 'v3.1-20260211',
@@ -245,6 +259,7 @@ async function generateModel() {
   } catch (e: any) {
     busy.value = false
     stage.value = ''
+    phase.value = 'idle'
     emit('alert', '3D生成失败：' + (e?.message || e), 'error')
   }
 }
@@ -259,7 +274,7 @@ async function pollModel(jobId: number) {
     }
     const d = await r.json()
     modelProgress.value = Number(d.progress || 0)
-    stage.value = d.status === 'succeeded' ? '3D模型已完成' : `3D模型生成中 ${modelProgress.value || 0}%`
+    setStage(d.status === 'succeeded' ? '3D模型已完成' : `Tripo 正在建模 ${modelProgress.value || 0}%`, d.status === 'succeeded' ? 'save' : 'generate')
     if (d.status === 'succeeded') {
       modelResult.value = d
       busy.value = false
@@ -267,6 +282,7 @@ async function pollModel(jobId: number) {
       await load()
       await nextTick()
       modelAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      phase.value = 'done'
       emit('alert', '3D模型已生成并保存', 'success')
       return
     }
@@ -275,6 +291,7 @@ async function pollModel(jobId: number) {
   } catch (e: any) {
     busy.value = false
     stage.value = ''
+    phase.value = 'idle'
     emit('alert', '查询3D任务失败：' + (e?.message || e), 'error')
   }
 }
@@ -302,11 +319,20 @@ function openUrl(url?: string) {
 
     <section class="hero">
       <span>{{ props.currentUser.username }}</span>
-      <h1>把一个想法变成文创产品</h1>
+      <h1>把一个想法变成官方感文创产品</h1>
+      <p>输入一句话，系统会先自动优化提示词，再直接交给 Google Imagen 4 或 Tripo 生成，并回传到作品库。</p>
       <div class="hero-actions">
         <button type="button" @click="tab='image'">生成图片</button>
         <button type="button" @click="tab='model'">生成3D</button>
       </div>
+    </section>
+
+    <section class="workflow-strip">
+      <div class="workflow-chip" :class="{ active: phase === 'optimize' }"><b>01</b><span>Qwen</span></div>
+      <div class="workflow-arrow">→</div>
+      <div class="workflow-chip" :class="{ active: phase === 'generate' }"><b>02</b><span>{{ tab === 'image' ? 'Google' : 'Tripo' }}</span></div>
+      <div class="workflow-arrow">→</div>
+      <div class="workflow-chip" :class="{ active: phase === 'save' || phase === 'done' }"><b>03</b><span>保存</span></div>
     </section>
 
     <nav class="quick-tabs">
@@ -329,6 +355,12 @@ function openUrl(url?: string) {
         <span>AI IMAGE</span>
         <b>产品图生成</b>
       </div>
+      <div class="service-pill">
+        <i></i>
+        <span>服务商</span>
+        <b>Google Imagen 4</b>
+        <em>{{ serviceReadyText }}</em>
+      </div>
       <label>
         <span>你想做什么</span>
         <textarea v-model="imageForm.rawPrompt" rows="5" placeholder="例如：江西博物馆主题冰箱贴，青铜器纹样，年轻人喜欢，精致伴手礼"></textarea>
@@ -343,9 +375,10 @@ function openUrl(url?: string) {
         <button type="button" :class="{active:imageForm.imagenAspectRatio==='9:16'}" @click="imageForm.imagenAspectRatio='9:16'">手机海报</button>
         <button type="button" :class="{active:imageForm.imagenAspectRatio==='16:9'}" @click="imageForm.imagenAspectRatio='16:9'">横版</button>
       </div>
+      <div class="mini-note">{{ flowLabel }}</div>
       <button type="button" class="primary" :disabled="busy" @click="generateImage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>
-        {{ busy && tab==='image' ? stage || '正在生成' : '一键生成图片' }}
+        {{ busy && tab==='image' ? stage || '正在生成' : '一键生成并保存图片' }}
       </button>
 
       <article v-if="imageResult" ref="imageAnchor" class="result-card">
@@ -363,10 +396,17 @@ function openUrl(url?: string) {
         <span>AI MODEL</span>
         <b>轻量3D建模</b>
       </div>
+      <div class="service-pill teal">
+        <i></i>
+        <span>服务商</span>
+        <b>Tripo</b>
+        <em>{{ serviceReadyText }}</em>
+      </div>
       <div class="mode-switch">
         <button type="button" :class="{active:modelForm.mode==='image_to_model'}" @click="modelForm.mode='image_to_model'">拍照/上传生成</button>
         <button type="button" :class="{active:modelForm.mode==='text_to_model'}" @click="modelForm.mode='text_to_model'">文字生成</button>
       </div>
+      <div class="mini-note">只保留简单输入，系统自动先优化提示词，再提交 Tripo。</div>
 
       <label v-if="modelForm.mode==='image_to_model'" class="upload-box">
         <input type="file" accept="image/*" @change="uploadReference" />
@@ -384,7 +424,7 @@ function openUrl(url?: string) {
 
       <button type="button" class="primary green" :disabled="busy || !canGenerateModel" @click="generateModel">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 8 4.5v9L12 20l-8-4.5v-9L12 2Z"/></svg>
-        {{ busy && tab==='model' ? stage || '正在生成' : '一键生成3D模型' }}
+        {{ busy && tab==='model' ? stage || '正在生成' : '一键生成并保存3D' }}
       </button>
       <div v-if="busy && tab==='model'" class="progress">
         <span :style="{ width: `${Math.max(12, modelProgress)}%` }"></span>
@@ -404,6 +444,7 @@ function openUrl(url?: string) {
         <span>MY WORKS</span>
         <b>最近作品</b>
       </div>
+      <div class="mini-note">图片和3D结果都会自动回到作品库，方便手机直接查看。</div>
       <div class="gallery">
         <article v-for="a in recentImages" :key="`img-${a.id}`">
           <img :src="a.previewUrl || a.fileUrl" alt="作品图片" />
@@ -422,4 +463,294 @@ function openUrl(url?: string) {
 
 <style scoped>
 .consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
+</style>
+
+<style scoped>
+.consumer-shell{
+  background:
+    radial-gradient(circle at top left, rgba(180,83,42,.12), transparent 28%),
+    radial-gradient(circle at 92% 4%, rgba(15,118,110,.12), transparent 24%),
+    linear-gradient(180deg, #f9f5ef 0%, #f3ede6 52%, #efe7dd 100%);
+}
+.consumer-top{
+  margin:-14px -14px 12px;
+  padding:14px 14px 12px;
+  border-bottom:1px solid rgba(87,65,44,.08);
+  background:rgba(248,241,232,.82);
+}
+.brand img{
+  width:38px;
+  height:38px;
+  border-radius:10px;
+  box-shadow:0 8px 20px rgba(39,28,20,.12);
+}
+.hero{
+  min-height:212px;
+  padding:24px 18px 20px;
+  border-radius:22px;
+  background:
+    radial-gradient(circle at 82% 18%, rgba(255,255,255,.16), transparent 26%),
+    radial-gradient(circle at 18% 22%, rgba(255,255,255,.08), transparent 22%),
+    linear-gradient(135deg, #231813 0%, #5f3124 46%, #9d5a35 100%);
+  box-shadow:0 24px 56px rgba(87,52,29,.24);
+}
+.hero:after{
+  width:128px;
+  height:128px;
+  right:12px;
+  top:-6px;
+  background:
+    radial-gradient(circle, rgba(255,255,255,.16) 0, rgba(255,255,255,.08) 38%, transparent 70%);
+  box-shadow:-48px 78px 0 rgba(255,255,255,.06);
+}
+.hero span{
+  padding:6px 10px;
+  background:rgba(255,255,255,.14);
+  letter-spacing:.8px;
+}
+.hero h1{
+  max-width:12ch;
+  font-size:30px;
+  line-height:1.1;
+}
+.hero p{
+  margin:0 0 16px;
+  max-width:26ch;
+  color:rgba(255,255,255,.88);
+  font-size:13px;
+  line-height:1.55;
+}
+.hero-actions button{
+  min-width:108px;
+  border-color:rgba(255,255,255,.2);
+  background:rgba(255,255,255,.12);
+  backdrop-filter:blur(10px);
+}
+.workflow-strip{
+  display:grid;
+  grid-template-columns:1fr 18px 1fr 18px 1fr;
+  align-items:center;
+  gap:8px;
+  margin:12px 0 4px;
+  padding:10px 12px;
+  border-radius:16px;
+  background:rgba(255,255,255,.7);
+  border:1px solid rgba(87,65,44,.08);
+  box-shadow:0 10px 26px rgba(76,53,33,.06);
+}
+.workflow-chip{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+  color:#7a6758;
+}
+.workflow-chip b{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:26px;
+  height:26px;
+  border-radius:999px;
+  background:#f3e8de;
+  color:#8b5a3c;
+  font-size:10px;
+  flex:0 0 auto;
+}
+.workflow-chip span{
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  font-size:12px;
+  font-weight:800;
+}
+.workflow-chip.active b{
+  background:#201a17;
+  color:#fff;
+}
+.workflow-chip.active span{
+  color:#201a17;
+}
+.workflow-arrow{
+  color:#b49a87;
+  text-align:center;
+  font-weight:900;
+}
+.panel{
+  margin-top:14px;
+  padding:16px;
+  border-radius:22px;
+  background:rgba(255,255,255,.82);
+  border:1px solid rgba(87,65,44,.09);
+  box-shadow:0 18px 42px rgba(69,49,31,.08);
+  backdrop-filter:blur(14px);
+}
+.section-head{
+  margin-bottom:10px;
+}
+.section-head span{
+  color:#b06539;
+}
+.section-head b{
+  color:#221913;
+}
+.service-pill{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin:2px 0 12px;
+  padding:10px 12px;
+  border-radius:14px;
+  background:#fbf4ec;
+  border:1px solid #ecd9c8;
+}
+.service-pill i{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#0f766e;
+  box-shadow:0 0 0 4px rgba(15,118,110,.12);
+}
+.service-pill span{
+  color:#9a7c68;
+  font-size:11px;
+  font-weight:800;
+}
+.service-pill b{
+  margin-left:auto;
+  color:#221913;
+  font-size:12px;
+  font-weight:900;
+}
+.service-pill em{
+  margin-left:8px;
+  color:#8a7161;
+  font-size:11px;
+  font-style:normal;
+}
+.service-pill.teal i{ background:#0f766e; box-shadow:0 0 0 4px rgba(15,118,110,.12); }
+.mini-note{
+  margin-top:10px;
+  padding:10px 12px;
+  border-radius:12px;
+  background:rgba(15,23,42,.04);
+  color:#6f5a4d;
+  font-size:12px;
+  line-height:1.55;
+}
+.chips{
+  grid-template-columns:repeat(3,minmax(0,1fr));
+}
+.chips button,
+.mode-switch button{
+  min-height:42px;
+  background:#fffaf4;
+  border-color:#e7d7c9;
+  color:#745e4f;
+  box-shadow:0 1px 0 rgba(255,255,255,.8) inset;
+}
+.chips button.active,
+.mode-switch button.active{
+  background:linear-gradient(180deg,#211a17,#34271f);
+  border-color:#211a17;
+  color:#fff;
+}
+.primary{
+  min-height:56px;
+  border-radius:16px;
+  background:linear-gradient(135deg,#0f766e,#1d9b8f 54%,#0b5b56);
+  box-shadow:0 18px 30px rgba(15,118,110,.22);
+}
+.primary.green{
+  background:linear-gradient(135deg,#1e6f60,#0f766e 55%,#124b42);
+}
+.result-card{
+  margin-top:16px;
+  border-radius:18px;
+  overflow:hidden;
+  border-color:#ead8c9;
+  background:linear-gradient(180deg,#fffdf9,#f8f0e6);
+}
+.result-card>img{
+  border-bottom:1px solid rgba(87,65,44,.08);
+  max-height:360px;
+}
+.result-info{
+  padding:14px;
+}
+.result-info b{
+  font-size:15px;
+}
+.result-info p{
+  color:#6e584a;
+}
+.result-info a,
+.result-info button{
+  border-radius:999px;
+  background:#201a17;
+}
+.upload-box{
+  border-radius:18px;
+  border-color:#dcc2ae;
+  background:linear-gradient(180deg,#fffaf4,#f8efe5);
+}
+.upload-box span{
+  color:#8c705e;
+}
+.progress{
+  height:9px;
+  border-radius:999px;
+  background:#eadfd5;
+}
+.progress span{
+  background:linear-gradient(90deg,#0f766e,#1d9b8f);
+}
+.gallery{
+  grid-template-columns:repeat(2,minmax(0,1fr));
+}
+.gallery article{
+  border-radius:16px;
+  border-color:#ead8c9;
+  background:#fffdf9;
+  box-shadow:0 10px 24px rgba(74,50,31,.06);
+}
+.gallery img,.model-tile{
+  border-bottom:1px solid rgba(87,65,44,.08);
+}
+.gallery button{
+  border-radius:999px;
+  background:#201a17;
+}
+.empty{
+  color:#8a7161;
+}
+.quick-tabs{
+  bottom:12px;
+  border-radius:18px;
+  padding:8px;
+  background:rgba(255,251,246,.92);
+  border:1px solid rgba(87,65,44,.12);
+  box-shadow:0 18px 50px rgba(57,38,26,.18);
+}
+.quick-tabs button{
+  min-height:48px;
+  border-radius:12px;
+  color:#927868;
+}
+.quick-tabs button.active{
+  background:linear-gradient(180deg,#1e1714,#2d221d);
+}
+@media(min-width:720px){
+  .consumer-shell{
+    max-width:460px;
+    margin:0 auto;
+    box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15);
+  }
+  .quick-tabs{
+    left:50%;
+    right:auto;
+    width:432px;
+    transform:translateX(-50%);
+  }
+}
 </style>
