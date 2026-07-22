@@ -858,6 +858,21 @@ public class CreativeAiController {
         return jdbc.queryForList(sql.toString(),args.toArray());
     }
 
+    @PutMapping("/consumer-assets/{id}/submit-review")
+    public Map<String,Object> submitConsumerAssetReview(@PathVariable Long id,
+                                                        @RequestHeader(value="X-Current-Role",required=false) String role,
+                                                        @RequestHeader(value="X-Current-User-Id",required=false) Long headerUserId,
+                                                        @RequestParam(required=false) Long currentUserId,
+                                                        @RequestBody(required=false) Map<String,String> body) {
+        Long userId=currentUserId==null?headerUserId:currentUserId;
+        if(!"user".equals(role)) throw new IllegalStateException("仅C端用户可提交自己的作品审核");
+        if(userId==null) throw new IllegalArgumentException("缺少当前用户ID，无法提交审核");
+        String note=body==null?"":nullToEmpty(body.get("note"));
+        int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND source_type<>'upload' AND status<>'approved'", blank(note)?";用户提交审核":";用户提交审核-"+note, id, userId);
+        if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已审核通过");
+        return Map.of("success",true,"id",id,"status","review","message","作品已提交给审核员");
+    }
+
     @PutMapping("/consumer-assets/{id}/review")
     public Map<String,Object> reviewConsumerAsset(@PathVariable Long id,
                                                   @RequestHeader(value="X-Current-Role",required=false) String role,
@@ -1544,7 +1559,7 @@ public class CreativeAiController {
         KeyHolder kh = new GeneratedKeyHolder();
         String assetNo = no("AST");
         String metaJson = mapper.writeValueAsString(meta == null ? Map.of() : meta);
-        String initialStatus = meta != null && Boolean.TRUE.equals(meta.get("consumerWork")) ? "review" : "draft";
+        String initialStatus = "draft";
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("INSERT INTO digital_asset (asset_no,title,asset_type,source_type,file_url,preview_url,prompt,negative_prompt,style_id,parent_asset_id,format,tags,metadata_json,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, assetNo); ps.setString(2, title); ps.setString(3, type); ps.setString(4, sourceType == null ? "ai_generated" : sourceType); ps.setString(5, fileUrl); ps.setString(6, previewUrl); ps.setString(7, prompt); ps.setString(8, negative); if (styleId == null) ps.setNull(9, java.sql.Types.BIGINT); else ps.setLong(9, styleId); if (parentAssetId == null) ps.setNull(10, java.sql.Types.BIGINT); else ps.setLong(10, parentAssetId); ps.setString(11, format); ps.setString(12, tags); ps.setString(13, metaJson); ps.setString(14, initialStatus);
