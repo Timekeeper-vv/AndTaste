@@ -1240,8 +1240,9 @@ public class CreativeAiController {
         byte[] signingKey = hmac(hmac(hmac(hmac(jimengSecretAccessKey.getBytes(StandardCharsets.UTF_8), shortDate), jimengRegion), jimengService), "request");
         String signature = hex(hmac(signingKey, stringToSign));
         String authorization = "HMAC-SHA256 Credential=" + jimengAccessKeyId.trim() + "/" + credentialScope + ", SignedHeaders=" + signedHeaders + ", Signature=" + signature;
-        builder.header("Host", host)
-                .header("X-Date", xDate)
+        // Java HttpClient 会自动设置 Host；Host 属于 restricted header，不能手动 header("Host", ...)。
+        // 签名 canonicalHeaders 中仍需要包含 host 值，否则火山签名校验会失败。
+        builder.header("X-Date", xDate)
                 .header("X-Content-Sha256", payloadHash)
                 .header("Authorization", authorization);
     }
