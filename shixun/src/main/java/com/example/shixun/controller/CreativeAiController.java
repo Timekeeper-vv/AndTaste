@@ -942,6 +942,22 @@ public class CreativeAiController {
         return jdbc.queryForList(sql.toString(),args.toArray());
     }
 
+    @GetMapping("/consumer-assets/inventory")
+    public List<Map<String,Object>> consumerAssetsInventory(@RequestHeader(value="X-Current-Role",required=false) String role,
+                                                            @RequestParam(required=false) Long userId,
+                                                            @RequestParam(required=false) String type,
+                                                            @RequestParam(required=false) String keyword,
+                                                            @RequestParam(required=false,defaultValue="200") int size) {
+        requireCreativeAdmin(role);
+        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt,a.updated_at updatedAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.status='approved' AND a.asset_type IN ('image','model') AND COALESCE(a.source_type,'ai_generated')<>'upload'");
+        List<Object> args=new ArrayList<>();
+        if(userId!=null){sql.append(" AND a.created_by=?");args.add(userId);}
+        if(!blank(type) && Set.of("image","model").contains(type)){sql.append(" AND a.asset_type=?");args.add(type);}
+        if(!blank(keyword)){sql.append(" AND (a.title LIKE ? OR a.prompt LIKE ? OR a.asset_no LIKE ? OR u.username LIKE ?)");String kw="%"+keyword.trim()+"%";args.add(kw);args.add(kw);args.add(kw);args.add(kw);}
+        sql.append(" ORDER BY a.updated_at DESC,a.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,1000)));
+        return jdbc.queryForList(sql.toString(),args.toArray());
+    }
+
     @PutMapping("/consumer-assets/{id}/submit-review")
     public Map<String,Object> submitConsumerAssetReview(@PathVariable Long id,
                                                         @RequestHeader(value="X-Current-Role",required=false) String role,
@@ -980,7 +996,7 @@ public class CreativeAiController {
         String comment=body==null?"":nullToEmpty(body.get("comment"));
         int n=jdbc.update("UPDATE digital_asset a SET a.status=?, a.tags=CONCAT(COALESCE(a.tags,''), ?) WHERE a.id=? AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')",status,";审核:"+status+(blank(comment)?"":"-"+comment),id);
         if(n==0) throw new IllegalArgumentException("作品不存在或不是C端用户作品");
-        return Map.of("success",true,"id",id,"status",status,"operator",blank(operator)?"admin":operator,"message","审核状态已更新");
+        return Map.of("success",true,"id",id,"status",status,"operator",blank(operator)?"admin":operator,"message","approved".equals(status)?"审核已通过，作品已进入C端用户端库存":"审核状态已更新");
     }
 
     @PostMapping("/reviews")

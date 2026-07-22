@@ -99,7 +99,7 @@ async function reviewWork(w: ConsumerAsset, nextStatus: ReviewStatus) {
       const err = await r.json().catch(() => null)
       throw new Error(err?.message || `HTTP ${r.status}`)
     }
-    emit('alert', nextStatus === 'approved' ? '作品已审核通过' : nextStatus === 'rejected' ? '作品已标记不通过' : '作品已退回待审核', 'success')
+    emit('alert', nextStatus === 'approved' ? '作品已审核通过，已进入C端用户端库存' : nextStatus === 'rejected' ? '作品已标记不通过' : '作品已退回待审核', 'success')
     await load()
   } catch (e: any) {
     emit('alert', '审核失败：' + (e?.message || e), 'error')

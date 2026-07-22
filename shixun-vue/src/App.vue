@@ -30,6 +30,7 @@ import AiChat from './components/AiChat.vue'
 import AiAssistantPage from './components/AiAssistantPage.vue'
 import ConsumerMobilePage from './components/ConsumerMobilePage.vue'
 import ConsumerWorksReview from './components/ConsumerWorksReview.vue'
+import ConsumerAssetInventory from './components/ConsumerAssetInventory.vue'
 
 // 角色兼容说明：
 // admin      = 超级管理员：拥有全部功能，包括账号权限、审批和系统配置
@@ -49,6 +50,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   dashboard:    ALL_ROLES,
   approvalCenter:MANAGER_ROLES,
   consumerWorksReview:SUPER_ADMIN_ROLES,
+  consumerAssetInventory:SUPER_ADMIN_ROLES,
   aiAssistant:  ALL_ROLES,
   studio:       STAFF_WORKFLOW_ROLES,
   creative2d:   CREATIVE_DESIGN_ROLES,
@@ -165,6 +167,7 @@ const pageLabels: Record<string, string> = {
   dashboard:    '经营看板',
   approvalCenter:'审批中心',
   consumerWorksReview:'C端用户作品审核',
+  consumerAssetInventory:'C端用户端库存',
   aiAssistant:  '之间味道AI助手',
   studio:       '创意设计',
   creative2d:   '2D创意生图',
@@ -287,6 +290,7 @@ const pageLabels: Record<string, string> = {
         <CreativeDashboard    v-if="currentPage === 'dashboard'"   @switch-page="p => { if (hasAccess(p, currentUser?.role)) currentPage = p as PageName }" @alert="showAlert" />
         <ApprovalCenter v-if="currentPage === 'approvalCenter'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerWorksReview v-if="currentPage === 'consumerWorksReview'" :current-user="currentUser" @alert="showAlert" />
+        <ConsumerAssetInventory v-if="currentPage === 'consumerAssetInventory'" :current-user="currentUser" @alert="showAlert" />
         <AiAssistantPage v-if="currentPage === 'aiAssistant'" :current-user="currentUser" />
         <CreativeStudio v-if="currentPage === 'studio'" initial-view="image2d" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'creative2d'" initial-view="image2d" @alert="showAlert" />
