@@ -689,7 +689,8 @@ public class CreativeAiController {
         if(!Set.of("image_to_model", "multiview_to_model", "text_to_model").contains(mode))
             throw new IllegalArgumentException("不支持的Tripo生成模式：" + mode);
 
-        String selectedModel=blank(req.modelVersion)?tripoModelVersion:req.modelVersion.trim();
+        boolean consumerRequest = req.currentUserId != null;
+        String selectedModel=consumerRequest ? "v3.1-20260211" : (blank(req.modelVersion)?tripoModelVersion:req.modelVersion.trim());
         Set<String> supportedModels=Set.of("P1-20260311","tripo-p1","tripo-v3.1","v3.1-20260211","tripo-v3.0","v3.0-20250812","tripo-v2.5","v2.5-20250123");
         if(!supportedModels.contains(selectedModel))throw new IllegalArgumentException("不支持的Tripo 3D模型："+selectedModel);
         Map<String,Object> taskBody = new LinkedHashMap<>();
@@ -720,6 +721,8 @@ public class CreativeAiController {
             if(req.inputAssetId == null) throw new IllegalArgumentException("请先上传2D参考图");
             Path image = resolveAssetImage(req.inputAssetId);
             taskBody.put("input", uploadToTripo(image));
+            req.prompt = null;
+            req.negativePrompt = null;
         }
 
         applyTripoQualityOptions(taskBody, req, mode, selectedModel);
@@ -732,8 +735,10 @@ public class CreativeAiController {
         if(blank(taskId)) throw new IllegalStateException("Tripo未返回task_id：" + taskResponse);
 
         String jobNo = no("T3D");
+        String storedPrompt = "image_to_model".equals(mode) ? "" : req.prompt;
+        String storedNegativePrompt = "image_to_model".equals(mode) ? "" : req.negativePrompt;
         Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
-                primaryInputAssetId, req.prompt, req.negativePrompt, "running", null,
+                primaryInputAssetId, storedPrompt, storedNegativePrompt, "running", null,
                 Boolean.TRUE.equals(req.quad) ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
         assignJobOwner(jobId, req.currentUserId);
         jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
@@ -764,7 +769,7 @@ public class CreativeAiController {
         body.put("texture",texture); body.put("pbr",pbr); body.put("export_uv",req.exportUv==null||req.exportUv);
         if(!legacy25) {
             body.put("auto_size",req.autoSize==null||req.autoSize);
-            String textureQuality = blank(req.textureQuality) ? "extreme" : req.textureQuality.trim();
+            String textureQuality = req.currentUserId != null || blank(req.textureQuality) ? "extreme" : req.textureQuality.trim();
             if(texture)body.put("texture_quality",Set.of("standard","detailed","extreme").contains(textureQuality)?textureQuality:"extreme");
             if(Boolean.TRUE.equals(req.compress))body.put("compress","geometry");
         }

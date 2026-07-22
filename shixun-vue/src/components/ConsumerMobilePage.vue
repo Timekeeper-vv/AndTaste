@@ -32,6 +32,7 @@ const previewDownloadFormat = ref<'GLB' | 'OBJ' | 'STL'>('GLB')
 const previewDownloading = ref(false)
 const submittedAssetIds = ref<Set<number>>(new Set())
 const submittingAssetIds = ref<Set<number>>(new Set())
+const CONSUMER_TRIPO_MODEL_VERSION = 'v3.1-20260211'
 
 const imageForm = reactive({
   rawPrompt: '一款适合年轻游客的城市味道文创礼盒，温暖、精致、有官方文创质感',
@@ -305,6 +306,10 @@ async function uploadReference(e: Event) {
 }
 
 async function optimizeModelPrompt() {
+  if (modelForm.mode !== 'text_to_model') {
+    modelForm.prompt = ''
+    return
+  }
   if (!modelForm.rawPrompt.trim()) return
   const r = await fetch('/api/creative/ai/prompt/tripo-3d-optimize', {
     method: 'POST',
@@ -331,23 +336,24 @@ async function generateModel() {
   busy.value = true
   modelResult.value = null
   modelProgress.value = 0
-  setStage('正在优化创意', 'optimize')
+  setStage(modelForm.mode === 'text_to_model' ? '正在优化创意' : '正在提交图片', modelForm.mode === 'text_to_model' ? 'optimize' : 'generate')
   try {
-    await optimizeModelPrompt()
+    if (modelForm.mode === 'text_to_model') await optimizeModelPrompt()
     setStage('正在生成3D模型', 'generate')
+    const isImageToModel = modelForm.mode === 'image_to_model'
     const body = {
       mode: modelForm.mode,
-      modelVersion: tripoConfig.value.modelVersion || 'v3.1-20260211',
-      promptTemplate: 'universal',
-      rawPrompt: modelForm.rawPrompt,
-      prompt: modelForm.prompt || modelForm.rawPrompt,
-      negativePrompt: 'low poly, blurry, flat texture, deformed, asymmetric, noisy mesh',
+      modelVersion: CONSUMER_TRIPO_MODEL_VERSION,
+      promptTemplate: isImageToModel ? '' : 'universal',
+      rawPrompt: isImageToModel ? '' : modelForm.rawPrompt,
+      prompt: isImageToModel ? '' : (modelForm.prompt || modelForm.rawPrompt),
+      negativePrompt: isImageToModel ? '' : 'low poly, blurry, flat texture, deformed, asymmetric, noisy mesh',
       inputAssetId: modelForm.inputAssetId,
       multiviewAssetIds: { front: null, left: null, back: null, right: null },
       exportFormats: 'GLB',
       texture: true,
       pbr: true,
-      textureQuality: 'detailed',
+      textureQuality: 'extreme',
       geometryQuality: 'detailed',
       textureAlignment: 'original_image',
       orientation: 'align_image',
@@ -554,9 +560,13 @@ function closeModelPreview() {
         </span>
       </label>
 
-      <label>
-        <span>{{ modelForm.mode === 'text_to_model' ? '模型描述' : '补充要求' }}</span>
-        <textarea v-model="modelForm.rawPrompt" rows="4" placeholder="例如：做成钥匙扣，边缘圆润，有浮雕层次，适合打样"></textarea>
+      <p v-if="modelForm.mode==='image_to_model'" class="simple-note">
+        上传清晰产品图后，系统会直接使用 Tripo 3.1 最高质量模型生成 3D，不需要再填写提示词。
+      </p>
+
+      <label v-if="modelForm.mode==='text_to_model'">
+        <span>模型描述</span>
+        <textarea v-model="modelForm.rawPrompt" rows="4" placeholder="例如：山城街巷主题亚克力钥匙扣，边缘圆润，有浮雕层次，适合打样"></textarea>
       </label>
 
       <button type="button" class="primary green" :disabled="busy || !canGenerateModel" @click="generateModel">
@@ -1601,6 +1611,17 @@ function closeModelPreview() {
 .model-preview-bottom .download-action{
   border-color:#c27643 !important;
   background:#c27643 !important;
+}
+.simple-note{
+  margin:10px 0 0 !important;
+  padding:11px 12px !important;
+  border-radius:10px !important;
+  background:#f0fdfa !important;
+  border:1px solid #ccfbf1 !important;
+  color:#0f766e !important;
+  font-size:12px !important;
+  line-height:1.55 !important;
+  font-weight:800 !important;
 }
 @keyframes modelSpin{
   to{ transform:rotate(360deg); }
