@@ -388,7 +388,7 @@ public class CreativeAiController {
                 + "For packaging or product concepts, describe the package shape, paper/plastic/metal/ceramic texture, typography, illustration style, net weight or label copy if supplied, countertop/tabletop/studio setting, lens, depth of field, and commercial product-shot quality. "
                 + "Keep it concise but rich, within 900 English words. Target provider: " + (blank(provider) ? "general" : provider) + ".";
         String optimized=callChat(system,req.prompt.trim()).trim();
-        int maxPromptLength = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? 1800 : 1024;
+        int maxPromptLength = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? 1800 : ("jimeng".equalsIgnoreCase(nullToEmpty(req.provider)) ? 760 : 1024);
         if(optimized.length()>maxPromptLength)optimized=optimized.substring(0,maxPromptLength);
         String usageGuide = buildProductUsageGuide(req, optimized);
         return Map.of(
@@ -1367,8 +1367,12 @@ public class CreativeAiController {
 
     private String buildJimengPrompt(String prompt) {
         String p = nullToEmpty(prompt).trim();
-        if(p.toLowerCase(Locale.ROOT).contains("product") || p.contains("产品") || p.contains("文创")) return p;
-        return p + "\nCommercial cultural creative product design, official brand quality, clean product photography, detailed material, premium packaging and manufacturable prototype.";
+        String finalPrompt = (p.toLowerCase(Locale.ROOT).contains("product") || p.contains("产品") || p.contains("文创"))
+                ? p
+                : p + "\nCommercial cultural creative product design, official brand quality, clean product photography, detailed material, premium packaging and manufacturable prototype.";
+        // 火山即梦 seedream 4.6 当前接口限制 prompt 不超过 800 字符。
+        // 管理端和C端统一从后端兜底裁剪，避免前端优化提示词较长时任务提交后查询失败。
+        return finalPrompt.length() > 800 ? finalPrompt.substring(0, 800) : finalPrompt;
     }
 
     private int[] jimengDimensions(String aspect, String size) {
