@@ -93,11 +93,52 @@ const modelCost = computed(() => modelForm.mode === 'image_to_model' ? Number(cr
 const convertCost = computed(() => Number(creditRules.value?.modelConvert ?? 1))
 const selectedPurposeLabel = computed(() => purposeOptions.find(x => x.value === creationPurpose.value)?.title || '')
 const selectedPurposeFullText = computed(() => creationPurpose.value === 'personal' ? '个人收藏/送礼（不可售卖）' : creationPurpose.value === 'museum_sale' ? '博物馆售卖' : '未选择')
+const totalWorks = computed(() => recentImages.value.length + recentModels.value.length)
+const reviewCount = computed(() => assets.value.filter(x => String(x.status || x.assetStatus || '') === 'review').length)
+const approvedCount = computed(() => assets.value.filter(x => String(x.status || x.assetStatus || '') === 'approved').length)
+const flowActiveIndex = computed(() => {
+  if (!creationPurpose.value) return 0
+  if (busy.value) return 1
+  if (reviewCount.value > 0) return 2
+  if (approvedCount.value > 0 || recentProductionRequests.value.length > 0) return 3
+  return 1
+})
+const flowSteps = computed(() => [
+  { key: 'purpose', no: '01', title: '确定用途', desc: selectedPurposeLabel.value || '先选创作方向' },
+  { key: 'create', no: '02', title: 'AI创作', desc: busy.value ? (stage.value || '正在处理') : '图片 / 3D一键生成' },
+  { key: 'review', no: '03', title: '博物馆审批', desc: reviewCount.value ? `${reviewCount.value}件待审批` : '作品提交准入' },
+  { key: 'deliver', no: '04', title: creationPurpose.value === 'museum_sale' ? '打样生产' : '作品交付', desc: recentProductionRequests.value.length ? `${recentProductionRequests.value.length}条申请` : '通过后继续推进' },
+])
+const currentStageText = computed(() => busy.value ? (stage.value || '正在处理') : phase.value === 'done' ? '作品已保存' : '准备就绪')
+const imagePromptPresets = [
+  '江西博物馆青铜器纹样冰箱贴，年轻人喜欢，官方文创质感',
+  '城市味道伴手礼礼盒，温暖包装，适合送礼',
+  '国潮可爱IP钥匙扣，精致包装，适合博物馆商店',
+]
+const modelPromptPresets = [
+  '山城街巷主题亚克力钥匙扣，边缘圆润，有浮雕层次，适合打样',
+  '青铜器纹样冰箱贴立体模型，金属质感，背面平整',
+  '可爱文博守护兽潮玩摆件，圆润安全，适合桌面陈列',
+]
 
 function selectCreationPurpose(value: 'personal' | 'museum_sale') {
   creationPurpose.value = value
   localStorage.setItem(purposeStorageKey, value)
   emit('alert', `已选择创作目的：${selectedPurposeFullText.value}`, 'success')
+}
+
+function switchTab(next: Tab) {
+  tab.value = next
+  nextTick(() => document.querySelector('.quick-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+}
+
+function applyImagePreset(text: string) {
+  imageForm.rawPrompt = text
+}
+
+function applyModelPreset(text: string) {
+  modelForm.rawPrompt = text
+  modelForm.mode = 'text_to_model'
 }
 
 function changeCreationPurpose() {
@@ -665,8 +706,9 @@ function closeModelPreview() {
 
     <section v-if="!creationPurpose" class="purpose-gate">
       <div class="purpose-card">
+        <div class="purpose-aurora"></div>
         <div class="purpose-brand"><img :src="andTasteLogo" alt="之间味道" /><span>开始创作前</span></div>
-        <h1>您创作是为了什么？</h1>
+        <h1>选择你的作品去向</h1>
         <p>请选择本次创作目的。选定后后续按单一路径执行，不支持个人和博物馆数量拆分。</p>
         <div class="purpose-options">
           <button v-for="item in purposeOptions" :key="item.value" type="button" @click="selectCreationPurpose(item.value)">
@@ -679,29 +721,56 @@ function closeModelPreview() {
     </section>
 
     <section class="hero">
-      <span>{{ props.currentUser.username }} · 剩余额度 {{ creditBalance }} 点 · {{ selectedPurposeFullText }}</span>
+      <div class="hero-motion-orb"></div>
+      <div class="hero-meta">
+        <span>{{ props.currentUser.username }}</span>
+        <span>{{ selectedPurposeFullText }}</span>
+      </div>
       <button type="button" class="purpose-change" @click="changeCreationPurpose">切换用途</button>
       <h1>把想法变成文创作品</h1>
       <p>输入一句话，选择图片或3D，系统会自动完成创作并保存。</p>
+      <div class="hero-stats-mobile">
+        <article><b>{{ creditBalance }}</b><span>剩余额度</span></article>
+        <article><b>{{ totalWorks }}</b><span>作品</span></article>
+        <article><b>{{ approvedCount }}</b><span>已通过</span></article>
+      </div>
       <div class="hero-actions">
-        <button type="button" @click="tab='image'">生成图片</button>
-        <button type="button" @click="tab='model'">生成3D</button>
+        <button type="button" @click="switchTab('image')">生成图片</button>
+        <button type="button" @click="switchTab('model')">生成3D</button>
         <button type="button" class="recharge-hero" @click="openCreditPanel">充值额度</button>
       </div>
     </section>
 
+    <section class="flow-card">
+      <div class="flow-line"><i :style="{ width: `${Math.max(8, (flowActiveIndex / 3) * 100)}%` }"></i></div>
+      <article v-for="(step, idx) in flowSteps" :key="step.key" :class="{ active: idx === flowActiveIndex, done: idx < flowActiveIndex }">
+        <b>{{ step.no }}</b>
+        <span>{{ step.title }}</span>
+        <em>{{ step.desc }}</em>
+      </article>
+    </section>
+
+    <section class="status-console" :class="{ live: busy }">
+      <i></i>
+      <div>
+        <span>{{ busy ? 'AI 正在处理' : '当前状态' }}</span>
+        <b>{{ currentStageText }}</b>
+      </div>
+      <button type="button" @click="openCreditPanel">额度 {{ creditBalance }}</button>
+    </section>
+
     <nav class="quick-tabs">
-      <button type="button" :class="{active:tab==='image'}" @click="tab='image'">
+      <button type="button" :class="{active:tab==='image'}" @click="switchTab('image')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 13 2.5-2.5L15 15l1-1 3 3"/><circle cx="8" cy="9" r="1"/></svg>
-        图片
+        图片 <small>{{ recentImages.length }}</small>
       </button>
-      <button type="button" :class="{active:tab==='model'}" @click="tab='model'">
+      <button type="button" :class="{active:tab==='model'}" @click="switchTab('model')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 8 4.5v9L12 20l-8-4.5v-9L12 2Z"/><path d="M12 11 4.5 6.8"/><path d="M12 11v9"/><path d="m12 11 7.5-4.2"/></svg>
-        3D
+        3D <small>{{ recentModels.length }}</small>
       </button>
-      <button type="button" :class="{active:tab==='gallery'}" @click="tab='gallery'">
+      <button type="button" :class="{active:tab==='gallery'}" @click="switchTab('gallery')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-        作品
+        作品 <small>{{ totalWorks }}</small>
       </button>
     </nav>
 
@@ -710,10 +779,16 @@ function closeModelPreview() {
         <span>IMAGE</span>
         <b>产品图生成</b>
       </div>
+      <div class="creation-guide">
+        <i>1</i><span>写想法</span><i>2</i><span>AI优化英文提示词</span><i>3</i><span>生成并入库</span>
+      </div>
       <label>
         <span>你想做什么</span>
         <textarea v-model="imageForm.rawPrompt" rows="5" placeholder="例如：江西博物馆主题冰箱贴，青铜器纹样，年轻人喜欢，精致伴手礼"></textarea>
       </label>
+      <div class="preset-scroll">
+        <button v-for="p in imagePromptPresets" :key="p" type="button" @click="applyImagePreset(p)">{{ p }}</button>
+      </div>
       <div class="chips">
         <button type="button" :class="{active:imageForm.style==='官方文创'}" @click="imageForm.style='官方文创'">官方文创</button>
         <button type="button" :class="{active:imageForm.style==='国潮精致'}" @click="imageForm.style='国潮精致'">国潮精致</button>
@@ -728,6 +803,10 @@ function closeModelPreview() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>
         {{ busy && tab==='image' ? stage || '正在生成' : `一键生成并保存图片 · ${imageCost}点` }}
       </button>
+      <div v-if="busy && tab==='image'" class="ai-progress-card">
+        <div class="ai-spinner"></div>
+        <div><b>{{ stage || '正在生成' }}</b><span>请保持页面打开，完成后会自动展示预览。</span></div>
+      </div>
 
       <article v-if="imageResult" ref="imageAnchor" class="result-card">
         <img v-if="imagePreviewUrl" :src="imagePreviewUrl" alt="生成图片" />
@@ -748,6 +827,9 @@ function closeModelPreview() {
       <div class="section-head">
         <span>3D</span>
         <b>轻量3D建模</b>
+      </div>
+      <div class="creation-guide green">
+        <i>1</i><span>上传/描述</span><i>2</i><span>自动优化</span><i>3</i><span>生成可预览模型</span>
       </div>
       <div class="mode-switch">
         <button type="button" :class="{active:modelForm.mode==='image_to_model'}" @click="modelForm.mode='image_to_model'">拍照/上传生成</button>
@@ -771,6 +853,9 @@ function closeModelPreview() {
         <span>模型描述</span>
         <textarea v-model="modelForm.rawPrompt" rows="4" placeholder="例如：山城街巷主题亚克力钥匙扣，边缘圆润，有浮雕层次，适合打样"></textarea>
       </label>
+      <div v-if="modelForm.mode==='text_to_model'" class="preset-scroll">
+        <button v-for="p in modelPromptPresets" :key="p" type="button" @click="applyModelPreset(p)">{{ p }}</button>
+      </div>
 
       <button type="button" class="primary green" :disabled="busy || !canGenerateModel" @click="generateModel">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 8 4.5v9L12 20l-8-4.5v-9L12 2Z"/></svg>
@@ -778,6 +863,10 @@ function closeModelPreview() {
       </button>
       <div v-if="busy && tab==='model'" class="progress">
         <span :style="{ width: `${Math.max(12, modelProgress)}%` }"></span>
+      </div>
+      <div v-if="busy && tab==='model'" class="ai-progress-card green">
+        <div class="ai-spinner"></div>
+        <div><b>{{ stage || '正在生成3D' }}</b><span>模型生成时间较长，完成后自动保存并可旋转预览。</span></div>
       </div>
 
       <article v-if="modelResult" ref="modelAnchor" class="result-card">
@@ -798,6 +887,11 @@ function closeModelPreview() {
       <div class="section-head">
         <span>WORKS</span>
         <b>最近作品</b>
+      </div>
+      <div class="gallery-summary">
+        <article><b>{{ recentImages.length }}</b><span>产品图</span></article>
+        <article><b>{{ recentModels.length }}</b><span>3D模型</span></article>
+        <article><b>{{ reviewCount }}</b><span>审批中</span></article>
       </div>
       <div class="gallery">
         <article v-for="a in recentImages" :key="`img-${a.id}`">
@@ -1956,4 +2050,61 @@ function closeModelPreview() {
     box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15) !important;
   }
 }
+</style>
+
+<style scoped>
+/* C端流程动效升级：作为最后样式块覆盖历史样式。 */
+.consumer-shell.immersive-shell{
+  padding:0 14px 32px !important;
+  background:
+    radial-gradient(circle at 8% 4%,rgba(194,118,67,.18),transparent 180px),
+    radial-gradient(circle at 92% 18%,rgba(15,118,110,.14),transparent 160px),
+    linear-gradient(180deg,#fbf6ef 0%,#f4ece4 48%,#eadfd4 100%) !important;
+}
+.consumer-shell.immersive-shell .ambient-layer{
+  display:block !important;
+  position:fixed !important;
+  inset:0 !important;
+  z-index:0 !important;
+  pointer-events:none !important;
+  opacity:.65 !important;
+  mix-blend-mode:normal !important;
+  background:
+    radial-gradient(circle at 18% 16%,rgba(255,255,255,.62),transparent 96px),
+    radial-gradient(circle at 84% 12%,rgba(194,118,67,.22),transparent 150px),
+    radial-gradient(circle at 70% 78%,rgba(15,118,110,.12),transparent 180px) !important;
+  animation:ambientFloat 8s ease-in-out infinite alternate !important;
+}
+@keyframes ambientFloat{to{transform:translate3d(0,-16px,0) scale(1.03)}}
+.consumer-shell.immersive-shell .consumer-top{
+  background:rgba(251,246,239,.72) !important;
+  backdrop-filter:blur(22px) saturate(1.25) !important;
+}
+.consumer-shell.immersive-shell .hero{
+  position:relative !important;
+  min-height:248px !important;
+  margin:12px 0 14px !important;
+  padding:18px !important;
+  overflow:hidden !important;
+  border:1px solid rgba(255,255,255,.2) !important;
+  border-radius:30px !important;
+  background:
+    linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,0)),
+    radial-gradient(circle at 88% 18%,rgba(255,232,202,.24),transparent 112px),
+    linear-gradient(135deg,#201510 0%,#623628 52%,#b66b42 100%) !important;
+  box-shadow:0 26px 66px rgba(70,43,25,.24) !important;
+}
+.hero-motion-orb{position:absolute;right:-44px;top:-34px;width:172px;height:172px;border-radius:50%;background:linear-gradient(145deg,rgba(255,255,255,.28),rgba(255,255,255,.04));border:1px solid rgba(255,255,255,.22);filter:blur(.1px);animation:orbDrift 5.5s ease-in-out infinite alternate}@keyframes orbDrift{to{transform:translate(-16px,18px) scale(1.08)}}
+.hero-meta{position:relative;z-index:2;display:flex;flex-wrap:wrap;gap:7px;margin-bottom:13px}.hero-meta span{width:auto !important;margin:0 !important;padding:6px 10px !important;border:1px solid rgba(255,255,255,.18) !important;border-radius:999px !important;background:rgba(255,255,255,.14) !important;color:#fff !important;font-size:11px !important;font-weight:900 !important}.consumer-shell.immersive-shell .purpose-change{position:absolute !important;z-index:3 !important;right:16px !important;top:18px !important;margin:0 !important;background:rgba(255,255,255,.12) !important}.consumer-shell.immersive-shell .hero h1{font-size:34px !important;letter-spacing:-.04em !important}
+.hero-stats-mobile{position:relative;z-index:2;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:16px 0 12px}.hero-stats-mobile article{padding:10px 8px;border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(255,255,255,.1);color:#fff;backdrop-filter:blur(14px)}.hero-stats-mobile b,.hero-stats-mobile span{display:block}.hero-stats-mobile b{font-size:20px;line-height:1}.hero-stats-mobile span{margin-top:4px;color:rgba(255,255,255,.62);font-size:10px;font-weight:900}
+.flow-card{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 12px;padding:13px 10px 10px;border:1px solid rgba(92,66,48,.1);border-radius:24px;background:rgba(255,250,245,.84);box-shadow:0 18px 44px rgba(60,40,25,.1);backdrop-filter:blur(18px)}.flow-line{position:absolute;left:22px;right:22px;top:29px;height:3px;border-radius:999px;background:#ead9c8;overflow:hidden}.flow-line i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#b4532a,#0f766e);transition:width .45s cubic-bezier(.2,.8,.2,1)}.flow-card article{position:relative;z-index:1;min-width:0;text-align:center;color:#8a7161;transition:transform .25s ease,color .25s ease}.flow-card b{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:#f5eadf;border:2px solid #fff;color:#9a6a4e;font-size:10px;box-shadow:0 6px 16px rgba(65,42,28,.1);transition:all .25s}.flow-card span,.flow-card em{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.flow-card span{margin-top:7px;font-size:11px;font-weight:950;color:#4a3429}.flow-card em{margin-top:3px;font-size:9px;font-style:normal;color:#9a8474}.flow-card article.active{transform:translateY(-2px)}.flow-card article.active b{background:#201a17;color:#fff;box-shadow:0 10px 22px rgba(32,26,23,.22)}.flow-card article.done b{background:#0f766e;color:#fff}
+.status-console{display:flex;align-items:center;gap:11px;margin:0 0 12px;padding:12px;border-radius:20px;background:linear-gradient(135deg,#fff,#fff8ef);border:1px solid rgba(92,66,48,.1);box-shadow:0 14px 32px rgba(60,40,25,.08)}.status-console i{width:12px;height:12px;border-radius:50%;background:#0f766e;box-shadow:0 0 0 7px rgba(15,118,110,.12)}.status-console.live i{animation:pulseLive 1s infinite ease-in-out}.status-console div{flex:1;min-width:0}.status-console span,.status-console b{display:block}.status-console span{font-size:10px;font-weight:900;color:#9a7c68;letter-spacing:.08em}.status-console b{margin-top:3px;color:#201a17;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.status-console button{height:34px;border:0;border-radius:999px;background:#201a17;color:#fff;padding:0 12px;font-size:12px;font-weight:900}
+.consumer-shell.immersive-shell .quick-tabs{position:sticky !important;top:62px !important;z-index:12 !important;margin-bottom:12px !important;background:rgba(255,251,246,.82) !important;backdrop-filter:blur(18px) !important}.quick-tabs small{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;margin-left:2px;border-radius:999px;background:rgba(180,83,42,.12);color:#b4532a;font-size:10px;font-weight:950}.quick-tabs button.active small{background:rgba(255,255,255,.18);color:#fff}
+.creation-guide{display:grid;grid-template-columns:auto 1fr auto 1fr auto 1.25fr;align-items:center;gap:6px;margin:0 0 12px;padding:10px;border-radius:18px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}.creation-guide.green{background:#ecfdf5;border-color:#bbf7d0;color:#047857}.creation-guide i{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#fff;font-size:10px;font-style:normal;font-weight:950}.creation-guide span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:900}
+.preset-scroll{display:flex;gap:8px;margin:10px -2px 2px;padding:0 2px 4px;overflow-x:auto;scroll-snap-type:x mandatory}.preset-scroll::-webkit-scrollbar{display:none}.preset-scroll button{flex:0 0 74%;scroll-snap-align:start;min-height:42px;padding:9px 11px;border:1px solid #ead8c9;border-radius:16px;background:#fffdf9;color:#6e5547;text-align:left;font-size:12px;font-weight:800;line-height:1.35;box-shadow:0 8px 18px rgba(68,45,29,.06)}
+.ai-progress-card{display:flex;align-items:center;gap:12px;margin-top:12px;padding:13px;border-radius:18px;background:#fff7ed;border:1px solid #fed7aa;color:#7c2d12}.ai-progress-card.green{background:#ecfdf5;border-color:#bbf7d0;color:#065f46}.ai-progress-card b,.ai-progress-card span{display:block}.ai-progress-card b{font-size:13px}.ai-progress-card span{margin-top:3px;font-size:11px;line-height:1.45;color:#8a5b3a}.ai-progress-card.green span{color:#047857}.ai-spinner{width:28px;height:28px;border-radius:50%;border:3px solid rgba(180,83,42,.18);border-top-color:#b4532a;animation:modelSpin .85s linear infinite}.ai-progress-card.green .ai-spinner{border-color:rgba(15,118,110,.18);border-top-color:#0f766e}
+.gallery-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}.gallery-summary article{padding:12px 8px;border-radius:18px;background:#fff7ed;border:1px solid #fed7aa;text-align:center}.gallery-summary b,.gallery-summary span{display:block}.gallery-summary b{font-size:22px;color:#7c2d12}.gallery-summary span{font-size:11px;font-weight:900;color:#9a5a2a}
+.consumer-shell.immersive-shell .creation-panel{animation:panelIn .32s ease both}@keyframes panelIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}.consumer-shell.immersive-shell .primary:not(:disabled){position:relative;overflow:hidden}.consumer-shell.immersive-shell .primary:not(:disabled)::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.22),transparent);transform:translateX(-110%);animation:buttonShine 2.8s ease-in-out infinite}@keyframes buttonShine{65%,100%{transform:translateX(120%)}}
+.purpose-card{position:relative;overflow:hidden;animation:purposePop .38s cubic-bezier(.2,.8,.2,1) both}.purpose-aurora{position:absolute;right:-80px;top:-80px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.42),transparent 64%);animation:orbDrift 4.5s ease-in-out infinite alternate}.purpose-options button{transition:transform .18s ease,box-shadow .18s ease}.purpose-options button:active{transform:scale(.985)}@keyframes purposePop{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:380px){.flow-card{gap:5px;padding-left:7px;padding-right:7px}.flow-card span{font-size:10px}.flow-card em{display:none}.hero-stats-mobile article{padding:9px 5px}.creation-guide{grid-template-columns:auto 1fr}.creation-guide i:nth-of-type(n+2),.creation-guide i:nth-of-type(n+2)+span{display:none}.preset-scroll button{flex-basis:84%}}
 </style>
