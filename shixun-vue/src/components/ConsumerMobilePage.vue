@@ -33,6 +33,8 @@ const modelProgress = ref(0)
 const modelTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const imageAnchor = ref<HTMLElement | null>(null)
 const modelAnchor = ref<HTMLElement | null>(null)
+const touchStartX = ref(0)
+const touchStartY = ref(0)
 const previewAsset = ref<any | null>(null)
 const previewReady = ref(false)
 const previewLoadFailed = ref(false)
@@ -128,8 +130,26 @@ function selectCreationPurpose(value: 'personal' | 'museum_sale') {
 }
 
 function switchTab(next: Tab) {
+  if (tab.value === next) return
   tab.value = next
-  nextTick(() => document.querySelector('.quick-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  nextTick(() => document.querySelector('.mobile-page-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+}
+
+function handleTouchStart(e: TouchEvent) {
+  touchStartX.value = e.touches[0]?.clientX || 0
+  touchStartY.value = e.touches[0]?.clientY || 0
+}
+
+function handleTouchEnd(e: TouchEvent) {
+  const end = e.changedTouches[0]
+  if (!end || busy.value || previewAsset.value || productionModal.value || creditPanelOpen.value) return
+  const dx = end.clientX - touchStartX.value
+  const dy = end.clientY - touchStartY.value
+  if (Math.abs(dx) < 72 || Math.abs(dx) < Math.abs(dy) * 1.25) return
+  const tabs: Tab[] = ['image', 'model', 'gallery']
+  const idx = tabs.indexOf(tab.value)
+  const next = dx < 0 ? tabs[Math.min(tabs.length - 1, idx + 1)] : tabs[Math.max(0, idx - 1)]
+  switchTab(next)
 }
 
 function applyImagePreset(text: string) {
@@ -689,7 +709,7 @@ function closeModelPreview() {
 </script>
 
 <template>
-  <main class="consumer-shell immersive-shell">
+  <main class="consumer-shell immersive-shell" @touchstart.passive="handleTouchStart" @touchend.passive="handleTouchEnd">
     <div class="ambient-layer"></div>
     <header class="consumer-top">
       <div class="brand">
@@ -741,6 +761,24 @@ function closeModelPreview() {
       </div>
     </section>
 
+    <section class="app-action-grid">
+      <button type="button" @click="switchTab('image')">
+        <i class="orange">IMG</i>
+        <b>AI产品图</b>
+        <span>一句话生成</span>
+      </button>
+      <button type="button" @click="switchTab('model')">
+        <i class="green">3D</i>
+        <b>3D建模</b>
+        <span>可旋转预览</span>
+      </button>
+      <button type="button" @click="switchTab('gallery')">
+        <i class="dark">BOX</i>
+        <b>我的作品</b>
+        <span>审核与生产</span>
+      </button>
+    </section>
+
     <section class="flow-card">
       <div class="flow-line"><i :style="{ width: `${Math.max(8, (flowActiveIndex / 3) * 100)}%` }"></i></div>
       <article v-for="(step, idx) in flowSteps" :key="step.key" :class="{ active: idx === flowActiveIndex, done: idx < flowActiveIndex }">
@@ -759,7 +797,7 @@ function closeModelPreview() {
       <button type="button" @click="openCreditPanel">额度 {{ creditBalance }}</button>
     </section>
 
-    <nav class="quick-tabs">
+    <nav class="quick-tabs bottom-tabs">
       <button type="button" :class="{active:tab==='image'}" @click="switchTab('image')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 13 2.5-2.5L15 15l1-1 3 3"/><circle cx="8" cy="9" r="1"/></svg>
         图片 <small>{{ recentImages.length }}</small>
@@ -774,7 +812,9 @@ function closeModelPreview() {
       </button>
     </nav>
 
-    <section v-if="tab==='image'" class="panel creation-panel">
+    <div class="mobile-page-wrap">
+    <Transition name="mobile-page" mode="out-in">
+    <section v-if="tab==='image'" key="image" class="panel creation-panel">
       <div class="section-head">
         <span>IMAGE</span>
         <b>产品图生成</b>
@@ -823,7 +863,7 @@ function closeModelPreview() {
       </article>
     </section>
 
-    <section v-if="tab==='model'" class="panel creation-panel">
+    <section v-else-if="tab==='model'" key="model" class="panel creation-panel">
       <div class="section-head">
         <span>3D</span>
         <b>轻量3D建模</b>
@@ -883,7 +923,7 @@ function closeModelPreview() {
       </article>
     </section>
 
-    <section v-if="tab==='gallery'" class="panel creation-panel">
+    <section v-else key="gallery" class="panel creation-panel">
       <div class="section-head">
         <span>WORKS</span>
         <b>最近作品</b>
@@ -925,6 +965,8 @@ function closeModelPreview() {
         </article>
       </div>
     </section>
+    </Transition>
+    </div>
 
     <Teleport to="body">
       <section v-if="creditPanelOpen" class="credit-modal" @click.self="closeCreditPanel">
@@ -2107,4 +2149,12 @@ function closeModelPreview() {
 .consumer-shell.immersive-shell .creation-panel{animation:panelIn .32s ease both}@keyframes panelIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}.consumer-shell.immersive-shell .primary:not(:disabled){position:relative;overflow:hidden}.consumer-shell.immersive-shell .primary:not(:disabled)::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.22),transparent);transform:translateX(-110%);animation:buttonShine 2.8s ease-in-out infinite}@keyframes buttonShine{65%,100%{transform:translateX(120%)}}
 .purpose-card{position:relative;overflow:hidden;animation:purposePop .38s cubic-bezier(.2,.8,.2,1) both}.purpose-aurora{position:absolute;right:-80px;top:-80px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.42),transparent 64%);animation:orbDrift 4.5s ease-in-out infinite alternate}.purpose-options button{transition:transform .18s ease,box-shadow .18s ease}.purpose-options button:active{transform:scale(.985)}@keyframes purposePop{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
 @media(max-width:380px){.flow-card{gap:5px;padding-left:7px;padding-right:7px}.flow-card span{font-size:10px}.flow-card em{display:none}.hero-stats-mobile article{padding:9px 5px}.creation-guide{grid-template-columns:auto 1fr}.creation-guide i:nth-of-type(n+2),.creation-guide i:nth-of-type(n+2)+span{display:none}.preset-scroll button{flex-basis:84%}}
+</style>
+
+<style scoped>
+/* C端 App 化布局升级：底部导航 + 页面切换 + 得物式轻卡片。 */
+.consumer-shell.immersive-shell{padding:0 14px calc(104px + env(safe-area-inset-bottom,0px)) !important;background:#f5f3ef !important}.consumer-shell.immersive-shell .consumer-top{height:58px !important;margin:0 -14px !important;padding:10px 16px !important;background:rgba(245,243,239,.9) !important;border-bottom:0 !important;box-shadow:none !important}.consumer-shell.immersive-shell .brand b{font-size:16px !important;letter-spacing:.02em !important}.consumer-shell.immersive-shell .brand span{font-size:10px !important}.consumer-shell.immersive-shell .brand img{width:34px !important;height:34px !important;border-radius:12px !important}.consumer-shell.immersive-shell .hero{min-height:220px !important;margin:6px 0 10px !important;padding:18px 16px 16px !important;border-radius:26px !important;background:radial-gradient(circle at 86% 0%,rgba(255,255,255,.2),transparent 112px),linear-gradient(137deg,#121212 0%,#32231d 50%,#b86639 100%) !important;box-shadow:0 18px 44px rgba(25,20,17,.18) !important}.consumer-shell.immersive-shell .hero h1{max-width:9em !important;margin-top:2px !important;font-size:31px !important;letter-spacing:-.055em !important}.consumer-shell.immersive-shell .hero p{max-width:25em !important;margin-bottom:10px !important;color:rgba(255,255,255,.72) !important}.hero-stats-mobile{margin:12px 0 10px !important}.hero-stats-mobile article{border-radius:16px !important;background:rgba(255,255,255,.09) !important}.consumer-shell.immersive-shell .hero-actions{grid-template-columns:1fr 1fr 1fr !important;gap:7px !important}.consumer-shell.immersive-shell .hero-actions button{height:38px !important;border-radius:999px !important;font-size:12px !important;padding:0 8px !important}
+.app-action-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:0 0 11px}.app-action-grid button{min-width:0;padding:12px 8px;border:0;border-radius:22px;background:#fff;box-shadow:0 10px 26px rgba(23,20,18,.06);text-align:left;transition:transform .18s ease,box-shadow .18s ease}.app-action-grid button:active{transform:scale(.97)}.app-action-grid i{display:inline-flex;align-items:center;justify-content:center;height:24px;min-width:30px;margin-bottom:10px;padding:0 7px;border-radius:999px;color:#fff;font-size:10px;font-style:normal;font-weight:950}.app-action-grid i.orange{background:#c25a2e}.app-action-grid i.green{background:#0f766e}.app-action-grid i.dark{background:#171717}.app-action-grid b,.app-action-grid span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.app-action-grid b{color:#161412;font-size:13px}.app-action-grid span{margin-top:3px;color:#9a9289;font-size:10px;font-weight:800}.consumer-shell.immersive-shell .flow-card{margin-bottom:10px !important;border-radius:22px !important;background:#fff !important;box-shadow:0 10px 28px rgba(23,20,18,.055) !important}.consumer-shell.immersive-shell .status-console{display:none !important}
+.consumer-shell.immersive-shell .bottom-tabs{position:fixed !important;left:12px !important;right:12px !important;bottom:calc(10px + env(safe-area-inset-bottom,0px)) !important;top:auto !important;z-index:90 !important;width:auto !important;max-width:436px !important;height:66px !important;margin:0 auto !important;padding:7px !important;border-radius:26px !important;background:rgba(255,255,255,.9) !important;border:1px solid rgba(23,20,18,.08) !important;box-shadow:0 18px 48px rgba(23,20,18,.18) !important;backdrop-filter:blur(24px) saturate(1.2) !important}.consumer-shell.immersive-shell .bottom-tabs button{height:52px !important;border-radius:20px !important;font-size:11px !important;gap:2px !important;transition:transform .18s ease,background .18s ease,color .18s ease !important}.consumer-shell.immersive-shell .bottom-tabs button:active{transform:scale(.96)}.consumer-shell.immersive-shell .bottom-tabs button.active{background:#111 !important;color:#fff !important}.mobile-page-wrap{position:relative;min-height:420px;overflow:visible}.mobile-page-enter-active,.mobile-page-leave-active{transition:opacity .22s ease,transform .26s cubic-bezier(.2,.8,.2,1),filter .26s ease}.mobile-page-enter-from{opacity:0;transform:translateX(18px) scale(.985);filter:blur(4px)}.mobile-page-leave-to{opacity:0;transform:translateX(-18px) scale(.985);filter:blur(4px)}
+.consumer-shell.immersive-shell .creation-panel{border-radius:28px !important;background:#fff !important;border:0 !important;box-shadow:0 14px 38px rgba(23,20,18,.07) !important}.consumer-shell.immersive-shell .section-head{align-items:center !important;padding-bottom:10px !important;border-bottom:1px solid #f0ebe6 !important}.consumer-shell.immersive-shell .section-head span{color:#c25a2e !important}.consumer-shell.immersive-shell textarea{border-radius:22px !important;background:#f8f7f5 !important;border-color:#eee9e2 !important;box-shadow:none !important}.consumer-shell.immersive-shell .chips button,.consumer-shell.immersive-shell .mode-switch button{border-radius:18px !important;background:#f8f7f5 !important;border-color:#eee9e2 !important;color:#625a53 !important}.consumer-shell.immersive-shell .chips button.active,.consumer-shell.immersive-shell .mode-switch button.active{background:#111 !important;color:#fff !important;border-color:#111 !important}.consumer-shell.immersive-shell .primary{border-radius:24px !important;background:#111 !important;box-shadow:0 14px 30px rgba(0,0,0,.16) !important}.consumer-shell.immersive-shell .primary.green{background:#0f766e !important}.preset-scroll button{border:0 !important;background:#f8f7f5 !important;box-shadow:none !important;flex-basis:68% !important}.creation-guide{border:0 !important;background:#f8f7f5 !important;color:#6b5748 !important}.creation-guide.green{background:#f0fdfa !important;color:#0f766e !important}.gallery-summary article{border:0 !important;background:#f8f7f5 !important}.gallery-summary b{color:#111 !important}.gallery-summary span{color:#898078 !important}.consumer-shell.immersive-shell .gallery{gap:12px !important}.consumer-shell.immersive-shell .gallery article{border:0 !important;border-radius:22px !important;background:#fff !important;box-shadow:0 10px 28px rgba(23,20,18,.065) !important}.consumer-shell.immersive-shell .gallery img,.consumer-shell.immersive-shell .model-tile{border-radius:22px 22px 0 0 !important}.consumer-shell.immersive-shell .gallery button{border-radius:999px !important;background:#111 !important}.consumer-shell.immersive-shell .gallery .review-submit{background:#c25a2e !important}.production-actions{display:grid !important;grid-template-columns:1fr 1fr !important}.consumer-shell.immersive-shell .production-list article{border:0 !important;border-radius:18px !important;background:#f8f7f5 !important}@media(min-width:720px){.consumer-shell.immersive-shell .bottom-tabs{left:50% !important;right:auto !important;width:432px !important;transform:translateX(-50%) !important}}
 </style>
