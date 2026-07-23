@@ -95,6 +95,9 @@ const modelCost = computed(() => modelForm.mode === 'image_to_model' ? Number(cr
 const convertCost = computed(() => Number(creditRules.value?.modelConvert ?? 1))
 const selectedPurposeLabel = computed(() => purposeOptions.find(x => x.value === creationPurpose.value)?.title || '')
 const selectedPurposeFullText = computed(() => creationPurpose.value === 'personal' ? '个人收藏/送礼（不可售卖）' : creationPurpose.value === 'museum_sale' ? '博物馆售卖' : '未选择')
+const reviewFlowTitle = computed(() => creationPurpose.value === 'museum_sale' ? '博物馆审批' : '作品审核')
+const reviewSubmitText = computed(() => creationPurpose.value === 'museum_sale' ? '提交博物馆审批' : '提交作品审核')
+const reviewSubmittedText = computed(() => creationPurpose.value === 'museum_sale' ? '已提交博物馆审批' : '已提交作品审核')
 const totalWorks = computed(() => recentImages.value.length + recentModels.value.length)
 const reviewCount = computed(() => assets.value.filter(x => String(x.status || x.assetStatus || '') === 'review').length)
 const approvedCount = computed(() => assets.value.filter(x => String(x.status || x.assetStatus || '') === 'approved').length)
@@ -108,7 +111,7 @@ const flowActiveIndex = computed(() => {
 const flowSteps = computed(() => [
   { key: 'purpose', no: '01', title: '确定用途', desc: selectedPurposeLabel.value || '先选创作方向' },
   { key: 'create', no: '02', title: 'AI创作', desc: busy.value ? (stage.value || '正在处理') : '图片 / 3D一键生成' },
-  { key: 'review', no: '03', title: '博物馆审批', desc: reviewCount.value ? `${reviewCount.value}件待审批` : '作品提交准入' },
+  { key: 'review', no: '03', title: reviewFlowTitle.value, desc: reviewCount.value ? `${reviewCount.value}件待审核` : '提交用途审核' },
   { key: 'deliver', no: '04', title: creationPurpose.value === 'museum_sale' ? '打样生产' : '作品交付', desc: recentProductionRequests.value.length ? `${recentProductionRequests.value.length}条申请` : '通过后继续推进' },
 ])
 const currentStageText = computed(() => busy.value ? (stage.value || '正在处理') : phase.value === 'done' ? '作品已保存' : '准备就绪')
@@ -277,7 +280,7 @@ function canSubmitReview(a: any): boolean {
 async function submitAssetForReview(a: any) {
   const id = assetIdOf(a)
   if (!id) {
-    emit('alert', '作品ID不存在，无法提交博物馆审批', 'error')
+    emit('alert', `作品ID不存在，无法${reviewSubmitText.value}`, 'error')
     return
   }
   if (!props.currentUser?.id) {
@@ -295,7 +298,8 @@ async function submitAssetForReview(a: any) {
         'X-Current-User': props.currentUser.username,
       },
       body: JSON.stringify({
-        note: `C端用户主动提交博物馆审批；创作目的：${selectedPurposeFullText.value}`,
+        purpose: creationPurpose.value,
+        note: `C端用户主动提交${reviewFlowTitle.value}；创作目的：${selectedPurposeFullText.value}`,
         currentUserId: String(props.currentUser.id),
         currentUsername: props.currentUser.username,
       }),
@@ -307,9 +311,9 @@ async function submitAssetForReview(a: any) {
     submittedAssetIds.value = new Set([...submittedAssetIds.value, id])
     if (a) a.status = 'review'
     await load()
-    emit('alert', '已提交博物馆审批，请等待审核结果', 'success')
+    emit('alert', `${reviewSubmittedText.value}，请等待审核结果`, 'success')
   } catch (e: any) {
-    emit('alert', '提交博物馆审批失败：' + (e?.message || e), 'error')
+    emit('alert', `${reviewSubmitText.value}失败：` + (e?.message || e), 'error')
   } finally {
     const next = new Set(submittingAssetIds.value)
     next.delete(id)
@@ -431,7 +435,7 @@ async function generateImage() {
     await nextTick()
     imageAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     phase.value = 'done'
-    emit('alert', '图片已保存，可提交博物馆审批', 'success')
+    emit('alert', `图片已保存，可${reviewSubmitText.value}`, 'success')
   } catch (e: any) {
     phase.value = 'idle'
     emit('alert', '生成图片失败：' + (e?.message || e), 'error')
@@ -570,7 +574,7 @@ async function pollModel(jobId: number) {
       await nextTick()
       modelAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       phase.value = 'done'
-      emit('alert', '3D模型已保存，可提交博物馆审批', 'success')
+      emit('alert', `3D模型已保存，可${reviewSubmitText.value}`, 'success')
       return
     }
     if (d.status === 'failed') throw new Error(d.errorMessage || '3D生成失败')
@@ -855,9 +859,9 @@ function closeModelPreview() {
           <p v-if="imageForm.usageGuide">{{ imageForm.usageGuide }}</p>
           <div class="result-actions">
             <a v-if="imageResult.imageUrl || imageResult.fileUrl" :href="imageResult.imageUrl || imageResult.fileUrl" target="_blank" rel="noopener">查看原图</a>
-            <button v-if="canSubmitReview(imageResult)" type="button" @click.stop="submitAssetForReview(imageResult)">提交博物馆审批</button>
+            <button v-if="canSubmitReview(imageResult)" type="button" @click.stop="submitAssetForReview(imageResult)">{{ reviewSubmitText }}</button>
             <span v-else-if="isSubmittingForReview(imageResult)" class="submitted-tip">提交中...</span>
-            <span v-else-if="isSubmittedForReview(imageResult) || imageResult.status === 'review'" class="submitted-tip">已提交博物馆审批</span>
+            <span v-else-if="isSubmittedForReview(imageResult) || imageResult.status === 'review'" class="submitted-tip">{{ reviewSubmittedText }}</span>
           </div>
         </div>
       </article>
@@ -915,9 +919,9 @@ function closeModelPreview() {
           <b>3D模型已生成</b>
           <div class="result-actions">
             <button type="button" @click="openModelPreview(modelResult)">预览模型</button>
-            <button v-if="canSubmitReview(modelResult)" type="button" @click.stop="submitAssetForReview(modelResult)">提交博物馆审批</button>
+            <button v-if="canSubmitReview(modelResult)" type="button" @click.stop="submitAssetForReview(modelResult)">{{ reviewSubmitText }}</button>
             <span v-else-if="isSubmittingForReview(modelResult)" class="submitted-tip">提交中...</span>
-            <span v-else-if="isSubmittedForReview(modelResult) || modelResult.status === 'review'" class="submitted-tip">已提交博物馆审批</span>
+            <span v-else-if="isSubmittedForReview(modelResult) || modelResult.status === 'review'" class="submitted-tip">{{ reviewSubmittedText }}</span>
           </div>
         </div>
       </article>
@@ -938,7 +942,7 @@ function closeModelPreview() {
           <img :src="a.previewUrl || a.fileUrl" alt="作品图片" />
           <span class="work-status" :class="workStatusClass(a)">{{ workStatusLabel(a) }}</span>
           <b>{{ displayAssetTitle(a) }}</b>
-          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交博物馆审批</button>
+          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">{{ reviewSubmitText }}</button>
           <span v-else-if="isSubmittingForReview(a)" class="submitted-tip">提交中...</span>
         </article>
         <article v-for="a in recentModels" :key="`model-${a.id}`">
@@ -947,7 +951,7 @@ function closeModelPreview() {
           <span class="work-status" :class="workStatusClass(a)">{{ workStatusLabel(a) }}</span>
           <b>{{ displayAssetTitle(a) }}</b>
           <button type="button" @click.stop="openModelPreview(a)">预览</button>
-          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交博物馆审批</button>
+          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">{{ reviewSubmitText }}</button>
           <span v-else-if="isSubmittingForReview(a)" class="submitted-tip">提交中...</span>
           <div v-if="canSubmitProduction(a)" class="production-actions">
             <button type="button" @click.stop="openProductionRequest(a, 'sample')">申请打样</button>

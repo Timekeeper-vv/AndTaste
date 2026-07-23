@@ -1103,8 +1103,11 @@ public class CreativeAiController {
         if(userId==null) throw new IllegalArgumentException("缺少当前用户ID，无法提交审核");
         List<Map<String,Object>> userRows=jdbc.queryForList("SELECT id,role FROM user WHERE id=? LIMIT 1", userId);
         if(userRows.isEmpty() || !"user".equals(String.valueOf(userRows.get(0).get("role")))) throw new IllegalStateException("仅C端用户可提交自己的作品审核");
+        String purpose=body==null?"":nullToEmpty(body.get("purpose")).trim();
+        if(!Set.of("personal","museum_sale").contains(purpose)) purpose="";
         String note=body==null?"":nullToEmpty(body.get("note"));
-        int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND (asset_type='model' OR COALESCE(source_type,'ai_generated')<>'upload') AND COALESCE(status,'draft')<>'approved'", blank(note)?";用户提交审核":";用户提交审核-"+note, id, userId);
+        String auditTag = ";用户提交审核" + (blank(purpose) ? "" : ";用途=" + purpose) + (blank(note) ? "" : "-" + note);
+        int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND (asset_type='model' OR COALESCE(source_type,'ai_generated')<>'upload') AND COALESCE(status,'draft')<>'approved'", auditTag, id, userId);
         if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已审核通过");
         return Map.of("success",true,"id",id,"status","review","message","作品已提交给审核员");
     }

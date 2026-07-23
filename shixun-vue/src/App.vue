@@ -170,7 +170,7 @@ const pageLabels: Record<string, string> = {
   consumerMobile:'文创灵感工坊',
   dashboard:    '经营看板',
   approvalCenter:'审批中心',
-  consumerWorksReview:'博物馆审批',
+  consumerWorksReview:'C端作品审核',
   consumerAssetInventory:'C端用户端库存',
   consumerCreditManagement:'C端额度管理',
   consumerProductionReview:'C端用户作品生产审核',

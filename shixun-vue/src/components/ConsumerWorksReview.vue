@@ -51,6 +51,17 @@ const statusClass = (s?: string) => s === 'approved' ? 'ok' : s === 'rejected' ?
 const assetTypeText = (t?: string) => t === 'model' ? '3D模型' : '产品图片'
 const previewUrl = (w: ConsumerAsset) => w.previewUrl || w.fileUrl || ''
 const fileViewUrl = (w: ConsumerAsset) => w.assetType === 'model' && w.id ? `/api/creative/ai/assets/${w.id}/model-content` : (w.fileUrl || w.previewUrl || '')
+function purposeOf(w: ConsumerAsset): 'museum_sale' | 'personal' | 'unknown' {
+  const t = `${w.tags || ''} ${w.prompt || ''}`
+  if (t.includes('用途=museum_sale') || t.includes('博物馆售卖') || t.includes('博物馆审批')) return 'museum_sale'
+  if (t.includes('用途=personal') || t.includes('个人收藏') || t.includes('送礼') || t.includes('作品审核')) return 'personal'
+  return 'unknown'
+}
+function purposeText(w: ConsumerAsset) {
+  const p = purposeOf(w)
+  return p === 'museum_sale' ? '博物馆售卖' : p === 'personal' ? '个人收藏/送礼' : '未标明用途'
+}
+function purposeClass(w: ConsumerAsset) { return purposeOf(w) === 'museum_sale' ? 'museum' : purposeOf(w) === 'personal' ? 'personal' : 'unknown' }
 
 function formatTime(v?: string) {
   if (!v) return '-'
@@ -126,8 +137,8 @@ onMounted(load)
     <section class="hero-card">
       <div>
         <span class="eyebrow">CONSUMER REVIEW</span>
-        <h1>博物馆审批</h1>
-        <p>集中查看 C 端用户提交的产品图和 3D 模型，支持按用户 ID 查询，并对作品做博物馆准入审批。</p>
+        <h1>C端作品审核</h1>
+        <p>集中查看 C 端用户提交的产品图和 3D 模型，并明确区分“个人收藏/送礼”和“博物馆售卖”用途；只有博物馆售卖才进入博物馆准入判断。</p>
       </div>
       <div class="hero-stats">
         <article><b>{{ stats.total }}</b><span>当前列表</span></article>
@@ -165,6 +176,7 @@ onMounted(load)
           <img v-else-if="w.assetType === 'model' && w.previewUrl" :src="w.previewUrl" alt="3D模型预览" />
           <div v-else class="model-placeholder">3D</div>
           <span class="type-pill">{{ assetTypeText(w.assetType) }}</span>
+          <span class="purpose-pill" :class="purposeClass(w)">{{ purposeText(w) }}</span>
           <span class="status-pill" :class="statusClass(w.status)">{{ statusText[w.status || 'review'] || w.status }}</span>
         </div>
         <div class="work-body">
@@ -175,6 +187,10 @@ onMounted(load)
           <div class="meta-row">
             <span>用户ID：{{ w.createdBy || '-' }}</span>
             <span>账号：{{ w.createdByName || '-' }}</span>
+          </div>
+          <div class="meta-row purpose-row">
+            <span>提交用途：{{ purposeText(w) }}</span>
+            <span>{{ purposeOf(w) === 'museum_sale' ? '博物馆准入' : '普通作品审核' }}</span>
           </div>
           <div class="meta-row">
             <span>格式：{{ (w.format || '-').toUpperCase() }}</span>
@@ -227,4 +243,8 @@ onMounted(load)
 
 <style scoped>
 .review-page{padding:24px;display:flex;flex-direction:column;gap:18px}.hero-card{position:relative;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(360px,.8fr);gap:20px;padding:28px;border-radius:28px;color:#1f2937;background:linear-gradient(135deg,#fff 0%,#f8efe7 48%,#eefaf7 100%);border:1px solid rgba(148,163,184,.18);box-shadow:0 22px 60px rgba(15,23,42,.08)}.hero-card:after{content:"";position:absolute;right:-80px;top:-90px;width:260px;height:260px;border-radius:50%;background:rgba(180,83,42,.12)}.eyebrow{display:inline-flex;margin-bottom:10px;padding:7px 10px;border-radius:999px;background:#fff6ed;color:#b4532a;font-size:11px;font-weight:900;letter-spacing:1.7px}.hero-card h1{margin:0 0 10px;font-size:30px;letter-spacing:-.04em}.hero-card p{max-width:720px;margin:0;color:#64748b;line-height:1.7}.hero-stats{position:relative;z-index:1;display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.hero-stats article{padding:18px;border-radius:20px;background:rgba(255,255,255,.75);border:1px solid rgba(148,163,184,.16);box-shadow:0 12px 30px rgba(15,23,42,.05)}.hero-stats b{display:block;font-size:28px;color:#111827}.hero-stats span{font-size:12px;color:#64748b;font-weight:800}.filter-card{display:grid;grid-template-columns:180px 160px minmax(240px,1fr) 120px;gap:12px;align-items:end;padding:16px;border-radius:22px;background:#fff;border:1px solid rgba(148,163,184,.18);box-shadow:0 12px 34px rgba(15,23,42,.05)}label span{display:block;margin-bottom:7px;color:#475569;font-size:12px;font-weight:900}input,select{width:100%;height:42px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:13px;background:#f8fafc;padding:0 12px;color:#0f172a;outline:none}input:focus,select:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.filter-card button,.actions button,footer button{height:42px;border:0;border-radius:13px;font-weight:900;cursor:pointer}.filter-card button{background:#111827;color:#fff}.filter-card button:disabled,.actions button:disabled{opacity:.55;cursor:not-allowed}.work-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}.work-card{overflow:hidden;border-radius:24px;background:#fff;border:1px solid rgba(148,163,184,.16);box-shadow:0 16px 42px rgba(15,23,42,.07)}.preview{position:relative;height:230px;background:#111827;cursor:pointer;overflow:hidden}.preview img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s}.preview:hover img{transform:scale(1.03)}.model-placeholder{height:100%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:46px;font-weight:950;background:radial-gradient(circle at 70% 20%,rgba(20,184,166,.35),transparent 35%),linear-gradient(135deg,#111827,#334155)}.type-pill,.status-pill{position:absolute;top:12px;padding:7px 9px;border-radius:999px;background:rgba(255,255,255,.92);font-size:11px;font-weight:900}.type-pill{left:12px;color:#334155}.status-pill{right:12px}.status-pill.wait{color:#b45309;background:#fff7ed}.status-pill.ok{color:#047857;background:#ecfdf5}.status-pill.bad{color:#dc2626;background:#fef2f2}.work-body{padding:16px}.title-line{display:flex;align-items:center;justify-content:space-between;gap:12px}.title-line b{font-size:16px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.title-line small{color:#94a3b8;font-weight:900}.meta-row{display:flex;justify-content:space-between;gap:10px;margin-top:9px;color:#64748b;font-size:12px}.prompt{min-height:44px;margin:12px 0 14px;color:#475569;font-size:13px;line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.actions{display:flex;flex-wrap:wrap;gap:8px}.actions button{padding:0 13px}.outline{border:1px solid #e2e8f0!important;background:#fff!important;color:#334155!important}.approve{background:#0f766e!important;color:#fff!important}.reject{background:#b91c1c!important;color:#fff!important}.empty-card{padding:60px 20px;text-align:center;border-radius:24px;background:#fff;border:1px dashed #cbd5e1;color:#64748b}.empty-card b,.empty-card span{display:block}.empty-card b{margin-bottom:8px;color:#0f172a;font-size:18px}.preview-modal{position:fixed;inset:0;z-index:200;background:rgba(15,23,42,.62);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:24px}.modal-card{width:min(980px,96vw);max-height:92vh;display:flex;flex-direction:column;border-radius:26px;background:#fff;overflow:hidden;box-shadow:0 28px 90px rgba(0,0,0,.28)}.modal-card header,.modal-card footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid #e2e8f0}.modal-card footer{border-top:1px solid #e2e8f0;border-bottom:0;justify-content:flex-end}.modal-card header b,.modal-card header span{display:block}.modal-card header span{margin-top:4px;color:#64748b;font-size:12px}.modal-card header button{width:38px;height:38px;border:0;border-radius:12px;background:#f1f5f9;font-size:24px;color:#475569}.modal-body{min-height:320px;overflow:auto;background:#f8fafc;display:flex;align-items:center;justify-content:center}.modal-body img{max-width:100%;max-height:72vh;object-fit:contain}.model-large{display:flex;flex-direction:column;align-items:center;gap:10px;color:#64748b}.model-large b{font-size:28px;color:#0f172a}.model-large a,.modal-card footer a{height:40px;display:inline-flex;align-items:center;padding:0 14px;border-radius:12px;background:#111827;color:#fff;text-decoration:none;font-weight:900}@media(max-width:980px){.review-page{padding:16px}.hero-card{grid-template-columns:1fr}.filter-card{grid-template-columns:1fr 1fr}.comment-field{grid-column:1/-1}.filter-card button{grid-column:1/-1}}@media(max-width:640px){.filter-card,.work-grid{grid-template-columns:1fr}.hero-stats{grid-template-columns:repeat(2,1fr)}.preview{height:210px}}
+</style>
+
+<style scoped>
+.purpose-pill{position:absolute;left:92px;top:12px;padding:7px 9px;border-radius:999px;background:rgba(255,255,255,.92);font-size:11px;font-weight:900;color:#64748b}.purpose-pill.museum{color:#7c2d12;background:#fff7ed}.purpose-pill.personal{color:#047857;background:#ecfdf5}.purpose-pill.unknown{color:#64748b;background:#f8fafc}.purpose-row{padding:8px 10px;border-radius:12px;background:#f8fafc;color:#334155;font-weight:800}@media(max-width:640px){.purpose-pill{left:12px;top:48px}}
 </style>
