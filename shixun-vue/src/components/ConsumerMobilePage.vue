@@ -182,8 +182,30 @@ function canSubmitProduction(a: any): boolean { return isApprovedModel(a) }
 function requestTypeText(v?: string) { return v === 'bulk' ? '批量生产' : '打样' }
 function productionStatusText(v?: string) { const map: Record<string,string> = { review:'待审核', approved:'已通过', rejected:'未通过' }; return map[String(v || 'review')] || String(v || '-') }
 function productionStatusClass(v?: string) { const st=String(v || 'review'); return st === 'approved' ? 'approved' : st === 'rejected' ? 'rejected' : 'review' }
-function allocatedMuseumQty() { return productionForm.museumDistribution.reduce((sum, x) => sum + Number(x.quantity || 0), 0) }
-function unallocatedQty() { return Number(productionForm.quantity || 0) - Number(productionForm.selfShipQuantity || 0) - allocatedMuseumQty() }
+function isMuseumSalePurpose() { return creationPurpose.value === 'museum_sale' }
+
+function ensureSingleMuseumSelection() {
+  if (!isMuseumSalePurpose()) return
+  if (!productionForm.museumDistribution.length) {
+    const firstMuseum = museums.value[0]
+    if (firstMuseum) {
+      productionForm.museumDistribution = [{ museumId: firstMuseum.id, museumName: firstMuseum.name, quantity: Number(productionForm.quantity || 0) }]
+    }
+  }
+}
+
+function currentMuseumDistribution() {
+  if (!isMuseumSalePurpose()) return []
+  ensureSingleMuseumSelection()
+  const row = productionForm.museumDistribution[0]
+  if (!row?.museumId) return []
+  const known = museums.value.find(m => m.id === row.museumId)
+  return [{
+    museumId: row.museumId,
+    museumName: known?.name || row.museumName || '博物馆',
+    quantity: Number(productionForm.quantity || 0),
+  }]
+}
 
 function canSubmitReview(a: any): boolean {
   const id = assetIdOf(a)
@@ -194,7 +216,7 @@ function canSubmitReview(a: any): boolean {
 async function submitAssetForReview(a: any) {
   const id = assetIdOf(a)
   if (!id) {
-    emit('alert', '作品ID不存在，无法提交审核', 'error')
+    emit('alert', '作品ID不存在，无法提交博物馆审批', 'error')
     return
   }
   if (!props.currentUser?.id) {
@@ -212,7 +234,7 @@ async function submitAssetForReview(a: any) {
         'X-Current-User': props.currentUser.username,
       },
       body: JSON.stringify({
-        note: `C端用户主动提交审核；创作目的：${selectedPurposeFullText.value}`,
+        note: `C端用户主动提交博物馆审批；创作目的：${selectedPurposeFullText.value}`,
         currentUserId: String(props.currentUser.id),
         currentUsername: props.currentUser.username,
       }),
@@ -224,9 +246,9 @@ async function submitAssetForReview(a: any) {
     submittedAssetIds.value = new Set([...submittedAssetIds.value, id])
     if (a) a.status = 'review'
     await load()
-    emit('alert', '已提交给审核员，请等待审核结果', 'success')
+    emit('alert', '已提交博物馆审批，请等待审核结果', 'success')
   } catch (e: any) {
-    emit('alert', '提交审核失败：' + (e?.message || e), 'error')
+    emit('alert', '提交博物馆审批失败：' + (e?.message || e), 'error')
   } finally {
     const next = new Set(submittingAssetIds.value)
     next.delete(id)
@@ -348,7 +370,7 @@ async function generateImage() {
     await nextTick()
     imageAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     phase.value = 'done'
-    emit('alert', '图片已保存，可选择提交审核', 'success')
+    emit('alert', '图片已保存，可提交博物馆审批', 'success')
   } catch (e: any) {
     phase.value = 'idle'
     emit('alert', '生成图片失败：' + (e?.message || e), 'error')
@@ -487,7 +509,7 @@ async function pollModel(jobId: number) {
       await nextTick()
       modelAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       phase.value = 'done'
-      emit('alert', '3D模型已保存，可选择提交审核', 'success')
+      emit('alert', '3D模型已保存，可提交博物馆审批', 'success')
       return
     }
     if (d.status === 'failed') throw new Error(d.errorMessage || '3D生成失败')
@@ -512,13 +534,13 @@ function openProductionRequest(a: any, type: 'sample' | 'bulk') {
   productionModal.value = a
   productionForm.requestType = type
   productionForm.quantity = type === 'sample' ? 1 : 1000
-  productionForm.selfShipQuantity = type === 'sample' ? 1 : 200
+  productionForm.selfShipQuantity = isMuseumSalePurpose() ? 0 : productionForm.quantity
   productionForm.recipientName = props.currentUser.username
   productionForm.recipientPhone = ''
   productionForm.recipientAddress = ''
-  productionForm.note = type === 'sample' ? `创作目的：${selectedPurposeFullText.value}。希望先打样确认材质、尺寸和包装效果` : `创作目的：${selectedPurposeFullText.value}。计划先生产1000个，其中一部分自收，其余投放博物馆文创渠道`
+  productionForm.note = type === 'sample' ? `创作目的：${selectedPurposeFullText.value}。希望先打样确认材质、尺寸和包装效果` : `创作目的：${selectedPurposeFullText.value}。计划按所选用途执行，不做个人/博物馆拆分`
   const firstMuseum = museums.value[0]
-  productionForm.museumDistribution = type === 'bulk' && firstMuseum ? [{ museumId: firstMuseum.id, museumName: firstMuseum.name, quantity: 800 }] : []
+  productionForm.museumDistribution = isMuseumSalePurpose() && firstMuseum ? [{ museumId: firstMuseum.id, museumName: firstMuseum.name, quantity: productionForm.quantity }] : []
   document.body.style.overflow = 'hidden'
 }
 
@@ -527,19 +549,9 @@ function closeProductionRequest() {
   document.body.style.overflow = ''
 }
 
-function addMuseumDistribution() {
-  const picked = museums.value.find(m => !productionForm.museumDistribution.some(x => x.museumId === m.id)) || museums.value[0]
-  if (!picked) return
-  productionForm.museumDistribution.push({ museumId: picked.id, museumName: picked.name, quantity: Math.max(0, unallocatedQty()) })
-}
-
 function changeMuseum(row: any) {
   const found = museums.value.find(m => m.id === row.museumId)
   if (found) row.museumName = found.name
-}
-
-function removeMuseumDistribution(index: number) {
-  productionForm.museumDistribution.splice(index, 1)
 }
 
 async function submitProductionRequest() {
@@ -548,8 +560,14 @@ async function submitProductionRequest() {
     emit('alert', '个人收藏/送礼（不可售卖）用途不能提交批量生产售卖申请', 'error')
     return
   }
-  if (productionForm.requestType === 'bulk' && unallocatedQty() !== 0) {
-    emit('alert', '数量分配不一致：自收数量 + 博物馆投放数量 必须等于总数量', 'error')
+  const quantity = Number(productionForm.quantity || 0)
+  if (quantity <= 0) {
+    emit('alert', '申请数量必须大于0', 'error')
+    return
+  }
+  const museumRows = currentMuseumDistribution()
+  if (isMuseumSalePurpose() && !museumRows.length) {
+    emit('alert', '请选择一个博物馆，全部数量将进入该博物馆售卖，不支持拆分', 'error')
     return
   }
   submittingProduction.value = true
@@ -561,13 +579,14 @@ async function submitProductionRequest() {
         currentUserId: props.currentUser.id,
         assetId: productionModal.value.id,
         requestType: productionForm.requestType,
-        quantity: Number(productionForm.quantity || 0),
-        selfShipQuantity: Number(productionForm.selfShipQuantity || 0),
+        purpose: creationPurpose.value,
+        quantity,
+        selfShipQuantity: isMuseumSalePurpose() ? 0 : quantity,
         recipientName: productionForm.recipientName,
         recipientPhone: productionForm.recipientPhone,
         recipientAddress: productionForm.recipientAddress,
         note: `创作目的：${selectedPurposeFullText.value}。${productionForm.note || ''}`,
-        museumDistribution: productionForm.requestType === 'bulk' ? productionForm.museumDistribution : [],
+        museumDistribution: museumRows,
       }),
     })
     if (!r.ok) {
@@ -575,7 +594,7 @@ async function submitProductionRequest() {
       throw new Error(err?.message || `HTTP ${r.status}`)
     }
     const d = await r.json()
-    emit('alert', d.message || '申请已提交，请等待审核', 'success')
+    emit('alert', d.message || '申请已提交，请等待审批', 'success')
     closeProductionRequest()
     await load()
     tab.value = 'gallery'
@@ -648,7 +667,7 @@ function closeModelPreview() {
       <div class="purpose-card">
         <div class="purpose-brand"><img :src="andTasteLogo" alt="之间味道" /><span>开始创作前</span></div>
         <h1>您创作是为了什么？</h1>
-        <p>请选择本次创作目的，系统会据此区分作品审核和后续生产/售卖流程。</p>
+        <p>请选择本次创作目的。选定后后续按单一路径执行，不支持个人和博物馆数量拆分。</p>
         <div class="purpose-options">
           <button v-for="item in purposeOptions" :key="item.value" type="button" @click="selectCreationPurpose(item.value)">
             <i>{{ item.tag }}</i>
@@ -717,9 +736,9 @@ function closeModelPreview() {
           <p v-if="imageForm.usageGuide">{{ imageForm.usageGuide }}</p>
           <div class="result-actions">
             <a v-if="imageResult.imageUrl || imageResult.fileUrl" :href="imageResult.imageUrl || imageResult.fileUrl" target="_blank" rel="noopener">查看原图</a>
-            <button v-if="canSubmitReview(imageResult)" type="button" @click.stop="submitAssetForReview(imageResult)">提交审核</button>
+            <button v-if="canSubmitReview(imageResult)" type="button" @click.stop="submitAssetForReview(imageResult)">提交博物馆审批</button>
             <span v-else-if="isSubmittingForReview(imageResult)" class="submitted-tip">提交中...</span>
-            <span v-else-if="isSubmittedForReview(imageResult) || imageResult.status === 'review'" class="submitted-tip">已提交审核</span>
+            <span v-else-if="isSubmittedForReview(imageResult) || imageResult.status === 'review'" class="submitted-tip">已提交博物馆审批</span>
           </div>
         </div>
       </article>
@@ -767,9 +786,9 @@ function closeModelPreview() {
           <b>3D模型已生成</b>
           <div class="result-actions">
             <button type="button" @click="openModelPreview(modelResult)">预览模型</button>
-            <button v-if="canSubmitReview(modelResult)" type="button" @click.stop="submitAssetForReview(modelResult)">提交审核</button>
+            <button v-if="canSubmitReview(modelResult)" type="button" @click.stop="submitAssetForReview(modelResult)">提交博物馆审批</button>
             <span v-else-if="isSubmittingForReview(modelResult)" class="submitted-tip">提交中...</span>
-            <span v-else-if="isSubmittedForReview(modelResult) || modelResult.status === 'review'" class="submitted-tip">已提交审核</span>
+            <span v-else-if="isSubmittedForReview(modelResult) || modelResult.status === 'review'" class="submitted-tip">已提交博物馆审批</span>
           </div>
         </div>
       </article>
@@ -785,7 +804,7 @@ function closeModelPreview() {
           <img :src="a.previewUrl || a.fileUrl" alt="作品图片" />
           <span class="work-status" :class="workStatusClass(a)">{{ workStatusLabel(a) }}</span>
           <b>{{ displayAssetTitle(a) }}</b>
-          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交审核</button>
+          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交博物馆审批</button>
           <span v-else-if="isSubmittingForReview(a)" class="submitted-tip">提交中...</span>
         </article>
         <article v-for="a in recentModels" :key="`model-${a.id}`">
@@ -794,7 +813,7 @@ function closeModelPreview() {
           <span class="work-status" :class="workStatusClass(a)">{{ workStatusLabel(a) }}</span>
           <b>{{ displayAssetTitle(a) }}</b>
           <button type="button" @click.stop="openModelPreview(a)">预览</button>
-          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交审核</button>
+          <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交博物馆审批</button>
           <span v-else-if="isSubmittingForReview(a)" class="submitted-tip">提交中...</span>
           <div v-if="canSubmitProduction(a)" class="production-actions">
             <button type="button" @click.stop="openProductionRequest(a, 'sample')">申请打样</button>
@@ -857,24 +876,31 @@ function closeModelPreview() {
           <main>
             <p class="purpose-in-form">创作目的：{{ selectedPurposeFullText }}</p>
             <label><span>总数量</span><input v-model.number="productionForm.quantity" type="number" min="1" /></label>
-            <label><span>邮寄给我</span><input v-model.number="productionForm.selfShipQuantity" type="number" min="0" /></label>
-            <template v-if="productionForm.requestType === 'bulk'">
-              <div class="dist-head"><b>博物馆投放</b><button type="button" @click="addMuseumDistribution">添加</button></div>
-              <div v-for="(d, idx) in productionForm.museumDistribution" :key="idx" class="dist-row">
-                <select v-model="d.museumId" @change="changeMuseum(d)"><option v-for="m in museums" :key="m.id" :value="m.id">{{ m.name }}</option></select>
-                <input v-model.number="d.quantity" type="number" min="0" placeholder="数量" />
-                <button type="button" @click="removeMuseumDistribution(idx)">删除</button>
+            <div v-if="creationPurpose === 'personal'" class="single-route">
+              <b>个人收藏 / 送礼路径</b>
+              <span>全部数量将按个人/送礼用途执行，不进入售卖渠道，不支持拆分到博物馆。</span>
+            </div>
+            <template v-else>
+              <div class="single-route museum">
+                <b>博物馆售卖路径</b>
+                <span>全部数量将进入所选博物馆售卖，不支持拆分给个人或多个博物馆。</span>
               </div>
-              <p class="alloc-tip" :class="{bad: unallocatedQty() !== 0}">剩余未分配：{{ unallocatedQty() }} 个</p>
+              <div class="dist-head"><b>选择博物馆</b><small>全部 {{ productionForm.quantity || 0 }} 个</small></div>
+              <div v-if="productionForm.museumDistribution[0]" class="dist-row single">
+                <select v-model="productionForm.museumDistribution[0].museumId" @change="changeMuseum(productionForm.museumDistribution[0])"><option v-for="m in museums" :key="m.id" :value="m.id">{{ m.name }}</option></select>
+              </div>
+              <p v-else class="alloc-tip bad">暂无可选博物馆，请联系平台管理员配置。</p>
             </template>
-            <label><span>收件人</span><input v-model.trim="productionForm.recipientName" placeholder="自收部分收件人" /></label>
-            <label><span>手机号</span><input v-model.trim="productionForm.recipientPhone" placeholder="用于样品/自收数量寄送" /></label>
-            <label><span>收货地址</span><textarea v-model.trim="productionForm.recipientAddress" rows="2" placeholder="邮寄给我的地址"></textarea></label>
+            <template v-if="creationPurpose === 'personal'">
+              <label><span>收件人</span><input v-model.trim="productionForm.recipientName" placeholder="收件人姓名" /></label>
+              <label><span>手机号</span><input v-model.trim="productionForm.recipientPhone" placeholder="用于寄送联系" /></label>
+              <label><span>收货地址</span><textarea v-model.trim="productionForm.recipientAddress" rows="2" placeholder="收货地址"></textarea></label>
+            </template>
             <label><span>申请说明</span><textarea v-model.trim="productionForm.note" rows="3"></textarea></label>
           </main>
           <footer>
             <button type="button" @click="closeProductionRequest">取消</button>
-            <button type="button" class="submit" :disabled="submittingProduction" @click="submitProductionRequest">{{ submittingProduction ? '提交中' : '提交审核' }}</button>
+            <button type="button" class="submit" :disabled="submittingProduction" @click="submitProductionRequest">{{ submittingProduction ? '提交中' : '提交审批' }}</button>
           </footer>
         </div>
       </section>
@@ -1722,6 +1748,42 @@ function closeModelPreview() {
 }
 .consumer-shell.immersive-shell .gallery article > button{
   width:calc(100% - 18px) !important;
+}
+.single-route{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  margin-top:12px;
+  padding:12px;
+  border-radius:16px;
+  background:#fff7ed;
+  border:1px solid #fed7aa;
+  color:#7c2d12;
+}
+.single-route b{
+  font-size:14px;
+  line-height:1.25;
+}
+.single-route span{
+  color:#9a5a2a;
+  font-size:12px;
+  line-height:1.55;
+}
+.single-route.museum{
+  background:#ecfdf5;
+  border-color:#bbf7d0;
+  color:#065f46;
+}
+.single-route.museum span{
+  color:#047857;
+}
+.dist-head small{
+  color:#8a7161;
+  font-size:12px;
+  font-weight:900;
+}
+.dist-row.single{
+  grid-template-columns:1fr !important;
 }
 .model-preview-modal{
   position:fixed !important;

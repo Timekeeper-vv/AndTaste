@@ -126,8 +126,8 @@ onMounted(load)
     <section class="hero-card">
       <div>
         <span class="eyebrow">CONSUMER REVIEW</span>
-        <h1>C端用户作品审核</h1>
-        <p>集中查看 C 端用户生成的产品图和 3D 模型，支持按用户 ID 查询，并对作品做通过/不通过审核。</p>
+        <h1>博物馆审批</h1>
+        <p>集中查看 C 端用户提交的产品图和 3D 模型，支持按用户 ID 查询，并对作品做博物馆准入审批。</p>
       </div>
       <div class="hero-stats">
         <article><b>{{ stats.total }}</b><span>当前列表</span></article>

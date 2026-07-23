@@ -1166,12 +1166,25 @@ public class CreativeAiController {
         if(!"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
         if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
+        String purpose=body==null||body.get("purpose")==null?"personal":String.valueOf(body.get("purpose")).trim();
+        if(blank(purpose)) purpose="personal";
+        if(!Set.of("personal","museum_sale").contains(purpose)) throw new IllegalArgumentException("创作目的只能是个人收藏/送礼或博物馆售卖");
         int selfQty=parseNonNegativeInt(body==null?null:body.get("selfShipQuantity"));
         Object museumObj=body==null?null:body.get("museumDistribution");
         List<Map<String,Object>> museumDistribution=normalizeMuseumDistribution(museumObj);
+        if("museum_sale".equals(purpose)) {
+            if(museumDistribution.isEmpty()) throw new IllegalArgumentException("博物馆售卖用途必须选择一个博物馆");
+            if(museumDistribution.size()!=1) throw new IllegalArgumentException("博物馆售卖用途不支持拆分多个博物馆");
+            selfQty=0;
+            museumDistribution.get(0).put("quantity",quantity);
+        } else {
+            selfQty=quantity;
+            museumDistribution=new ArrayList<>();
+        }
         int museumQty=museumDistribution.stream().mapToInt(m -> parseNonNegativeInt(m.get("quantity"))).sum();
-        if("bulk".equals(requestType) && selfQty+museumQty!=quantity) throw new IllegalArgumentException("批量生产数量分配不一致：自收数量 + 博物馆投放数量 必须等于总数量");
-        if("sample".equals(requestType) && selfQty==0 && museumQty==0) selfQty=quantity;
+        if(selfQty>0 && museumQty>0) throw new IllegalArgumentException("同一申请不能同时分配给个人和博物馆，请按创作目的单一路径提交");
+        if("museum_sale".equals(purpose) && museumQty!=quantity) throw new IllegalArgumentException("博物馆售卖用途必须将全部数量投放到所选博物馆");
+        if("personal".equals(purpose) && selfQty!=quantity) throw new IllegalArgumentException("个人收藏/送礼用途必须将全部数量寄送给个人，不支持拆分");
         String title=body==null||body.get("title")==null?"":String.valueOf(body.get("title"));
         if(blank(title)) title=("sample".equals(requestType)?"C端打样申请-":"C端批量生产申请-")+asset.get("title");
         String requestNo=no("sample".equals(requestType)?"CYP":"CPR");
