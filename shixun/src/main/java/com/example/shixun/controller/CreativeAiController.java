@@ -144,6 +144,7 @@ public class CreativeAiController {
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS design_review_report (id BIGINT AUTO_INCREMENT PRIMARY KEY, review_id BIGINT NOT NULL UNIQUE, report_json JSON NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='智能评估完整报告留存'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_account (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL UNIQUE, balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, frozen_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_recharged DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_consumed DECIMAL(12,2) NOT NULL DEFAULT 0.00, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='C端用户额度账户'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_transaction (id BIGINT AUTO_INCREMENT PRIMARY KEY, transaction_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NULL, job_id BIGINT NULL, biz_type VARCHAR(50) NOT NULL, amount DECIMAL(12,2) NOT NULL, direction VARCHAR(20) NOT NULL, status VARCHAR(30) NOT NULL, balance_before DECIMAL(12,2) NOT NULL DEFAULT 0.00, balance_after DECIMAL(12,2) NOT NULL DEFAULT 0.00, remark VARCHAR(500), operator VARCHAR(80), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_credit_user(user_id), INDEX idx_credit_status(status), INDEX idx_credit_biz(biz_type)) COMMENT='C端用户额度流水'");
+        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY, request_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NOT NULL, request_type VARCHAR(20) NOT NULL, title VARCHAR(200), quantity INT NOT NULL DEFAULT 1, self_ship_quantity INT NOT NULL DEFAULT 0, museum_distribution_json TEXT, recipient_name VARCHAR(80), recipient_phone VARCHAR(80), recipient_address VARCHAR(500), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cpr_user(user_id), INDEX idx_cpr_asset(asset_id), INDEX idx_cpr_type(request_type), INDEX idx_cpr_status(status)) COMMENT='C端作品打样与生产申请'");
         try { this.jdbc.execute("ALTER TABLE digital_asset ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
         try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
         try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN credit_transaction_id BIGINT NULL"); } catch (Exception ignored) {}
@@ -1123,6 +1124,104 @@ public class CreativeAiController {
         return Map.of("success",true,"id",id,"status",status,"operator",blank(operator)?"admin":operator,"message","approved".equals(status)?"审核已通过，作品已进入C端用户端库存":"审核状态已更新");
     }
 
+    @GetMapping("/consumer-production/museums")
+    public List<Map<String,Object>> consumerProductionMuseums() {
+        return List.of(
+                Map.of("id","jx-museum","name","江西省博物馆","city","南昌","scene","省级文博文创店 / 展陈主题快闪"),
+                Map.of("id","national-museum","name","中国国家博物馆","city","北京","scene","国家级文创零售 / 礼品渠道"),
+                Map.of("id","nanjing-museum","name","南京博物院","city","南京","scene","综合博物馆文创空间 / 研学游客"),
+                Map.of("id","shaanxi-history","name","陕西历史博物馆","city","西安","scene","历史文化主题文创 / 旅游客群"),
+                Map.of("id","qinhuangdao-museum","name","秦皇岛博物馆","city","秦皇岛","scene","城市伴手礼 / 滨海旅游场景")
+        );
+    }
+
+    @GetMapping("/consumer-production/my")
+    public List<Map<String,Object>> myConsumerProductionRequests(@RequestParam(required=false) Long currentUserId,
+                                                                 @RequestHeader(value="X-Current-User-Id",required=false) Long headerUserId,
+                                                                 @RequestParam(required=false) String type,
+                                                                 @RequestParam(required=false,defaultValue="100") int size) {
+        Long userId=currentUserId==null?headerUserId:currentUserId;
+        requireConsumerUser(userId);
+        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id WHERE r.user_id=?");
+        List<Object> args=new ArrayList<>();args.add(userId);
+        if(!blank(type)&&Set.of("sample","bulk").contains(type)){sql.append(" AND r.request_type=?");args.add(type);}
+        sql.append(" ORDER BY r.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,300)));
+        return enrichProductionRows(jdbc.queryForList(sql.toString(),args.toArray()));
+    }
+
+    @PostMapping("/consumer-production/submit")
+    public Map<String,Object> submitConsumerProductionRequest(@RequestParam(required=false) Long currentUserId,
+                                                              @RequestHeader(value="X-Current-User-Id",required=false) Long headerUserId,
+                                                              @RequestBody Map<String,Object> body) throws Exception {
+        Long userId=currentUserId==null?headerUserId:currentUserId;
+        if(userId==null && body!=null && body.get("currentUserId")!=null) userId=Long.parseLong(String.valueOf(body.get("currentUserId")));
+        requireConsumerUser(userId);
+        Long assetId=body==null||body.get("assetId")==null?null:Long.parseLong(String.valueOf(body.get("assetId")));
+        if(assetId==null) throw new IllegalArgumentException("请选择审核通过的3D作品");
+        String requestType=body==null||body.get("requestType")==null?"":String.valueOf(body.get("requestType")).trim();
+        if(!Set.of("sample","bulk").contains(requestType)) throw new IllegalArgumentException("申请类型只能是打样或批量生产");
+        Map<String,Object> asset=jdbc.queryForMap("SELECT id,title,asset_type assetType,status,created_by createdBy FROM digital_asset WHERE id=?",assetId);
+        if(!(asset.get("createdBy") instanceof Number) || ((Number)asset.get("createdBy")).longValue()!=userId) throw new IllegalStateException("只能提交自己的作品");
+        if(!"model".equals(String.valueOf(asset.get("assetType")))) throw new IllegalStateException("第一版仅支持3D模型作品提交打样/生产申请");
+        if(!"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
+        int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
+        if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
+        int selfQty=parseNonNegativeInt(body==null?null:body.get("selfShipQuantity"));
+        Object museumObj=body==null?null:body.get("museumDistribution");
+        List<Map<String,Object>> museumDistribution=normalizeMuseumDistribution(museumObj);
+        int museumQty=museumDistribution.stream().mapToInt(m -> parseNonNegativeInt(m.get("quantity"))).sum();
+        if("bulk".equals(requestType) && selfQty+museumQty!=quantity) throw new IllegalArgumentException("批量生产数量分配不一致：自收数量 + 博物馆投放数量 必须等于总数量");
+        if("sample".equals(requestType) && selfQty==0 && museumQty==0) selfQty=quantity;
+        String title=body==null||body.get("title")==null?"":String.valueOf(body.get("title"));
+        if(blank(title)) title=("sample".equals(requestType)?"C端打样申请-":"C端批量生产申请-")+asset.get("title");
+        String requestNo=no("sample".equals(requestType)?"CYP":"CPR");
+        KeyHolder kh=new GeneratedKeyHolder();
+        Long finalUserId=userId; Long finalAssetId=assetId; String finalRequestType=requestType; int finalQuantity=quantity;
+        int finalSelfQty=selfQty; String finalTitle=title; String distributionJson=mapper.writeValueAsString(museumDistribution);
+        String recipientName=body.get("recipientName")==null?"":String.valueOf(body.get("recipientName"));
+        String recipientPhone=body.get("recipientPhone")==null?"":String.valueOf(body.get("recipientPhone"));
+        String recipientAddress=body.get("recipientAddress")==null?"":String.valueOf(body.get("recipientAddress"));
+        String note=body.get("note")==null?"":String.valueOf(body.get("note"));
+        jdbc.update(con -> {
+            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'review')",Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);ps.setString(4,finalRequestType);ps.setString(5,finalTitle);ps.setInt(6,finalQuantity);ps.setInt(7,finalSelfQty);ps.setString(8,distributionJson);ps.setString(9,recipientName);ps.setString(10,recipientPhone);ps.setString(11,recipientAddress);ps.setString(12,note);
+            return ps;
+        },kh);
+        Long id=Objects.requireNonNull(kh.getKey()).longValue();
+        return Map.of("success",true,"id",id,"requestNo",requestNo,"status","review","message","sample".equals(requestType)?"打样申请已提交，请等待审核":"批量生产申请已提交，请等待审核");
+    }
+
+    @GetMapping("/consumer-production/admin/review")
+    public List<Map<String,Object>> consumerProductionReview(@RequestHeader(value="X-Current-Role",required=false) String role,
+                                                             @RequestParam(required=false) String type,
+                                                             @RequestParam(required=false) String status,
+                                                             @RequestParam(required=false) Long userId,
+                                                             @RequestParam(required=false,defaultValue="200") int size) {
+        requireCreativeAdmin(role);
+        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id WHERE 1=1");
+        List<Object> args=new ArrayList<>();
+        if(!blank(type)&&Set.of("sample","bulk").contains(type)){sql.append(" AND r.request_type=?");args.add(type);}
+        if(!blank(status)&&Set.of("review","approved","rejected").contains(status)){sql.append(" AND r.status=?");args.add(status);}
+        if(userId!=null){sql.append(" AND r.user_id=?");args.add(userId);}
+        sql.append(" ORDER BY r.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,500)));
+        return enrichProductionRows(jdbc.queryForList(sql.toString(),args.toArray()));
+    }
+
+    @PutMapping("/consumer-production/admin/{id}/review")
+    public Map<String,Object> reviewConsumerProduction(@PathVariable Long id,
+                                                       @RequestHeader(value="X-Current-Role",required=false) String role,
+                                                       @RequestHeader(value="X-Current-User",required=false) String operatorHeader,
+                                                       @RequestBody Map<String,String> body) {
+        requireCreativeAdmin(role);
+        String status=body==null?"":nullToEmpty(body.get("status")).trim();
+        if(!Set.of("approved","rejected","review").contains(status)) throw new IllegalArgumentException("审核状态只能是 approved / rejected / review");
+        String comment=body==null?"":nullToEmpty(body.get("comment"));
+        String operator=blank(body==null?null:body.get("operator"))?operatorHeader:body.get("operator");
+        int n=jdbc.update("UPDATE consumer_production_request SET status=?,review_comment=?,reviewed_by=?,reviewed_at=? WHERE id=?",status,comment,blank(operator)?"admin":operator,"review".equals(status)?null:LocalDateTime.now(),id);
+        if(n==0) throw new IllegalArgumentException("生产申请不存在");
+        return Map.of("success",true,"id",id,"status",status,"message","approved".equals(status)?"生产申请已通过":"rejected".equals(status)?"生产申请已驳回":"已退回待审核");
+    }
+
     @PostMapping("/reviews")
     public Map<String, Object> createReview(@RequestBody ReviewRequest req) throws Exception {
         if (req.assetId == null) throw new IllegalArgumentException("assetId不能为空");
@@ -2004,6 +2103,49 @@ public class CreativeAiController {
     private void assignJobOwner(Long jobId, Long userId) {
         if(jobId==null||userId==null) return;
         try { jdbc.update("UPDATE ai_generation_job SET created_by=? WHERE id=?", userId, jobId); } catch(Exception ignored) {}
+    }
+
+    private List<Map<String,Object>> enrichProductionRows(List<Map<String,Object>> rows) {
+        for(Map<String,Object> r:rows) {
+            Object json=r.get("museumDistributionJson");
+            try {
+                if(json==null||blank(String.valueOf(json))) r.put("museumDistribution",List.of());
+                else r.put("museumDistribution",mapper.readValue(String.valueOf(json),List.class));
+            } catch(Exception ignored) { r.put("museumDistribution",List.of()); }
+        }
+        return rows;
+    }
+
+    private int parsePositiveInt(Object value,int fallback) {
+        if(value==null||blank(String.valueOf(value))) return fallback;
+        try { return Integer.parseInt(String.valueOf(value).trim()); } catch(Exception e) { throw new IllegalArgumentException("数量必须是整数"); }
+    }
+
+    private int parseNonNegativeInt(Object value) {
+        if(value==null||blank(String.valueOf(value))) return 0;
+        int n=parsePositiveInt(value,0);
+        if(n<0) throw new IllegalArgumentException("数量不能小于0");
+        return n;
+    }
+
+    private List<Map<String,Object>> normalizeMuseumDistribution(Object raw) {
+        if(!(raw instanceof List<?> list)) return new ArrayList<>();
+        Map<String,Map<String,Object>> museumLookup=new LinkedHashMap<>();
+        consumerProductionMuseums().forEach(m -> museumLookup.put(String.valueOf(m.get("id")),m));
+        List<Map<String,Object>> out=new ArrayList<>();
+        for(Object item:list) {
+            if(!(item instanceof Map<?,?> m)) continue;
+            String museumId=m.get("museumId")==null?"":String.valueOf(m.get("museumId"));
+            String museumName=m.get("museumName")==null?"":String.valueOf(m.get("museumName"));
+            int qty=parseNonNegativeInt(m.get("quantity"));
+            if(qty<=0) continue;
+            Map<String,Object> known=museumLookup.get(museumId);
+            if(known!=null) { museumName=String.valueOf(known.get("name")); }
+            if(blank(museumName)) throw new IllegalArgumentException("博物馆投放项缺少名称");
+            Map<String,Object> row=new LinkedHashMap<>();row.put("museumId",museumId);row.put("museumName",museumName);row.put("quantity",qty);if(known!=null){row.put("city",known.get("city"));row.put("scene",known.get("scene"));}
+            out.add(row);
+        }
+        return out;
     }
 
     private void requireCreativeAdmin(String role) {

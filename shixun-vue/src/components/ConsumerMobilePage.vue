@@ -34,6 +34,20 @@ const previewDownloadFormat = ref<'GLB' | 'OBJ' | 'STL'>('GLB')
 const previewDownloading = ref(false)
 const submittedAssetIds = ref<Set<number>>(new Set())
 const submittingAssetIds = ref<Set<number>>(new Set())
+const productionRequests = ref<any[]>([])
+const museums = ref<any[]>([])
+const productionModal = ref<any | null>(null)
+const submittingProduction = ref(false)
+const productionForm = reactive({
+  requestType: 'sample' as 'sample' | 'bulk',
+  quantity: 1,
+  selfShipQuantity: 1,
+  recipientName: '',
+  recipientPhone: '',
+  recipientAddress: '',
+  note: '',
+  museumDistribution: [] as Array<{ museumId: string; museumName: string; quantity: number }>,
+})
 const CONSUMER_TRIPO_MODEL_VERSION = 'v3.1-20260211'
 
 const imageForm = reactive({
@@ -55,6 +69,7 @@ const modelForm = reactive({
 
 const recentImages = computed(() => assets.value.filter(x => x.assetType === 'image').slice(0, 8))
 const recentModels = computed(() => assets.value.filter(x => x.assetType === 'model').slice(0, 8))
+const recentProductionRequests = computed(() => productionRequests.value.slice(0, 8))
 const canGenerateModel = computed(() => modelForm.mode === 'image_to_model' ? !!modelForm.inputAssetId : !!modelForm.rawPrompt.trim())
 const previewModelUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/model-content` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || '')
 const previewDownloadUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/download-model?format=${previewDownloadFormat.value}&currentUserId=${props.currentUser.id}` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
@@ -128,6 +143,14 @@ function workStatusClass(a: any): string { const s = String(a?.status || 'draft'
 function assetIdOf(a: any): number { return Number(a?.id || a?.assetId || 0) }
 function isSubmittedForReview(a: any): boolean { const id = assetIdOf(a); return !!id && submittedAssetIds.value.has(id) }
 function isSubmittingForReview(a: any): boolean { const id = assetIdOf(a); return !!id && submittingAssetIds.value.has(id) }
+function isApprovedModel(a: any): boolean { return a?.assetType === 'model' && String(a?.assetStatus || a?.status || '') === 'approved' }
+function canSubmitProduction(a: any): boolean { return isApprovedModel(a) }
+function requestTypeText(v?: string) { return v === 'bulk' ? '批量生产' : '打样' }
+function productionStatusText(v?: string) { const map: Record<string,string> = { review:'待审核', approved:'已通过', rejected:'未通过' }; return map[String(v || 'review')] || String(v || '-') }
+function productionStatusClass(v?: string) { const st=String(v || 'review'); return st === 'approved' ? 'approved' : st === 'rejected' ? 'rejected' : 'review' }
+function allocatedMuseumQty() { return productionForm.museumDistribution.reduce((sum, x) => sum + Number(x.quantity || 0), 0) }
+function unallocatedQty() { return Number(productionForm.quantity || 0) - Number(productionForm.selfShipQuantity || 0) - allocatedMuseumQty() }
+
 function canSubmitReview(a: any): boolean {
   const id = assetIdOf(a)
   const st = String(a?.assetStatus || a?.status || 'draft')
@@ -199,17 +222,21 @@ async function json(url: string) {
 async function load() {
   try {
     const assetParams = new URLSearchParams({ role: 'user', currentUserId: String(props.currentUser.id) })
-    const [i, t, a, c] = await Promise.all([
+    const [i, t, a, c, prs, ms] = await Promise.all([
       json('/api/creative/ai/jimeng/config'),
       json('/api/creative/ai/tripo/config'),
       json(`/api/creative/ai/assets?${assetParams}`),
       json(`/api/creative/ai/consumer-credits/account?currentUserId=${props.currentUser.id}`),
+      json(`/api/creative/ai/consumer-production/my?currentUserId=${props.currentUser.id}`),
+      json('/api/creative/ai/consumer-production/museums'),
     ])
     imageConfig.value = i
     tripoConfig.value = t
     assets.value = Array.isArray(a) ? a : []
     creditAccount.value = c
     creditRules.value = c?.rules || {}
+    productionRequests.value = Array.isArray(prs) ? prs : []
+    museums.value = Array.isArray(ms) ? ms : []
   } catch (e: any) {
     emit('alert', '加载移动创作页失败：' + (e?.message || e), 'error')
   }
@@ -439,6 +466,84 @@ async function pollModel(jobId: number) {
   }
 }
 
+function openProductionRequest(a: any, type: 'sample' | 'bulk') {
+  if (!canSubmitProduction(a)) {
+    emit('alert', '作品需先通过审核，并且必须是3D模型，才能提交打样或生产申请', 'error')
+    return
+  }
+  productionModal.value = a
+  productionForm.requestType = type
+  productionForm.quantity = type === 'sample' ? 1 : 1000
+  productionForm.selfShipQuantity = type === 'sample' ? 1 : 200
+  productionForm.recipientName = props.currentUser.username
+  productionForm.recipientPhone = ''
+  productionForm.recipientAddress = ''
+  productionForm.note = type === 'sample' ? '希望先打样确认材质、尺寸和包装效果' : '计划先生产1000个，其中一部分自收，其余投放博物馆文创渠道'
+  const firstMuseum = museums.value[0]
+  productionForm.museumDistribution = type === 'bulk' && firstMuseum ? [{ museumId: firstMuseum.id, museumName: firstMuseum.name, quantity: 800 }] : []
+  document.body.style.overflow = 'hidden'
+}
+
+function closeProductionRequest() {
+  productionModal.value = null
+  document.body.style.overflow = ''
+}
+
+function addMuseumDistribution() {
+  const picked = museums.value.find(m => !productionForm.museumDistribution.some(x => x.museumId === m.id)) || museums.value[0]
+  if (!picked) return
+  productionForm.museumDistribution.push({ museumId: picked.id, museumName: picked.name, quantity: Math.max(0, unallocatedQty()) })
+}
+
+function changeMuseum(row: any) {
+  const found = museums.value.find(m => m.id === row.museumId)
+  if (found) row.museumName = found.name
+}
+
+function removeMuseumDistribution(index: number) {
+  productionForm.museumDistribution.splice(index, 1)
+}
+
+async function submitProductionRequest() {
+  if (!productionModal.value?.id) return
+  if (productionForm.requestType === 'bulk' && unallocatedQty() !== 0) {
+    emit('alert', '数量分配不一致：自收数量 + 博物馆投放数量 必须等于总数量', 'error')
+    return
+  }
+  submittingProduction.value = true
+  try {
+    const r = await fetch(`/api/creative/ai/consumer-production/submit?currentUserId=${props.currentUser.id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Current-Role': 'user', 'X-Current-User-Id': String(props.currentUser.id), 'X-Current-User': props.currentUser.username },
+      body: JSON.stringify({
+        currentUserId: props.currentUser.id,
+        assetId: productionModal.value.id,
+        requestType: productionForm.requestType,
+        quantity: Number(productionForm.quantity || 0),
+        selfShipQuantity: Number(productionForm.selfShipQuantity || 0),
+        recipientName: productionForm.recipientName,
+        recipientPhone: productionForm.recipientPhone,
+        recipientAddress: productionForm.recipientAddress,
+        note: productionForm.note,
+        museumDistribution: productionForm.requestType === 'bulk' ? productionForm.museumDistribution : [],
+      }),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => null)
+      throw new Error(err?.message || `HTTP ${r.status}`)
+    }
+    const d = await r.json()
+    emit('alert', d.message || '申请已提交，请等待审核', 'success')
+    closeProductionRequest()
+    await load()
+    tab.value = 'gallery'
+  } catch (e: any) {
+    emit('alert', '提交失败：' + (e?.message || e), 'error')
+  } finally {
+    submittingProduction.value = false
+  }
+}
+
 function openUrl(url?: string) {
   if (!url) return
   window.open(url, '_blank', 'noopener,noreferrer')
@@ -632,12 +737,54 @@ function closeModelPreview() {
           <button type="button" @click.stop="openModelPreview(a)">预览</button>
           <button v-if="canSubmitReview(a)" type="button" class="review-submit" @click.stop="submitAssetForReview(a)">提交审核</button>
           <span v-else-if="isSubmittingForReview(a)" class="submitted-tip">提交中...</span>
+          <div v-if="canSubmitProduction(a)" class="production-actions">
+            <button type="button" @click.stop="openProductionRequest(a, 'sample')">申请打样</button>
+            <button type="button" class="prod" @click.stop="openProductionRequest(a, 'bulk')">批量生产</button>
+          </div>
         </article>
       </div>
       <p v-if="!recentImages.length && !recentModels.length" class="empty">暂无作品</p>
+
+      <div v-if="recentProductionRequests.length" class="production-list">
+        <h3>我的生产申请</h3>
+        <article v-for="r in recentProductionRequests" :key="r.id">
+          <div><b>{{ requestTypeText(r.requestType) }} · {{ r.quantity }}个</b><span>{{ r.assetTitle || r.title }}</span></div>
+          <em :class="productionStatusClass(r.status)">{{ productionStatusText(r.status) }}</em>
+        </article>
+      </div>
     </section>
 
     <Teleport to="body">
+      <section v-if="productionModal" class="production-modal" @click.self="closeProductionRequest">
+        <div class="production-card">
+          <header>
+            <div><b>{{ productionForm.requestType === 'sample' ? '提交打样申请' : '提交批量生产申请' }}</b><span>作品：{{ productionModal.title || '3D模型作品' }}</span></div>
+            <button type="button" @click="closeProductionRequest">×</button>
+          </header>
+          <main>
+            <label><span>总数量</span><input v-model.number="productionForm.quantity" type="number" min="1" /></label>
+            <label><span>邮寄给我</span><input v-model.number="productionForm.selfShipQuantity" type="number" min="0" /></label>
+            <template v-if="productionForm.requestType === 'bulk'">
+              <div class="dist-head"><b>博物馆投放</b><button type="button" @click="addMuseumDistribution">添加</button></div>
+              <div v-for="(d, idx) in productionForm.museumDistribution" :key="idx" class="dist-row">
+                <select v-model="d.museumId" @change="changeMuseum(d)"><option v-for="m in museums" :key="m.id" :value="m.id">{{ m.name }}</option></select>
+                <input v-model.number="d.quantity" type="number" min="0" placeholder="数量" />
+                <button type="button" @click="removeMuseumDistribution(idx)">删除</button>
+              </div>
+              <p class="alloc-tip" :class="{bad: unallocatedQty() !== 0}">剩余未分配：{{ unallocatedQty() }} 个</p>
+            </template>
+            <label><span>收件人</span><input v-model.trim="productionForm.recipientName" placeholder="自收部分收件人" /></label>
+            <label><span>手机号</span><input v-model.trim="productionForm.recipientPhone" placeholder="用于样品/自收数量寄送" /></label>
+            <label><span>收货地址</span><textarea v-model.trim="productionForm.recipientAddress" rows="2" placeholder="邮寄给我的地址"></textarea></label>
+            <label><span>申请说明</span><textarea v-model.trim="productionForm.note" rows="3"></textarea></label>
+          </main>
+          <footer>
+            <button type="button" @click="closeProductionRequest">取消</button>
+            <button type="button" class="submit" :disabled="submittingProduction" @click="submitProductionRequest">{{ submittingProduction ? '提交中' : '提交审核' }}</button>
+          </footer>
+        </div>
+      </section>
+
       <section v-if="previewAsset" class="model-preview-modal" @click.self="closeModelPreview">
         <div class="model-preview-top">
           <button type="button" class="preview-back" @click="closeModelPreview">
@@ -695,7 +842,7 @@ function closeModelPreview() {
 </template>
 
 <style scoped>
-.consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.submitted-tip{display:inline-flex;height:30px;align-items:center;padding:0 10px;border-radius:999px;background:#fff7ed;color:#b45309;font-size:12px;font-weight:900}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{position:relative;overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.work-status{position:absolute;top:8px;right:8px;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.92);font-size:10px;font-weight:900}.work-status.draft{color:#64748b}.work-status.review{color:#b45309}.work-status.approved{color:#047857}.work-status.rejected{color:#dc2626}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.gallery .review-submit{background:#b4532a}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
+.consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.submitted-tip{display:inline-flex;height:30px;align-items:center;padding:0 10px;border-radius:999px;background:#fff7ed;color:#b45309;font-size:12px;font-weight:900}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{position:relative;overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.work-status{position:absolute;top:8px;right:8px;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.92);font-size:10px;font-weight:900}.work-status.draft{color:#64748b}.work-status.review{color:#b45309}.work-status.approved{color:#047857}.work-status.rejected{color:#dc2626}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.gallery .review-submit{background:#b4532a}.production-actions{display:flex;gap:6px;padding:0 9px 9px}.gallery .production-actions button{flex:1;margin:0;background:#0f766e}.gallery .production-actions .prod{background:#7c2d12}.production-list{margin-top:14px;display:flex;flex-direction:column;gap:8px}.production-list h3{margin:4px 0;font-size:15px}.production-list article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:10px;background:#fffaf4;border:1px solid #eadfd4}.production-list b,.production-list span{display:block}.production-list span{margin-top:3px;color:#8a7161;font-size:12px}.production-list em{font-style:normal;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:900}.production-list em.review{background:#fff7ed;color:#b45309}.production-list em.approved{background:#ecfdf5;color:#047857}.production-list em.rejected{background:#fef2f2;color:#dc2626}.production-modal{position:fixed;inset:0;z-index:220;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.production-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden}.production-card header,.production-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.production-card footer{border-top:1px solid #eadfd4;border-bottom:0}.production-card header b,.production-card header span{display:block}.production-card header span{margin-top:3px;color:#8a7161;font-size:12px}.production-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.production-card main{padding:14px;overflow:auto}.production-card input,.production-card select{width:100%;height:40px;box-sizing:border-box;border:1px solid #eadfd4;border-radius:10px;background:#fffaf4;padding:0 10px}.dist-head{display:flex;align-items:center;justify-content:space-between;margin-top:12px}.dist-head button,.production-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.dist-row{display:grid;grid-template-columns:1fr 74px 52px;gap:7px;margin-top:8px}.dist-row button{border:0;border-radius:10px;background:#fef2f2;color:#dc2626;font-weight:900}.alloc-tip{margin:8px 0 0;color:#047857;font-size:12px;font-weight:900}.alloc-tip.bad{color:#dc2626}.production-card footer .submit{background:#b4532a}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
 </style>
 
 <style scoped>
