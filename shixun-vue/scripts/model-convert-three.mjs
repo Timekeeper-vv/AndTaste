@@ -6,6 +6,7 @@ globalThis.self ||= globalThis
 
 const THREE = await import('three')
 const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
+const { MeshoptDecoder } = await import('three/examples/jsm/libs/meshopt_decoder.module.js')
 const { OBJExporter } = await import('three/examples/jsm/exporters/OBJExporter.js')
 const { STLExporter } = await import('three/examples/jsm/exporters/STLExporter.js')
 
@@ -39,6 +40,7 @@ globalThis.ProgressEvent ||= class ProgressEvent extends Event {
 const buffer = fs.readFileSync(input)
 const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
 const loader = new GLTFLoader()
+loader.setMeshoptDecoder(MeshoptDecoder)
 
 const gltf = await new Promise((resolve, reject) => {
   loader.parse(arrayBuffer, '', resolve, reject)
