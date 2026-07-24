@@ -8,6 +8,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -1016,7 +1019,7 @@ public class CreativeAiController {
     }
 
     @GetMapping("/assets/{id}/download-model")
-    public ResponseEntity<byte[]> downloadModel(@PathVariable Long id,
+    public ResponseEntity<Resource> downloadModel(@PathVariable Long id,
                                                 @RequestParam(defaultValue="GLB") String format,
                                                 @RequestParam(required=false) Long currentUserId,
                                                 @RequestHeader(value="X-Current-Role",required=false) String role,
@@ -1027,7 +1030,7 @@ public class CreativeAiController {
         Long creditTxId=chargeUser?reserveConsumerCredit(userId,"model_convert",consumerCreditCost("model_convert"),"C端3D模型"+fmt+"格式下载/转换预扣"):null;
         try {
             Map<String,Object> asset=resolveDownloadableModelAsset(id,fmt);
-            ResponseEntity<byte[]> response=modelDownloadResponse(asset,fmt);
+            ResponseEntity<Resource> response=modelDownloadResponse(asset,fmt);
             completeConsumerCredit(creditTxId,null,asset.get("id") instanceof Number?((Number)asset.get("id")).longValue():id);
             return response;
         } catch(Exception e) {
@@ -2520,22 +2523,26 @@ public class CreativeAiController {
 
     private String firstNonBlank(String... values) { for(String v:values) if(!blank(v)) return v; return ""; }
 
-    private ResponseEntity<byte[]> modelDownloadResponse(Map<String,Object> asset,String fmt) throws Exception {
+    private ResponseEntity<Resource> modelDownloadResponse(Map<String,Object> asset,String fmt) throws Exception {
         String url=str(asset.get("fileUrl")); if(blank(url)) throw new IOException("模型文件地址不存在");
-        byte[] bytes; String lower=url.toLowerCase(Locale.ROOT);
+        Resource body; long contentLength=-1; String lower=url.toLowerCase(Locale.ROOT);
         if(url.startsWith("http://")||url.startsWith("https://")){
             HttpResponse<byte[]> response=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());
             if(response.statusCode()<200||response.statusCode()>=300) throw new IOException("读取模型失败 HTTP "+response.statusCode());
-            bytes=response.body();
+            byte[] bytes=response.body();
+            body=new ByteArrayResource(bytes);
+            contentLength=bytes.length;
         } else {
             Path publicDir=vuePublicDir(); String relative=url.startsWith("/")?url.substring(1):url; Path file=publicDir.resolve(relative).normalize();
             if(!file.startsWith(publicDir)||!Files.exists(file)) throw new IOException("模型文件不存在："+url);
-            bytes=Files.readAllBytes(file); lower=file.getFileName().toString().toLowerCase(Locale.ROOT);
+            body=new FileSystemResource(file);
+            contentLength=Files.size(file);
+            lower=file.getFileName().toString().toLowerCase(Locale.ROOT);
         }
         MediaType type=lower.endsWith(".zip")?MediaType.parseMediaType("application/zip"):"STL".equals(fmt)?MediaType.parseMediaType("model/stl"):"OBJ".equals(fmt)?MediaType.parseMediaType("model/obj"):MediaType.parseMediaType("model/gltf-binary");
         String suffix=lower.endsWith(".zip")?".zip":"."+fmt.toLowerCase(Locale.ROOT);
         String filename="and-taste-3d-"+asset.get("id")+"-"+fmt.toLowerCase(Locale.ROOT)+suffix;
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(type).header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=\""+filename+"\"").body(bytes);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentLength(contentLength).contentType(type).header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=\""+filename+"\"").body(body);
     }
 
     public static class ReviewRequest {
