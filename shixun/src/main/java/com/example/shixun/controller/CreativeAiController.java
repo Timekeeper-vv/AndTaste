@@ -2402,24 +2402,38 @@ public class CreativeAiController {
 
     private void runLocalModelConverter(Path input,Path output,String fmt) throws Exception {
         Path log=output.getParent().resolve("convert-"+fmt.toLowerCase(Locale.ROOT)+".log");
-        List<String> cmd;
+        List<List<String>> commands=new ArrayList<>();
         if(commandAvailable(modelConvertBlenderCommand)) {
             Path script=modelConvertScriptPath();
-            cmd=List.of(modelConvertBlenderCommand,"-b","--python",script.toString(),"--",input.toString(),output.toString(),fmt);
-        } else if(commandAvailable(modelConvertAssimpCommand)) {
-            cmd=List.of(modelConvertAssimpCommand,"export",input.toString(),output.toString());
-        } else if(commandAvailable(modelConvertNodeCommand)) {
+            commands.add(List.of(modelConvertBlenderCommand,"-b","--python",script.toString(),"--",input.toString(),output.toString(),fmt));
+        }
+        if(commandAvailable(modelConvertAssimpCommand)) {
+            commands.add(List.of(modelConvertAssimpCommand,"export",input.toString(),output.toString()));
+        }
+        if(commandAvailable(modelConvertNodeCommand)) {
             Path script=modelConvertNodeScriptPath();
-            cmd=List.of(modelConvertNodeCommand,script.toString(),input.toString(),output.toString(),fmt);
-        } else {
+            commands.add(List.of(modelConvertNodeCommand,script.toString(),input.toString(),output.toString(),fmt));
+        }
+        if(commands.isEmpty()) {
             throw new IllegalStateException("服务器未安装模型转换器。请安装 Blender（推荐）、assimp，或确认 Node 可执行并已安装前端依赖");
         }
-        ProcessBuilder pb=new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(log.toFile());
-        Process p=pb.start();
-        boolean finished=p.waitFor(Math.max(60,modelConvertTimeoutSeconds),java.util.concurrent.TimeUnit.SECONDS);
-        if(!finished) { p.destroyForcibly(); throw new IllegalStateException("模型本地转换超时，请稍后重试或检查模型大小"); }
-        String out=Files.exists(log)?Files.readString(log,StandardCharsets.UTF_8):"";
-        if(p.exitValue()!=0) throw new IllegalStateException("模型本地转换失败："+out);
+        List<String> errors=new ArrayList<>();
+        for(List<String> cmd:commands) {
+            Files.deleteIfExists(output);
+            ProcessBuilder pb=new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(log.toFile());
+            Process p=pb.start();
+            boolean finished=p.waitFor(Math.max(60,modelConvertTimeoutSeconds),java.util.concurrent.TimeUnit.SECONDS);
+            String out=Files.exists(log)?Files.readString(log,StandardCharsets.UTF_8):"";
+            String name=cmd.isEmpty()?"converter":cmd.get(0);
+            if(!finished) {
+                p.destroyForcibly();
+                errors.add(name+"转换超时");
+                continue;
+            }
+            if(p.exitValue()==0&&Files.exists(output)&&Files.size(output)>0) return;
+            errors.add(name+"转换失败："+out);
+        }
+        throw new IllegalStateException("模型本地转换失败，已尝试可用转换器："+String.join("；",errors));
     }
 
     private boolean commandAvailable(String command) {
