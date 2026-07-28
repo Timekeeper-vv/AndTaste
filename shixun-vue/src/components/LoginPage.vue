@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import type { User } from '../types'
+import type { AuthSession } from '../types'
 import andTasteLogo from '../assets/and_taste.png'
 
-const emit = defineEmits<{ login: [user: User] }>()
+const emit = defineEmits<{ login: [session: AuthSession] }>()
 
 const lang = ref<'en' | 'zh'>('zh')
 const toggleLang = () => { lang.value = lang.value === 'en' ? 'zh' : 'en' }
@@ -236,7 +236,7 @@ async function login() {
       return
     }
     document.body.style.overflow = ''
-    emit('login', await res.json())
+    emit('login', await res.json() as AuthSession)
   } catch {
     loginMsg.value = 'Network error, please try again'
   } finally {

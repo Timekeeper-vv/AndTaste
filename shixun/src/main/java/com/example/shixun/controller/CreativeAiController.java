@@ -1109,7 +1109,14 @@ public class CreativeAiController {
         String purpose=body==null?"":nullToEmpty(body.get("purpose")).trim();
         if(!Set.of("personal","museum_sale").contains(purpose)) purpose="";
         String note=body==null?"":nullToEmpty(body.get("note"));
-        String auditTag = ";用户提交审核" + (blank(purpose) ? "" : ";用途=" + purpose) + (blank(note) ? "" : "-" + note);
+        String museumSource="";
+        if("museum_sale".equals(purpose)) {
+            String museumId=body==null?"":nullToEmpty(body.get("museumId"));
+            Map<String,Object> museum=consumerProductionMuseums().stream().filter(x -> museumId.equals(String.valueOf(x.get("id")))).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("博物馆售卖作品必须标明审批博物馆"));
+            museumSource=String.valueOf(museum.get("province")) + String.valueOf(museum.get("city")) + String.valueOf(museum.get("district")) + " · " + String.valueOf(museum.get("name"));
+        }
+        String auditTag = ";用户提交审核" + (blank(purpose) ? "" : ";用途=" + purpose) + (blank(museumSource) ? "" : ";审批出处=" + museumSource) + (blank(note) ? "" : "-" + note);
         int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND (asset_type='model' OR COALESCE(source_type,'ai_generated')<>'upload') AND COALESCE(status,'draft')<>'approved'", auditTag, id, userId);
         if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已审核通过");
         return Map.of("success",true,"id",id,"status","review","message","作品已提交给审核员");
@@ -1133,11 +1140,25 @@ public class CreativeAiController {
     @GetMapping("/consumer-production/museums")
     public List<Map<String,Object>> consumerProductionMuseums() {
         return List.of(
-                Map.of("id","jx-museum","name","江西省博物馆","city","南昌","scene","省级文博文创店 / 展陈主题快闪"),
-                Map.of("id","national-museum","name","中国国家博物馆","city","北京","scene","国家级文创零售 / 礼品渠道"),
-                Map.of("id","nanjing-museum","name","南京博物院","city","南京","scene","综合博物馆文创空间 / 研学游客"),
-                Map.of("id","shaanxi-history","name","陕西历史博物馆","city","西安","scene","历史文化主题文创 / 旅游客群"),
-                Map.of("id","qinhuangdao-museum","name","秦皇岛博物馆","city","秦皇岛","scene","城市伴手礼 / 滨海旅游场景")
+                Map.of("id","jx-museum","name","江西省博物馆","province","江西省","city","南昌市","district","红谷滩区","scene","省级文博文创店 / 展陈主题快闪"),
+                Map.of("id","jingdezhen-museum","name","景德镇中国陶瓷博物馆","province","江西省","city","景德镇市","district","珠山区","scene","陶瓷文创 / 艺术旅游渠道"),
+                Map.of("id","ganzhou-museum","name","赣州市博物馆","province","江西省","city","赣州市","district","章贡区","scene","客家文化 / 城市礼品渠道"),
+                Map.of("id","national-museum","name","中国国家博物馆","province","北京市","city","北京市","district","东城区","scene","国家级文创零售 / 礼品渠道"),
+                Map.of("id","capital-museum","name","首都博物馆","province","北京市","city","北京市","district","西城区","scene","北京城市文化 / 馆店文创"),
+                Map.of("id","shanghai-museum","name","上海博物馆","province","上海市","city","上海市","district","黄浦区","scene","艺术精品 / 城市文旅渠道"),
+                Map.of("id","china-art-museum","name","中华艺术宫","province","上海市","city","上海市","district","浦东新区","scene","艺术展陈 / 潮流文创渠道"),
+                Map.of("id","nanjing-museum","name","南京博物院","province","江苏省","city","南京市","district","玄武区","scene","综合博物馆文创空间 / 研学游客"),
+                Map.of("id","suzhou-museum","name","苏州博物馆","province","江苏省","city","苏州市","district","姑苏区","scene","江南美学 / 设计文创渠道"),
+                Map.of("id","zhejiang-museum","name","浙江省博物馆","province","浙江省","city","杭州市","district","西湖区","scene","宋韵文化 / 文旅礼品渠道"),
+                Map.of("id","ningbo-museum","name","宁波博物院","province","浙江省","city","宁波市","district","鄞州区","scene","海丝文化 / 亲子研学渠道"),
+                Map.of("id","shaanxi-history","name","陕西历史博物馆","province","陕西省","city","西安市","district","雁塔区","scene","历史文化主题文创 / 旅游客群"),
+                Map.of("id","qinshihuang-museum","name","秦始皇帝陵博物院","province","陕西省","city","西安市","district","临潼区","scene","秦文化 IP / 高客单文创渠道"),
+                Map.of("id","hunan-museum","name","湖南博物院","province","湖南省","city","长沙市","district","开福区","scene","马王堆文化 / 年轻客群渠道"),
+                Map.of("id","guangdong-museum","name","广东省博物馆","province","广东省","city","广州市","district","天河区","scene","岭南文化 / 城市商圈渠道"),
+                Map.of("id","shenzhen-museum","name","深圳博物馆","province","广东省","city","深圳市","district","福田区","scene","科技城市文化 / 创意礼品渠道"),
+                Map.of("id","sichuan-museum","name","四川博物院","province","四川省","city","成都市","district","浣花溪","scene","巴蜀文化 / 旅游文创渠道"),
+                Map.of("id","sanxingdui-museum","name","三星堆博物馆","province","四川省","city","德阳市","district","广汉市","scene","古蜀文明 IP / 爆款文创渠道"),
+                Map.of("id","qinhuangdao-museum","name","秦皇岛博物馆","province","河北省","city","秦皇岛市","district","海港区","scene","城市伴手礼 / 滨海旅游场景")
         );
     }
 
@@ -2165,7 +2186,7 @@ public class CreativeAiController {
             Map<String,Object> known=museumLookup.get(museumId);
             if(known!=null) { museumName=String.valueOf(known.get("name")); }
             if(blank(museumName)) throw new IllegalArgumentException("博物馆投放项缺少名称");
-            Map<String,Object> row=new LinkedHashMap<>();row.put("museumId",museumId);row.put("museumName",museumName);row.put("quantity",qty);if(known!=null){row.put("city",known.get("city"));row.put("scene",known.get("scene"));}
+            Map<String,Object> row=new LinkedHashMap<>();row.put("museumId",museumId);row.put("museumName",museumName);row.put("quantity",qty);if(known!=null){row.put("province",known.get("province"));row.put("city",known.get("city"));row.put("district",known.get("district"));row.put("scene",known.get("scene"));row.put("approvalSource",known.get("province") + "" + known.get("city") + "" + known.get("district") + " · " + known.get("name"));}
             out.add(row);
         }
         return out;
@@ -2177,9 +2198,9 @@ public class CreativeAiController {
 
     private BigDecimal consumerCreditCost(String bizType) {
         return switch (nullToEmpty(bizType)) {
-            case "image2d" -> BigDecimal.valueOf(1);
-            case "image_to_3d" -> BigDecimal.valueOf(10);
-            case "text_to_3d" -> BigDecimal.valueOf(8);
+            case "image2d" -> BigDecimal.valueOf(16);
+            case "image_to_3d" -> BigDecimal.valueOf(70);
+            case "text_to_3d" -> BigDecimal.valueOf(60);
             case "model_convert" -> BigDecimal.valueOf(1);
             default -> BigDecimal.ZERO;
         };

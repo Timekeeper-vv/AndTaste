@@ -8,6 +8,7 @@ if [ -f "$ENV_FILE" ]; then set -a; source "$ENV_FILE"; set +a; fi
 
 APP_PORT="${APP_PORT:-8080}"
 JAVA_OPTS="${JAVA_OPTS:--Xms512m -Xmx1536m -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai}"
+AUTH_JWT_SECRET="${AUTH_JWT_SECRET:-}"; AUTH_JWT_EXPIRES_SECONDS="${AUTH_JWT_EXPIRES_SECONDS:-28800}"
 BACKEND_DIR="$ROOT_DIR/shixun"; FRONTEND_DIR="$ROOT_DIR/shixun-vue"
 RUN_DIR="$ROOT_DIR/runtime"; LOG_DIR="$ROOT_DIR/logs"; PID_FILE="$RUN_DIR/$APP_NAME.pid"; APP_LOG="$LOG_DIR/$APP_NAME.log"
 DB_HOST="${DB_HOST:-127.0.0.1}"; DB_PORT="${DB_PORT:-3306}"; DB_NAME="${DB_NAME:-shixun}"; DB_USER="${DB_USER:-smart_pig}"
@@ -20,6 +21,7 @@ REPLICATE_API_KEY="${REPLICATE_API_KEY:-}"; REPLICATE_API_BASE_URL="${REPLICATE_
 JIMENG_API_KEY="${JIMENG_API_KEY:-}"; JIMENG_ACCESS_KEY_ID="${JIMENG_ACCESS_KEY_ID:-}"; JIMENG_SECRET_ACCESS_KEY="${JIMENG_SECRET_ACCESS_KEY:-}"; JIMENG_REGION="${JIMENG_REGION:-cn-north-1}"; JIMENG_SERVICE="${JIMENG_SERVICE:-cv}"; JIMENG_API_BASE_URL="${JIMENG_API_BASE_URL:-https://visual.volcengineapi.com}"; JIMENG_REQ_KEY="${JIMENG_REQ_KEY:-jimeng_seedream46_cvtob}"; JIMENG_POLL_MAX_SECONDS="${JIMENG_POLL_MAX_SECONDS:-180}"
 MODAO_API_KEY="${MODAO_API_KEY:-}"; MODAO_DESIGN_URL="${MODAO_DESIGN_URL:-https://modao.cc/ai/design/spmrsxjgcyi6g0h1/6a5dd48151e5a21110c1697a}"; MODAO_MCP_URL="${MODAO_MCP_URL:-https://modao.cc/agent-py/ai/mcp}"; MODAO_CHROME_PATH="${MODAO_CHROME_PATH:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 KUAIDI100_CUSTOMER="${KUAIDI100_CUSTOMER:-}"; KUAIDI100_KEY="${KUAIDI100_KEY:-}"; KUAIDI100_CALLBACK_URL="${KUAIDI100_CALLBACK_URL:-}"; KUAIDI100_SALT="${KUAIDI100_SALT:-}"
+PAYMENT_WECHAT_ENABLED="${PAYMENT_WECHAT_ENABLED:-false}"; PAYMENT_WECHAT_APP_ID="${PAYMENT_WECHAT_APP_ID:-}"; PAYMENT_WECHAT_MCH_ID="${PAYMENT_WECHAT_MCH_ID:-}"; PAYMENT_WECHAT_SERIAL_NO="${PAYMENT_WECHAT_SERIAL_NO:-}"; PAYMENT_WECHAT_PRIVATE_KEY_PATH="${PAYMENT_WECHAT_PRIVATE_KEY_PATH:-}"; PAYMENT_WECHAT_API_V3_KEY="${PAYMENT_WECHAT_API_V3_KEY:-}"; PAYMENT_WECHAT_NOTIFY_URL="${PAYMENT_WECHAT_NOTIFY_URL:-}"; PAYMENT_WECHAT_PLATFORM_PUBLIC_KEY_PATH="${PAYMENT_WECHAT_PLATFORM_PUBLIC_KEY_PATH:-}"; PAYMENT_WECHAT_PLATFORM_SERIAL_NO="${PAYMENT_WECHAT_PLATFORM_SERIAL_NO:-}"
 JAR_FILE=""
 
 info(){ echo -e "\033[1;34m[INFO]\033[0m $*"; }; ok(){ echo -e "\033[1;32m[OK]\033[0m $*"; }; warn(){ echo -e "\033[1;33m[WARN]\033[0m $*"; }; die(){ echo -e "\033[1;31m[ERR]\033[0m $*" >&2; exit 1; }
@@ -73,6 +75,8 @@ write_config(){
   cat > "$BACKEND_DIR/application-local.properties" <<CFG
 server.address=0.0.0.0
 server.port=$APP_PORT
+auth.jwt.secret=$AUTH_JWT_SECRET
+auth.jwt.expires-seconds=$AUTH_JWT_EXPIRES_SECONDS
 spring.datasource.url=jdbc:mysql://$DB_HOST:$DB_PORT/$DB_NAME?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&characterEncoding=UTF-8
 spring.datasource.username=$DB_USER
 spring.datasource.password=$DB_PASSWORD
@@ -111,6 +115,15 @@ kuaidi100.customer=$KUAIDI100_CUSTOMER
 kuaidi100.key=$KUAIDI100_KEY
 kuaidi100.callback-url=$KUAIDI100_CALLBACK_URL
 kuaidi100.salt=$KUAIDI100_SALT
+payment.wechat.enabled=$PAYMENT_WECHAT_ENABLED
+payment.wechat.app-id=$PAYMENT_WECHAT_APP_ID
+payment.wechat.mch-id=$PAYMENT_WECHAT_MCH_ID
+payment.wechat.serial-no=$PAYMENT_WECHAT_SERIAL_NO
+payment.wechat.private-key-path=$PAYMENT_WECHAT_PRIVATE_KEY_PATH
+payment.wechat.api-v3-key=$PAYMENT_WECHAT_API_V3_KEY
+payment.wechat.notify-url=$PAYMENT_WECHAT_NOTIFY_URL
+payment.wechat.platform-public-key-path=$PAYMENT_WECHAT_PLATFORM_PUBLIC_KEY_PATH
+payment.wechat.platform-serial-no=$PAYMENT_WECHAT_PLATFORM_SERIAL_NO
 CFG
   chmod 600 "$BACKEND_DIR/application-local.properties" "$ENV_FILE" 2>/dev/null || true
   ok "生产配置已生成"

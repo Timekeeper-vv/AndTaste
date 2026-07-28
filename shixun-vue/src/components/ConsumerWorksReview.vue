@@ -2,6 +2,12 @@
 import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
 
+function authMediaUrl(url: string): string {
+  const token = sessionStorage.getItem('accessToken')
+  return token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
+}
+
+
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
 
@@ -50,7 +56,7 @@ const statusText: Record<string, string> = {
 const statusClass = (s?: string) => s === 'approved' ? 'ok' : s === 'rejected' ? 'bad' : 'wait'
 const assetTypeText = (t?: string) => t === 'model' ? '3D模型' : '产品图片'
 const previewUrl = (w: ConsumerAsset) => w.previewUrl || w.fileUrl || ''
-const fileViewUrl = (w: ConsumerAsset) => w.assetType === 'model' && w.id ? `/api/creative/ai/assets/${w.id}/model-content` : (w.fileUrl || w.previewUrl || '')
+const fileViewUrl = (w: ConsumerAsset) => w.assetType === 'model' && w.id ? authMediaUrl(`/api/creative/ai/assets/${w.id}/model-content`) : (w.fileUrl || w.previewUrl || '')
 function purposeOf(w: ConsumerAsset): 'museum_sale' | 'personal' | 'unknown' {
   const t = `${w.tags || ''} ${w.prompt || ''}`
   if (t.includes('用途=museum_sale') || t.includes('博物馆售卖') || t.includes('博物馆审批')) return 'museum_sale'
@@ -60,6 +66,10 @@ function purposeOf(w: ConsumerAsset): 'museum_sale' | 'personal' | 'unknown' {
 function purposeText(w: ConsumerAsset) {
   const p = purposeOf(w)
   return p === 'museum_sale' ? '博物馆售卖' : p === 'personal' ? '个人收藏/送礼' : '未标明用途'
+}
+function approvalSource(w: ConsumerAsset) {
+  const matched = /审批出处=([^;]+)/.exec(String(w.tags || ''))
+  return matched?.[1]?.trim() || ''
 }
 function purposeClass(w: ConsumerAsset) { return purposeOf(w) === 'museum_sale' ? 'museum' : purposeOf(w) === 'personal' ? 'personal' : 'unknown' }
 
@@ -190,8 +200,9 @@ onMounted(load)
           </div>
           <div class="meta-row purpose-row">
             <span>提交用途：{{ purposeText(w) }}</span>
-            <span>{{ purposeOf(w) === 'museum_sale' ? '博物馆准入' : '普通作品审核' }}</span>
+            <span>{{ purposeOf(w) === 'museum_sale' ? '博物馆准入审批' : '普通作品审核' }}</span>
           </div>
+          <div v-if="approvalSource(w)" class="approval-source">审批出处：{{ approvalSource(w) }}</div>
           <div class="meta-row">
             <span>格式：{{ (w.format || '-').toUpperCase() }}</span>
             <span>{{ formatTime(w.createdAt) }}</span>
@@ -247,4 +258,8 @@ onMounted(load)
 
 <style scoped>
 .purpose-pill{position:absolute;left:92px;top:12px;padding:7px 9px;border-radius:999px;background:rgba(255,255,255,.92);font-size:11px;font-weight:900;color:#64748b}.purpose-pill.museum{color:#7c2d12;background:#fff7ed}.purpose-pill.personal{color:#047857;background:#ecfdf5}.purpose-pill.unknown{color:#64748b;background:#f8fafc}.purpose-row{padding:8px 10px;border-radius:12px;background:#f8fafc;color:#334155;font-weight:800}@media(max-width:640px){.purpose-pill{left:12px;top:48px}}
+</style>
+
+<style scoped>
+.approval-source{margin:9px 0;padding:8px 10px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;font-size:12px;font-weight:800;line-height:1.45}
 </style>

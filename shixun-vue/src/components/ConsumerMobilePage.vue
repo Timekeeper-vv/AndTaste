@@ -2,6 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type { User } from '../types'
 import andTasteLogo from '../assets/and_taste.png'
+import QRCode from 'qrcode'
+
+function authMediaUrl(url: string): string {
+  const token = sessionStorage.getItem('accessToken')
+  return token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
+}
+
 
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error']; logout: [] }>()
@@ -14,8 +21,10 @@ const busy = ref(false)
 const stage = ref('')
 const phase = ref<Phase>('idle')
 type CreationPurpose = '' | 'personal' | 'museum_sale'
-const purposeStorageKey = `consumerCreationPurpose:${props.currentUser.id}`
-const creationPurpose = ref<CreationPurpose>((localStorage.getItem(purposeStorageKey) as CreationPurpose) || '')
+const creationPurpose = ref<CreationPurpose>('')
+const purposeGate = ref<HTMLElement | null>(null)
+const purposeStep = ref<'purpose' | 'museum'>('purpose')
+const selectedPurposeMuseum = ref<any | null>(null)
 const purposeOptions = [
   { value: 'personal' as const, title: '个人收藏 / 送礼', desc: '用于自己收藏、赠送亲友，不进入售卖渠道。', tag: '不可售卖' },
   { value: 'museum_sale' as const, title: '博物馆售卖', desc: '面向博物馆文创店、展陈空间或渠道售卖。', tag: '可提交生产' },
@@ -42,15 +51,18 @@ const modelViewerLoaded = ref(false)
 const previewDownloadFormat = ref<'GLB' | 'OBJ' | 'STL'>('GLB')
 const previewDownloading = ref(false)
 const creditPanelOpen = ref(false)
-const rechargePackages = [
-  { points: 100, label: '体验包', desc: '适合少量图片生成和一次3D尝试' },
-  { points: 500, label: '创作包', desc: '适合连续做系列文创方案' },
-  { points: 1000, label: '生产预备包', desc: '适合博物馆售卖方向的批量创作' },
-]
+const rechargePackages = ref<any[]>([])
+const paymentChannelEnabled = ref(false)
+const paymentOrder = ref<any | null>(null)
+const paymentQrUrl = ref('')
+const paymentLoading = ref(false)
+const paymentError = ref('')
+const paymentTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const submittedAssetIds = ref<Set<number>>(new Set())
 const submittingAssetIds = ref<Set<number>>(new Set())
 const productionRequests = ref<any[]>([])
 const museums = ref<any[]>([])
+const museumRegion = reactive({ province: '', city: '', district: '' })
 const productionModal = ref<any | null>(null)
 const submittingProduction = ref(false)
 const productionForm = reactive({
@@ -86,13 +98,21 @@ const recentImages = computed(() => assets.value.filter(x => x.assetType === 'im
 const recentModels = computed(() => assets.value.filter(x => x.assetType === 'model').slice(0, 8))
 const recentProductionRequests = computed(() => productionRequests.value.slice(0, 8))
 const canGenerateModel = computed(() => modelForm.mode === 'image_to_model' ? !!modelForm.inputAssetId : !!modelForm.rawPrompt.trim())
-const previewModelUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/model-content` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || '')
+const previewModelUrl = computed(() => previewAsset.value?.id ? authMediaUrl(`/api/creative/ai/assets/${previewAsset.value.id}/model-content`) : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || '')
 const previewDownloadUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/download-model?format=${previewDownloadFormat.value}&currentUserId=${props.currentUser.id}` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
 
 const creditBalance = computed(() => Number(creditAccount.value?.balance ?? 0))
 const imageCost = computed(() => Number(creditRules.value?.image2d ?? 1))
 const modelCost = computed(() => modelForm.mode === 'image_to_model' ? Number(creditRules.value?.imageTo3d ?? 10) : Number(creditRules.value?.textTo3d ?? 8))
 const convertCost = computed(() => Number(creditRules.value?.modelConvert ?? 1))
+const museumProvinces = computed(() => [...new Set(museums.value.map(m => m.province).filter(Boolean))])
+const museumCities = computed(() => [...new Set(museums.value.filter(m => !museumRegion.province || m.province === museumRegion.province).map(m => m.city).filter(Boolean))])
+const museumDistricts = computed(() => [...new Set(museums.value.filter(m => (!museumRegion.province || m.province === museumRegion.province) && (!museumRegion.city || m.city === museumRegion.city)).map(m => m.district).filter(Boolean))])
+const filteredMuseums = computed(() => museums.value.filter(m =>
+  (!museumRegion.province || m.province === museumRegion.province) &&
+  (!museumRegion.city || m.city === museumRegion.city) &&
+  (!museumRegion.district || m.district === museumRegion.district)
+))
 const selectedPurposeLabel = computed(() => purposeOptions.find(x => x.value === creationPurpose.value)?.title || '')
 const selectedPurposeFullText = computed(() => creationPurpose.value === 'personal' ? '个人收藏/送礼（不可售卖）' : creationPurpose.value === 'museum_sale' ? '博物馆售卖' : '未选择')
 const reviewFlowTitle = computed(() => creationPurpose.value === 'museum_sale' ? '博物馆审批' : '作品审核')
@@ -127,9 +147,26 @@ const modelPromptPresets = [
 ]
 
 function selectCreationPurpose(value: 'personal' | 'museum_sale') {
+  if (value === 'museum_sale') {
+    purposeStep.value = 'museum'
+    nextTick(() => purposeGate.value?.focus())
+    return
+  }
   creationPurpose.value = value
-  localStorage.setItem(purposeStorageKey, value)
+  document.body.style.overflow = ''
   emit('alert', `已选择创作目的：${selectedPurposeFullText.value}`, 'success')
+}
+function backToPurposeChoice() { purposeStep.value = 'purpose' }
+function confirmMuseumPurpose() {
+  const museum = selectedPurposeMuseum.value || filteredMuseums.value[0]
+  if (!museum) {
+    emit('alert', '请先选择要合作的博物馆', 'error')
+    return
+  }
+  selectMuseum(museum)
+  creationPurpose.value = 'museum_sale'
+  document.body.style.overflow = ''
+  emit('alert', `已选择博物馆售卖：${museum.name}`, 'success')
 }
 
 function switchTab(next: Tab) {
@@ -166,15 +203,101 @@ function applyModelPreset(text: string) {
 
 function changeCreationPurpose() {
   creationPurpose.value = ''
-  localStorage.removeItem(purposeStorageKey)
+  purposeStep.value = 'purpose'
+  selectedPurposeMuseum.value = null
+  document.body.style.overflow = 'hidden'
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+  nextTick(() => purposeGate.value?.focus())
 }
 
 function openCreditPanel() { creditPanelOpen.value = true }
-function closeCreditPanel() { creditPanelOpen.value = false }
-function contactAdminForRecharge(points?: number) {
-  const text = points ? `我想给账号 ${props.currentUser.username} 充值 ${points} 点额度` : `我想给账号 ${props.currentUser.username} 充值额度`
-  navigator.clipboard?.writeText(text).catch(() => {})
-  emit('alert', '充值申请文案已复制，请联系平台管理员充值', 'success')
+function stopPaymentPolling() {
+  if (paymentTimer.value) clearInterval(paymentTimer.value)
+  paymentTimer.value = null
+}
+function closePaymentOrder() {
+  stopPaymentPolling()
+  paymentOrder.value = null
+  paymentQrUrl.value = ''
+  paymentError.value = ''
+}
+function closeCreditPanel() {
+  closePaymentOrder()
+  creditPanelOpen.value = false
+}
+async function loadPaymentPackages() {
+  try {
+    const data = await json('/api/payments/packages')
+    rechargePackages.value = Array.isArray(data?.items) ? data.items : []
+    paymentChannelEnabled.value = !!data?.channels?.find((x: any) => x.code === 'manual_wechat_qr')?.enabled
+  } catch {
+    rechargePackages.value = []
+    paymentChannelEnabled.value = false
+  }
+}
+async function refreshPaymentOrder() {
+  if (!paymentOrder.value?.orderNo) return
+  const r = await fetch(`/api/payments/orders/${encodeURIComponent(paymentOrder.value.orderNo)}`, {
+    headers: { 'X-Current-User-Id': String(props.currentUser.id) }, cache: 'no-store',
+  })
+  if (!r.ok) return
+  const latest = await r.json()
+  paymentOrder.value = latest
+  if (latest.status === 'paid') {
+    stopPaymentPolling()
+    await load()
+    emit('alert', `充值成功，${latest.credits} 点已到账`, 'success')
+  }
+  if (['closed', 'failed'].includes(latest.status)) stopPaymentPolling()
+}
+async function createPaymentOrder(pkg: any) {
+  paymentError.value = ''
+  if (!paymentChannelEnabled.value) {
+    paymentError.value = '收款码当前不可用，请稍后再试。'
+    return
+  }
+  paymentLoading.value = true
+  try {
+    const r = await fetch('/api/payments/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Current-User-Id': String(props.currentUser.id) },
+      body: JSON.stringify({ packageCode: pkg.code, channel: 'manual_wechat_qr' }),
+    })
+    const data = await r.json().catch(() => null)
+    if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
+    paymentOrder.value = data
+    paymentQrUrl.value = data.codeUrl?.startsWith('/')
+      ? data.codeUrl
+      : await QRCode.toDataURL(data.codeUrl, { width: 360, margin: 1, color: { dark: '#1f1713', light: '#ffffff' } })
+    stopPaymentPolling()
+    if (data.channel === 'wechat') paymentTimer.value = setInterval(refreshPaymentOrder, 2000)
+  } catch (e: any) {
+    paymentError.value = e?.message || '创建支付订单失败'
+  } finally {
+    paymentLoading.value = false
+  }
+}
+async function copyPaymentCode() {
+  if (!paymentOrder.value?.codeUrl) return
+  await navigator.clipboard?.writeText(paymentOrder.value.codeUrl).catch(() => {})
+  emit('alert', '支付链接已复制，可在微信中打开', 'success')
+}
+async function completeManualPayment() {
+  if (!paymentOrder.value?.orderNo) return
+  paymentLoading.value = true
+  try {
+    const r = await fetch(`/api/payments/orders/${encodeURIComponent(paymentOrder.value.orderNo)}/manual-complete`, {
+      method: 'POST', headers: { 'X-Current-User-Id': String(props.currentUser.id) },
+    })
+    const data = await r.json().catch(() => null)
+    if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
+    paymentOrder.value = data
+    emit('alert', '已提交收款核验，管理员确认后额度自动到账', 'success')
+  } catch (e: any) {
+    paymentError.value = e?.message || '提交支付完成状态失败'
+  } finally {
+    paymentLoading.value = false
+  }
 }
 
 async function downloadPreviewModel() {
@@ -251,9 +374,9 @@ function isMuseumSalePurpose() { return creationPurpose.value === 'museum_sale' 
 function ensureSingleMuseumSelection() {
   if (!isMuseumSalePurpose()) return
   if (!productionForm.museumDistribution.length) {
-    const firstMuseum = museums.value[0]
+    const firstMuseum = filteredMuseums.value[0] || museums.value[0]
     if (firstMuseum) {
-      productionForm.museumDistribution = [{ museumId: firstMuseum.id, museumName: firstMuseum.name, quantity: Number(productionForm.quantity || 0) }]
+      selectMuseum(firstMuseum)
     }
   }
 }
@@ -299,7 +422,8 @@ async function submitAssetForReview(a: any) {
       },
       body: JSON.stringify({
         purpose: creationPurpose.value,
-        note: `C端用户主动提交${reviewFlowTitle.value}；创作目的：${selectedPurposeFullText.value}`,
+        museumId: creationPurpose.value === 'museum_sale' ? selectedPurposeMuseum.value?.id || '' : '',
+        note: `C端用户主动提交${reviewFlowTitle.value}；创作目的：${selectedPurposeFullText.value}${creationPurpose.value === 'museum_sale' && selectedPurposeMuseum.value ? `；审批博物馆：${selectedPurposeMuseum.value.name}` : ''}`,
         currentUserId: String(props.currentUser.id),
         currentUsername: props.currentUser.username,
       }),
@@ -326,9 +450,15 @@ function setStage(text: string, nextPhase: Phase) {
   phase.value = nextPhase
 }
 
-onMounted(load)
+onMounted(() => {
+  // Every login starts with a deliberate destination choice; it is not persisted between sessions.
+  document.body.style.overflow = 'hidden'
+  load()
+  nextTick(() => purposeGate.value?.focus())
+})
 onBeforeUnmount(() => {
   if (modelTimer.value) clearTimeout(modelTimer.value)
+  stopPaymentPolling()
   if (imagePreviewUrl.value.startsWith('blob:')) URL.revokeObjectURL(imagePreviewUrl.value)
   if (uploadPreviewUrl.value.startsWith('blob:')) URL.revokeObjectURL(uploadPreviewUrl.value)
   document.body.style.overflow = ''
@@ -351,6 +481,7 @@ async function load() {
       json(`/api/creative/ai/consumer-production/my?currentUserId=${props.currentUser.id}`),
       json('/api/creative/ai/consumer-production/museums'),
     ])
+    await loadPaymentPackages()
     imageConfig.value = i
     tripoConfig.value = t
     assets.value = Array.isArray(a) ? a : []
@@ -604,8 +735,9 @@ function openProductionRequest(a: any, type: 'sample' | 'bulk') {
   productionForm.recipientPhone = ''
   productionForm.recipientAddress = ''
   productionForm.note = type === 'sample' ? `创作目的：${selectedPurposeFullText.value}。希望先打样确认材质、尺寸和包装效果` : `创作目的：${selectedPurposeFullText.value}。计划按所选用途执行，不做个人/博物馆拆分`
-  const firstMuseum = museums.value[0]
-  productionForm.museumDistribution = isMuseumSalePurpose() && firstMuseum ? [{ museumId: firstMuseum.id, museumName: firstMuseum.name, quantity: productionForm.quantity }] : []
+  const firstMuseum = filteredMuseums.value[0] || museums.value[0]
+  productionForm.museumDistribution = []
+  if (isMuseumSalePurpose() && firstMuseum) selectMuseum(firstMuseum)
   document.body.style.overflow = 'hidden'
 }
 
@@ -614,9 +746,32 @@ function closeProductionRequest() {
   document.body.style.overflow = ''
 }
 
+function selectMuseum(found: any) {
+  if (!found) return
+  selectedPurposeMuseum.value = found
+  museumRegion.province = found.province || ''
+  museumRegion.city = found.city || ''
+  museumRegion.district = found.district || ''
+  productionForm.museumDistribution = [{ museumId: found.id, museumName: found.name, quantity: Number(productionForm.quantity || 0) }]
+}
+function selectFirstMuseumInRegion() {
+  const found = filteredMuseums.value[0]
+  if (found) selectMuseum(found)
+  else productionForm.museumDistribution = []
+}
+function changeMuseumProvince() {
+  museumRegion.city = ''
+  museumRegion.district = ''
+  selectFirstMuseumInRegion()
+}
+function changeMuseumCity() {
+  museumRegion.district = ''
+  selectFirstMuseumInRegion()
+}
+function changeMuseumDistrict() { selectFirstMuseumInRegion() }
 function changeMuseum(row: any) {
   const found = museums.value.find(m => m.id === row.museumId)
-  if (found) row.museumName = found.name
+  if (found) selectMuseum(found)
 }
 
 async function submitProductionRequest() {
@@ -728,24 +883,50 @@ function closeModelPreview() {
       </button>
     </header>
 
-    <section v-if="!creationPurpose" class="purpose-gate">
+    <section v-if="!creationPurpose" ref="purposeGate" class="purpose-gate" role="dialog" aria-modal="true" aria-labelledby="purpose-gate-title" tabindex="-1" @keydown.esc.prevent>
       <div class="purpose-card">
         <div class="purpose-aurora"></div>
         <div class="purpose-brand"><img :src="andTasteLogo" alt="之间味道" /><span>开始创作前</span></div>
-        <h1>选择你的作品去向</h1>
-        <p>请选择本次创作目的。选定后后续按单一路径执行，不支持个人和博物馆数量拆分。</p>
-        <div class="purpose-options">
-          <button v-for="item in purposeOptions" :key="item.value" type="button" @click="selectCreationPurpose(item.value)">
-            <i>{{ item.tag }}</i>
-            <b>{{ item.title }}</b>
-            <span>{{ item.desc }}</span>
-          </button>
-        </div>
+        <template v-if="purposeStep === 'purpose'">
+          <h1 id="purpose-gate-title">选择你的作品去向</h1>
+          <p>请选择本次创作目的。选定后后续按单一路径执行，不支持个人和博物馆数量拆分。</p>
+          <div class="purpose-options">
+            <button v-for="item in purposeOptions" :key="item.value" type="button" @click="selectCreationPurpose(item.value)">
+              <i>{{ item.tag }}</i>
+              <b>{{ item.title }}</b>
+              <span>{{ item.desc }}</span>
+            </button>
+          </div>
+        </template>
+        <template v-else>
+          <button type="button" class="purpose-back" @click="backToPurposeChoice">← 返回用途选择</button>
+          <h1 id="purpose-gate-title">选择合作博物馆</h1>
+          <p>请先确定要为哪个博物馆制作和投放作品。进入创作页后，本次作品会默认关联该馆。</p>
+          <div class="purpose-museum-select">
+            <select v-model="museumRegion.province" @change="changeMuseumProvince"><option value="">省 / 直辖市</option><option v-for="province in museumProvinces" :key="province" :value="province">{{ province }}</option></select>
+            <select v-model="museumRegion.city" :disabled="!museumRegion.province" @change="changeMuseumCity"><option value="">市</option><option v-for="city in museumCities" :key="city" :value="city">{{ city }}</option></select>
+            <select v-model="museumRegion.district" :disabled="!museumRegion.city" @change="changeMuseumDistrict"><option value="">区 / 县</option><option v-for="district in museumDistricts" :key="district" :value="district">{{ district }}</option></select>
+            <select v-model="selectedPurposeMuseum" :disabled="!filteredMuseums.length" @change="selectMuseum(selectedPurposeMuseum)">
+              <option :value="null">请选择博物馆</option>
+              <option v-for="museum in filteredMuseums" :key="museum.id" :value="museum">{{ museum.name }} · {{ museum.scene }}</option>
+            </select>
+          </div>
+          <button type="button" class="purpose-confirm" :disabled="!selectedPurposeMuseum" @click="confirmMuseumPurpose">确认并进入创作</button>
+        </template>
       </div>
     </section>
 
     <section class="hero">
       <div class="hero-motion-orb"></div>
+      <div class="hero-illustration" aria-hidden="true">
+        <span class="hero-halo"></span>
+        <span class="hero-card hero-card-back"></span>
+        <span class="hero-card hero-card-front">
+          <i></i><i></i><i></i>
+        </span>
+        <span class="hero-spark hero-spark-one">✦</span>
+        <span class="hero-spark hero-spark-two">✧</span>
+      </div>
       <div class="hero-meta">
         <span>{{ props.currentUser.username }}</span>
         <span>{{ selectedPurposeFullText }}</span>
@@ -991,17 +1172,28 @@ function closeModelPreview() {
               <p>3D生成：{{ modelCost }}点 / 次</p>
               <p>OBJ/STL转换下载：{{ convertCost }}点 / 次</p>
             </div>
-            <div class="packages">
-              <button v-for="pkg in rechargePackages" :key="pkg.points" type="button" @click="contactAdminForRecharge(pkg.points)">
-                <strong>{{ pkg.points }} 点</strong>
-                <span>{{ pkg.label }}</span>
-                <em>{{ pkg.desc }}</em>
-              </button>
+            <div v-if="paymentOrder" class="payment-order-card">
+              <div class="payment-order-head"><span>微信收款码</span><b>请使用微信扫码完成付款</b></div>
+              <img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信收款二维码" class="payment-qr" />
+              <strong>¥ {{ paymentOrder.amountYuan }} · {{ paymentOrder.credits }} 点</strong>
+              <small>订单 {{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'manual_review' ? '已提交核验' : paymentOrder.status === 'paid' ? '已确认到账' : '请完成付款后点击下方按钮' }}</small>
+              <button v-if="paymentOrder.status === 'pending'" type="button" class="manual-complete" :disabled="paymentLoading" @click="completeManualPayment">我已完成支付</button>
+              <button v-else-if="paymentOrder.status === 'manual_review'" type="button" class="copy-payment" disabled>等待管理员核验</button>
             </div>
-            <p class="recharge-note">第一版暂不接入在线支付。点击套餐会复制充值申请文案，请发给平台管理员；管理员在后台「C端额度管理」为你充值后，刷新即可看到余额。</p>
+            <div v-else class="packages">
+              <button v-for="pkg in rechargePackages" :key="pkg.code" type="button" :disabled="paymentLoading" @click="createPaymentOrder(pkg)">
+                <strong>{{ pkg.credits }} 点</strong>
+                <span>{{ pkg.name }} · ¥{{ pkg.amountYuan }}</span>
+                <em>{{ pkg.description }}</em>
+              </button>
+              <p v-if="!rechargePackages.length" class="recharge-note">充值套餐加载中，请稍后重试。</p>
+            </div>
+            <p v-if="paymentError" class="payment-error">{{ paymentError }}</p>
+            <p class="recharge-note">扫码付款后请点击“我已完成支付”。该收款码采用人工核验，管理员确认到账后才会增加额度。</p>
           </main>
           <footer>
-            <button type="button" @click="contactAdminForRecharge()">复制充值申请</button>
+            <button v-if="paymentOrder" type="button" @click="closePaymentOrder">返回套餐</button>
+            <button v-else type="button" @click="loadPaymentPackages">刷新套餐</button>
             <button type="button" class="done" @click="closeCreditPanel">完成</button>
           </footer>
         </div>
@@ -1025,11 +1217,17 @@ function closeModelPreview() {
                 <b>博物馆售卖路径</b>
                 <span>全部数量将进入所选博物馆售卖，不支持拆分给个人或多个博物馆。</span>
               </div>
-              <div class="dist-head"><b>选择博物馆</b><small>全部 {{ productionForm.quantity || 0 }} 个</small></div>
-              <div v-if="productionForm.museumDistribution[0]" class="dist-row single">
-                <select v-model="productionForm.museumDistribution[0].museumId" @change="changeMuseum(productionForm.museumDistribution[0])"><option v-for="m in museums" :key="m.id" :value="m.id">{{ m.name }}</option></select>
+              <div class="dist-head"><b>选择投放博物馆</b><small>全部 {{ productionForm.quantity || 0 }} 个</small></div>
+              <div class="museum-location-select">
+                <select v-model="museumRegion.province" @change="changeMuseumProvince"><option value="">省 / 直辖市</option><option v-for="province in museumProvinces" :key="province" :value="province">{{ province }}</option></select>
+                <select v-model="museumRegion.city" :disabled="!museumRegion.province" @change="changeMuseumCity"><option value="">市</option><option v-for="city in museumCities" :key="city" :value="city">{{ city }}</option></select>
+                <select v-model="museumRegion.district" :disabled="!museumRegion.city" @change="changeMuseumDistrict"><option value="">区 / 县</option><option v-for="district in museumDistricts" :key="district" :value="district">{{ district }}</option></select>
               </div>
-              <p v-else class="alloc-tip bad">暂无可选博物馆，请联系平台管理员配置。</p>
+              <div v-if="productionForm.museumDistribution[0]" class="dist-row single museum-final-select">
+                <select v-model="productionForm.museumDistribution[0].museumId" @change="changeMuseum(productionForm.museumDistribution[0])"><option v-for="m in filteredMuseums" :key="m.id" :value="m.id">{{ m.name }} · {{ m.scene }}</option></select>
+              </div>
+              <p v-if="productionForm.museumDistribution[0]" class="museum-selection-tip">将投放至：{{ productionForm.museumDistribution[0].museumName }}（{{ museumRegion.province }} {{ museumRegion.city }} {{ museumRegion.district }}）</p>
+              <p v-else class="alloc-tip bad">当前区域暂无可选博物馆，请调整省、市或区县。</p>
             </template>
             <template v-if="creationPurpose === 'personal'">
               <label><span>收件人</span><input v-model.trim="productionForm.recipientName" placeholder="收件人姓名" /></label>
@@ -2161,4 +2359,83 @@ function closeModelPreview() {
 .app-action-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:0 0 11px}.app-action-grid button{min-width:0;padding:12px 8px;border:0;border-radius:22px;background:#fff;box-shadow:0 10px 26px rgba(23,20,18,.06);text-align:left;transition:transform .18s ease,box-shadow .18s ease}.app-action-grid button:active{transform:scale(.97)}.app-action-grid i{display:inline-flex;align-items:center;justify-content:center;height:24px;min-width:30px;margin-bottom:10px;padding:0 7px;border-radius:999px;color:#fff;font-size:10px;font-style:normal;font-weight:950}.app-action-grid i.orange{background:#c25a2e}.app-action-grid i.green{background:#0f766e}.app-action-grid i.dark{background:#171717}.app-action-grid b,.app-action-grid span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.app-action-grid b{color:#161412;font-size:13px}.app-action-grid span{margin-top:3px;color:#9a9289;font-size:10px;font-weight:800}.consumer-shell.immersive-shell .flow-card{margin-bottom:10px !important;border-radius:22px !important;background:#fff !important;box-shadow:0 10px 28px rgba(23,20,18,.055) !important}.consumer-shell.immersive-shell .status-console{display:none !important}
 .consumer-shell.immersive-shell .bottom-tabs{position:fixed !important;left:12px !important;right:12px !important;bottom:calc(10px + env(safe-area-inset-bottom,0px)) !important;top:auto !important;z-index:90 !important;width:auto !important;max-width:436px !important;height:66px !important;margin:0 auto !important;padding:7px !important;border-radius:26px !important;background:rgba(255,255,255,.9) !important;border:1px solid rgba(23,20,18,.08) !important;box-shadow:0 18px 48px rgba(23,20,18,.18) !important;backdrop-filter:blur(24px) saturate(1.2) !important}.consumer-shell.immersive-shell .bottom-tabs button{height:52px !important;border-radius:20px !important;font-size:11px !important;gap:2px !important;transition:transform .18s ease,background .18s ease,color .18s ease !important}.consumer-shell.immersive-shell .bottom-tabs button:active{transform:scale(.96)}.consumer-shell.immersive-shell .bottom-tabs button.active{background:#111 !important;color:#fff !important}.mobile-page-wrap{position:relative;min-height:420px;overflow:visible}.mobile-page-enter-active,.mobile-page-leave-active{transition:opacity .22s ease,transform .26s cubic-bezier(.2,.8,.2,1),filter .26s ease}.mobile-page-enter-from{opacity:0;transform:translateX(18px) scale(.985);filter:blur(4px)}.mobile-page-leave-to{opacity:0;transform:translateX(-18px) scale(.985);filter:blur(4px)}
 .consumer-shell.immersive-shell .creation-panel{border-radius:28px !important;background:#fff !important;border:0 !important;box-shadow:0 14px 38px rgba(23,20,18,.07) !important}.consumer-shell.immersive-shell .section-head{align-items:center !important;padding-bottom:10px !important;border-bottom:1px solid #f0ebe6 !important}.consumer-shell.immersive-shell .section-head span{color:#c25a2e !important}.consumer-shell.immersive-shell textarea{border-radius:22px !important;background:#f8f7f5 !important;border-color:#eee9e2 !important;box-shadow:none !important}.consumer-shell.immersive-shell .chips button,.consumer-shell.immersive-shell .mode-switch button{border-radius:18px !important;background:#f8f7f5 !important;border-color:#eee9e2 !important;color:#625a53 !important}.consumer-shell.immersive-shell .chips button.active,.consumer-shell.immersive-shell .mode-switch button.active{background:#111 !important;color:#fff !important;border-color:#111 !important}.consumer-shell.immersive-shell .primary{border-radius:24px !important;background:#111 !important;box-shadow:0 14px 30px rgba(0,0,0,.16) !important}.consumer-shell.immersive-shell .primary.green{background:#0f766e !important}.preset-scroll button{border:0 !important;background:#f8f7f5 !important;box-shadow:none !important;flex-basis:68% !important}.creation-guide{border:0 !important;background:#f8f7f5 !important;color:#6b5748 !important}.creation-guide.green{background:#f0fdfa !important;color:#0f766e !important}.gallery-summary article{border:0 !important;background:#f8f7f5 !important}.gallery-summary b{color:#111 !important}.gallery-summary span{color:#898078 !important}.consumer-shell.immersive-shell .gallery{gap:12px !important}.consumer-shell.immersive-shell .gallery article{border:0 !important;border-radius:22px !important;background:#fff !important;box-shadow:0 10px 28px rgba(23,20,18,.065) !important}.consumer-shell.immersive-shell .gallery img,.consumer-shell.immersive-shell .model-tile{border-radius:22px 22px 0 0 !important}.consumer-shell.immersive-shell .gallery button{border-radius:999px !important;background:#111 !important}.consumer-shell.immersive-shell .gallery .review-submit{background:#c25a2e !important}.production-actions{display:grid !important;grid-template-columns:1fr 1fr !important}.consumer-shell.immersive-shell .production-list article{border:0 !important;border-radius:18px !important;background:#f8f7f5 !important}@media(min-width:720px){.consumer-shell.immersive-shell .bottom-tabs{left:50% !important;right:auto !important;width:432px !important;transform:translateX(-50%) !important}}
+</style>
+
+
+<style scoped>
+/* Consumer atelier refresh: premium museum-creative workbench with richer hierarchy on all screens. */
+.consumer-shell.immersive-shell { isolation: isolate; color: #27211f; }
+.consumer-shell.immersive-shell button,.consumer-shell.immersive-shell a { -webkit-tap-highlight-color: transparent; }
+.consumer-shell.immersive-shell button:focus-visible,.consumer-shell.immersive-shell a:focus-visible,.consumer-shell.immersive-shell textarea:focus-visible,.consumer-shell.immersive-shell input:focus-visible,.consumer-shell.immersive-shell select:focus-visible { outline: 3px solid rgba(235,150,88,.52) !important; outline-offset: 3px; }
+.consumer-shell.immersive-shell .consumer-top { min-height:72px; border-bottom:1px solid rgba(75,50,37,.08) !important; }
+.consumer-shell.immersive-shell .brand img { border-radius:12px !important; box-shadow:0 8px 20px rgba(59,36,25,.18); }
+.consumer-shell.immersive-shell .brand b { letter-spacing:-.025em; }
+.consumer-shell.immersive-shell .hero { display:flex; flex-direction:column; justify-content:center; min-height:282px !important; padding:28px 22px !important; border-radius:32px !important; background:linear-gradient(115deg,rgba(16,11,10,.22),transparent 56%),radial-gradient(circle at 88% 18%,rgba(255,216,164,.42),transparent 12%),radial-gradient(circle at 87% 86%,rgba(90,204,185,.25),transparent 20%),linear-gradient(130deg,#211511 0%,#5c3328 54%,#be7147 100%) !important; }
+.consumer-shell.immersive-shell .hero::after { content:''; position:absolute; inset:0; pointer-events:none; border-radius:inherit; background-image:linear-gradient(115deg,rgba(255,255,255,.1) 1px,transparent 1px),linear-gradient(25deg,rgba(255,255,255,.06) 1px,transparent 1px); background-size:32px 32px,44px 44px; mask-image:linear-gradient(90deg,#000,transparent 70%); opacity:.35; }
+.hero-illustration { position:absolute; right:11px; bottom:8px; width:175px; height:185px; z-index:1; pointer-events:none; transform:rotate(-5deg); }
+.hero-halo { position:absolute; inset:22px 10px 16px; border-radius:50%; background:radial-gradient(circle,rgba(255,244,219,.44),rgba(255,219,162,.14) 48%,transparent 70%); filter:blur(2px); animation:heroGlow 4s ease-in-out infinite alternate; }
+.hero-card { position:absolute; display:block; width:122px; height:140px; right:18px; bottom:17px; border-radius:24px; transform:rotate(13deg); }
+.hero-card-back { right:43px; bottom:31px; background:linear-gradient(145deg,rgba(255,255,255,.25),rgba(255,255,255,.03)); border:1px solid rgba(255,255,255,.28); box-shadow:0 24px 34px rgba(25,12,8,.22); }
+.hero-card-front { overflow:hidden; padding:23px 18px; background:linear-gradient(145deg,#fbdec0,#e88351 60%,#913e2a); border:1px solid rgba(255,255,255,.45); box-shadow:0 28px 40px rgba(24,11,7,.38),inset 0 1px 0 rgba(255,255,255,.45); }
+.hero-card-front::before,.hero-card-front::after { content:''; position:absolute; border-radius:999px; background:rgba(255,255,255,.25); }.hero-card-front::before { width:116px; height:116px; left:-46px; bottom:-50px; }.hero-card-front::after { width:70px; height:70px; right:-34px; top:-24px; }.hero-card-front i { position:relative; z-index:1; display:block; height:8px; margin-bottom:10px; border-radius:99px; background:rgba(86,35,23,.62); }.hero-card-front i:nth-child(1) { width:58px; background:rgba(255,255,255,.82); }.hero-card-front i:nth-child(2) { width:76px; }.hero-card-front i:nth-child(3) { width:40px; }
+.hero-spark { position:absolute; z-index:3; color:#fff1d4; text-shadow:0 8px 16px rgba(65,25,15,.4); font-size:24px; animation:heroSpark 2.8s ease-in-out infinite alternate; }.hero-spark-one { top:18px; right:24px; }.hero-spark-two { bottom:18px; left:22px; font-size:18px; animation-delay:-1.1s; }
+.consumer-shell.immersive-shell .hero-meta,.consumer-shell.immersive-shell .hero h1,.consumer-shell.immersive-shell .hero > p,.consumer-shell.immersive-shell .hero-stats-mobile,.consumer-shell.immersive-shell .hero-actions { max-width:calc(100% - 120px); }.consumer-shell.immersive-shell .hero h1 { position:relative; z-index:2; margin-top:0; line-height:1.08; text-wrap:balance; }.consumer-shell.immersive-shell .hero > p { position:relative; z-index:2; margin-top:10px; color:rgba(255,255,255,.77); line-height:1.58; }.consumer-shell.immersive-shell .hero-actions { position:relative; z-index:2; }
+.consumer-shell.immersive-shell .app-action-grid button { position:relative; overflow:hidden; min-height:112px; }.consumer-shell.immersive-shell .app-action-grid button::after { content:'↗'; position:absolute; right:13px; top:12px; color:#c6bdb4; font-size:16px; transition:transform .2s ease,color .2s ease; }.consumer-shell.immersive-shell .app-action-grid button:hover { transform:translateY(-4px); box-shadow:0 20px 34px rgba(34,24,18,.12) !important; }.consumer-shell.immersive-shell .app-action-grid button:hover::after { transform:translate(2px,-2px); color:#be5f35; }
+.consumer-shell.immersive-shell .creation-panel { position:relative; overflow:hidden; }.consumer-shell.immersive-shell .creation-panel::before { content:''; position:absolute; width:190px; height:190px; right:-110px; top:-120px; border-radius:50%; background:radial-gradient(circle,rgba(234,143,80,.12),transparent 68%); pointer-events:none; }.consumer-shell.immersive-shell .section-head b { font-size:18px; letter-spacing:-.025em; }.consumer-shell.immersive-shell .section-head span { font-weight:900; letter-spacing:.11em; }.consumer-shell.immersive-shell textarea { min-height:132px; padding:16px !important; font-size:14px; line-height:1.65; }.consumer-shell.immersive-shell .primary { min-height:54px; letter-spacing:.01em; transition:transform .2s ease,box-shadow .2s ease,filter .2s ease !important; }.consumer-shell.immersive-shell .primary:not(:disabled):hover { transform:translateY(-2px); filter:brightness(1.08); box-shadow:0 18px 34px rgba(0,0,0,.22) !important; }.consumer-shell.immersive-shell .primary:disabled { opacity:.58; cursor:wait; }
+.consumer-shell.immersive-shell .purpose-card { border-radius:34px !important; background:linear-gradient(145deg,rgba(255,255,255,.22),rgba(255,255,255,.08)) !important; }.consumer-shell.immersive-shell .purpose-card h1 { text-wrap:balance; line-height:1.1; }.consumer-shell.immersive-shell .purpose-options button { overflow:hidden; transition:transform .2s ease,box-shadow .2s ease,background .2s ease !important; }.consumer-shell.immersive-shell .purpose-options button::after { content:'→'; position:absolute; right:18px; top:50%; transform:translateY(-50%); font-size:22px; color:#b4532a; opacity:.72; }.consumer-shell.immersive-shell .purpose-options button:hover { transform:translateY(-3px); background:#fff !important; box-shadow:0 18px 30px rgba(32,26,23,.2) !important; }
+@keyframes heroGlow { to { transform:scale(1.08); opacity:.78; } } @keyframes heroSpark { to { transform:translateY(-7px) rotate(12deg) scale(1.08); opacity:.7; } }
+@media (min-width:860px) { .consumer-shell.immersive-shell { width:min(1180px,calc(100% - 48px)) !important; max-width:1180px !important; min-height:100vh; margin:24px auto !important; padding:0 28px 116px !important; border:1px solid rgba(87,57,42,.09); border-radius:36px; box-shadow:0 32px 100px rgba(55,32,22,.18) !important; }.consumer-shell.immersive-shell .consumer-top { margin:0 -28px 18px !important; padding:16px 28px !important; border-radius:36px 36px 0 0; }.consumer-shell.immersive-shell .hero { min-height:370px !important; margin-bottom:20px !important; padding:52px 54px !important; }.consumer-shell.immersive-shell .hero h1 { font-size:clamp(42px,5vw,62px) !important; }.consumer-shell.immersive-shell .hero > p { max-width:550px !important; font-size:16px; }.consumer-shell.immersive-shell .hero-meta,.consumer-shell.immersive-shell .hero h1,.consumer-shell.immersive-shell .hero > p,.consumer-shell.immersive-shell .hero-stats-mobile,.consumer-shell.immersive-shell .hero-actions { max-width:62%; }.hero-illustration { right:76px; bottom:32px; width:285px; height:285px; transform:rotate(-6deg) scale(1.12); }.hero-card { width:176px; height:204px; border-radius:34px; }.hero-card-back { right:48px; bottom:36px; }.hero-card-front { padding:38px 26px; }.hero-card-front i { height:12px; margin-bottom:15px; }.hero-card-front i:nth-child(1) { width:88px; }.hero-card-front i:nth-child(2) { width:112px; }.hero-card-front i:nth-child(3) { width:62px; }.consumer-shell.immersive-shell .app-action-grid { grid-template-columns:repeat(3,1fr) !important; gap:16px !important; margin-bottom:18px !important; }.consumer-shell.immersive-shell .app-action-grid button { min-height:128px; padding:22px !important; }.consumer-shell.immersive-shell .app-action-grid b { font-size:16px; }.consumer-shell.immersive-shell .flow-card { padding:18px 18px 14px !important; margin-bottom:18px !important; }.consumer-shell.immersive-shell .mobile-page-wrap { max-width:1000px; margin:0 auto; }.consumer-shell.immersive-shell .creation-panel { padding:30px !important; }.consumer-shell.immersive-shell .bottom-tabs { width:560px !important; max-width:calc(100% - 80px) !important; }.consumer-shell.immersive-shell .gallery { grid-template-columns:repeat(3,minmax(0,1fr)) !important; } }
+@media (max-width:420px) { .hero-illustration { right:-10px; opacity:.82; transform:rotate(-5deg) scale(.82); transform-origin:bottom right; }.consumer-shell.immersive-shell .hero-meta,.consumer-shell.immersive-shell .hero h1,.consumer-shell.immersive-shell .hero > p,.consumer-shell.immersive-shell .hero-stats-mobile,.consumer-shell.immersive-shell .hero-actions { max-width:calc(100% - 82px); }.consumer-shell.immersive-shell .hero h1 { font-size:30px !important; } }
+@media (prefers-reduced-motion:reduce) { .consumer-shell.immersive-shell *,.consumer-shell.immersive-shell *::before,.consumer-shell.immersive-shell *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
+</style>
+
+
+<style scoped>
+/* Gate is intentionally a session-entry screen: users cannot reach the workbench before choosing. */
+.consumer-shell.immersive-shell:has(.purpose-gate) { height: 100dvh; overflow: hidden; }
+.consumer-shell.immersive-shell .purpose-gate {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 1000 !important;
+  min-height: 100dvh;
+  padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)) !important;
+  background:
+    radial-gradient(circle at 86% 14%, rgba(255, 195, 123, .35), transparent 22%),
+    radial-gradient(circle at 12% 88%, rgba(35, 171, 150, .26), transparent 28%),
+    linear-gradient(145deg, #1e120f 0%, #613527 56%, #bc7046 100%) !important;
+}
+.consumer-shell.immersive-shell .purpose-gate::before,
+.consumer-shell.immersive-shell .purpose-gate::after {
+  content: '';
+  position: absolute;
+  width: min(62vw, 540px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.14);
+  pointer-events: none;
+}
+.consumer-shell.immersive-shell .purpose-gate::before { right: -18vw; top: -24vw; box-shadow: inset 0 0 80px rgba(255,255,255,.08); }
+.consumer-shell.immersive-shell .purpose-gate::after { left: -28vw; bottom: -36vw; background: radial-gradient(circle, rgba(255,255,255,.09), transparent 68%); }
+.consumer-shell.immersive-shell .purpose-card { position: relative; z-index: 1; width: min(620px, 100%) !important; padding: clamp(28px, 6vw, 54px) !important; border-radius: 38px !important; }
+.consumer-shell.immersive-shell .purpose-card > p { max-width: 480px; font-size: 15px; }
+.consumer-shell.immersive-shell .purpose-options { gap: 14px !important; margin-top: 26px; }
+.consumer-shell.immersive-shell .purpose-options button { min-height: 132px; padding: 23px 64px 23px 22px !important; border-radius: 22px !important; }
+.consumer-shell.immersive-shell .purpose-options b { font-size: 20px; }
+@media (max-width: 560px) {
+  .consumer-shell.immersive-shell .purpose-card { padding: 28px 22px !important; }
+  .consumer-shell.immersive-shell .purpose-card h1 { font-size: 31px !important; }
+  .consumer-shell.immersive-shell .purpose-options button { min-height: 118px; }
+}
+</style>
+
+<style scoped>
+.payment-order-card{margin-top:14px;padding:18px;border-radius:22px;background:linear-gradient(145deg,#f8fffc,#effaf6);border:1px solid #bbf7d0;text-align:center}.payment-order-head{display:flex;flex-direction:column;gap:4px;align-items:center;color:#047857}.payment-order-head span{font-size:11px;font-weight:900;letter-spacing:.1em}.payment-order-head b{font-size:16px}.payment-qr{display:block;width:min(220px,74vw);margin:14px auto;border-radius:14px;background:#fff;padding:10px;box-shadow:0 10px 22px rgba(6,78,59,.12)}.payment-order-card strong,.payment-order-card small{display:block}.payment-order-card strong{color:#17342d;font-size:17px}.payment-order-card small{margin-top:5px;color:#5f766e;font-size:11px}.copy-payment{margin-top:12px;padding:9px 14px;border:1px solid #99f6e4;border-radius:999px;background:#fff;color:#047857;font-weight:800}.manual-complete{margin-top:12px;width:100%;height:44px;border:0;border-radius:14px;background:#0f766e;color:#fff;font-weight:900;box-shadow:0 10px 20px rgba(15,118,110,.2)}.manual-complete:disabled{opacity:.55;cursor:wait}.payment-error{margin:12px 0 0;padding:10px 12px;border-radius:14px;background:#fef2f2;color:#b91c1c;font-size:12px;line-height:1.55}.packages button:disabled{opacity:.58;cursor:wait}
+</style>
+
+<style scoped>
+.museum-location-select{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}.museum-location-select select,.museum-final-select select{width:100%;min-width:0}.museum-selection-tip{margin:9px 0 0;padding:9px 11px;border-radius:12px;background:#f0fdfa;color:#047857;font-size:12px;line-height:1.45;font-weight:700}.museum-final-select{grid-template-columns:1fr !important}@media(max-width:420px){.museum-location-select{grid-template-columns:1fr}.museum-location-select select{height:39px}}
+</style>
+
+<style scoped>
+.purpose-back{margin:0 0 16px;padding:0;border:0;background:transparent;color:rgba(255,255,255,.82);font-weight:800}.purpose-museum-select{display:grid;gap:10px;margin-top:22px}.purpose-museum-select select{width:100%;height:48px;padding:0 14px;border:1px solid rgba(255,255,255,.22);border-radius:14px;background:rgba(255,255,255,.96);color:#2e211b;font:inherit}.purpose-museum-select select:last-child{height:56px}.purpose-confirm{width:100%;height:52px;margin-top:16px;border:0;border-radius:16px;background:#1d1714;color:#fff;font-size:15px;font-weight:900;box-shadow:0 12px 26px rgba(25,13,8,.24)}.purpose-confirm:disabled{opacity:.45;cursor:not-allowed}
 </style>

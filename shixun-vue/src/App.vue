@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, watchEffect } from 'vue'
-import type { User, PageName, AlertType, Role } from './types'
+import { ref, onMounted, onBeforeUnmount, watchEffect } from 'vue'
+import type { User, PageName, AlertType, Role, AuthSession } from './types'
 import LoginPage from './components/LoginPage.vue'
 import Sidebar from './components/Sidebar.vue'
 import CreativeDashboard from './components/CreativeDashboard.vue'
@@ -136,10 +136,28 @@ const alertType = ref<AlertType>('success')
 const alertVisible = ref<boolean>(false)
 let alertTimer: ReturnType<typeof setTimeout> | null = null
 
+async function restoreSession(): Promise<void> {
+  const token = sessionStorage.getItem('accessToken')
+  if (!token) return
+  try {
+    const response = await fetch('/api/auth/me', { cache: 'no-store' })
+    if (!response.ok) throw new Error('session invalid')
+    const data = await response.json()
+    currentUser.value = data.user as User
+    sessionStorage.setItem('currentUser', JSON.stringify(data.user))
+    currentPage.value = firstAllowedPage(data.user.role || 'admin')
+  } catch {
+    sessionStorage.removeItem('accessToken')
+    sessionStorage.removeItem('currentUser')
+  }
+}
+
 onMounted(() => {
-  const saved = sessionStorage.getItem('currentUser')
-  if (saved) currentUser.value = JSON.parse(saved) as User
+  restoreSession()
+  window.addEventListener('auth-expired', onLogout)
 })
+
+onBeforeUnmount(() => window.removeEventListener('auth-expired', onLogout))
 
 watchEffect(() => {
   if (!currentUser.value) return
@@ -155,14 +173,16 @@ function showAlert(msg: string, type: AlertType = 'success'): void {
   alertTimer = setTimeout(() => { alertVisible.value = false }, 3000)
 }
 
-function onLogin(user: User): void {
-  currentUser.value = user
-  sessionStorage.setItem('currentUser', JSON.stringify(user))
-  currentPage.value = firstAllowedPage(user.role || 'admin')
+function onLogin(session: AuthSession): void {
+  currentUser.value = session.user
+  sessionStorage.setItem('accessToken', session.token)
+  sessionStorage.setItem('currentUser', JSON.stringify(session.user))
+  currentPage.value = firstAllowedPage(session.user.role || 'admin')
 }
 
 function onLogout(): void {
   currentUser.value = null
+  sessionStorage.removeItem('accessToken')
   sessionStorage.removeItem('currentUser')
 }
 

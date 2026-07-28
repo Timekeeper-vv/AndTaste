@@ -2,6 +2,12 @@
 import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
 
+function authMediaUrl(url: string): string {
+  const token = sessionStorage.getItem('accessToken')
+  return token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
+}
+
+
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
 
@@ -56,7 +62,7 @@ function previewUrl(a: InventoryAsset) {
 }
 
 function fileUrl(a: InventoryAsset) {
-  if (a.assetType === 'model' && a.id) return `/api/creative/ai/assets/${a.id}/model-content`
+  if (a.assetType === 'model' && a.id) return authMediaUrl(`/api/creative/ai/assets/${a.id}/model-content`)
   return a.fileUrl || a.previewUrl || ''
 }
 

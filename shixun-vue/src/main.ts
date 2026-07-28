@@ -3,4 +3,20 @@ import './style.css'
 import './shared.css'
 import App from './App.vue'
 
+const nativeFetch = window.fetch.bind(window)
+const publicApiPaths = ['/api/users/login']
+
+// Centralized Bearer injection. Business components no longer need to trust or manage user-id headers.
+window.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+  const isApi = url.startsWith('/api/') || url.includes('/api/')
+  const isPublic = publicApiPaths.some(path => url.includes(path)) || (url.endsWith('/api/users') && (init.method || 'GET').toUpperCase() === 'POST')
+  const token = sessionStorage.getItem('accessToken')
+  const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined))
+  if (isApi && token && !isPublic) headers.set('Authorization', `Bearer ${token}`)
+  const response = await nativeFetch(input, { ...init, headers })
+  if (isApi && response.status === 401 && !isPublic) window.dispatchEvent(new Event('auth-expired'))
+  return response
+}) as typeof window.fetch
+
 createApp(App).mount('#app')

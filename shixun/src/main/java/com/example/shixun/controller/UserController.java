@@ -2,6 +2,7 @@ package com.example.shixun.controller;
 
 import com.example.shixun.model.User;
 import com.example.shixun.service.UserService;
+import com.example.shixun.security.JwtService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -26,9 +27,11 @@ import java.util.concurrent.CompletionException;
 public class UserController {
 
     private final UserService userService;
+    private final JwtService jwtService;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService, JwtService jwtService) {
         this.userService = userService;
+        this.jwtService = jwtService;
     }
 
     @GetMapping
@@ -179,13 +182,14 @@ public class UserController {
         description = "登录凭证",
         content = @Content(schema = @Schema(example = "{\"username\":\"张三\",\"password\":\"123456\"}"))
     )
-    public CompletableFuture<ResponseEntity<User>> login(@RequestBody Map<String, String> body) {
+    public CompletableFuture<ResponseEntity<Map<String, Object>>> login(@RequestBody Map<String, String> body) {
         return userService.login(body.get("username"), body.get("password"))
             .thenApply(user -> {
                 if (user == null) {
                     throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
                 }
-                return ResponseEntity.ok(user);
+                String token = jwtService.issue(user);
+                return ResponseEntity.ok(Map.of("token", token, "tokenType", "Bearer", "expiresIn", jwtService.expiresSeconds(), "user", user));
             })
             .exceptionally(ex -> {
                 Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;

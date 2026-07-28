@@ -83,6 +83,13 @@ export interface User {
   role: Role
 }
 
+export interface AuthSession {
+  token: string
+  tokenType: 'Bearer'
+  expiresIn: number
+  user: User
+}
+
 export interface UserRecord {
   id: number
   username: string

@@ -2,6 +2,12 @@
 import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
 
+function authMediaUrl(url: string): string {
+  const token = sessionStorage.getItem('accessToken')
+  return token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
+}
+
+
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
 
@@ -47,7 +53,7 @@ async function openOrDownloadModel(r: any) {
   const format = formatOf(r)
   if (!r.assetId) return
   if (format === 'GLB') {
-    window.open(`/api/creative/ai/assets/${r.assetId}/model-content`, '_blank', 'noopener,noreferrer')
+    window.open(authMediaUrl(`/api/creative/ai/assets/${r.assetId}/model-content`), '_blank', 'noopener,noreferrer')
     return
   }
   const key = downloadKey(r, format)
@@ -167,7 +173,7 @@ onMounted(load)
           </div>
           <div v-if="museumList(r).length" class="museums">
             <b>投放分配</b>
-            <p v-for="m in museumList(r)" :key="m.museumId || m.museumName">{{ m.museumName }}：{{ m.quantity }}个 <small v-if="m.city">· {{ m.city }}</small></p>
+            <p v-for="m in museumList(r)" :key="m.museumId || m.museumName"><b>审批出处：</b>{{ m.approvalSource || `${m.province || ''}${m.city || ''}${m.district || ''} · ${m.museumName}` }} · 投放 {{ m.quantity }} 个</p>
           </div>
           <p class="address" v-if="r.recipientAddress || r.recipientName">自收信息：{{ r.recipientName || '-' }} / {{ r.recipientPhone || '-' }} / {{ r.recipientAddress || '-' }}</p>
           <p class="note">{{ r.note || '暂无申请说明' }}</p>
