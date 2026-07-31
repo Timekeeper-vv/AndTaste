@@ -126,3 +126,30 @@ CREATE TABLE IF NOT EXISTS workflow_notification (
     INDEX idx_workflow_notice_receiver (receiver, read_flag),
     INDEX idx_workflow_notice_app (application_id)
 ) COMMENT='审批流消息提醒';
+
+
+-- C端注册合规确认记录；协议正式文本上线前须经法务确认。
+CREATE TABLE IF NOT EXISTS user_compliance_consent (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    disclaimer_accepted TINYINT NOT NULL,
+    confidentiality_accepted TINYINT NOT NULL,
+    content_policy_accepted TINYINT NOT NULL,
+    real_name_acknowledged TINYINT NOT NULL DEFAULT 0,
+    signature_name VARCHAR(100),
+    policy_version VARCHAR(50) NOT NULL,
+    accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- C端客服会话：AI首响，后台人工可接管。
+CREATE TABLE IF NOT EXISTS customer_service_conversation (
+ id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, user_name VARCHAR(100) NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'open', human_takeover TINYINT NOT NULL DEFAULT 0, taken_by BIGINT NULL, taken_by_name VARCHAR(100),
+ created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ INDEX idx_customer_service_user (user_id), INDEX idx_customer_service_updated (updated_at)
+);
+CREATE TABLE IF NOT EXISTS customer_service_message (
+ id BIGINT AUTO_INCREMENT PRIMARY KEY, conversation_id BIGINT NOT NULL, sender_type VARCHAR(20) NOT NULL, sender_id BIGINT NULL, sender_name VARCHAR(100), content TEXT NOT NULL,
+ read_by_user TINYINT NOT NULL DEFAULT 0, read_by_staff TINYINT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_customer_service_message_conversation (conversation_id)
+);

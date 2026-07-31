@@ -16,6 +16,7 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import java.io.IOException;
@@ -126,6 +127,17 @@ public class CreativeAiController {
     @Value("${jimeng.req-key:jimeng_seedream46_cvtob}")
     private String jimengReqKey;
 
+    // 火山引擎 Ark 密钥仅从本地密钥库 / 环境变量读取，绝不写入代码仓库。
+    @Value("${volcengine.ark.api.key:${VOLCENGINE_ARK_API_KEY:}}")
+    private String volcengineArkApiKey;
+
+    @Value("${volcengine.ark.images.base-url:https://ark.cn-beijing.volces.com/api/v3/images/generations}")
+    private String volcengineArkImagesUrl;
+
+    // 使用已在 Ark 控制台开通的 Seedream 接入点名称；可通过环境变量覆盖。
+    @Value("${volcengine.ark.seedream.multiview.model:${VOLCENGINE_ARK_SEEDREAM_MULTIVIEW_MODEL:doubao-seedream-5-0-260128}}")
+    private String volcengineArkSeedreamMultiviewModel;
+
     @Value("${jimeng.poll.max-seconds:180}")
     private long jimengPollMaxSeconds;
 
@@ -164,6 +176,13 @@ public class CreativeAiController {
     public Map<String,Object> ioBusinessError(IOException e) {
         return Map.of("success", false, "message", e.getMessage() == null ? "文件读取失败" : e.getMessage());
     }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    public Map<String,Object> uploadTooLarge(MaxUploadSizeExceededException e) {
+        return Map.of("success", false, "message", "材质版模型及贴图超过 100MB，请降低贴图分辨率后再保存");
+    }
+
 
     @GetMapping("/styles")
     public List<Map<String, Object>> styles() {
@@ -304,6 +323,7 @@ public class CreativeAiController {
 
     @PostMapping("/prompt/tripo-3d-optimize")
     public Map<String,Object> optimizeTripo3dPrompt(@RequestBody Generate3dRequest req) throws Exception {
+        assertCompliantPrompt(req.prompt, req.productCategory);
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础3D模型描述");
         String template = normalizeTripo3dTemplate(req.promptTemplate);
         String system = "You are a senior Tripo text-to-3D prompt engineer. Rewrite the user's rough idea into a high-detail English prompt for Tripo text-to-model. "
@@ -346,7 +366,7 @@ public class CreativeAiController {
 
     private String normalizeTripo3dTemplate(String template) {
         String t = blank(template) ? "universal" : template.trim();
-        return Set.of("fantasy", "hard_surface", "oriental", "collectible", "universal").contains(t) ? t : "universal";
+        return Set.of("fantasy", "hard_surface", "oriental", "collectible", "plush_toy", "ppc_precision", "universal").contains(t) ? t : "universal";
     }
 
     private String tripo3dTemplateName(String template) {
@@ -355,6 +375,8 @@ public class CreativeAiController {
             case "hard_surface" -> "硬核科幻/机械（高精度硬表面）";
             case "oriental" -> "东方美学/国风（纹样与釉色）";
             case "collectible" -> "潮玩/IP 手办（精致涂装与微缩感）";
+            case "plush_toy" -> "毛绒玩具（软体填充、短密绒毛、刺绣细节）";
+            case "ppc_precision" -> "PPC 精密硬塑（高精度注塑、分件与微细表面）";
             default -> "万能产品模板（填空即用）";
         };
     }
@@ -365,6 +387,8 @@ public class CreativeAiController {
             case "hard_surface" -> "Use hard-surface industrial design language. Emphasize beveled panels, seams, exposed hydraulic pistons, wiring, greeble details, brushed titanium, carbon fiber, ultra-sharp edges, studio lighting, 4k/8k texture fidelity.";
             case "oriental" -> "Use Chinese/Eastern craft language. Emphasize cloisonné enamel, filigree wirework, glossy ceramic glaze, crackle finish, jade finial, carved relief patterns, traditional craftsmanship, cultural heritage artifact.";
             case "collectible" -> "Use collectible toy / GK figurine language. Emphasize cute stylized proportions, miniature accessories, hand-painted resin texture, matte finish, metallic accents, tilt-shift product photography, softbox lighting, extremely fine surface details.";
+            case "plush_toy" -> "Use premium stuffed plush toy design language. Emphasize soft rounded padded silhouette, dense short-pile faux fur, velvety microfiber fibers, subtle panel seams, embroidered eyes and nose, fabric ears and limbs, gentle squashy volume, plush product photography, no hard plastic or glossy vinyl, clean UV-ready watertight mesh, production-friendly closed geometry.";
+            case "ppc_precision" -> "Use high-precision injection-molded PPC polymer product design language. Emphasize clean manufactured part separation, crisp but softly filleted edges, tight panel gaps, visible but subtle parting lines, fine engraved relief, tiny recessed grooves, accurate symmetrical details, high-density satin engineering-plastic surface, micro orange-peel texture, 8k PBR textures, UV-ready watertight mesh, production-friendly closed geometry. Avoid fabric, fur, glass, metal, glossy vinyl and melted shapes.";
             default -> "Use the structure: A [adjective] [subject] made of [primary material] and [secondary material], featuring [specific surface detail/pattern], [art style] aesthetic, [lighting type] lighting, ultra-detailed 3D asset, 8k PBR textures, sharp geometry, professional product visualization.";
         };
     }
@@ -375,12 +399,15 @@ public class CreativeAiController {
             case "hard_surface" -> "适合机甲、武器、设备和工业产品。建议强调倒角、接缝、螺丝、液压、线缆、拉丝金属和硬表面分件。";
             case "oriental" -> "适合国风器物、瓷器、景泰蓝、文博衍生品。材质要写具体：釉面、开片、掐丝、玉石、金属包边，避免塑料感。";
             case "collectible" -> "适合盲盒、IP手办、钥匙扣和微缩摆件。建议写清比例、姿态、涂装、配件、底座和哑光/金属局部材质。";
+            case "plush_toy" -> "适合毛绒公仔、玩偶、吉祥物。建议写清动物/IP主体、圆润比例、短毛或长毛、主辅色、刺绣五官、耳朵尾巴、缝线和填充感；避免同时写树脂、金属、透明等冲突材质。";
+            case "ppc_precision" -> "适合硬塑摆件、精密结构玩具和量产概念。建议写清分件位置、拼缝、浅浮雕、凹槽、倒角、底座与功能结构；避免把毛绒、织物、金属、透明件和高光搪胶同时混入。";
             default -> "适合普通产品快速转3D。先生成基础形态，再追加材质、纹样、PBR、clean topology、watertight mesh 等细节词进行二次优化。";
         };
     }
 
     @PostMapping("/prompt/tripo-optimize")
     public Map<String,Object> optimizeTripoImagePrompt(@RequestBody GenerateImageRequest req) throws Exception {
+        assertCompliantPrompt(req.prompt, req.productCategory);
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础创意描述");
         String provider = nullToEmpty(req.provider).toLowerCase(Locale.ROOT);
         String system = "You are a senior English prompt writer for premium AI image generation, specializing in cinematic commercial product photography, official brand visuals, cultural creative products, packaging concepts, and realistic lifestyle scenes. "
@@ -418,6 +445,7 @@ public class CreativeAiController {
 
     @PostMapping("/text-to-image")
     public Map<String, Object> textToImage(@RequestBody GenerateImageRequest req) throws Exception {
+        assertCompliantPrompt(req.prompt, req.productCategory);
         Map<String, Object> style = style(req.styleId);
         String finalPrompt = buildPrompt(req.prompt, style, req.scene, req.productType);
         String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
@@ -455,8 +483,66 @@ public class CreativeAiController {
         }
     }
 
+    @PostMapping("/volcengine/seedream/multiview")
+    public Map<String,Object> volcengineSeedreamMultiview(@RequestBody MultiViewImageRequest req) throws Exception {
+        assertCompliantPrompt(req.prompt, null);
+        if (blank(req.prompt)) throw new IllegalArgumentException("请先填写要生成的产品或角色描述");
+        if (req.inputAssetId == null) throw new IllegalArgumentException("请先上传一张产品参考图，再生成多视图");
+        if (blank(volcengineArkApiKey) || volcengineArkApiKey.contains("YOUR_")) {
+            throw new IllegalStateException("未检测到火山引擎 Ark 密钥，请在密钥库注入 VOLCENGINE_ARK_API_KEY 后重启服务");
+        }
+        String size = blank(req.size) ? "2K" : req.size.trim();
+        if (!Set.of("1K", "2K").contains(size)) throw new IllegalArgumentException("多视图仅支持 1K 或 2K 尺寸");
+        List<String> views = List.of("front", "left", "back", "right");
+        Map<String,String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
+        List<Map<String,Object>> images = new ArrayList<>();
+        String basePrompt = req.prompt.trim();
+        String referenceImage = buildArkReferenceImage(req.inputAssetId);
+        for (String view : views) {
+            String viewPrompt = basePrompt + ". Use the supplied reference image as the single source of truth. Generate ONE consistent product turntable reference image, " + view + " view only. "
+                    + "Preserve the reference product identity, silhouette, proportions, colors, materials, accessories and recognizable details; infer unseen surfaces plausibly. "
+                    + "Centered isolated object, clean light neutral studio background, full object visible, no collage, no text, no watermark overlay, no extra objects, high-detail commercial product rendering.";
+            Map<String,Object> payload = new LinkedHashMap<>();
+            payload.put("model", volcengineArkSeedreamMultiviewModel);
+            payload.put("prompt", viewPrompt);
+            payload.put("image", List.of(referenceImage));
+            payload.put("sequential_image_generation", "disabled");
+            payload.put("response_format", "url");
+            payload.put("size", size);
+            payload.put("stream", false);
+            payload.put("watermark", req.watermark == null || req.watermark);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(volcengineArkImagesUrl))
+                    .header("Authorization", "Bearer " + volcengineArkApiKey.trim())
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
+                    .build();
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IllegalStateException("火山引擎 Seedream 多视图生成失败（" + labels.get(view) + "）HTTP " + response.statusCode());
+            }
+            String remoteUrl = extractImageUrl(mapper.readTree(response.body()));
+            if (blank(remoteUrl)) throw new IllegalStateException("火山引擎 Seedream 未返回" + labels.get(view) + "图地址");
+            String localUrl = saveRemoteImage(remoteUrl, "doubao-multiview-" + view + "-", ".png");
+            Map<String,Object> metadata = new LinkedHashMap<>();
+            metadata.put("provider", "volcengine-ark"); metadata.put("model", volcengineArkSeedreamMultiviewModel);
+            metadata.put("view", view); metadata.put("remoteUrl", remoteUrl); metadata.put("multiView", true);
+            if (req.currentUserId != null) metadata.put("createdByUserId", req.currentUserId);
+            Long assetId = createAsset("Doubao 多视图参考 · " + labels.get(view), "image", "ai_generated", localUrl, localUrl,
+                    basePrompt, null, null, req.inputAssetId, "png", "Doubao,Seedream,多视图,3D参考," + labels.get(view), metadata);
+            Map<String,Object> item = new LinkedHashMap<>();
+            item.put("view", view); item.put("label", labels.get(view)); item.put("assetId", assetId); item.put("fileUrl", localUrl); item.put("previewUrl", localUrl);
+            images.add(item);
+        }
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("provider", "volcengine-ark"); out.put("model", volcengineArkSeedreamMultiviewModel); out.put("images", images);
+        out.put("message", "Doubao Seedream 多视图已生成，可一键带入多视图 3D 建模");
+        return out;
+    }
+
     @PostMapping("/image-to-image")
     public Map<String, Object> imageToImage(@RequestBody GenerateImageRequest req) throws Exception {
+        assertCompliantPrompt(req.prompt, req.productCategory);
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先选择一张参考图");
         Map<String, Object> style = style(req.styleId);
         String finalPrompt = buildPrompt(req.prompt, style, req.scene, req.productType);
@@ -532,6 +618,7 @@ public class CreativeAiController {
 
     @PostMapping("/jimeng/text-to-image")
     public Map<String,Object> jimengTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
+        assertCompliantPrompt(req.prompt, req.productCategory);
         if(blank(jimengAccessKeyId) || blank(jimengSecretAccessKey)) throw new IllegalStateException("即梦视觉接口需要火山引擎 AccessKeyId + SecretAccessKey 签名鉴权，不支持直接使用 Vx 开头的 API Key。请在 shixun/application-local.properties 配置 jimeng.access-key-id 和 jimeng.secret-access-key");
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
         String prompt = req.prompt.trim();
@@ -779,6 +866,7 @@ public class CreativeAiController {
 
     @PostMapping({"/tripo/generate", "/tripo/image-to-3d"})
     public Map<String,Object> tripoGenerate(@RequestBody Generate3dRequest req) throws Exception {
+        assertCompliantPrompt(req.prompt, req.productCategory);
         if(blank(tripoApiKey) || tripoApiKey.contains("YOUR_"))
             throw new IllegalStateException("未配置 tripo.api.key，请在服务器.env中填写TRIPO_API_KEY后重新部署");
 
@@ -800,7 +888,9 @@ public class CreativeAiController {
                 if(blank(req.prompt)) throw new IllegalArgumentException("文生3D模式必须填写模型描述");
                 if(req.prompt.trim().length() > 1024) throw new IllegalArgumentException("模型描述不能超过1024个字符");
                 if(!blank(req.negativePrompt) && req.negativePrompt.trim().length() > 255) throw new IllegalArgumentException("反向提示词不能超过255个字符");
-                taskBody.put("prompt", req.prompt.trim());
+                String textPrompt = req.prompt.trim();
+                if (!blank(req.materialPrompt)) textPrompt = textPrompt + ", material and surface finish: " + req.materialPrompt.trim();
+                taskBody.put("prompt", textPrompt);
                 if(!blank(req.negativePrompt)) taskBody.put("negative_prompt", req.negativePrompt.trim());
             } else if("multiview_to_model".equals(mode)) {
                 if(req.multiviewAssetIds == null || req.multiviewAssetIds.get("front") == null)
@@ -834,8 +924,10 @@ public class CreativeAiController {
             if(blank(taskId)) throw new IllegalStateException("Tripo未返回task_id：" + taskResponse);
 
             String jobNo = no("T3D");
-            String storedPrompt = "image_to_model".equals(mode) ? "" : req.prompt;
-            String storedNegativePrompt = "image_to_model".equals(mode) ? "" : req.negativePrompt;
+            String materialNote = blank(req.materialLabel) ? "" : "期望材质/表面质感：" + req.materialLabel;
+            String storedPrompt = "text_to_model".equals(mode) ? req.prompt : materialNote;
+            if ("text_to_model".equals(mode) && !blank(materialNote)) storedPrompt = (storedPrompt == null ? "" : storedPrompt) + "；" + materialNote;
+            String storedNegativePrompt = "text_to_model".equals(mode) ? req.negativePrompt : "";
             Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
                     primaryInputAssetId, storedPrompt, storedNegativePrompt, "running", null,
                     Boolean.TRUE.equals(req.quad) ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
@@ -984,6 +1076,35 @@ public class CreativeAiController {
                 meta
         );
         return Map.of("assetId", assetId, "url", url, "title", title == null || title.isBlank() ? original : title);
+    }
+
+    @PostMapping(value = "/assets/{id}/material-variants", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Map<String,Object> saveMaterialVariant(@PathVariable Long id,
+                                                  @RequestHeader(value="X-Current-User-Id",required=false) Long headerUserId,
+                                                  @RequestParam(required=false) Long currentUserId,
+                                                  @RequestParam("file") MultipartFile file,
+                                                  @RequestParam(required=false) String materialLabel) throws Exception {
+        Long userId = currentUserId == null ? headerUserId : currentUserId;
+        requireConsumerUser(userId);
+        if (file == null || file.isEmpty()) throw new IllegalArgumentException("请先导出材质版 GLB 模型");
+        if (file.getSize() > 100L * 1024 * 1024) throw new IllegalArgumentException("材质版 GLB 不能超过 100MB");
+        String original = nullToEmpty(file.getOriginalFilename()).toLowerCase(Locale.ROOT);
+        if (!original.endsWith(".glb")) throw new IllegalArgumentException("当前仅支持保存 GLB 材质版模型");
+        Map<String,Object> source = jdbc.queryForMap("SELECT id,title,asset_type assetType,preview_url previewUrl,prompt,created_by createdBy,tags FROM digital_asset WHERE id=?", id);
+        if (!"model".equals(String.valueOf(source.get("assetType")))) throw new IllegalArgumentException("仅支持为 3D 模型创建材质版本");
+        if (!(source.get("createdBy") instanceof Number) || ((Number) source.get("createdBy")).longValue() != userId) throw new IllegalStateException("只能为自己的 3D 作品保存材质版本");
+        Path dir = vuePublicDir().resolve("generated").normalize();
+        Files.createDirectories(dir);
+        String fileName = "material-" + id + "-" + System.currentTimeMillis() + ".glb";
+        Files.copy(file.getInputStream(), dir.resolve(fileName), StandardCopyOption.REPLACE_EXISTING);
+        String label = blank(materialLabel) ? "自定义材质" : materialLabel.trim();
+        Map<String,Object> meta = new LinkedHashMap<>();
+        meta.put("createdByUserId", userId); meta.put("materialVariant", true); meta.put("sourceAssetId", id); meta.put("materialLabel", label); meta.put("editor", "threejs-material-lab");
+        Long assetId = createAsset(String.valueOf(source.get("title")) + " · " + label, "model", "material_variant", "/generated/" + fileName,
+                source.get("previewUrl") == null ? null : String.valueOf(source.get("previewUrl")), String.valueOf(source.get("prompt")), null, null, id,
+                "glb", String.valueOf(source.get("tags")) + ",材质转换," + label, meta);
+        return Map.of("assetId", assetId, "fileUrl", "/generated/" + fileName, "title", String.valueOf(source.get("title")) + " · " + label,
+                "materialLabel", label, "message", "材质版模型已保存到作品库，可继续提交审核");
     }
 
     @GetMapping("/assets/{id}/content")
@@ -1139,7 +1260,7 @@ public class CreativeAiController {
 
     @GetMapping("/consumer-production/museums")
     public List<Map<String,Object>> consumerProductionMuseums() {
-        return List.of(
+        List<Map<String,Object>> directory = List.of(
                 Map.of("id","jx-museum","name","江西省博物馆","province","江西省","city","南昌市","district","红谷滩区","scene","省级文博文创店 / 展陈主题快闪"),
                 Map.of("id","jingdezhen-museum","name","景德镇中国陶瓷博物馆","province","江西省","city","景德镇市","district","珠山区","scene","陶瓷文创 / 艺术旅游渠道"),
                 Map.of("id","ganzhou-museum","name","赣州市博物馆","province","江西省","city","赣州市","district","章贡区","scene","客家文化 / 城市礼品渠道"),
@@ -1160,6 +1281,49 @@ public class CreativeAiController {
                 Map.of("id","sanxingdui-museum","name","三星堆博物馆","province","四川省","city","德阳市","district","广汉市","scene","古蜀文明 IP / 爆款文创渠道"),
                 Map.of("id","qinhuangdao-museum","name","秦皇岛博物馆","province","河北省","city","秦皇岛市","district","海港区","scene","城市伴手礼 / 滨海旅游场景")
         );
+        return directory.stream().map(this::withMuseumRecommendation).toList();
+    }
+
+    /**
+     * 测试目录的选址策略标签：用于帮助创作者做渠道匹配，不代表实时客流、销量或官方合作承诺。
+     */
+    private Map<String,Object> withMuseumRecommendation(Map<String,Object> museum) {
+        String id = String.valueOf(museum.get("id"));
+        Map<String,Object> item = new LinkedHashMap<>(museum);
+        Map<String,Object> recommendation = new LinkedHashMap<>();
+        boolean flagship = Set.of("national-museum", "shanghai-museum", "nanjing-museum", "shaanxi-history", "qinshihuang-museum", "hunan-museum", "sanxingdui-museum", "suzhou-museum").contains(id);
+        boolean emerging = Set.of("ganzhou-museum", "ningbo-museum", "shenzhen-museum", "qinhuangdao-museum", "capital-museum", "china-art-museum").contains(id);
+        if (flagship) {
+            recommendation.put("strategy", "流量优先");
+            recommendation.put("trafficLevel", "高");
+            recommendation.put("competitionLevel", "高");
+            recommendation.put("breakoutPotential", "中高");
+            recommendation.put("badge", "高客流 · 高竞争");
+            recommendation.put("advantages", "曝光机会大、品牌背书强、游客消费场景成熟。");
+            recommendation.put("risks", "同类竞争强，通常需要更成熟的设计、供应链和差异化 IP 才容易突围。");
+            recommendation.put("advice", "适合已有成熟设计、供应链和差异化 IP 的作品。");
+        } else if (emerging) {
+            recommendation.put("strategy", "爆款试水");
+            recommendation.put("trafficLevel", "中低");
+            recommendation.put("competitionLevel", "较低");
+            recommendation.put("breakoutPotential", "高");
+            recommendation.put("badge", "竞争较低 · 更易试爆款");
+            recommendation.put("advantages", "同质竞争较低，地域题材和新颖产品更容易被看见，适合小批量试爆款。");
+            recommendation.put("risks", "自然客流相对有限，需要更精准的定价、陈列和线上传播配合。");
+            recommendation.put("advice", "适合题材鲜明、价格友好、适合游客即时购买的创意产品。");
+        } else {
+            recommendation.put("strategy", "平衡增长");
+            recommendation.put("trafficLevel", "中高");
+            recommendation.put("competitionLevel", "中");
+            recommendation.put("breakoutPotential", "中高");
+            recommendation.put("badge", "客流与竞争较均衡");
+            recommendation.put("advantages", "客流与竞争相对均衡，既适合展示品牌，也适合稳定测试转化。");
+            recommendation.put("risks", "需要围绕当地文化符号、礼品属性和价格带做清晰差异化，避免产品定位普通。");
+            recommendation.put("advice", "适合兼顾品牌展示和转化的文创产品。");
+        }
+        recommendation.put("disclaimer", "策略标签为系统测试建议，请以实际授权、客流、渠道规则和市场调研为准。");
+        item.put("recommendation", recommendation);
+        return item;
     }
 
     @GetMapping("/consumer-production/my")
@@ -2113,6 +2277,15 @@ public class CreativeAiController {
         return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(Files.readAllBytes(file));
     }
 
+    private String buildArkReferenceImage(Long assetId) throws Exception {
+        Path image = resolveAssetImage(assetId);
+        String name = image.getFileName().toString().toLowerCase(Locale.ROOT);
+        String contentType = name.endsWith(".jpg") || name.endsWith(".jpeg") ? "image/jpeg" : name.endsWith(".webp") ? "image/webp" : "image/png";
+        byte[] bytes = Files.readAllBytes(image);
+        if (bytes.length > 15L * 1024 * 1024) throw new IllegalArgumentException("参考图不能超过 15MB，请压缩后重试");
+        return "data:" + contentType + ";base64," + Base64.getEncoder().encodeToString(bytes);
+    }
+
     private String saveRemoteImage(String url, String prefix, String suffix) throws IOException, InterruptedException {
         HttpResponse<byte[]> response = http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
         if (response.statusCode() < 200 || response.statusCode() >= 300) throw new IOException("下载生成图片失败 HTTP " + response.statusCode());
@@ -2571,6 +2744,46 @@ public class CreativeAiController {
         public String context;
     }
 
+    @PostMapping("/production-feasibility")
+    public Map<String, Object> productionFeasibility(@RequestBody Map<String, Object> body) {
+        String category = nullToEmpty(String.valueOf(body.getOrDefault("productCategory", "")));
+        String material = nullToEmpty(String.valueOf(body.getOrDefault("material", "")));
+        String prompt = nullToEmpty(String.valueOf(body.getOrDefault("prompt", "")));
+        List<String> issues = new ArrayList<>();
+        List<String> suggestions = new ArrayList<>();
+        int score = 92;
+        String all = (category + " " + material + " " + prompt).toLowerCase(Locale.ROOT);
+        if (all.contains("细线") || all.contains("极细") || all.contains("发丝") || all.contains("thin line")) { score -= 14; issues.add("存在过细线条风险，量产时易断裂或丢失细节。"); suggestions.add("将关键线条加粗，并在打样图上标注最小线宽。 "); }
+        if (all.contains("悬空") || all.contains("floating") || all.contains("漂浮")) { score -= 14; issues.add("存在悬空/细连接结构，运输和开模风险较高。"); suggestions.add("增加底座、支撑或改成独立分件。 "); }
+        if (all.contains("倒扣") || all.contains("undercut")) { score -= 12; issues.add("描述包含倒扣结构，可能需要滑块或调整分件。"); suggestions.add("在打样前由工艺人员确认拔模方向与分型线。 "); }
+        if (material.contains("毛绒")) { suggestions.add("毛绒建议使用刺绣五官和独立布料裁片，避免把复杂图案直接做成长毛印花。 "); }
+        if (material.contains("PVC") || material.contains("搪胶") || material.contains("PPC") || material.contains("硬塑")) { suggestions.add("注塑/搪胶件建议预留合理壁厚、圆角与分件位；该结果仅为系统初筛。 "); }
+        if (category.contains("冰箱贴")) suggestions.add("冰箱贴请在背面预留平整磁铁位，并避免过薄边缘。 ");
+        if (issues.isEmpty()) issues.add("未识别到明显的文字描述风险，仍需以3D结构、尺寸和真实打样为准。 ");
+        String level = score >= 85 ? "可进入打样准备" : score >= 65 ? "建议工艺复核" : "建议先修改方案";
+        return Map.of("score", Math.max(35, score), "level", level, "issues", issues, "suggestions", suggestions, "disclaimer", "这是基于文字描述的生产可行性初筛，不构成报价、质检承诺或正式工艺结论；量产前须由工厂/人工专业人员确认。");
+    }
+
+    @PostMapping("/consumer/copyright-consultations")
+    public Map<String, Object> createCopyrightConsultation(@RequestBody Map<String, Object> body) {
+        Long userId = body.get("currentUserId") instanceof Number ? ((Number) body.get("currentUserId")).longValue() : null;
+        if (userId == null) throw new IllegalArgumentException("缺少用户信息");
+        String service = nullToEmpty(String.valueOf(body.getOrDefault("service", "")));
+        if (blank(service)) throw new IllegalArgumentException("请选择确权服务");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_rights_consultation (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, asset_id BIGINT NULL, service_type VARCHAR(80) NOT NULL, note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'pending', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        Object assetValue = body.get("assetId"); Long assetId = assetValue instanceof Number ? ((Number) assetValue).longValue() : null;
+        jdbc.update("INSERT INTO creative_rights_consultation (user_id,asset_id,service_type,note) VALUES (?,?,?,?)", userId, assetId, service, nullToEmpty(String.valueOf(body.getOrDefault("note", ""))));
+        return Map.of("message", "版权服务咨询已登记，平台人员将按协议与您核对材料。该入口不等同于已完成登记或授权。", "status", "pending");
+    }
+
+    private void assertCompliantPrompt(String prompt, String category) {
+        String normalized = (nullToEmpty(prompt) + " " + nullToEmpty(category)).toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        List<String> prohibited = List.of("裸照", "色情", "色情网", "强奸", "毒品", "爆炸物", "制枪", "恐怖袭击", "未成年性", "deepfake porn");
+        List<String> rightsRisk = List.of("明星同款", "明星脸", "肖像复刻", "未经授权", "迪士尼", "漫威", "宝可梦", "皮卡丘", "哆啦a梦", "奥特曼", "hello kitty");
+        for (String keyword : prohibited) if (normalized.contains(keyword)) throw new IllegalArgumentException("当前描述包含平台禁止内容，请修改后重试。");
+        for (String keyword : rightsRisk) if (normalized.contains(keyword)) throw new IllegalArgumentException("当前描述可能涉及未授权人物肖像、商标或IP，请提供授权证明或改用原创描述。");
+    }
+
     public static class GenerateImageRequest {
         public String title;
         public String provider;
@@ -2579,6 +2792,8 @@ public class CreativeAiController {
         public Long styleId;
         public String scene;
         public String productType;
+        public String productCategory;
+        public String material;
         public String imageSize;
         public Long seed;
         public String tags;
@@ -2592,12 +2807,24 @@ public class CreativeAiController {
         public String imagenOutputFormat;
         public Long currentUserId;
     }
+    public static class MultiViewImageRequest {
+        public String prompt;
+        public Long inputAssetId;
+        public String size;
+        public Boolean watermark;
+        public Long currentUserId;
+    }
+
     public static class Generate3dRequest {
         public String mode;
         public String modelVersion;
         public String promptTemplate;
         public String prompt;
         public String negativePrompt;
+        // 材质为“视觉/PBR 表面质感”偏好；文本建模会注入提示词，图/多视图建模会随任务记录保存。
+        public String materialLabel;
+        public String materialPrompt;
+        public String productCategory;
         public Long inputAssetId;
         public Map<String,Long> multiviewAssetIds;
         public String exportFormats;

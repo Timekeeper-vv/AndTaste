@@ -70,7 +70,7 @@ const translations = {
     fieldAge: 'Age',
     fieldEmail: 'Email',
     fieldPhone: 'Phone',
-    fieldPhoneOpt: 'Optional',
+    fieldPhoneOpt: 'Required',
     fieldConfirm: 'Confirm',
     fieldUserPh: 'Enter username',
     fieldPwdPh: 'Enter password',
@@ -153,7 +153,7 @@ const translations = {
     fieldAge: '年龄',
     fieldEmail: '邮箱',
     fieldPhone: '手机号',
-    fieldPhoneOpt: '选填',
+    fieldPhoneOpt: '必填',
     fieldConfirm: '确认密码',
     fieldUserPh: '请输入用户名',
     fieldPwdPh: '请输入密码',
@@ -195,6 +195,12 @@ const regConfirm = ref('')
 const regMsg = ref('')
 const regSuccess = ref(false)
 const regLoading = ref(false)
+const agreeDisclaimer = ref(false)
+const agreeConfidentiality = ref(false)
+const agreeContentPolicy = ref(false)
+const realNameAcknowledged = ref(false)
+const complianceConfirmed = ref(false)
+const complianceSignature = ref('')
 
 function openModal(m: 'login' | 'register') {
   modal.value = m
@@ -244,12 +250,24 @@ async function login() {
   }
 }
 
+function syncComplianceConfirmation() {
+  agreeDisclaimer.value = complianceConfirmed.value
+  agreeConfidentiality.value = complianceConfirmed.value
+  agreeContentPolicy.value = complianceConfirmed.value
+  realNameAcknowledged.value = complianceConfirmed.value
+}
+
 async function register() {
   if (regLoading.value) return
   regMsg.value = ''
   regSuccess.value = false
   if (regPassword.value !== regConfirm.value) { regMsg.value = 'Passwords do not match'; return }
   if (regAge.value && (isNaN(Number(regAge.value)) || Number(regAge.value) <= 0)) { regMsg.value = 'Please enter a valid age'; return }
+  if (!regPhone.value.trim()) { regMsg.value = '请填写手机号，用于实名认证与合作服务联系'; return }
+  if (!/^[0-9+()\-\s]{6,30}$/.test(regPhone.value.trim())) { regMsg.value = '手机号格式不正确'; return }
+  if (!complianceConfirmed.value) { regMsg.value = '请勾选电子签署确认后再创建账号'; return }
+  if (!complianceSignature.value.trim()) { regMsg.value = '请填写电子签署名称'; return }
+  syncComplianceConfirmation()
   regLoading.value = true
   try {
     const res = await fetch('/api/users', {
@@ -260,7 +278,12 @@ async function register() {
         age: Number(regAge.value),
         email: regEmail.value,
         phone: regPhone.value || undefined,
-        password: regPassword.value
+        password: regPassword.value,
+        agreeDisclaimer: agreeDisclaimer.value,
+        agreeConfidentiality: agreeConfidentiality.value,
+        agreeContentPolicy: agreeContentPolicy.value,
+        realNameAcknowledged: realNameAcknowledged.value,
+        complianceSignature: complianceSignature.value.trim()
       })
     })
     if (!res.ok) {
@@ -706,8 +729,10 @@ onUnmounted(() => {
             </form>
 
             <!-- Register form -->
-            <form v-else @submit.prevent="register" class="modal-form">
-              <div class="mfield-row">
+            <form v-else @submit.prevent="register" class="modal-form registration-form">
+              <div class="registration-intro"><span>CREATE YOUR CREATOR ID</span><b>创建创作者账号</b><small>手机号用于实名认证、作品合作与版权服务联系。</small></div>
+              <div class="registration-section-label"><i>01</i><span>身份与联系方式</span></div>
+              <div class="mfield-row registration-name-row">
                 <div class="mfield">
                   <label>{{ t.fieldUsername }} <span class="req">*</span></label>
                   <input v-model="regUsername" :placeholder="t.fieldUserPh" required autocomplete="username" />
@@ -717,14 +742,17 @@ onUnmounted(() => {
                   <input v-model="regAge" type="number" :placeholder="t.fieldAgePh" min="1" max="150" required />
                 </div>
               </div>
-              <div class="mfield">
-                <label>{{ t.fieldEmail }} <span class="req">*</span></label>
-                <input v-model="regEmail" type="email" :placeholder="t.fieldEmailPh" required autocomplete="email" />
+              <div class="mfield-row registration-contact-row">
+                <div class="mfield">
+                  <label>{{ t.fieldPhone }} <span class="req">*</span></label>
+                  <input v-model="regPhone" :placeholder="t.fieldPhonePh" required inputmode="tel" autocomplete="tel" />
+                </div>
+                <div class="mfield">
+                  <label>{{ t.fieldEmail }} <span class="req">*</span></label>
+                  <input v-model="regEmail" type="email" :placeholder="t.fieldEmailPh" required autocomplete="email" />
+                </div>
               </div>
-              <div class="mfield">
-                <label>{{ t.fieldPhone }} <span class="opt">{{ t.fieldPhoneOpt }}</span></label>
-                <input v-model="regPhone" :placeholder="t.fieldPhonePh" autocomplete="tel" />
-              </div>
+              <div class="registration-section-label"><i>02</i><span>设置登录密码</span></div>
               <div class="mfield-row">
                 <div class="mfield">
                   <label>{{ t.fieldPwd }} <span class="req">*</span></label>
@@ -734,6 +762,14 @@ onUnmounted(() => {
                   <label>{{ t.fieldConfirm }} <span class="req">*</span></label>
                   <input v-model="regConfirm" type="password" :placeholder="t.fieldConfirmPh" required autocomplete="new-password" />
                 </div>
+              </div>
+              <div class="registration-section-label"><i>03</i><span>合规电子签署</span></div>
+              <div class="agreement-signature">
+                <div class="agreement-seal">✓</div>
+                <div class="agreement-copy"><span>CREATOR AGREEMENT</span><b>一次确认，守护原创与合作</b><p>我承诺仅上传有权使用的内容，不生成违法或未授权人物/IP素材；并知悉作品合作前需完成实名认证，AI 结果与生产、版权事项需人工复核。</p></div>
+                <div class="signature-line"><label>电子签署</label><input v-model.trim="complianceSignature" :placeholder="`输入 ${regUsername || '你的姓名或账号'} 以确认`" autocomplete="off" /><i>签署即代表同意平台创作规范</i></div>
+                <label class="signature-confirm"><input v-model="complianceConfirmed" type="checkbox" @change="syncComplianceConfirmation" /><span>我已阅读并同意《免责声明》《保密协议》《内容创作规范》及实名认证要求。</span></label>
+                <small>协议正式版本及上线文本须经法务审核；本次电子签署将记录当前版本的确认。</small>
               </div>
               <div v-if="regMsg" :class="['modal-msg', regSuccess ? 'success' : 'error']">{{ regMsg }}</div>
               <button type="submit" class="modal-submit" :disabled="regLoading">
@@ -2336,4 +2372,6 @@ onUnmounted(() => {
   .hero-title { letter-spacing: -2px; }
   .launch-proof { grid-template-columns: 1fr; }
 }
+
+.agreement-signature{position:relative;display:grid;grid-template-columns:40px 1fr;gap:10px;padding:14px;border:1px solid #b9dfd7;border-radius:16px;background:radial-gradient(circle at 90% 8%,rgba(45,212,191,.15),transparent 90px),linear-gradient(135deg,#f2fffb,#f8fafc);color:#36534e}.agreement-seal{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff;font-weight:900;box-shadow:0 7px 18px rgba(15,118,110,.22)}.agreement-copy span{display:block;font-size:9px;letter-spacing:.13em;color:#0f766e;font-weight:900}.agreement-copy b{display:block;margin:2px 0;color:#173f3a;font-size:14px}.agreement-copy p{margin:0;font-size:10px;line-height:1.55;color:#55736d}.signature-line{grid-column:1/-1;display:grid;grid-template-columns:64px 1fr;align-items:center;margin-top:2px;padding:8px 0 6px;border-bottom:1px dashed #89bbb0}.signature-line label{color:#0f766e;font-size:11px;font-weight:900}.signature-line input{height:30px!important;padding:0 4px!important;border:0!important;border-radius:0!important;border-bottom:1px solid #51968a!important;background:transparent!important;box-shadow:none!important;font-family:"STKaiti","KaiTi",serif!important;font-size:15px!important;font-weight:700;color:#174740!important}.signature-line input:focus{border-bottom:2px solid #0f766e!important}.signature-line i{grid-column:2;font-size:9px;color:#7a9892;font-style:normal;margin-top:3px}.signature-confirm{grid-column:1/-1;display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border-radius:10px;background:rgba(255,255,255,.7);color:#335b54;font-size:11px;font-weight:700;line-height:1.5;cursor:pointer}.signature-confirm input{margin:2px 0 0;accent-color:#0f766e}.agreement-signature>small{grid-column:1/-1;color:#819590;font-size:9px;line-height:1.45}.registration-form{gap:11px}.registration-intro{margin:-2px 0 2px;padding:12px 13px;border:1px solid #bde7df;border-radius:13px;background:linear-gradient(135deg,#ecfdf8,#f6fffc)}.registration-intro span{display:block;color:#0f766e;font-size:9px;font-weight:800;letter-spacing:.12em}.registration-intro b{display:block;margin:3px 0;color:#134e4a;font-size:16px}.registration-intro small{display:block;color:#52716c;font-size:11px;line-height:1.45}.registration-section-label{display:flex;align-items:center;gap:7px;margin-top:2px;color:#475569;font-size:11px;font-weight:800}.registration-section-label i{display:grid;place-items:center;width:19px;height:19px;border-radius:6px;background:#0f766e;color:#fff;font-size:9px;font-style:normal}.registration-contact-row{grid-template-columns:1.1fr 1fr}.registration-form .modal-submit{position:sticky;bottom:0;margin-top:4px}@media(max-width:768px){.registration-contact-row{grid-template-columns:1fr}.registration-intro{padding:11px}.modal-box:has(.registration-form){max-height:calc(100vh - 24px);overflow:auto;overscroll-behavior:contain}}
 </style>

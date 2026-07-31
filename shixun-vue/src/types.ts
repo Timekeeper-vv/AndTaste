@@ -13,6 +13,7 @@ export type PageName =
   | 'consumerCreditManagement'
   | 'consumerProductionReview'
   | 'aiAssistant'
+  | 'customerService'
   | 'consumerMobile'
   | 'studio'
   | 'creative2d'

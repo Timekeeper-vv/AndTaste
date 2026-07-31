@@ -1,0 +1,18 @@
+{
+  "pages": [
+    { "path": "pages/login/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/home/index", "style": { "navigationBarTitleText": "之间智造", "navigationBarBackgroundColor": "#fffaf5" } },
+    { "path": "pages/purpose/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/create/index", "style": { "navigationBarTitleText": "AI 创作" } },
+    { "path": "pages/works/index", "style": { "navigationBarTitleText": "我的作品" } },
+    { "path": "pages/recharge/index", "style": { "navigationBarTitleText": "积分充值" } },
+    { "path": "pages/profile/index", "style": { "navigationBarTitleText": "个人中心" } },
+    { "path": "pages/preview/index", "style": { "navigationBarTitleText": "3D 模型预览" } }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarBackgroundColor": "#fffaf5",
+    "backgroundColor": "#fffaf5",
+    "backgroundTextStyle": "light"
+  }
+}

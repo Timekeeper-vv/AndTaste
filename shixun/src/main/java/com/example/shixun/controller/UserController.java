@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -28,10 +29,12 @@ public class UserController {
 
     private final UserService userService;
     private final JwtService jwtService;
+    private final JdbcTemplate jdbc;
 
-    public UserController(UserService userService, JwtService jwtService) {
+    public UserController(UserService userService, JwtService jwtService, JdbcTemplate jdbc) {
         this.userService = userService;
         this.jwtService = jwtService;
+        this.jdbc = jdbc;
     }
 
     @GetMapping
@@ -67,38 +70,59 @@ public class UserController {
     }
 
     @PostMapping
-    @Operation(summary = "新增用户", description = "创建新用户，用户名、年龄、邮箱、密码为必填项")
-    @ApiResponses({
-        @ApiResponse(responseCode = "201", description = "创建成功"),
-        @ApiResponse(responseCode = "400", description = "参数校验失败"),
-        @ApiResponse(responseCode = "409", description = "用户名已存在")
-    })
+    @Operation(summary = "新增用户", description = "创建新用户。前台注册必须确认内容规范、免责声明和保密协议。")
     public CompletableFuture<ResponseEntity<User>> create(
             @RequestHeader(value = "X-Current-Role", required = false) String currentRole,
-            @RequestBody User user) {
-        if (currentRole == null || currentRole.isBlank()) {
-            user.setRole("feeder");
+            @RequestBody Map<String, Object> body) {
+        User user = new User();
+        user.setUsername(text(body.get("username")));
+        user.setAge(number(body.get("age")));
+        user.setEmail(text(body.get("email")));
+        user.setPhone(text(body.get("phone")));
+        user.setPassword(text(body.get("password")));
+        user.setRole(text(body.get("role")));
+        boolean publicRegistration = currentRole == null || currentRole.isBlank();
+        if (publicRegistration) {
+            requireConsent(body, "agreeDisclaimer", "请先阅读并同意免责声明");
+            requireConsent(body, "agreeConfidentiality", "请先阅读并同意保密协议");
+            requireConsent(body, "agreeContentPolicy", "请先阅读并同意内容创作规范");
+            requireConsent(body, "realNameAcknowledged", "请确认后续作品合作须完成实名认证");
+            if (text(body.get("complianceSignature")) == null || text(body.get("complianceSignature")).isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请完成合规电子签署");
+            }
+            user.setRole("user");
         } else {
             requireAdmin(currentRole);
-        }
-        if (user.getRole() == null || user.getRole().isBlank()) {
-            user.setRole("feeder");
+            if (user.getRole() == null || user.getRole().isBlank()) user.setRole("feeder");
         }
         validateUser(user);
-        if (user.getPassword() == null || user.getPassword().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "密码不能为空");
-        }
+        if (user.getPassword() == null || user.getPassword().isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "密码不能为空");
         return userService.save(user)
-            .thenApply(saved -> ResponseEntity.status(HttpStatus.CREATED).body(saved))
+            .thenApply(saved -> {
+                if (publicRegistration) recordComplianceConsent(saved.getId(), body);
+                return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+            })
             .exceptionally(ex -> {
                 Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
-                if (cause instanceof IllegalArgumentException) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT, cause.getMessage());
-                }
+                if (cause instanceof IllegalArgumentException) throw new ResponseStatusException(HttpStatus.CONFLICT, cause.getMessage());
                 if (cause instanceof RuntimeException) throw (RuntimeException) cause;
                 throw new RuntimeException(cause);
             });
     }
+
+    private void recordComplianceConsent(Long userId, Map<String, Object> body) {
+        jdbc.execute("CREATE TABLE IF NOT EXISTS user_compliance_consent (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, disclaimer_accepted TINYINT NOT NULL, confidentiality_accepted TINYINT NOT NULL, content_policy_accepted TINYINT NOT NULL, real_name_acknowledged TINYINT NOT NULL DEFAULT 0, signature_name VARCHAR(100), policy_version VARCHAR(50) NOT NULL, accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        try { jdbc.execute("ALTER TABLE user_compliance_consent ADD COLUMN signature_name VARCHAR(100)"); } catch (Exception ignored) { }
+        jdbc.update("INSERT INTO user_compliance_consent (user_id,disclaimer_accepted,confidentiality_accepted,content_policy_accepted,real_name_acknowledged,signature_name,policy_version) VALUES (?,?,?,?,?,?,?)", userId, 1, 1, 1, yes(body.get("realNameAcknowledged")) ? 1 : 0, text(body.get("complianceSignature")), "2026-07-30");
+    }
+
+    private void requireConsent(Map<String, Object> body, String key, String message) {
+        if (!yes(body.get(key))) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private boolean yes(Object value) { return value instanceof Boolean ? (Boolean) value : "true".equalsIgnoreCase(String.valueOf(value)); }
+    private String text(Object value) { return value == null ? null : String.valueOf(value).trim(); }
+    private Integer number(Object value) { try { return value == null || String.valueOf(value).isBlank() ? null : Integer.valueOf(String.valueOf(value)); } catch (NumberFormatException ex) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "年龄格式错误"); } }
 
     @PutMapping("/{id}")
     @Operation(summary = "更新用户", description = "根据ID更新用户信息")
@@ -210,6 +234,12 @@ public class UserController {
         }
         if (user.getEmail() == null || user.getEmail().trim().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email must not be blank");
+        }
+        if (user.getPhone() == null || user.getPhone().trim().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "手机号不能为空");
+        }
+        if (!user.getPhone().trim().matches("^[0-9+()\\-\\s]{6,30}$")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "手机号格式不正确");
         }
     }
 

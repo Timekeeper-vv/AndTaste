@@ -28,6 +28,7 @@ import NotificationPanel from './components/NotificationPanel.vue'
 import GlobalAlert from './components/GlobalAlert.vue'
 import AiChat from './components/AiChat.vue'
 import AiAssistantPage from './components/AiAssistantPage.vue'
+import CustomerServiceDesk from './components/CustomerServiceDesk.vue'
 import ConsumerMobilePage from './components/ConsumerMobilePage.vue'
 import ConsumerWorksReview from './components/ConsumerWorksReview.vue'
 import ConsumerAssetInventory from './components/ConsumerAssetInventory.vue'
@@ -56,6 +57,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   consumerCreditManagement:SUPER_ADMIN_ROLES,
   consumerProductionReview:SUPER_ADMIN_ROLES,
   aiAssistant:  ALL_ROLES,
+  customerService: ALL_ROLES,
   studio:       STAFF_WORKFLOW_ROLES,
   creative2d:   CREATIVE_DESIGN_ROLES,
   creative3d:   CREATIVE_DESIGN_ROLES,
@@ -195,6 +197,7 @@ const pageLabels: Record<string, string> = {
   consumerCreditManagement:'C端额度管理',
   consumerProductionReview:'C端用户作品生产审核',
   aiAssistant:  '之间味道AI助手',
+  customerService:'C端客服会话',
   studio:       '创意设计',
   creative2d:   '2D创意生图',
   creative3d:   '3D辅助建模',
@@ -320,6 +323,7 @@ const pageLabels: Record<string, string> = {
         <ConsumerCreditManagement v-if="currentPage === 'consumerCreditManagement'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerProductionReview v-if="currentPage === 'consumerProductionReview'" :current-user="currentUser" @alert="showAlert" />
         <AiAssistantPage v-if="currentPage === 'aiAssistant'" :current-user="currentUser" />
+        <CustomerServiceDesk v-if="currentPage === 'customerService'" :current-user="currentUser" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'studio'" initial-view="image2d" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'creative2d'" initial-view="image2d" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'creative3d'" initial-view="model3d" @alert="showAlert" />
