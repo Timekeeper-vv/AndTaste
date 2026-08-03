@@ -46,6 +46,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // These providers authenticate their callbacks with their own signed
         // payloads. Do not broaden this exemption to arbitrary "callback" URLs.
         return path.equals("/api/payments/wechat/notify")
+                || path.equals("/api/payments/wechat/refund-notify")
                 || path.equals("/api/logistics/callback/kuaidi100");
     }
 

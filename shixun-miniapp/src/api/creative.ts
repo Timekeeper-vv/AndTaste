@@ -51,6 +51,45 @@ export const getAssetPreviewAccess = (assetId: number | string) => request<{ url
 export const getModelPreviewAccess = getAssetPreviewAccess
 
 export const getPackages = () => request<any>('/api/payments/packages')
-export const createPaymentOrder = (packageCode: string) => request<any>('/api/payments/orders', { method: 'POST', data: { packageCode, channel: 'manual_wechat_qr' }, header: { 'content-type': 'application/json' } })
+
+/**
+ * Only the temporary code returned by `uni.login` is sent to the server.
+ * The server exchanges it with WeChat and stores the resulting OpenID; neither
+ * an AppSecret nor any merchant key may ever be bundled into the mini program.
+ */
+export const bindWechatMiniapp = (code: string) => request<{ bound: boolean; openIdBound: boolean }>('/api/payments/wechat/bind', {
+  method: 'POST', data: { code }, header: { 'content-type': 'application/json' },
+})
+
+export type PaymentChannel = 'manual_wechat_qr' | 'wechat_jsapi'
+
+export interface WechatJsapiPaymentParams {
+  timeStamp: string | number
+  nonceStr: string
+  package: string
+  signType: 'RSA' | 'MD5' | 'HMAC-SHA256' | string
+  paySign: string
+}
+
+export interface PaymentOrder {
+  orderNo: string
+  channel?: PaymentChannel | string
+  status?: string
+  packageName?: string
+  credits?: number
+  amountYuan?: number | string
+  amountFen?: number | string
+  codeUrl?: string
+  createdAt?: string
+  refundStatus?: string
+  paymentParams?: WechatJsapiPaymentParams
+}
+
+export const createPaymentOrder = (packageCode: string, channel: PaymentChannel = 'manual_wechat_qr') => request<PaymentOrder>('/api/payments/orders', {
+  method: 'POST', data: { packageCode, channel }, header: { 'content-type': 'application/json' },
+})
 export const manualComplete = (orderNo: string) => request<any>(`/api/payments/orders/${encodeURIComponent(orderNo)}/manual-complete`, { method: 'POST' })
+/** Close an unpaid order before switching payment methods; never call this after a confirmed payment. */
+export const closePaymentOrderOnServer = (orderNo: string) => request<PaymentOrder>(`/api/payments/orders/${encodeURIComponent(orderNo)}/close`, { method: 'POST' })
 export const getPaymentOrders = () => request<any[]>('/api/payments/orders')
+export const getPaymentOrder = (orderNo: string) => request<PaymentOrder>(`/api/payments/orders/${encodeURIComponent(orderNo)}`)

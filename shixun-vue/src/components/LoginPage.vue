@@ -179,6 +179,75 @@ const translations = {
 
 const t = computed(() => translations[lang.value])
 
+type RankingPeriod = 'month' | 'quarter' | 'year'
+
+const rankingPeriod = ref<RankingPeriod>('month')
+
+const destinationMarks = [
+  { mark: '国博', name: '中国国家博物馆', place: '北京', theme: '文明脉络', tone: 'jade' },
+  { mark: '上博', name: '上海博物馆', place: '上海', theme: '器物美学', tone: 'indigo' },
+  { mark: '苏博', name: '苏州博物馆', place: '苏州', theme: '园林留白', tone: 'terracotta' },
+  { mark: '三星', name: '三星堆博物馆', place: '广汉', theme: '神秘符号', tone: 'gold' },
+  { mark: '敦煌', name: '敦煌莫高窟', place: '酒泉', theme: '飞天色谱', tone: 'violet' },
+  { mark: '黄山', name: '黄山风景区', place: '黄山', theme: '山水意境', tone: 'pine' },
+]
+
+const smallDestinationLogic = [
+  { no: '01', title: '符号更聚焦', desc: '一个清晰的器物、传说或地貌，往往比“大而全”的文化叙事更容易被记住。' },
+  { no: '02', title: '同质竞争更低', desc: '先用 1–2 个高辨识 SKU 测试，避开热门目的地已有的大量同类纪念品。' },
+  { no: '03', title: '故事更愿被分享', desc: '把“第一次知道这个地方”的惊喜做成礼物语言，天然适合社交传播。' },
+]
+
+const inspirationCases = [
+  {
+    image: '/generated/images/jimeng-image-1784783686097.png',
+    category: '器物再设计',
+    title: '从器型中提取一眼能认出的轮廓',
+    copy: '不复制文物本身，而是拆解瓶口、纹样和釉色层次，转译为更适合陈列与送礼的产品语言。',
+    tags: ['高识别度', '可做系列', '陈列友好'],
+  },
+  {
+    image: '/generated/images/jimeng-image-1785721085629.png',
+    category: '城市伴手礼',
+    title: '用一条城市线索，组织整套礼赠体验',
+    copy: '把地标、地图、地方纹样放进统一的开箱节奏，让单品也能带出完整的目的地记忆。',
+    tags: ['礼盒逻辑', '客单提升', '轻量打样'],
+  },
+  {
+    image: '/generated/models/tripo-preview-1785312126915.webp',
+    category: '在地 IP',
+    title: '把地域角色做成可收藏的情绪入口',
+    copy: '先定义角色的表情、材质和一句话故事，再扩展挂件、摆件与节日限定，降低首发试错成本。',
+    tags: ['情绪价值', '易于延展', '适合限定'],
+  },
+]
+
+const salesRankings: Record<RankingPeriod, Array<{ name: string; category: string; units: string; change: string; color: string }>> = {
+  month: [
+    { name: '镇馆纹样冰箱贴', category: '轻量纪念品', units: '1,286 件', change: '+36%', color: 'jade' },
+    { name: '城市漫游伴手礼盒', category: '礼赠套装', units: '863 件', change: '+22%', color: 'terracotta' },
+    { name: '在地动物挂件', category: '角色 IP', units: '742 件', change: '+19%', color: 'violet' },
+  ],
+  quarter: [
+    { name: '园林窗棂香插套装', category: '家居文创', units: '3,948 件', change: '+41%', color: 'pine' },
+    { name: '飞天配色丝巾礼盒', category: '高客单礼赠', units: '2,765 件', change: '+28%', color: 'gold' },
+    { name: '城市地标拼图册', category: '亲子互动', units: '2,109 件', change: '+17%', color: 'indigo' },
+  ],
+  year: [
+    { name: '地方纹样系列冰箱贴', category: '常青 SKU', units: '16,802 件', change: '+58%', color: 'jade' },
+    { name: '山水主题旅行礼盒', category: '伴手礼', units: '11,430 件', change: '+33%', color: 'pine' },
+    { name: '博物馆夜游限定徽章', category: '限定收藏', units: '8,624 件', change: '+26%', color: 'gold' },
+  ],
+}
+
+const rankingPeriods: Array<{ value: RankingPeriod; label: string }> = [
+  { value: 'month', label: '月榜' },
+  { value: 'quarter', label: '季榜' },
+  { value: 'year', label: '年榜' },
+]
+
+const activeRanking = computed(() => salesRankings[rankingPeriod.value])
+
 const modal = ref<'none' | 'login' | 'register'>('none')
 
 const username = ref('')
@@ -406,6 +475,103 @@ onUnmounted(() => {
         <span>{{ t.scrollHint }}</span>
         <div class="scroll-chevron">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════
+         DESTINATION DISCOVERY — trust, inspiration, trend data
+    ══════════════════════════════════════ -->
+    <section class="destination-discovery" aria-labelledby="destination-discovery-title">
+      <div class="discovery-shell">
+        <div class="discovery-heading">
+          <div>
+            <span class="discovery-kicker">DESTINATION DISCOVERY</span>
+            <h2 id="destination-discovery-title">先找到值得被带走的地方故事</h2>
+            <p>从热门馆与景区的文化线索中找方向，也为小而美的目的地发现更容易出爆款的切口。</p>
+          </div>
+          <button class="discovery-cta" type="button" @click="openModal('register')">
+            开始创建文创方案
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+
+        <div class="destination-mark-grid" aria-label="热门博物馆和景区灵感名片">
+          <article v-for="destination in destinationMarks" :key="destination.name" :class="['destination-mark-card', `tone-${destination.tone}`]">
+            <div class="destination-mark" aria-hidden="true">{{ destination.mark }}</div>
+            <div>
+              <b>{{ destination.name }}</b>
+              <span>{{ destination.place }} · {{ destination.theme }}</span>
+            </div>
+            <i aria-hidden="true"></i>
+          </article>
+        </div>
+        <p class="destination-note">机构名称与自绘文化徽章仅用于创作灵感展示，不代表合作、授权或官方背书；实际项目请先确认相关商标、版权与文创授权。</p>
+
+        <div class="small-destination-panel">
+          <div class="small-destination-intro">
+            <span>SMALL DESTINATION, BIG IDEA</span>
+            <h3>小景区不必“像大景区”<br/><em>单点文化记忆，反而更容易成为爆点。</em></h3>
+            <p>不是客流越大越容易卖。对冷门馆、县域景区和地方展馆来说，选择一个独特符号、一个好讲的故事、一个易带走的产品，常常比复制热门款更有机会被记住。</p>
+          </div>
+          <div class="small-destination-steps">
+            <article v-for="step in smallDestinationLogic" :key="step.no">
+              <span>{{ step.no }}</span>
+              <b>{{ step.title }}</b>
+              <p>{{ step.desc }}</p>
+            </article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="proof-section" aria-labelledby="proof-title">
+      <div class="proof-shell">
+        <div class="proof-heading">
+          <div>
+            <span class="discovery-kicker">CREATOR PLAYBOOK</span>
+            <h2 id="proof-title">把别人的成功方法，变成你的第一版方向</h2>
+            <p>从文化提取、产品组合到角色塑造，先借鉴可复用的方法，再长出自己的原创表达。</p>
+          </div>
+          <span class="demo-pill">创作参考 · 演示内容</span>
+        </div>
+
+        <div class="case-grid">
+          <article v-for="(item, index) in inspirationCases" :key="item.title" class="inspiration-case">
+            <div class="case-image-wrap">
+              <img :src="item.image" :alt="item.title" />
+              <span>0{{ index + 1 }}</span>
+            </div>
+            <div class="case-copy">
+              <small>{{ item.category }}</small>
+              <h3>{{ item.title }}</h3>
+              <p>{{ item.copy }}</p>
+              <div class="case-tags"><span v-for="tag in item.tags" :key="tag">{{ tag }}</span></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="ranking-panel" aria-labelledby="ranking-title">
+          <div class="ranking-heading">
+            <div>
+              <span class="ranking-eyebrow">SALES TREND BOARD</span>
+              <h3 id="ranking-title">文创销量排行榜</h3>
+              <p>看清哪些产品逻辑正在被市场选择，再决定自己的首发组合。</p>
+            </div>
+            <div class="ranking-tabs" role="tablist" aria-label="选择榜单周期">
+              <button v-for="period in rankingPeriods" :key="period.value" :class="{ active: rankingPeriod === period.value }" type="button" role="tab" :aria-selected="rankingPeriod === period.value" @click="rankingPeriod = period.value">{{ period.label }}</button>
+            </div>
+          </div>
+          <ol class="ranking-list">
+            <li v-for="(item, index) in activeRanking" :key="item.name">
+              <span class="ranking-number">0{{ index + 1 }}</span>
+              <span :class="['ranking-dot', `dot-${item.color}`]" aria-hidden="true"></span>
+              <div class="ranking-item-copy"><b>{{ item.name }}</b><small>{{ item.category }}</small></div>
+              <strong>{{ item.units }}</strong>
+              <em>{{ item.change }}</em>
+            </li>
+          </ol>
+          <p class="ranking-note">演示榜单用于展示产品趋势洞察；正式上线时应接入已脱敏、可审计的订单聚合数据。</p>
         </div>
       </div>
     </section>
@@ -2376,4 +2542,10 @@ onUnmounted(() => {
 }
 
 .agreement-signature{position:relative;display:grid;grid-template-columns:40px 1fr;gap:10px;padding:14px;border:1px solid #b9dfd7;border-radius:16px;background:radial-gradient(circle at 90% 8%,rgba(45,212,191,.15),transparent 90px),linear-gradient(135deg,#f2fffb,#f8fafc);color:#36534e}.agreement-seal{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff;font-weight:900;box-shadow:0 7px 18px rgba(15,118,110,.22)}.agreement-copy span{display:block;font-size:9px;letter-spacing:.13em;color:#0f766e;font-weight:900}.agreement-copy b{display:block;margin:2px 0;color:#173f3a;font-size:14px}.agreement-copy p{margin:0;font-size:10px;line-height:1.55;color:#55736d}.signature-line{grid-column:1/-1;display:grid;grid-template-columns:64px 1fr;align-items:center;margin-top:2px;padding:8px 0 6px;border-bottom:1px dashed #89bbb0}.signature-line label{color:#0f766e;font-size:11px;font-weight:900}.signature-line input{height:30px!important;padding:0 4px!important;border:0!important;border-radius:0!important;border-bottom:1px solid #51968a!important;background:transparent!important;box-shadow:none!important;font-family:"STKaiti","KaiTi",serif!important;font-size:15px!important;font-weight:700;color:#174740!important}.signature-line input:focus{border-bottom:2px solid #0f766e!important}.signature-line i{grid-column:2;font-size:9px;color:#7a9892;font-style:normal;margin-top:3px}.signature-confirm{grid-column:1/-1;display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border-radius:10px;background:rgba(255,255,255,.7);color:#335b54;font-size:11px;font-weight:700;line-height:1.5;cursor:pointer}.signature-confirm input{margin:2px 0 0;accent-color:#0f766e}.agreement-signature>small{grid-column:1/-1;color:#819590;font-size:9px;line-height:1.45}.registration-form{gap:11px}.registration-intro{margin:-2px 0 2px;padding:12px 13px;border:1px solid #bde7df;border-radius:13px;background:linear-gradient(135deg,#ecfdf8,#f6fffc)}.registration-intro span{display:block;color:#0f766e;font-size:9px;font-weight:800;letter-spacing:.12em}.registration-intro b{display:block;margin:3px 0;color:#134e4a;font-size:16px}.registration-intro small{display:block;color:#52716c;font-size:11px;line-height:1.45}.registration-section-label{display:flex;align-items:center;gap:7px;margin-top:2px;color:#475569;font-size:11px;font-weight:800}.registration-section-label i{display:grid;place-items:center;width:19px;height:19px;border-radius:6px;background:#0f766e;color:#fff;font-size:9px;font-style:normal}.registration-contact-row{grid-template-columns:1.1fr 1fr}.registration-form .modal-submit{position:sticky;bottom:0;margin-top:4px}.password-hint{display:block;color:#64748b;font-size:10px;line-height:1.35}@media(max-width:768px){.registration-contact-row{grid-template-columns:1fr}.registration-intro{padding:11px}.modal-box:has(.registration-form){max-height:calc(100vh - 24px);overflow:auto;overscroll-behavior:contain}}
+
+/* ── Destination discovery / social proof ── */
+.destination-discovery,.proof-section{position:relative;padding:92px 24px;background:#f7f3ea}.destination-discovery{overflow:hidden;background:radial-gradient(circle at 92% 8%,rgba(45,212,191,.15),transparent 22%),radial-gradient(circle at 6% 85%,rgba(251,191,36,.15),transparent 26%),#f7f3ea}.proof-section{padding-top:0;background:linear-gradient(180deg,#f7f3ea 0%,#f8fbff 100%)}.discovery-shell,.proof-shell{width:min(1180px,100%);margin:0 auto}.discovery-heading,.proof-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:28px}.discovery-kicker,.ranking-eyebrow{display:block;color:#0f766e;font-size:10px;font-weight:900;letter-spacing:.16em}.discovery-heading h2,.proof-heading h2{max-width:720px;margin:9px 0 10px;color:#0f172a;font-size:clamp(32px,4vw,52px);line-height:1.12;letter-spacing:-.055em}.discovery-heading p,.proof-heading p{max-width:650px;margin:0;color:#64748b;font-size:15px;line-height:1.75}.discovery-cta{display:inline-flex;align-items:center;gap:8px;flex:none;padding:13px 18px;border:0;border-radius:999px;background:#0f172a;color:#fff;font:inherit;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 14px 30px rgba(15,23,42,.16);transition:transform .18s ease,box-shadow .18s ease}.discovery-cta:hover{transform:translateY(-2px);box-shadow:0 18px 36px rgba(15,23,42,.22)}.destination-mark-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-top:38px}.destination-mark-card{position:relative;min-height:106px;padding:14px;overflow:hidden;border:1px solid rgba(15,23,42,.08);border-radius:18px;background:rgba(255,255,255,.76);box-shadow:0 14px 32px rgba(15,23,42,.06);transition:transform .2s ease,box-shadow .2s ease}.destination-mark-card:hover{z-index:1;transform:translateY(-5px);box-shadow:0 20px 40px rgba(15,23,42,.11)}.destination-mark{display:grid;place-items:center;width:40px;height:40px;margin-bottom:13px;border-radius:13px;background:#dcfce7;color:#065f46;font-size:14px;font-weight:950;letter-spacing:.08em;box-shadow:inset 0 0 0 1px rgba(255,255,255,.85)}.destination-mark-card b{display:block;position:relative;color:#0f172a;font-size:13px;line-height:1.35}.destination-mark-card span{display:block;position:relative;margin-top:4px;color:#64748b;font-size:10px;line-height:1.4}.destination-mark-card i{position:absolute;right:-15px;top:-13px;width:74px;height:74px;border:1px solid currentColor;border-radius:50%;opacity:.12}.tone-jade{color:#059669}.tone-jade .destination-mark{background:#d1fae5;color:#047857}.tone-indigo{color:#4f46e5}.tone-indigo .destination-mark{background:#e0e7ff;color:#4338ca}.tone-terracotta{color:#c2410c}.tone-terracotta .destination-mark{background:#ffedd5;color:#9a3412}.tone-gold{color:#a16207}.tone-gold .destination-mark{background:#fef3c7;color:#92400e}.tone-violet{color:#7c3aed}.tone-violet .destination-mark{background:#ede9fe;color:#6d28d9}.tone-pine{color:#0f766e}.tone-pine .destination-mark{background:#ccfbf1;color:#0f766e}.destination-note{margin:12px 2px 0;color:#94a3b8;font-size:11px;line-height:1.65}.small-destination-panel{display:grid;grid-template-columns:minmax(260px,.96fr) minmax(0,1.4fr);gap:42px;margin-top:48px;padding:38px;border-radius:28px;background:radial-gradient(circle at 90% 18%,rgba(45,212,191,.24),transparent 28%),radial-gradient(circle at 14% 92%,rgba(251,191,36,.18),transparent 32%),linear-gradient(135deg,#0c1d1a,#112d2a 58%,#163431);box-shadow:0 28px 60px rgba(15,23,42,.15)}.small-destination-intro>span{color:#8af1db;font-size:10px;font-weight:900;letter-spacing:.16em}.small-destination-intro h3{margin:11px 0 14px;color:#fff;font-size:clamp(26px,3vw,38px);line-height:1.2;letter-spacing:-.04em}.small-destination-intro h3 em{font-style:normal;color:#fcd34d}.small-destination-intro p{margin:0;color:rgba(236,253,245,.72);font-size:13px;line-height:1.8}.small-destination-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.small-destination-steps article{padding:18px 16px;border:1px solid rgba(255,255,255,.11);border-radius:18px;background:rgba(255,255,255,.08);backdrop-filter:blur(12px)}.small-destination-steps span{display:block;color:#8af1db;font-size:11px;font-weight:950;letter-spacing:.11em}.small-destination-steps b{display:block;margin-top:22px;color:#fff;font-size:15px}.small-destination-steps p{margin:8px 0 0;color:rgba(236,253,245,.68);font-size:11px;line-height:1.7}.proof-heading{align-items:flex-start}.demo-pill{flex:none;margin-top:8px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:999px;background:rgba(255,255,255,.68);color:#64748b;font-size:11px;font-weight:700}.case-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:34px}.inspiration-case{overflow:hidden;border:1px solid rgba(15,23,42,.08);border-radius:22px;background:rgba(255,255,255,.78);box-shadow:0 14px 34px rgba(15,23,42,.07);transition:transform .2s ease,box-shadow .2s ease}.inspiration-case:hover{transform:translateY(-5px);box-shadow:0 24px 50px rgba(15,23,42,.12)}.case-image-wrap{position:relative;height:205px;overflow:hidden;background:linear-gradient(135deg,#dbeafe,#fef3c7)}.case-image-wrap img{width:100%;height:100%;object-fit:cover;transition:transform .5s ease}.inspiration-case:hover img{transform:scale(1.045)}.case-image-wrap span{position:absolute;left:14px;top:13px;display:grid;place-items:center;width:34px;height:26px;border:1px solid rgba(255,255,255,.5);border-radius:9px;background:rgba(15,23,42,.58);color:#fff;font-size:10px;font-weight:900;backdrop-filter:blur(8px)}.case-copy{padding:19px}.case-copy small{display:block;color:#0f766e;font-size:10px;font-weight:900;letter-spacing:.12em}.case-copy h3{min-height:48px;margin:8px 0;color:#0f172a;font-size:18px;line-height:1.35;letter-spacing:-.025em}.case-copy p{min-height:64px;margin:0;color:#64748b;font-size:12px;line-height:1.7}.case-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:17px}.case-tags span{padding:5px 8px;border-radius:999px;background:#f1f5f9;color:#475569;font-size:10px;font-weight:700}.ranking-panel{margin-top:48px;padding:30px;border:1px solid rgba(15,23,42,.08);border-radius:26px;background:radial-gradient(circle at 90% 5%,rgba(250,204,21,.16),transparent 26%),radial-gradient(circle at 2% 100%,rgba(45,212,191,.15),transparent 28%),rgba(255,255,255,.84);box-shadow:0 18px 48px rgba(15,23,42,.08)}.ranking-heading{display:flex;align-items:center;justify-content:space-between;gap:24px}.ranking-heading h3{margin:6px 0;color:#0f172a;font-size:28px;letter-spacing:-.04em}.ranking-heading p{margin:0;color:#64748b;font-size:13px}.ranking-tabs{display:flex;gap:5px;padding:4px;border:1px solid #e2e8f0;border-radius:999px;background:#f8fafc}.ranking-tabs button{border:0;border-radius:999px;padding:8px 13px;background:transparent;color:#64748b;font:inherit;font-size:12px;font-weight:800;cursor:pointer}.ranking-tabs button.active{background:#0f172a;color:#fff;box-shadow:0 5px 12px rgba(15,23,42,.16)}.ranking-list{margin:25px 0 0;padding:0;list-style:none}.ranking-list li{display:grid;grid-template-columns:36px 10px minmax(0,1fr) auto 52px;align-items:center;gap:11px;padding:15px 2px;border-top:1px solid rgba(15,23,42,.07)}.ranking-number{color:#94a3b8;font-size:13px;font-weight:950;font-variant-numeric:tabular-nums}.ranking-list li:first-child .ranking-number{color:#d97706}.ranking-dot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 0 4px currentColor}.dot-jade{color:#0f766e;background:#0f766e}.dot-terracotta{color:#ea580c;background:#ea580c}.dot-violet{color:#7c3aed;background:#7c3aed}.dot-pine{color:#059669;background:#059669}.dot-gold{color:#d97706;background:#d97706}.dot-indigo{color:#4f46e5;background:#4f46e5}.ranking-item-copy b,.ranking-item-copy small{display:block}.ranking-item-copy b{color:#1e293b;font-size:14px}.ranking-item-copy small{margin-top:3px;color:#94a3b8;font-size:11px}.ranking-list strong{color:#0f172a;font-size:14px;font-variant-numeric:tabular-nums}.ranking-list em{color:#059669;font-size:12px;font-style:normal;font-weight:900;text-align:right}.ranking-note{margin:16px 0 0;color:#94a3b8;font-size:10px;line-height:1.6}
+
+@media(max-width:980px){.destination-mark-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.small-destination-panel{grid-template-columns:1fr;gap:26px}.small-destination-steps{grid-template-columns:repeat(3,minmax(0,1fr))}.discovery-heading{align-items:flex-start;flex-direction:column}.case-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.case-image-wrap{height:170px}.case-copy h3{font-size:16px}.case-copy p{min-height:82px}}
+@media(max-width:680px){.destination-discovery,.proof-section{padding:64px 16px}.discovery-heading h2,.proof-heading h2{font-size:32px}.discovery-heading p,.proof-heading p{font-size:14px}.destination-mark-grid{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:28px}.destination-mark-card{min-height:96px}.small-destination-panel{margin-top:34px;padding:24px}.small-destination-steps{grid-template-columns:1fr}.small-destination-steps article{padding:14px}.small-destination-steps b{margin-top:11px}.proof-heading{gap:14px;flex-direction:column}.case-grid{grid-template-columns:1fr}.case-image-wrap{height:210px}.case-copy h3,.case-copy p{min-height:0}.ranking-panel{margin-top:32px;padding:22px 16px}.ranking-heading{align-items:flex-start;flex-direction:column;gap:14px}.ranking-heading h3{font-size:25px}.ranking-list li{grid-template-columns:28px 8px minmax(0,1fr) 48px;gap:8px}.ranking-list strong{display:none}.ranking-item-copy b{font-size:13px}.ranking-item-copy small{font-size:10px}.ranking-list em{font-size:11px}.discovery-cta{width:100%;justify-content:center}}
 </style>

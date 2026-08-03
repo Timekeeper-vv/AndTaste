@@ -239,3 +239,44 @@ curl -s http://127.0.0.1:8080/api/creative/ai/imagen/config
 ```
 
 返回 `"configured":true` 表示 2D 生图的 Google Imagen 4 按钮可用。
+
+## 12. 微信小程序 JSAPI 支付上线
+
+小程序支付只在服务端创建订单，客户端通过 `wx.requestPayment` 展示支付界面；到账、退款和异常订单均以微信支付 API v3 的验签通知或主动查询为准。不要在小程序代码中放 AppSecret、商户私钥或 APIv3 Key。
+
+上线前确认：
+
+1. 微信商户平台已开通 JSAPI/小程序支付，且商户号已绑定小程序 AppID `wxd1ba9e6e01d0e3db`；小程序后台已配置服务器业务域名和 request 合法域名。
+2. 服务器已启用 HTTPS，并将以下两个地址登记到微信商户平台，且反向代理不会删除 `Wechatpay-*` 请求头：
+
+   - `https://你的域名/api/payments/wechat/notify`
+   - `https://你的域名/api/payments/wechat/refund-notify`
+
+3. 将商户私钥、微信支付平台证书放在服务器受限目录（例如 `/opt/smart_pig/secrets`），权限设为仅运行用户可读；平台证书 serial 必须与 `.env` 中的值一致。
+4. 在 `.env` 填写并检查以下配置（真实密钥不要提交 Git）：
+
+   ```dotenv
+   PAYMENT_WECHAT_ENABLED=true
+   PAYMENT_WECHAT_APP_ID=wxd1ba9e6e01d0e3db
+   PAYMENT_WECHAT_MINI_APP_SECRET=小程序AppSecret
+   PAYMENT_WECHAT_MCH_ID=微信商户号
+   PAYMENT_WECHAT_SERIAL_NO=商户证书序列号
+   PAYMENT_WECHAT_PRIVATE_KEY_PATH=/opt/smart_pig/secrets/apiclient_key.pem
+   PAYMENT_WECHAT_API_V3_KEY=32位APIv3Key
+   PAYMENT_WECHAT_NOTIFY_URL=https://你的域名/api/payments/wechat/notify
+   PAYMENT_WECHAT_REFUND_NOTIFY_URL=https://你的域名/api/payments/wechat/refund-notify
+   PAYMENT_WECHAT_PLATFORM_PUBLIC_KEY_PATH=/opt/smart_pig/secrets/wechatpay_platform_cert.pem
+   PAYMENT_WECHAT_PLATFORM_SERIAL_NO=平台证书序列号
+   PAYMENT_WECHAT_RECONCILE_ENABLED=true
+   ```
+
+5. 历史数据库先备份，再执行支付扩展表迁移，然后重新部署：
+
+   ```bash
+   mysql -u <数据库账号> -p shixun < shixun/src/main/resources/db/migration/V20260803_01__wechat_jsapi_payment.sql
+   bash scripts/aliyun-start.sh production
+   ```
+
+订单接口会先绑定 `uni.login` 的临时 code，再返回 `paymentParams`；前端支付成功回调不会直接增加积分。退款仅允许已核验的微信订单，且充值额度尚未被创作消费；人工收款码订单需线下退款。网络超时、支付回调丢失、退款 `PROCESSING/ABNORMAL` 会保留为待核对状态，不应让用户重复付款。
+
+每日账单任务默认北京时间 10:30 下载昨日交易/退款/资金流水账单，14:30 自动重试失败项。系统会验签请求、校验账单摘要并记录差异，不会根据 CSV 自动改余额；管理员应在“支付异常/日账单”接口完成复核。

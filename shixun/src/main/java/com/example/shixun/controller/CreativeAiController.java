@@ -20,6 +20,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.server.ResponseStatusException;
@@ -53,6 +55,7 @@ import java.util.zip.ZipOutputStream;
 @RequestMapping("/api/creative/ai")
 public class CreativeAiController {
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate creditTransactions;
     private final ObjectMapper mapper;
     private final JwtService jwtService;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).followRedirects(HttpClient.Redirect.NORMAL).build();
@@ -165,8 +168,9 @@ public class CreativeAiController {
     @Value("${creative.asset.private-root:${CREATIVE_ASSET_PRIVATE_ROOT:}}")
     private String creativePrivateAssetRoot;
 
-    public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper, JwtService jwtService) {
+    public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper, JwtService jwtService, PlatformTransactionManager transactionManager) {
         this.jdbc = jdbc;
+        this.creditTransactions = new TransactionTemplate(transactionManager);
         this.mapper = mapper;
         this.jwtService = jwtService;
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS design_review_report (id BIGINT AUTO_INCREMENT PRIMARY KEY, review_id BIGINT NOT NULL UNIQUE, report_json JSON NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='智能评估完整报告留存'");
@@ -2766,12 +2770,23 @@ public class CreativeAiController {
 
     private synchronized Long reserveConsumerCredit(Long userId,String bizType,BigDecimal amount,String remark) {
         if(userId==null||amount==null||amount.compareTo(BigDecimal.ZERO)<=0) return null;
+        return creditTransactions.execute(status -> reserveConsumerCreditInTransaction(userId,bizType,amount,remark));
+    }
+
+    private Long reserveConsumerCreditInTransaction(Long userId,String bizType,BigDecimal amount,String remark) {
         ensureConsumerCreditAccount(userId);
-        Map<String,Object> account=jdbc.queryForMap("SELECT id,balance,frozen_balance frozenBalance FROM consumer_credit_account WHERE user_id=? FOR UPDATE",userId);
-        BigDecimal balance=toDecimal(account.get("balance"));
-        if(balance.compareTo(amount)<0) throw new IllegalStateException("额度不足：当前剩余 "+plain(balance)+" 点，本次需要 "+plain(amount)+" 点，请联系管理员充值");
-        BigDecimal after=balance.subtract(amount);
-        jdbc.update("UPDATE consumer_credit_account SET balance=?,frozen_balance=frozen_balance+? WHERE user_id=?",after,amount,userId);
+        // Conditional debit is shared with payment-refund's row lock. This is
+        // deliberately an atomic SQL predicate rather than a read-then-write,
+        // so a concurrent refund or another application node cannot overdraw
+        // the same credit balance.
+        int reserved=jdbc.update("UPDATE consumer_credit_account SET balance=balance-?,frozen_balance=frozen_balance+? WHERE user_id=? AND balance>=?",amount,amount,userId,amount);
+        if(reserved!=1) {
+            BigDecimal balance=toDecimal(jdbc.queryForObject("SELECT balance FROM consumer_credit_account WHERE user_id=?",Object.class,userId));
+            throw new IllegalStateException("额度不足：当前剩余 "+plain(balance)+" 点，本次需要 "+plain(amount)+" 点，请联系管理员充值");
+        }
+        Map<String,Object> account=jdbc.queryForMap("SELECT balance FROM consumer_credit_account WHERE user_id=?",userId);
+        BigDecimal after=toDecimal(account.get("balance"));
+        BigDecimal balance=after.add(amount);
         KeyHolder kh=new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_credit_transaction (transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)",Statement.RETURN_GENERATED_KEYS);
@@ -2797,23 +2812,40 @@ public class CreativeAiController {
 
     private synchronized void completeConsumerCredit(Long txId,Long jobId,Long assetId) {
         if(txId==null) return;
-        List<Map<String,Object>> rows=jdbc.queryForList("SELECT id,user_id userId,amount,status FROM consumer_credit_transaction WHERE id=? LIMIT 1",txId);
+        creditTransactions.execute(status -> { completeConsumerCreditInTransaction(txId,jobId,assetId); return null; });
+    }
+
+    private void completeConsumerCreditInTransaction(Long txId,Long jobId,Long assetId) {
+        // Lock the ledger row across application nodes. The in-process
+        // synchronized guard is not sufficient when the scheduler and an
+        // API request run on different instances.
+        List<Map<String,Object>> rows=jdbc.queryForList("SELECT id,user_id userId,amount,status FROM consumer_credit_transaction WHERE id=? FOR UPDATE",txId);
         if(rows.isEmpty()||!"pending".equals(String.valueOf(rows.get(0).get("status")))) return;
         Long userId=((Number)rows.get(0).get("userId")).longValue();
         BigDecimal amount=toDecimal(rows.get(0).get("amount"));
-        jdbc.update("UPDATE consumer_credit_account SET frozen_balance=GREATEST(0,frozen_balance-?),total_consumed=total_consumed+? WHERE user_id=?",amount,amount,userId);
-        jdbc.update("UPDATE consumer_credit_transaction SET status='completed',job_id=COALESCE(?,job_id),asset_id=COALESCE(?,asset_id),remark=CONCAT(COALESCE(remark,''),';已完成扣费') WHERE id=?",jobId,assetId,txId);
+        int accountChanged=jdbc.update("UPDATE consumer_credit_account SET frozen_balance=frozen_balance-?,total_consumed=total_consumed+? WHERE user_id=? AND frozen_balance>=?",amount,amount,userId,amount);
+        if(accountChanged!=1) throw new IllegalStateException("额度冻结流水与账户余额不一致，需人工核对");
+        int txChanged=jdbc.update("UPDATE consumer_credit_transaction SET status='completed',job_id=COALESCE(?,job_id),asset_id=COALESCE(?,asset_id),remark=CONCAT(COALESCE(remark,''),';已完成扣费') WHERE id=? AND status='pending'",jobId,assetId,txId);
+        if(txChanged!=1) throw new IllegalStateException("额度流水状态并发变化，事务已回滚");
     }
 
     private synchronized void refundConsumerCredit(Long txId,String reason) {
         if(txId==null) return;
-        List<Map<String,Object>> rows=jdbc.queryForList("SELECT id,user_id userId,amount,status FROM consumer_credit_transaction WHERE id=? LIMIT 1",txId);
+        creditTransactions.execute(status -> { refundConsumerCreditInTransaction(txId,reason); return null; });
+    }
+
+    private void refundConsumerCreditInTransaction(Long txId,String reason) {
+        // Lock the ledger row so a refund and a completion cannot both apply
+        // the same pending reservation when requests hit different nodes.
+        List<Map<String,Object>> rows=jdbc.queryForList("SELECT id,user_id userId,amount,status FROM consumer_credit_transaction WHERE id=? FOR UPDATE",txId);
         if(rows.isEmpty()||!"pending".equals(String.valueOf(rows.get(0).get("status")))) return;
         Long userId=((Number)rows.get(0).get("userId")).longValue();
         BigDecimal amount=toDecimal(rows.get(0).get("amount"));
-        jdbc.update("UPDATE consumer_credit_account SET balance=balance+?,frozen_balance=GREATEST(0,frozen_balance-?) WHERE user_id=?",amount,amount,userId);
+        int accountChanged=jdbc.update("UPDATE consumer_credit_account SET balance=balance+?,frozen_balance=frozen_balance-? WHERE user_id=? AND frozen_balance>=?",amount,amount, userId,amount);
+        if(accountChanged!=1) throw new IllegalStateException("额度冻结流水与账户余额不一致，需人工核对");
         Map<String,Object> account=jdbc.queryForMap("SELECT balance FROM consumer_credit_account WHERE user_id=?",userId);
-        jdbc.update("UPDATE consumer_credit_transaction SET status='refunded',balance_after=?,remark=CONCAT(COALESCE(remark,''),?) WHERE id=?",toDecimal(account.get("balance")),";失败退回-"+nullToEmpty(reason),txId);
+        int txChanged=jdbc.update("UPDATE consumer_credit_transaction SET status='refunded',balance_after=?,remark=CONCAT(COALESCE(remark,''),?) WHERE id=? AND status='pending'",toDecimal(account.get("balance")),";失败退回-"+nullToEmpty(reason),txId);
+        if(txChanged!=1) throw new IllegalStateException("额度流水状态并发变化，事务已回滚");
     }
 
     private synchronized Long rechargeCredit(Long userId,BigDecimal amount,String operator,String remark) {

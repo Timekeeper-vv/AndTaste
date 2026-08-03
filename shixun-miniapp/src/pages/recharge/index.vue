@@ -3,7 +3,7 @@
     <view class="head">
       <view>
         <text class="title">充值积分</text>
-        <text class="sub">支付完成后提交核验，管理员确认后积分自动到账。</text>
+        <text class="sub">微信支付由官方回调自动确认到账；人工收款码订单需提交核验。</text>
       </view>
       <button class="refresh" size="mini" :loading="loading" @tap="loadData(true)">刷新</button>
     </view>
@@ -18,14 +18,16 @@
       </view>
     </view>
 
-    <button class="pay" :disabled="!selected || !manualPaymentEnabled" :loading="creatingOrder" @tap="order">{{ !manualPaymentEnabled ? '收款码暂不可用' : selected ? `生成 ${selected.name} 收款码` : '请选择套餐' }}</button>
-    <text v-if="!manualPaymentEnabled" class="payment-unavailable">收款码尚未配置或暂时不可用，请联系平台管理员后重试。</text>
+    <button class="pay" :disabled="!selected || !paymentEnabled" :loading="creatingOrder || requestingPayment" @tap="startPayment">{{ paymentButtonText }}</button>
+    <text v-if="!paymentEnabled" class="payment-unavailable">当前暂无可用支付方式，请稍后重试或联系平台管理员。</text>
+    <text v-else-if="wechatJsapiEnabled" class="payment-note">将在微信内完成安全支付，积分以微信官方回调结果为准。</text>
+    <text v-else class="payment-note">将生成微信人工收款码，付款后需提交收款核验。</text>
 
     <view class="section history">
       <view class="history-head"><text class="label">充值订单</text><text>{{ orders.length }} 笔</text></view>
       <view v-if="!orders.length && !loading" class="no-order">还没有充值订单</view>
       <view v-for="item in orders" :key="item.orderNo" class="order-item">
-        <view class="row"><text class="order-name">{{ item.packageName || '积分充值' }}</text><text class="status" :class="item.status">{{ statusText(item.status) }}</text></view>
+        <view class="row"><text class="order-name">{{ item.packageName || '积分充值' }}</text><text class="status" :class="item.status">{{ paymentStatusText(item.status) }}</text></view>
         <text class="order-meta">{{ item.orderNo }} · {{ formatTime(item.createdAt) }}</text>
         <view class="order-bottom"><text>{{ item.credits }} 积分</text><text class="order-price">¥{{ orderAmount(item) }}</text></view>
       </view>
@@ -33,26 +35,53 @@
 
     <view v-if="paymentOrder" class="modal">
       <view class="sheet">
-        <text class="sheet-title">请使用微信扫码付款</text>
-        <image v-if="qrUrl" :src="qrUrl" class="qr" mode="aspectFit" />
+        <text class="sheet-title">{{ isWechatJsapiOrder ? '微信支付' : '请使用微信扫码付款' }}</text>
+
+        <view v-if="isWechatJsapiOrder" class="jsapi-state" :class="paymentIntent">
+          <text class="state-icon">{{ paymentStateIcon }}</text>
+          <text class="state-title">{{ paymentStateTitle }}</text>
+          <text class="state-hint">{{ paymentHint }}</text>
+        </view>
+        <image v-else-if="qrUrl" :src="qrUrl" class="qr" mode="aspectFit" />
         <text v-else class="qr-unavailable">当前收款码不可用，请稍后重试或联系平台管理员。</text>
+
         <text class="order">订单号：{{ paymentOrder.orderNo }}</text>
         <text class="order">金额：¥{{ orderAmount(paymentOrder) }} · {{ paymentOrder.credits }} 积分</text>
-        <text v-if="paymentOrder.status === 'pending'" class="order">支付后请点击下方按钮提交人工核验。</text>
-        <text v-else class="order">当前状态：{{ statusText(paymentOrder.status) }}</text>
-        <button v-if="paymentOrder.status === 'pending'" class="done" :loading="completing" @tap="complete">我已完成支付</button>
-        <text class="close" @tap="paymentOrder = null">关闭</text>
+        <text v-if="isWechatJsapiOrder" class="order">当前状态：{{ paymentStatusText(paymentOrder.status) }}。支付是否到账以微信支付回调为准。</text>
+        <text v-else-if="paymentOrder.status === 'pending'" class="order">支付后请点击下方按钮提交人工核验。</text>
+        <text v-else class="order">当前状态：{{ paymentStatusText(paymentOrder.status) }}</text>
+
+        <button v-if="paymentOrder.status === 'pending' && !isWechatJsapiOrder" class="done" :loading="completing" @tap="complete">我已完成支付</button>
+        <button v-if="paymentOrder.status === 'pending' && isWechatJsapiOrder" class="query" :loading="paymentPolling" @tap="refreshPaymentStatus(true)">查询支付结果</button>
+        <button v-if="showManualFallback" class="fallback" :disabled="creatingOrder" @tap="switchToManualPayment">改用人工收款码</button>
+        <text class="close" @tap="closePaymentOrder">关闭</text>
       </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
-import { createPaymentOrder, getCredits, getPackages, getPaymentOrders, manualComplete } from '../../api/creative'
+import { computed, ref } from 'vue'
+import { onPullDownRefresh, onShow, onUnload } from '@dcloudio/uni-app'
+import {
+  bindWechatMiniapp,
+  closePaymentOrderOnServer,
+  createPaymentOrder,
+  getCredits,
+  getPackages,
+  getPaymentOrder,
+  getPaymentOrders,
+  manualComplete,
+  type PaymentOrder,
+  type WechatJsapiPaymentParams,
+} from '../../api/creative'
 import { imageUrl, moneyText, statusText } from '../../utils/format'
 import { requireSession } from '../../utils/session'
+
+type PaymentIntent = 'idle' | 'launching' | 'awaiting_callback' | 'cancelled' | 'failed' | 'paid' | 'closed' | 'exception'
+
+const MAX_PAYMENT_POLL_ATTEMPTS = 45
+const PAYMENT_POLL_INTERVAL = 2000
 
 const packages = ref<any[]>([])
 const selected = ref<any>(null)
@@ -60,14 +89,74 @@ const balance = ref(0)
 const orders = ref<any[]>([])
 const loading = ref(false)
 const creatingOrder = ref(false)
+const requestingPayment = ref(false)
 const completing = ref(false)
-const paymentOrder = ref<any>(null)
+const paymentPolling = ref(false)
+const paymentOrder = ref<PaymentOrder | null>(null)
 const qrUrl = ref('')
+const wechatJsapiEnabled = ref(false)
 const manualPaymentEnabled = ref(false)
+const paymentIntent = ref<PaymentIntent>('idle')
+const paymentHint = ref('')
+const paymentPollAttempts = ref(0)
+let paymentTimer: ReturnType<typeof setInterval> | null = null
+let paymentPollInFlight = false
+let paymentPollingGeneration = 0
+let paidNoticeShown = false
+
+const paymentEnabled = computed(() => wechatJsapiEnabled.value || manualPaymentEnabled.value)
+const isWechatJsapiOrder = computed(() => paymentOrder.value?.channel === 'wechat_jsapi')
+const showManualFallback = computed(() => (
+  isWechatJsapiOrder.value
+  && manualPaymentEnabled.value
+  && ['pending', 'failed', 'closed', 'expired', 'cancelled'].includes(paymentOrder.value?.status || '')
+  && ['cancelled', 'failed', 'closed'].includes(paymentIntent.value)
+))
+const paymentButtonText = computed(() => {
+  if (!paymentEnabled.value) return '支付暂不可用'
+  if (!selected.value) return '请选择套餐'
+  return wechatJsapiEnabled.value ? `微信支付 ¥${packageAmount(selected.value)}` : `生成 ${selected.value.name} 收款码`
+})
+const paymentStateIcon = computed(() => ({
+  idle: '⌛',
+  launching: '…',
+  awaiting_callback: '⌛',
+  cancelled: '×',
+  failed: '!',
+  paid: '✓',
+  closed: '×',
+  exception: '!',
+}[paymentIntent.value] || '⌛'))
+const paymentStateTitle = computed(() => ({
+  idle: '等待支付结果',
+  launching: '正在唤起微信支付',
+  awaiting_callback: '正在确认支付结果',
+  cancelled: '你已取消本次支付',
+  failed: '未能完成微信支付',
+  paid: '积分已到账',
+  closed: '订单已关闭',
+  exception: '支付结果核对中',
+}[paymentIntent.value] || '等待支付结果'))
 
 const rows = (payload: any) => Array.isArray(payload) ? payload : (Array.isArray(payload?.items) ? payload.items : [])
 const packageAmount = (pkg: any) => moneyText(pkg?.amountYuan, pkg?.amountFen)
 const orderAmount = (order: any) => moneyText(order?.amountYuan, order?.amountFen)
+const paymentStatusText = (status?: string) => ({
+  pending: '待支付',
+  manual_review: '待人工核验',
+  paid: '已到账',
+  failed: '支付失败',
+  closed: '已关闭',
+  expired: '已过期',
+  cancelled: '已取消',
+  payment_exception: '支付结果核对中',
+  refund_requested: '退款申请中',
+  refund_processing: '退款处理中',
+  refund_unknown: '退款待核对',
+  refund_exception: '退款异常',
+  refund_failed: '退款未完成',
+  refunded: '已退款',
+}[status || ''] || statusText(status))
 
 function formatTime(value: any) {
   if (!value) return '刚刚创建'
@@ -77,17 +166,36 @@ function formatTime(value: any) {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`
 }
 
+function stopPaymentPolling() {
+  paymentPollingGeneration += 1
+  if (paymentTimer) clearInterval(paymentTimer)
+  paymentTimer = null
+  paymentPolling.value = false
+}
+
+function closePaymentOrder() {
+  stopPaymentPolling()
+  paymentOrder.value = null
+  qrUrl.value = ''
+  paymentHint.value = ''
+  paymentIntent.value = 'idle'
+  paymentPollAttempts.value = 0
+  paidNoticeShown = false
+}
+
 async function loadData(notify = false) {
   loading.value = true
   try {
     const [packageData, creditData, orderData] = await Promise.all([getPackages(), getCredits(), getPaymentOrders()])
     packages.value = rows(packageData)
     const channels = Array.isArray(packageData?.channels) ? packageData.channels : []
-    manualPaymentEnabled.value = !!channels.find((channel: any) => channel.code === 'manual_wechat_qr' && channel.enabled)
+    wechatJsapiEnabled.value = channels.some((channel: any) => channel.code === 'wechat_jsapi' && channel.enabled)
+    manualPaymentEnabled.value = channels.some((channel: any) => channel.code === 'manual_wechat_qr' && channel.enabled)
     balance.value = Number(creditData?.balance) || 0
     orders.value = rows(orderData)
     if (notify) uni.showToast({ title: '订单已刷新', icon: 'success' })
   } catch (error: any) {
+    wechatJsapiEnabled.value = false
     manualPaymentEnabled.value = false
     uni.showToast({ title: error.message || '加载充值信息失败', icon: 'none' })
   } finally {
@@ -96,12 +204,158 @@ async function loadData(notify = false) {
   }
 }
 
-async function order() {
+/**
+ * A network timeout after creating a payment can mean WeChat has already
+ * received the order. Recover the server-side order instead of allowing the
+ * user to immediately create and pay another one.
+ */
+async function recoverUncertainWechatOrder() {
+  try {
+    const orderData = await getPaymentOrders()
+    orders.value = rows(orderData)
+    const latest = orders.value.find((item: PaymentOrder) => (
+      item.channel === 'wechat_jsapi'
+      && ['pending', 'payment_exception'].includes(item.status || '')
+    )) as PaymentOrder | undefined
+    if (!latest) return false
+    paymentOrder.value = latest
+    paymentIntent.value = latest.status === 'payment_exception' ? 'exception' : 'awaiting_callback'
+    paymentHint.value = latest.status === 'payment_exception'
+      ? '支付请求结果正在由服务器与微信核对。请勿重复付款、改用人工收款码或创建新订单。'
+      : '已恢复待确认订单，正在向服务器查询微信支付结果，请勿重复付款。'
+    if (latest.status === 'pending') startPaymentPolling()
+    return true
+  } catch {
+    return false
+  }
+}
+
+function loginForWechatCode(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // #ifdef MP-WEIXIN
+    uni.login({
+      provider: 'weixin',
+      success: (result) => result.code ? resolve(result.code) : reject(new Error('未获取到微信登录凭证，请稍后重试')),
+      fail: () => reject(new Error('微信登录失败，请检查网络后重试')),
+    })
+    // #endif
+    // #ifndef MP-WEIXIN
+    reject(new Error('请在微信小程序内完成微信支付'))
+    // #endif
+  })
+}
+
+function requirePaymentParams(order: PaymentOrder): WechatJsapiPaymentParams {
+  const params = order.paymentParams
+  if (!params?.timeStamp || !params?.nonceStr || !params?.package || !params?.signType || !params?.paySign) {
+    throw new Error('支付服务未返回完整支付凭证，请稍后重试')
+  }
+  return params
+}
+
+function requestWechatPayment(params: WechatJsapiPaymentParams): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // #ifdef MP-WEIXIN
+    uni.requestPayment({
+      provider: 'wxpay',
+      timeStamp: String(params.timeStamp),
+      nonceStr: params.nonceStr,
+      package: params.package,
+      signType: params.signType as 'RSA' | 'MD5' | 'HMAC-SHA256',
+      paySign: params.paySign,
+      success: () => resolve(),
+      fail: (error) => reject(error),
+    })
+    // #endif
+    // #ifndef MP-WEIXIN
+    reject(new Error('请在微信小程序内完成微信支付'))
+    // #endif
+  })
+}
+
+function paymentWasCancelled(error: any) {
+  const message = `${error?.errMsg || ''} ${error?.message || ''}`.toLowerCase()
+  return message.includes('cancel') || message.includes('取消')
+}
+
+function startPaymentPolling() {
+  if (!paymentOrder.value?.orderNo || !isWechatJsapiOrder.value) return
+  stopPaymentPolling()
+  const generation = paymentPollingGeneration
+  paymentPollAttempts.value = 0
+  paymentPolling.value = true
+  void refreshPaymentStatus(false, generation)
+  paymentTimer = setInterval(() => { void refreshPaymentStatus(false, generation) }, PAYMENT_POLL_INTERVAL)
+}
+
+async function refreshPaymentStatus(showLoading = false, generation = paymentPollingGeneration) {
+  if (!paymentOrder.value?.orderNo || !isWechatJsapiOrder.value || paymentPollInFlight) return
+  const orderNo = paymentOrder.value.orderNo
+  paymentPollInFlight = true
+  if (showLoading) paymentPolling.value = true
+  try {
+    const latest = await getPaymentOrder(orderNo)
+    // Closing the sheet or creating another order must not allow a late polling
+    // response to reopen or overwrite the current order.
+    if (generation !== paymentPollingGeneration || paymentOrder.value?.orderNo !== orderNo) return
+    paymentOrder.value = latest
+    const status = latest.status || 'pending'
+    if (status === 'paid') {
+      stopPaymentPolling()
+      paymentIntent.value = 'paid'
+      paymentHint.value = '微信支付已由官方回调确认，积分已发放到你的账户。'
+      await loadData(false)
+      if (!paidNoticeShown) {
+        paidNoticeShown = true
+        uni.showModal({ title: '充值成功', content: `${latest.credits || ''} 积分已到账。`, showCancel: false })
+      }
+      return
+    }
+    if (status === 'payment_exception') {
+      stopPaymentPolling()
+      paymentIntent.value = 'exception'
+      paymentHint.value = '支付结果正在由服务器与微信核对。若微信已扣款，请勿重复支付；平台会以官方对账结果为准。'
+      await loadData(false)
+      return
+    }
+    if (['refund_requested', 'refund_processing', 'refund_unknown', 'refund_exception', 'refund_failed', 'refunded'].includes(status)) {
+      stopPaymentPolling()
+      paymentIntent.value = 'exception'
+      paymentHint.value = status === 'refunded'
+        ? '该笔订单已原路退款，积分已相应撤销。'
+        : '该笔订单正在进行退款或人工核对，请勿重复付款。'
+      await loadData(false)
+      return
+    }
+    if (['closed', 'failed', 'expired', 'cancelled'].includes(status)) {
+      stopPaymentPolling()
+      paymentIntent.value = 'closed'
+      paymentHint.value = status === 'expired' ? '订单已过期，请重新选择套餐发起支付。' : '订单未完成支付，未产生积分。'
+      await loadData(false)
+      return
+    }
+    paymentPollAttempts.value += 1
+    if (paymentPollAttempts.value >= MAX_PAYMENT_POLL_ATTEMPTS) {
+      stopPaymentPolling()
+      if (paymentIntent.value === 'awaiting_callback') paymentHint.value = '暂未收到支付结果。若微信已扣款，请稍后刷新订单，不要重复支付。'
+    }
+  } catch (error: any) {
+    if (showLoading) uni.showToast({ title: error.message || '查询支付结果失败', icon: 'none' })
+  } finally {
+    paymentPollInFlight = false
+    if (showLoading && !paymentTimer) paymentPolling.value = false
+  }
+}
+
+async function createManualPaymentOrder() {
   if (!selected.value) return
   creatingOrder.value = true
   try {
-    paymentOrder.value = await createPaymentOrder(selected.value.code)
-    qrUrl.value = imageUrl(paymentOrder.value.codeUrl || '/payment-collection-qr.jpg')
+    const order = await createPaymentOrder(selected.value.code, 'manual_wechat_qr')
+    paymentOrder.value = order
+    qrUrl.value = imageUrl(order.codeUrl || '/payment-collection-qr.jpg')
+    paymentIntent.value = 'idle'
+    paymentHint.value = ''
     await loadData(false)
   } catch (error: any) {
     paymentOrder.value = null
@@ -109,6 +363,62 @@ async function order() {
   } finally {
     creatingOrder.value = false
   }
+}
+
+async function createWechatPaymentOrder() {
+  if (!selected.value) return
+  creatingOrder.value = true
+  let newlyCreatedOrder: PaymentOrder | null = null
+  try {
+    // A login code is one-time-use. Bind it immediately before creating the order.
+    const code = await loginForWechatCode()
+    const binding = await bindWechatMiniapp(code)
+    if (!binding?.openIdBound) throw new Error('微信身份绑定失败，请稍后重试')
+
+    const order = await createPaymentOrder(selected.value.code, 'wechat_jsapi')
+    newlyCreatedOrder = order
+    paymentOrder.value = order
+    const params = requirePaymentParams(order)
+    qrUrl.value = ''
+    paymentIntent.value = 'launching'
+    paymentHint.value = '请在微信支付页面完成付款。'
+
+    requestingPayment.value = true
+    try {
+      await requestWechatPayment(params)
+      // Do not mark the order paid here. Only the server-side WeChat callback is authoritative.
+      paymentIntent.value = 'awaiting_callback'
+      paymentHint.value = '微信已受理支付，正在等待官方支付结果确认，请勿重复支付。'
+      startPaymentPolling()
+    } catch (error: any) {
+      paymentIntent.value = paymentWasCancelled(error) ? 'cancelled' : 'failed'
+      paymentHint.value = paymentIntent.value === 'cancelled'
+        ? '本次支付已取消，未提交人工核验。若微信账单显示已扣款，请等待回调后再刷新订单。'
+        : '未能调起或完成微信支付。若未发生扣款，可改用人工收款码。'
+      // A callback can race with the client result, so check the server briefly either way.
+      startPaymentPolling()
+    } finally {
+      requestingPayment.value = false
+    }
+  } catch (error: any) {
+    if (newlyCreatedOrder) {
+      paymentOrder.value = newlyCreatedOrder
+      paymentIntent.value = 'failed'
+      paymentHint.value = '支付订单已创建，但未能获取有效支付凭证。请不要重复支付，可稍后查询订单或改用人工收款码。'
+      await loadData(false)
+    } else if (!(await recoverUncertainWechatOrder())) {
+      paymentOrder.value = null
+    }
+    uni.showToast({ title: error.message || '发起微信支付失败', icon: 'none' })
+  } finally {
+    creatingOrder.value = false
+  }
+}
+
+async function startPayment() {
+  if (!selected.value || !paymentEnabled.value || !requireSession()) return
+  if (wechatJsapiEnabled.value) await createWechatPaymentOrder()
+  else await createManualPaymentOrder()
 }
 
 async function complete() {
@@ -121,7 +431,7 @@ async function complete() {
       title: '已提交核验',
       content: '管理员确认收款后，积分将自动发放到你的账户。',
       showCancel: false,
-      success: () => { paymentOrder.value = null },
+      success: () => { closePaymentOrder() },
     })
   } catch (error: any) {
     uni.showToast({ title: error.message || '提交失败', icon: 'none' })
@@ -130,16 +440,52 @@ async function complete() {
   }
 }
 
+function confirmManualFallback(): Promise<boolean> {
+  return new Promise((resolve) => {
+    uni.showModal({
+      title: '改用人工收款码？',
+      content: '仅当上一笔微信支付没有扣款时使用。若已扣款，请等待回调或查询订单，避免重复支付。',
+      confirmText: '继续使用',
+      success: (result) => resolve(result.confirm),
+      fail: () => resolve(false),
+    })
+  })
+}
+
+async function switchToManualPayment() {
+  if (!manualPaymentEnabled.value || !(await confirmManualFallback())) return
+  const sourceOrder = paymentOrder.value
+  if (sourceOrder?.status === 'pending') {
+    creatingOrder.value = true
+    try {
+      // The server permits one open recharge order per user. Closing a known-unpaid
+      // JSAPI order also prevents the manual fallback from being rejected as duplicate.
+      await closePaymentOrderOnServer(sourceOrder.orderNo)
+    } catch (error: any) {
+      uni.showToast({ title: error.message || '订单状态已变化，请先查询支付结果', icon: 'none' })
+      return
+    } finally {
+      creatingOrder.value = false
+    }
+  }
+  closePaymentOrder()
+  await createManualPaymentOrder()
+}
+
 onShow(() => {
-  if (requireSession()) void loadData(false)
+  if (!requireSession()) return
+  void loadData(false)
+  if (paymentOrder.value?.status === 'pending' && isWechatJsapiOrder.value) startPaymentPolling()
 })
 
 onPullDownRefresh(() => {
-  if (requireSession()) loadData(false)
+  if (requireSession()) void loadData(false)
   else uni.stopPullDownRefresh()
 })
+
+onUnload(stopPaymentPolling)
 </script>
 
 <style scoped lang="scss">
-.page{min-height:100vh;padding:34rpx;box-sizing:border-box}.head{display:flex;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 30rpx}.title{display:block;font-size:48rpx;font-weight:800}.sub{display:block;font-size:23rpx;color:#8d7469;margin-top:12rpx;line-height:1.6}.refresh{flex-shrink:0;margin:4rpx 0 0;background:#f4e5db;color:#873e26;font-size:21rpx}.card{background:linear-gradient(135deg,#472015,#a94c2b);border-radius:25rpx;color:#fff;padding:34rpx}.balance{font-size:24rpx;display:block}.balance text{font-size:62rpx;font-weight:800;margin-left:16rpx}.rules{font-size:21rpx;color:#f4d7c4;margin-top:20rpx;display:block}.section{margin-top:36rpx}.label{font-size:30rpx;font-weight:700}.pkg{display:flex;justify-content:space-between;align-items:center;margin-top:18rpx;background:#fff;border:2rpx solid transparent;border-radius:20rpx;padding:26rpx}.pkg.selected{border-color:#a64a2b;background:#fff8f2}.pkg-name,.pkg-credit{display:block}.pkg-name{font-size:29rpx;font-weight:700}.pkg-credit{font-size:22rpx;color:#936f5f;margin-top:8rpx}.price{font-size:38rpx;font-weight:800;color:#9e4325}.pay,.done{height:94rpx;line-height:94rpx;background:#963c23;color:#fff;border-radius:48rpx;font-size:29rpx;margin-top:40rpx}.pay[disabled]{opacity:.4}.payment-unavailable{display:block;margin:18rpx 12rpx 0;color:#ad442c;font-size:22rpx;line-height:1.6;text-align:center}.history{padding-bottom:42rpx}.history-head{display:flex;align-items:center;justify-content:space-between}.history-head text:last-child{font-size:21rpx;color:#9a7d70}.no-order{padding:50rpx;text-align:center;color:#a48c80;font-size:24rpx}.order-item{margin-top:16rpx;background:#fff;border-radius:18rpx;padding:24rpx}.row{display:flex;align-items:center;gap:16rpx}.order-name{font-size:27rpx;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.paid{background:#e4f5e9;color:#248653}.status.manual_review{background:#fff0d5;color:#aa681e}.status.closed,.status.failed,.status.expired{background:#ffe5e1;color:#ba3d2e}.order-meta{display:block;font-size:20rpx;color:#9b8175;margin-top:10rpx}.order-bottom{display:flex;justify-content:space-between;margin-top:15rpx;color:#765b4e;font-size:22rpx}.order-price{font-size:29rpx;font-weight:800;color:#9e4325}.modal{position:fixed;inset:0;background:rgba(0,0,0,.48);display:flex;align-items:flex-end;z-index:10}.sheet{width:100%;background:#fff;border-radius:34rpx 34rpx 0 0;padding:44rpx;box-sizing:border-box;text-align:center}.sheet-title{font-size:34rpx;font-weight:700}.qr{width:420rpx;height:420rpx;margin:24rpx auto}.qr-unavailable{display:block;margin:28rpx 0;padding:30rpx;background:#fff1e9;border-radius:18rpx;color:#ad442c;font-size:25rpx;line-height:1.6}.order{display:block;font-size:21rpx;color:#947a6d;line-height:1.7}.done{margin-top:25rpx}.close{display:block;padding:25rpx;color:#8e7469;font-size:26rpx}
+.page{min-height:100vh;padding:34rpx;box-sizing:border-box}.head{display:flex;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 30rpx}.title{display:block;font-size:48rpx;font-weight:800}.sub{display:block;font-size:23rpx;color:#8d7469;margin-top:12rpx;line-height:1.6}.refresh{flex-shrink:0;margin:4rpx 0 0;background:#f4e5db;color:#873e26;font-size:21rpx}.card{background:linear-gradient(135deg,#472015,#a94c2b);border-radius:25rpx;color:#fff;padding:34rpx}.balance{font-size:24rpx;display:block}.balance text{font-size:62rpx;font-weight:800;margin-left:16rpx}.rules{font-size:21rpx;color:#f4d7c4;margin-top:20rpx;display:block}.section{margin-top:36rpx}.label{font-size:30rpx;font-weight:700}.pkg{display:flex;justify-content:space-between;align-items:center;margin-top:18rpx;background:#fff;border:2rpx solid transparent;border-radius:20rpx;padding:26rpx}.pkg.selected{border-color:#a64a2b;background:#fff8f2}.pkg-name,.pkg-credit{display:block}.pkg-name{font-size:29rpx;font-weight:700}.pkg-credit{font-size:22rpx;color:#936f5f;margin-top:8rpx}.price{font-size:38rpx;font-weight:800;color:#9e4325}.pay,.done,.query,.fallback{height:94rpx;line-height:94rpx;background:#963c23;color:#fff;border-radius:48rpx;font-size:29rpx;margin-top:40rpx}.pay[disabled],.fallback[disabled]{opacity:.4}.payment-unavailable,.payment-note{display:block;margin:18rpx 12rpx 0;color:#ad442c;font-size:22rpx;line-height:1.6;text-align:center}.payment-note{color:#8d7469}.history{padding-bottom:42rpx}.history-head{display:flex;align-items:center;justify-content:space-between}.history-head text:last-child{font-size:21rpx;color:#9a7d70}.no-order{padding:50rpx;text-align:center;color:#a48c80;font-size:24rpx}.order-item{margin-top:16rpx;background:#fff;border-radius:18rpx;padding:24rpx}.row{display:flex;align-items:center;gap:16rpx}.order-name{font-size:27rpx;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.paid{background:#e4f5e9;color:#248653}.status.manual_review{background:#fff0d5;color:#aa681e}.status.closed,.status.failed,.status.expired,.status.cancelled{background:#ffe5e1;color:#ba3d2e}.order-meta{display:block;font-size:20rpx;color:#9b8175;margin-top:10rpx}.order-bottom{display:flex;justify-content:space-between;margin-top:15rpx;color:#765b4e;font-size:22rpx}.order-price{font-size:29rpx;font-weight:800;color:#9e4325}.modal{position:fixed;inset:0;background:rgba(0,0,0,.48);display:flex;align-items:flex-end;z-index:10}.sheet{width:100%;background:#fff;border-radius:34rpx 34rpx 0 0;padding:44rpx;box-sizing:border-box;text-align:center}.sheet-title{font-size:34rpx;font-weight:700}.qr{width:420rpx;height:420rpx;margin:24rpx auto}.qr-unavailable{display:block;margin:28rpx 0;padding:30rpx;background:#fff1e9;border-radius:18rpx;color:#ad442c;font-size:25rpx;line-height:1.6}.jsapi-state{margin:30rpx 0 24rpx;padding:34rpx 28rpx;border-radius:22rpx;background:#fff8f2}.jsapi-state.awaiting_callback,.jsapi-state.launching{background:#fff7de}.jsapi-state.paid{background:#e9f8ec}.jsapi-state.cancelled,.jsapi-state.failed,.jsapi-state.closed{background:#fff0ec}.state-icon{display:block;font-size:54rpx;font-weight:800;color:#9e4325;line-height:1}.paid .state-icon{color:#248653}.state-title{display:block;margin-top:16rpx;font-size:29rpx;font-weight:700}.state-hint{display:block;margin-top:12rpx;font-size:22rpx;line-height:1.65;color:#8f7062}.order{display:block;font-size:21rpx;color:#947a6d;line-height:1.7}.done,.query,.fallback{margin-top:25rpx}.query{background:#fff;border:2rpx solid #963c23;color:#963c23}.fallback{margin-top:16rpx;background:#b36e2e}.close{display:block;padding:25rpx;color:#8e7469;font-size:26rpx}
 </style>
