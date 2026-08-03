@@ -20,7 +20,6 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/ai")
-@CrossOrigin(origins = "*")
 public class AiChatController {
     private final SiliconFlowChatService siliconFlow;
     private final JdbcTemplate jdbc;

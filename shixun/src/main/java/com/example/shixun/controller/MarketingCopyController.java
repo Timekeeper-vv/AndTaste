@@ -7,7 +7,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/creative/marketing")
-@CrossOrigin(origins = "*")
 public class MarketingCopyController {
     private final SiliconFlowChatService siliconFlow;
 

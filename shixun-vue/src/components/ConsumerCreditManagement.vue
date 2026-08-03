@@ -48,7 +48,7 @@ async function loadAccounts() {
   try {
     const qs = new URLSearchParams({ size: '500' })
     if (search.value.trim()) qs.set('search', search.value.trim())
-    const r = await fetch(`/api/creative/ai/consumer-credits/admin/accounts?${qs}`, { cache: 'no-store', headers: { 'X-Current-Role': props.currentUser.role, 'X-Current-User': props.currentUser.username } })
+    const r = await fetch(`/api/creative/ai/consumer-credits/admin/accounts?${qs}`, { cache: 'no-store' })
     if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`)
     accounts.value = await r.json()
   } catch (e: any) {
@@ -61,7 +61,7 @@ async function loadTransactions(userId?: number) {
     const qs = new URLSearchParams({ size: '300' })
     const uid = userId ? String(userId) : txUserId.value.trim()
     if (uid) qs.set('userId', uid)
-    const r = await fetch(`/api/creative/ai/consumer-credits/admin/transactions?${qs}`, { cache: 'no-store', headers: { 'X-Current-Role': props.currentUser.role, 'X-Current-User': props.currentUser.username } })
+    const r = await fetch(`/api/creative/ai/consumer-credits/admin/transactions?${qs}`, { cache: 'no-store' })
     if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`)
     transactions.value = await r.json()
   } catch (e: any) {
@@ -85,7 +85,7 @@ async function submitRecharge() {
   try {
     const r = await fetch('/api/creative/ai/consumer-credits/admin/recharge', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Current-Role': props.currentUser.role, 'X-Current-User': props.currentUser.username },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId: recharge.userId, amount: String(recharge.amount), remark: recharge.remark }),
     })
     if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`)
@@ -104,7 +104,7 @@ async function submitSetBalance() {
   try {
     const r = await fetch('/api/creative/ai/consumer-credits/admin/set-balance', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Current-Role': props.currentUser.role, 'X-Current-User': props.currentUser.username },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId: setBalance.userId, balance: String(setBalance.balance), remark: setBalance.remark }),
     })
     if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`)

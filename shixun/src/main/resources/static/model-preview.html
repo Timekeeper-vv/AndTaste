@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#17100d" />
+    <title>3D 模型预览 · 之间智造</title>
+    <script type="module" crossorigin src="/assets/model-preview-DQMBg-Lo.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/preload-helper-Gh4c6aNx.js">
+    <link rel="stylesheet" crossorigin href="/assets/model-preview-Zq4WBtBP.css">
+  </head>
+  <body>
+    <main class="preview-shell" aria-live="polite">
+      <header class="preview-header">
+        <span class="eyebrow">BETWEEN · 3D PREVIEW</span>
+        <h1 id="model-title">3D 模型预览</h1>
+        <p id="model-status">正在准备模型…</p>
+      </header>
+      <section class="viewer-card" aria-label="3D 模型查看器">
+        <model-viewer
+          id="model-viewer"
+          camera-controls
+          touch-action="pan-y"
+          shadow-intensity="1"
+          exposure="1"
+          interaction-prompt="auto"
+          loading="eager"
+          crossorigin="anonymous"
+          alt="文创 3D 模型"
+        ></model-viewer>
+        <div id="viewer-state" class="viewer-state">模型加载中…</div>
+      </section>
+      <p class="privacy-note">此预览链接只对当前作品短时有效，过期后请返回小程序重新打开。</p>
+    </main>
+  </body>
+</html>

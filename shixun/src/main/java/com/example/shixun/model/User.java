@@ -21,7 +21,7 @@ public class User {
     @Schema(description = "手机号", example = "13800138001")
     private String phone;
 
-    @Schema(description = "密码（仅写入，响应中不返回）", example = "123456", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "密码（仅写入，响应中不返回；至少 12 个字符）", example = "Str0ngPassw0rd!", requiredMode = Schema.RequiredMode.REQUIRED)
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;
 

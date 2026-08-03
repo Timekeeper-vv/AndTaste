@@ -16,7 +16,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/scale")
-@CrossOrigin(origins = "*")
 public class ScaleUpController {
     private final JdbcTemplate jdbc;
     private final SiliconFlowChatService ai;

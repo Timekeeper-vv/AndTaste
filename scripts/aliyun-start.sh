@@ -12,7 +12,11 @@ AUTH_JWT_SECRET="${AUTH_JWT_SECRET:-}"; AUTH_JWT_EXPIRES_SECONDS="${AUTH_JWT_EXP
 BACKEND_DIR="$ROOT_DIR/shixun"; FRONTEND_DIR="$ROOT_DIR/shixun-vue"
 RUN_DIR="$ROOT_DIR/runtime"; LOG_DIR="$ROOT_DIR/logs"; PID_FILE="$RUN_DIR/$APP_NAME.pid"; APP_LOG="$LOG_DIR/$APP_NAME.log"
 DB_HOST="${DB_HOST:-127.0.0.1}"; DB_PORT="${DB_PORT:-3306}"; DB_NAME="${DB_NAME:-shixun}"; DB_USER="${DB_USER:-smart_pig}"
-DB_PASSWORD="${DB_PASSWORD:-ChangeMe_123456}"; MYSQL_ADMIN_USER="${MYSQL_ADMIN_USER:-root}"; MYSQL_ADMIN_PASSWORD="${MYSQL_ADMIN_PASSWORD:-}"
+DB_PASSWORD="${DB_PASSWORD:-}"; MYSQL_ADMIN_USER="${MYSQL_ADMIN_USER:-root}"; MYSQL_ADMIN_PASSWORD="${MYSQL_ADMIN_PASSWORD:-}"
+CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-}"
+PAYMENT_MANUAL_QR_URL="${PAYMENT_MANUAL_QR_URL:-/payment-collection-qr.jpg}"
+CREATIVE_ASSET_PRIVATE_ROOT="${CREATIVE_ASSET_PRIVATE_ROOT:-$BACKEND_DIR/data/creative-assets}"
+BOOTSTRAP_ADMIN_ENABLED="${BOOTSTRAP_ADMIN_ENABLED:-false}"; BOOTSTRAP_ADMIN_USERNAME="${BOOTSTRAP_ADMIN_USERNAME:-}"; BOOTSTRAP_ADMIN_PASSWORD="${BOOTSTRAP_ADMIN_PASSWORD:-}"; BOOTSTRAP_ADMIN_EMAIL="${BOOTSTRAP_ADMIN_EMAIL:-}"; BOOTSTRAP_ADMIN_PHONE="${BOOTSTRAP_ADMIN_PHONE:-}"; BOOTSTRAP_ADMIN_AGE="${BOOTSTRAP_ADMIN_AGE:-30}"
 SILICONFLOW_API_KEY="${SILICONFLOW_API_KEY:-}"; SILICONFLOW_CHAT_MODEL="${SILICONFLOW_CHAT_MODEL:-Qwen/Qwen3-32B}"
 SILICONFLOW_IMAGE_MODEL="${SILICONFLOW_IMAGE_MODEL:-Kwai-Kolors/Kolors}"; SILICONFLOW_IMAGE_EDIT_MODEL="${SILICONFLOW_IMAGE_EDIT_MODEL:-Qwen/Qwen-Image-Edit-2509}"
 QWEN_API_KEY="${QWEN_API_KEY:-}"; TRIPO_API_KEY="${TRIPO_API_KEY:-}"; TRIPO_API_BASE_URL="${TRIPO_API_BASE_URL:-https://openapi.tripo3d.com/v3}"; TRIPO_CONVERT_BASE_URL="${TRIPO_CONVERT_BASE_URL:-https://api.tripo3d.ai/v2/openapi}"; TRIPO_MODEL_VERSION="${TRIPO_MODEL_VERSION:-v3.1-20260211}"
@@ -77,6 +81,15 @@ server.address=0.0.0.0
 server.port=$APP_PORT
 auth.jwt.secret=$AUTH_JWT_SECRET
 auth.jwt.expires-seconds=$AUTH_JWT_EXPIRES_SECONDS
+app.cors.allowed-origins=${CORS_ALLOWED_ORIGINS:-http://localhost:5176,http://127.0.0.1:5176,http://localhost:5173,http://127.0.0.1:5173}
+payment.manual-qr-url=$PAYMENT_MANUAL_QR_URL
+creative.asset.private-root=$CREATIVE_ASSET_PRIVATE_ROOT
+app.bootstrap.admin.enabled=$BOOTSTRAP_ADMIN_ENABLED
+app.bootstrap.admin.username=$BOOTSTRAP_ADMIN_USERNAME
+app.bootstrap.admin.password=$BOOTSTRAP_ADMIN_PASSWORD
+app.bootstrap.admin.email=$BOOTSTRAP_ADMIN_EMAIL
+app.bootstrap.admin.phone=$BOOTSTRAP_ADMIN_PHONE
+app.bootstrap.admin.age=$BOOTSTRAP_ADMIN_AGE
 spring.datasource.url=jdbc:mysql://$DB_HOST:$DB_PORT/$DB_NAME?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&characterEncoding=UTF-8
 spring.datasource.username=$DB_USER
 spring.datasource.password=$DB_PASSWORD
@@ -137,19 +150,79 @@ mysql_exec(){
   MYSQL_PWD="$MYSQL_ADMIN_PASSWORD" mysql -h"$DB_HOST" -P"$DB_PORT" -u"$MYSQL_ADMIN_USER" -e "$sql"
 }
 
+mysql_query(){
+  local sql="$1"
+  if [ "$DB_HOST" = "127.0.0.1" ] || [ "$DB_HOST" = "localhost" ]; then
+    if [ -z "$MYSQL_ADMIN_PASSWORD" ] && run_root mysql -u"$MYSQL_ADMIN_USER" -e "SELECT 1" >/dev/null 2>&1; then
+      run_root mysql -N -B -u"$MYSQL_ADMIN_USER" -e "$sql"
+      return
+    fi
+  fi
+  MYSQL_PWD="$MYSQL_ADMIN_PASSWORD" mysql -N -B -h"$DB_HOST" -P"$DB_PORT" -u"$MYSQL_ADMIN_USER" -e "$sql"
+}
+
+mysql_import_file(){
+  local file="$1"
+  [ -f "$file" ] || die "找不到数据库脚本：$file"
+  info "导入数据库脚本：$(basename "$file")"
+  # 历史 schema 文件包含面向存量库的重复 ALTER；--force 允许这些已存在
+  # 的列/索引报错后继续执行，随后用关键表检查确认真正的建表语句已完成。
+  # 两份历史脚本包含固定的 `USE shixun`；删除这两类数据库级指令，避免
+  # DB_NAME 使用自定义名称时误把表导入另一个数据库。
+  if [ "$DB_HOST" = "127.0.0.1" ] || [ "$DB_HOST" = "localhost" ]; then
+    if [ -z "$MYSQL_ADMIN_PASSWORD" ] && run_root mysql -u"$MYSQL_ADMIN_USER" -e "SELECT 1" >/dev/null 2>&1; then
+      if ! sed -E '/^[[:space:]]*CREATE DATABASE IF NOT EXISTS[[:space:]]+shixun([[:space:]]|;)/d; /^[[:space:]]*USE[[:space:]]+shixun[[:space:]]*;/d' "$file" \
+        | run_root mysql --force --binary-mode -u"$MYSQL_ADMIN_USER" "$DB_NAME"; then
+        warn "$(basename "$file") 包含可忽略的历史兼容错误，继续执行关键表检查"
+      fi
+      return
+    fi
+  fi
+  if ! sed -E '/^[[:space:]]*CREATE DATABASE IF NOT EXISTS[[:space:]]+shixun([[:space:]]|;)/d; /^[[:space:]]*USE[[:space:]]+shixun[[:space:]]*;/d' "$file" \
+    | MYSQL_PWD="$MYSQL_ADMIN_PASSWORD" mysql --force --binary-mode -h"$DB_HOST" -P"$DB_PORT" -u"$MYSQL_ADMIN_USER" "$DB_NAME"; then
+    warn "$(basename "$file") 包含可忽略的历史兼容错误，继续执行关键表检查"
+  fi
+}
+
 init_db(){
   need mysql
+  [ -n "$DB_PASSWORD" ] || die "DB_PASSWORD 不能为空，请在 .env 中设置高强度数据库密码"
   [[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]] || die "DB_NAME只能包含字母、数字和下划线"
   [[ "$DB_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "DB_USER格式不合法"
   local escaped=${DB_PASSWORD//\'/\'\'}
   mysql_exec "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER IF NOT EXISTS '$DB_USER'@'%' IDENTIFIED BY '$escaped'; ALTER USER '$DB_USER'@'%' IDENTIFIED BY '$escaped'; GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'%'; FLUSH PRIVILEGES;"
+  init_schema_if_needed
   ok "数据库及业务账号已就绪：$DB_NAME / $DB_USER"
+}
+
+init_schema_if_needed(){
+  local table_count
+  table_count="$(mysql_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='user'")"
+  if [ "${table_count:-0}" != "0" ]; then
+    info "检测到已有业务表，跳过首装 Schema 导入"
+    return
+  fi
+  warn "检测到空数据库，正在执行一次性基础 Schema 导入；已有数据库不会自动覆盖"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/schema.sql"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/and_taste_schema.sql"
+  local required
+  required="$(mysql_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name IN ('user','digital_asset','ai_generation_job','workflow_application','warehouse_inventory')")"
+  [ "${required:-0}" = "5" ] || die "基础 Schema 导入不完整，请查看上方导入日志后修复数据库"
+  ok "基础 Schema 首装完成"
 }
 
 build(){
   check_deps; write_config
   info "构建 Vue 前端"; cd "$FRONTEND_DIR"; [ -f package-lock.json ] && npm ci || npm install; npm run build
-  rm -rf "$BACKEND_DIR/src/main/resources/static"/*; cp -R "$FRONTEND_DIR/dist/"* "$BACKEND_DIR/src/main/resources/static/"
+  # The manual payment flow depends on the QR image being packaged with the
+  # same-origin Spring Boot static resources.  Fail before deleting the
+  # existing bundle if the frontend build accidentally omitted it.
+  [ -f "$FRONTEND_DIR/dist/payment-collection-qr.jpg" ] || die "前端构建产物缺少 payment-collection-qr.jpg；请确认 shixun-vue/public/payment-collection-qr.jpg 存在"
+  rm -rf "$BACKEND_DIR/src/main/resources/static"/*
+  # Copy the directory itself (including dotfiles) instead of relying on a
+  # shell glob; this keeps model-preview and any future static assets intact.
+  cp -a "$FRONTEND_DIR/dist/." "$BACKEND_DIR/src/main/resources/static/"
+  [ -f "$BACKEND_DIR/src/main/resources/static/payment-collection-qr.jpg" ] || die "静态资源同步失败：payment-collection-qr.jpg 未复制到 Spring Boot 目录"
   info "构建 Spring Boot"; cd "$BACKEND_DIR"; chmod +x mvnw; ./mvnw -DskipTests clean package
   find_jar; ok "应用构建完成：$JAR_FILE"
 }
@@ -191,12 +264,26 @@ WantedBy=multi-user.target"
 
 nginx(){
   local domain="${DOMAIN:-_}" conf="/etc/nginx/conf.d/$APP_NAME.conf"
-  local content="server { listen 80; server_name $domain; client_max_body_size 30m; location / { proxy_pass http://127.0.0.1:$APP_PORT; proxy_http_version 1.1; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto \$scheme; proxy_read_timeout 180s; } }"
+  # The material-variant upload limit is 100MB and local 3D conversion may
+  # run for up to five minutes.  Keep the reverse proxy above those backend
+  # limits, otherwise a valid C-end upload/conversion fails at Nginx first.
+  local content="server { listen 80; server_name $domain; client_max_body_size 120m; location / { proxy_pass http://127.0.0.1:$APP_PORT; proxy_http_version 1.1; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto \$scheme; proxy_read_timeout 360s; } }"
   if [ "$(id -u)" = 0 ]; then printf '%s\n' "$content" > "$conf"; else printf '%s\n' "$content" | sudo tee "$conf" >/dev/null; fi
   run_root nginx -t; run_root systemctl enable --now nginx; run_root systemctl reload nginx; ok "Nginx已配置：http://$domain"
 }
 
-deploy(){ check_deps; write_config; init_db; build; restart; }
-production(){ check_deps; write_config; init_db; build; install_service; nginx; }
+validate_runtime_config(){
+  [ -n "$AUTH_JWT_SECRET" ] || die "AUTH_JWT_SECRET 不能为空，请在 .env 中设置随机密钥"
+  [ "${#AUTH_JWT_SECRET}" -ge 32 ] || die "AUTH_JWT_SECRET 至少需要32个字符"
+  [[ "$AUTH_JWT_SECRET" != *change-this* && "$AUTH_JWT_SECRET" != *development-jwt-secret* ]] || die "AUTH_JWT_SECRET 不能使用示例密钥"
+  [ -n "$CORS_ALLOWED_ORIGINS" ] || die "CORS_ALLOWED_ORIGINS 不能为空，请填写实际前端 HTTPS 域名"
+  [[ "$CORS_ALLOWED_ORIGINS" != *\** && "$CORS_ALLOWED_ORIGINS" != *null* ]] || die "CORS_ALLOWED_ORIGINS 不允许使用 * 或 null"
+  if [ "$BOOTSTRAP_ADMIN_ENABLED" = "true" ]; then
+    [ -n "$BOOTSTRAP_ADMIN_USERNAME" ] && [ -n "$BOOTSTRAP_ADMIN_PASSWORD" ] && [ -n "$BOOTSTRAP_ADMIN_EMAIL" ] && [ -n "$BOOTSTRAP_ADMIN_PHONE" ] || die "启用 BOOTSTRAP_ADMIN_ENABLED 时必须完整填写 BOOTSTRAP_ADMIN_*"
+    [ "${#BOOTSTRAP_ADMIN_PASSWORD}" -ge 12 ] || die "BOOTSTRAP_ADMIN_PASSWORD 至少需要12个字符"
+  fi
+}
+deploy(){ check_deps; validate_runtime_config; write_config; init_db; build; restart; }
+production(){ check_deps; validate_runtime_config; write_config; init_db; build; install_service; nginx; }
 case "${1:-deploy}" in
  install-deps) install_deps;; config) write_config;; init-db) init_db;; build) build;; start) start;; stop) stop;; restart) restart;; status) status;; logs) logs;; service) install_service;; nginx) nginx;; deploy) deploy;; production) production;; *) echo "用法: $0 {install-deps|config|init-db|build|deploy|production|start|stop|restart|status|logs|service|nginx}"; exit 1;; esac

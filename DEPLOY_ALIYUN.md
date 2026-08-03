@@ -52,9 +52,23 @@ DB_PASSWORD=一个高强度密码
 MYSQL_ADMIN_USER=root
 MYSQL_ADMIN_PASSWORD=
 DOMAIN=你的域名或_
+CORS_ALLOWED_ORIGINS=https://你的前端域名
+AUTH_JWT_SECRET=至少32位随机字符串
 SILICONFLOW_API_KEY=你的密钥
 REPLICATE_API_KEY=你的r8开头Replicate密钥
 ```
+
+首次没有管理员账号时，可临时补充：
+
+```dotenv
+BOOTSTRAP_ADMIN_ENABLED=true
+BOOTSTRAP_ADMIN_USERNAME=你的管理员用户名
+BOOTSTRAP_ADMIN_PASSWORD=至少12位高强度密码
+BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+BOOTSTRAP_ADMIN_PHONE=你的手机号
+```
+
+首次登录确认成功后，立刻将 `BOOTSTRAP_ADMIN_ENABLED` 改回 `false` 并重新执行部署。项目不会自动创建演示账号或默认密码。
 
 使用阿里云 RDS 时：
 
@@ -81,13 +95,21 @@ bash scripts/aliyun-start.sh production
 它会自动：
 
 1. 加载 `.env`
-2. 创建数据库和业务账号
+2. 创建数据库和业务账号；空库仅首装一次基础 Schema
 3. 安装前端依赖并构建 Vue
 4. 将前端产物打入 Spring Boot
 5. Maven 打包后端
 6. 安装 `smart-pig.service` systemd 服务
 7. 设置故障自动重启和开机自启
 8. 配置 Nginx 反向代理到 `127.0.0.1:8080`
+
+已有历史数据库时，首次升级到本版本前请先备份，并执行一次账号安全迁移：
+
+```bash
+mysql -u <数据库账号> -p shixun < shixun/src/main/resources/db/migration/V20260731_01__harden_account_bootstrap.sql
+```
+
+迁移不会删除旧演示账号；请在后台人工盘点、停用并重置其密码。
 
 访问：`http://服务器公网IP/` 或 `http://你的域名/`。
 

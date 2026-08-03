@@ -1,10 +1,16 @@
 package com.example.shixun.controller;
 
+import com.example.shixun.security.JwtAuthenticationFilter;
+import com.example.shixun.security.JwtService;
 import com.example.shixun.service.SiliconFlowChatService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.sql.PreparedStatement;
@@ -15,7 +21,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/warehouse")
-@CrossOrigin(origins = "*")
 public class WarehouseController {
     private final JdbcTemplate jdbc;
     private final SiliconFlowChatService ai;
@@ -110,6 +115,7 @@ public class WarehouseController {
 
     @PostMapping("/inbound")
     public Map<String, Object> inbound(@RequestBody InboundRequest req) {
+        JwtService.Claims principal = authenticatedPrincipal();
         enrichInboundFromCatalog(req);
         if (blank(req.itemName) || req.qty == null || req.qty.compareTo(BigDecimal.ZERO) <= 0) throw new IllegalArgumentException("入库商品和数量不能为空");
         Long locationId = ensureLocation(req.locationCode);
@@ -118,7 +124,7 @@ public class WarehouseController {
         KeyHolder kh = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("INSERT INTO warehouse_inbound (inbound_no,source_type,supplier,operator,remark,status) VALUES (?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
-            ps.setString(1, inboundNo); ps.setString(2, nvl(req.sourceType,"purchase")); ps.setString(3, req.supplier); ps.setString(4, nvl(req.operator,"仓库员")); ps.setString(5, req.remark); ps.setString(6, "done"); return ps;
+            ps.setString(1, inboundNo); ps.setString(2, nvl(req.sourceType,"purchase")); ps.setString(3, req.supplier); ps.setString(4, principal.username()); ps.setString(5, req.remark); ps.setString(6, "done"); return ps;
         }, kh);
         Long inboundId = Objects.requireNonNull(kh.getKey()).longValue();
         jdbc.update("INSERT INTO warehouse_inbound_item (inbound_id,inventory_id,item_name,qty,unit_cost,location_code) VALUES (?,?,?,?,?,?)", inboundId, inventoryId, req.itemName, req.qty, req.unitCost == null ? BigDecimal.ZERO : req.unitCost, req.locationCode);
@@ -129,6 +135,7 @@ public class WarehouseController {
 
     @PostMapping("/outbound")
     public Map<String, Object> outbound(@RequestBody OutboundRequest req) {
+        JwtService.Claims principal = authenticatedPrincipal();
         if (req.inventoryId == null || req.qty == null || req.qty.compareTo(BigDecimal.ZERO) <= 0) throw new IllegalArgumentException("请选择出库库存并填写数量");
         Map<String, Object> inv = jdbc.queryForMap("SELECT id, item_name itemName, available_qty availableQty, location_id locationId FROM warehouse_inventory WHERE id=?", req.inventoryId);
         BigDecimal available = bd(inv.get("availableQty"));
@@ -138,13 +145,13 @@ public class WarehouseController {
         KeyHolder kh = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("INSERT INTO warehouse_outbound (outbound_no,order_no,purpose,receiver,operator,status) VALUES (?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
-            ps.setString(1, outboundNo); ps.setString(2, req.orderNo); ps.setString(3, nvl(req.purpose,"订单发货")); ps.setString(4, req.receiver); ps.setString(5, nvl(req.operator,"仓库员")); ps.setString(6, "picking"); return ps;
+            ps.setString(1, outboundNo); ps.setString(2, req.orderNo); ps.setString(3, nvl(req.purpose,"订单发货")); ps.setString(4, req.receiver); ps.setString(5, principal.username()); ps.setString(6, "picking"); return ps;
         }, kh);
         Long outboundId = Objects.requireNonNull(kh.getKey()).longValue();
         jdbc.update("INSERT INTO warehouse_outbound_item (outbound_id,inventory_id,item_name,qty,location_code) VALUES (?,?,?,?,?)", outboundId, req.inventoryId, inv.get("itemName"), req.qty, locationCode);
         jdbc.update("UPDATE warehouse_inventory SET locked_qty=locked_qty+?, available_qty=available_qty-? WHERE id=?", req.qty, req.qty, req.inventoryId);
         String pickNo = no("PICK");
-        jdbc.update("INSERT INTO warehouse_pick_task (pick_no,outbound_id,inventory_id,item_name,qty,location_code,status,operator) VALUES (?,?,?,?,?,?,?,?)", pickNo, outboundId, req.inventoryId, inv.get("itemName"), req.qty, locationCode, "pending", nvl(req.operator,"仓库员"));
+        jdbc.update("INSERT INTO warehouse_pick_task (pick_no,outbound_id,inventory_id,item_name,qty,location_code,status,operator) VALUES (?,?,?,?,?,?,?,?)", pickNo, outboundId, req.inventoryId, inv.get("itemName"), req.qty, locationCode, "pending", principal.username());
         refreshAlerts();
         return Map.of("outboundId", outboundId, "outboundNo", outboundNo, "pickNo", pickNo, "message", "出库单已创建，已生成拣货任务");
     }
@@ -231,6 +238,19 @@ public class WarehouseController {
         if (blank(req.unit)) req.unit = "件";
         if (req.unitCost == null) req.unitCost = bd(p.get("productCostUnitPrice")).compareTo(BigDecimal.ZERO) > 0 ? bd(p.get("productCostUnitPrice")) : bd(p.get("companyCostPrice"));
         if (blank(req.locationCode) && !blank((String)p.get("locationName"))) req.locationCode = (String)p.get("locationName");
+    }
+
+    /** Use the verified request principal for warehouse audit fields. */
+    private JwtService.Claims authenticatedPrincipal() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        Object value = attributes == null ? null : attributes.getAttribute(
+                JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        if (!(value instanceof JwtService.Claims claims)
+                || claims.username() == null || claims.username().isBlank()
+                || claims.role() == null || claims.role().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
+        }
+        return claims;
     }
 
     private Long productCatalogId(String code) {

@@ -1,0 +1,4 @@
+# Third-party Vite bundles embed shader source verbatim.  Preserve it exactly
+# while keeping whitespace checks enabled for all handwritten source files.
+shixun/src/main/resources/static/assets/*.js whitespace=-trailing-space,-space-before-tab
+shixun/src/main/resources/static/assets/*.css whitespace=-trailing-space,-space-before-tab

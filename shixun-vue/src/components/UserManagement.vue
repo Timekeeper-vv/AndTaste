@@ -25,7 +25,6 @@ const roleOptions: Array<{ value: Role; label: string }> = [
 ]
 const roleLabelMap: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工', designer: '设计师', user: 'C端用户' }
 const roleBadgeClass: Record<Role, string> = { admin: 'badge-admin', technician: 'badge-approver', feeder: 'badge-employee', designer: 'badge-designer', user: 'badge-user' }
-const demoPasswordAccounts = new Set(['superadmin', 'approver01', 'employee01', 'testuser', '审批员1', '审批员2', '审批员3', '审批员4', 'designer', 'user'])
 const searchQuery = ref<string>('')
 const currentPage = ref<number>(1)
 const pageSize = ref<number>(10)
@@ -41,7 +40,7 @@ async function loadUsers() {
   try {
     const p = new URLSearchParams({ page: String(currentPage.value), size: String(pageSize.value) })
     if (searchQuery.value.trim()) p.set('search', searchQuery.value.trim())
-    const res = await fetch(`/api/users?${p}`, { headers: { 'X-Current-Role': props.currentUser?.role || 'admin', 'X-Current-User': props.currentUser?.username || 'admin' } })
+    const res = await fetch(`/api/users?${p}`)
     const data = await res.json()
     users.value = data.content
     total.value = data.total
@@ -64,7 +63,7 @@ async function openEdit(id: number): Promise<void> {
   if (editingId.value !== null) return
   editingId.value = id
   try {
-    const res = await fetch(`/api/users/${id}`, { headers: { 'X-Current-Role': props.currentUser?.role || 'admin', 'X-Current-User': props.currentUser?.username || 'admin' } })
+    const res = await fetch(`/api/users/${id}`)
     if (!res.ok) { emit('alert', '获取用户信息失败', 'error'); return }
     const u = await res.json()
     form.value = { id: u.id, username: u.username ?? '', age: u.age ?? '', email: u.email ?? '', phone: u.phone ?? '', password: '', role: u.role || 'admin' }
@@ -80,6 +79,9 @@ async function openEdit(id: number): Promise<void> {
 async function submitForm() {
   if (submitting.value) return
   if (!isEdit.value && !form.value.password) { emit('alert', '新增用户密码不能为空', 'error'); return }
+  if (form.value.password && (form.value.password.length < 12 || form.value.password !== form.value.password.trim())) {
+    emit('alert', '密码至少需要 12 个字符，且首尾不能包含空格', 'error'); return
+  }
   const payload: Record<string, unknown> = {
     username: form.value.username,
     age: Number(form.value.age),
@@ -94,8 +96,6 @@ async function submitForm() {
       method: isEdit.value ? 'PUT' : 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Current-Role': props.currentUser?.role || 'admin',
-        'X-Current-User': props.currentUser?.username || 'admin',
       },
       body: JSON.stringify(payload)
     })
@@ -118,10 +118,6 @@ async function deleteUser(id: number, name: string) {
   try {
     const res = await fetch(`/api/users/${id}`, {
       method: 'DELETE',
-      headers: {
-        'X-Current-Role': props.currentUser?.role || 'admin',
-        'X-Current-User': props.currentUser?.username || 'admin',
-      },
     })
     if (!res.ok && res.status !== 204) { emit('alert', '删除失败', 'error'); return }
     emit('alert', '用户删除成功')
@@ -133,23 +129,23 @@ async function deleteUser(id: number, name: string) {
 
 async function resetPassword(u: UserRecord) {
   if (!isAdmin.value) { emit('alert', '仅超级管理员可重置密码', 'error'); return }
-  if (!confirm(`确定将「${u.username}」的密码重置为 123456？`)) return
+  const password = window.prompt(`为「${u.username}」设置新密码（至少 12 个字符，首尾不能包含空格）：`)
+  if (password === null) return
+  if (password.length < 12 || password !== password.trim()) { emit('alert', '密码至少需要 12 个字符，且首尾不能包含空格', 'error'); return }
   try {
     const res = await fetch(`/api/users/${u.id}/reset-password`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Current-Role': props.currentUser?.role || 'admin',
-        'X-Current-User': props.currentUser?.username || 'admin',
       },
-      body: JSON.stringify({ password: '123456' }),
+      body: JSON.stringify({ password }),
     })
     if (!res.ok) {
       const text = await res.text()
       emit('alert', `重置失败：${extractMsg(text)}`, 'error'); return
     }
     const data = await res.json()
-    emit('alert', `已重置 ${data.username}，新密码：${data.password}`, 'success')
+    emit('alert', `已重置 ${data.username} 的密码`, 'success')
   } catch {
     emit('alert', '网络错误', 'error')
   }
@@ -169,8 +165,7 @@ function avatarBg(name) {
 function initial(name) { return name ? name.charAt(0).toUpperCase() : '?' }
 
 function passwordDisplay(u: UserRecord) {
-  if (!isAdmin.value) return '仅超管可见'
-  return demoPasswordAccounts.has(u.username) ? '123456' : '已加密存储'
+  return isAdmin.value ? '已加密存储' : '仅超管可操作'
 }
 
 </script>
@@ -180,7 +175,7 @@ function passwordDisplay(u: UserRecord) {
     <div class="page-header">
       <div>
         <h2 class="page-title">用户管理</h2>
-        <p class="page-desc">管理超级管理员、审批主管与员工账号权限。密码采用加密存储，演示账号显示默认密码，其他账号可由超管重置。</p>
+        <p class="page-desc">管理后台与创作者账号权限。密码仅以加密形式保存，由超级管理员设置符合规则的新密码。</p>
       </div>
       <button class="btn btn-primary" @click="openAdd">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -263,7 +258,7 @@ function passwordDisplay(u: UserRecord) {
               <td class="text-sm text-muted">{{ u.email ?? '—' }}</td>
               <td>{{ u.phone ?? '—' }}</td>
               <td>
-                <span class="password-pill" :class="{ muted: !demoPasswordAccounts.has(u.username) }">
+                <span class="password-pill muted">
                   {{ passwordDisplay(u) }}
                 </span>
               </td>
@@ -324,8 +319,8 @@ function passwordDisplay(u: UserRecord) {
         </div>
         <div class="form-group" style="grid-column: 1 / -1">
           <label>密码 <span v-if="!isEdit" style="color:var(--c-error)">*</span></label>
-          <input v-model="form.password" type="password" :placeholder="isEdit ? '不填则不修改密码' : '请设置密码'" />
-          <small class="role-help">出于安全原因，系统不保存可反查的明文密码；如忘记密码，超级管理员可在列表中一键重置为 123456。</small>
+          <input v-model="form.password" type="password" minlength="12" :placeholder="isEdit ? '不填则不修改密码' : '请设置至少 12 个字符的密码'" />
+          <small class="role-help">出于安全原因，系统仅保存加密后的密码；忘记密码时由超级管理员重新设置符合规则的新密码。</small>
         </div>
       </div>
       <div class="modal-footer">

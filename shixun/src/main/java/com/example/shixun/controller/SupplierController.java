@@ -15,7 +15,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/suppliers")
-@CrossOrigin(origins = "*")
 public class SupplierController {
     private final JdbcTemplate jdbc;
     private final SupplierSearchToolService supplierSearch;

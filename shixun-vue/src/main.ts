@@ -10,8 +10,11 @@ const publicApiPaths = ['/api/users/login']
 window.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
   const isApi = url.startsWith('/api/') || url.includes('/api/')
-  const isPublic = publicApiPaths.some(path => url.includes(path)) || (url.endsWith('/api/users') && (init.method || 'GET').toUpperCase() === 'POST')
   const token = sessionStorage.getItem('accessToken')
+  // A signup without a session is public. The same endpoint is also used by
+  // super-admins to create staff accounts, which must carry their Bearer token.
+  const isPublic = publicApiPaths.some(path => url.includes(path))
+    || (url.endsWith('/api/users') && (init.method || 'GET').toUpperCase() === 'POST' && !token)
   const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined))
   if (isApi && token && !isPublic) headers.set('Authorization', `Bearer ${token}`)
   const response = await nativeFetch(input, { ...init, headers })

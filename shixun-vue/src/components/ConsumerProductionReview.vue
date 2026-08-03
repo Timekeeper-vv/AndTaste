@@ -1,12 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
-
-function authMediaUrl(url: string): string {
-  const token = sessionStorage.getItem('accessToken')
-  return token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
-}
-
+import { requestAssetPreviewUrl } from '../utils/assetAccess'
 
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
@@ -53,7 +48,12 @@ async function openOrDownloadModel(r: any) {
   const format = formatOf(r)
   if (!r.assetId) return
   if (format === 'GLB') {
-    window.open(authMediaUrl(`/api/creative/ai/assets/${r.assetId}/model-content`), '_blank', 'noopener,noreferrer')
+    try {
+      const url = await requestAssetPreviewUrl(r.assetId)
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (e: any) {
+      emit('alert', `模型预览失败：${e?.message || e}`, 'error')
+    }
     return
   }
   const key = downloadKey(r, format)
@@ -62,7 +62,6 @@ async function openOrDownloadModel(r: any) {
   try {
     const response = await fetch(`/api/creative/ai/assets/${r.assetId}/download-model?format=${format}`, {
       cache: 'no-store',
-      headers: { 'X-Current-Role': props.currentUser.role, 'X-Current-User': props.currentUser.username },
     })
     if (!response.ok) {
       let message = ''
@@ -102,7 +101,6 @@ async function load() {
     if (userId.value.trim()) qs.set('userId', userId.value.trim())
     const r = await fetch(`/api/creative/ai/consumer-production/admin/review?${qs}`, {
       cache: 'no-store',
-      headers: { 'X-Current-Role': props.currentUser.role, 'X-Current-User': props.currentUser.username },
     })
     if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`)
     const data = await r.json()
@@ -117,7 +115,7 @@ async function review(row: any, next: 'approved' | 'rejected' | 'review') {
   try {
     const r = await fetch(`/api/creative/ai/consumer-production/admin/${row.id}/review`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Current-Role': props.currentUser.role, 'X-Current-User': props.currentUser.username },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: next, operator: props.currentUser.username, comment: comment.value.trim() }),
     })
     if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`)

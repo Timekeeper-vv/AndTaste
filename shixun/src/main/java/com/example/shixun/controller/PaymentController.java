@@ -1,5 +1,7 @@
 package com.example.shixun.controller;
 
+import com.example.shixun.security.JwtAuthenticationFilter;
+import com.example.shixun.security.JwtService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -8,6 +10,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.core.io.ClassPathResource;
 
 import javax.annotation.PostConstruct;
 import javax.crypto.Cipher;
@@ -39,6 +43,9 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/payments")
 public class PaymentController {
+    private static final int DEFAULT_ORDER_LIST_LIMIT = 50;
+    private static final int MAX_ORDER_LIST_LIMIT = 100;
+
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).build();
@@ -52,6 +59,7 @@ public class PaymentController {
     @Value("${payment.wechat.notify-url:}") private String wechatNotifyUrl;
     @Value("${payment.wechat.platform-public-key-path:}") private String wechatPlatformPublicKeyPath;
     @Value("${payment.wechat.platform-serial-no:}") private String wechatPlatformSerialNo;
+    @Value("${payment.manual-qr-url:/payment-collection-qr.jpg}") private String manualWechatQrUrl;
 
     private static final List<CreditPackage> PACKAGES = List.of(
             new CreditPackage("credit_100", "体验包", "适合少量图片生成和一次3D尝试", 990, new BigDecimal("100")),
@@ -90,28 +98,55 @@ public class PaymentController {
                     "amountFen", pkg.amountFen, "amountYuan", fenToYuan(pkg.amountFen), "credits", pkg.credits));
         }
         return Map.of("items", items, "channels", List.of(
-                Map.of("code", "manual_wechat_qr", "name", "微信收款码", "enabled", true, "mode", "manual_qr"),
+                Map.of("code", "manual_wechat_qr", "name", "微信收款码", "enabled", manualWechatQrReady(), "mode", "manual_qr"),
                 Map.of("code", "wechat", "name", "微信支付", "enabled", wechatReady(), "mode", "native")
         ));
     }
 
     @PostMapping("/orders")
-    public Map<String, Object> createOrder(@RequestHeader(value = "X-Current-User-Id", required = false) Long userId,
+    @Transactional
+    public Map<String, Object> createOrder(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
                                             @RequestBody Map<String, String> body) throws Exception {
-        requireConsumer(userId);
+        Long userId = requireConsumer(principal);
         String packageCode = body == null ? "" : nullToEmpty(body.get("packageCode"));
         String channel = body == null ? "" : nullToEmpty(body.get("channel"));
         CreditPackage pkg = PACKAGES.stream().filter(p -> p.code.equals(packageCode)).findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("充值套餐不存在"));
         if (!"wechat".equals(channel) && !"manual_wechat_qr".equals(channel)) throw new IllegalArgumentException("暂不支持该支付方式");
         if ("wechat".equals(channel) && !wechatReady()) throw new IllegalStateException("微信支付尚未配置，请联系平台管理员完成商户配置");
+        if ("manual_wechat_qr".equals(channel) && !manualWechatQrReady()) throw new IllegalStateException("平台尚未配置有效收款码，请联系管理员");
+
+        // 同一用户同时只能保留一笔尚未完成的充值，避免重复扫码、重复人工核验。
+        // 同套餐、同通道的重复点击返回原订单，作为创建接口的幂等行为。
+        expireOverdueOrders(userId);
+        List<Map<String, Object>> activeOrders = jdbc.queryForList(
+                "SELECT order_no,product_code,channel,status FROM payment_order " +
+                        "WHERE user_id=? AND status IN ('pending','manual_review') " +
+                        "AND (expired_at IS NULL OR expired_at>CURRENT_TIMESTAMP) ORDER BY id DESC LIMIT 1 FOR UPDATE",
+                userId);
+        if (!activeOrders.isEmpty()) {
+            Map<String, Object> active = activeOrders.get(0);
+            String activeStatus = String.valueOf(active.get("status"));
+            String activeOrderNo = String.valueOf(active.get("order_no"));
+            if ("pending".equals(activeStatus)
+                    && pkg.code.equals(String.valueOf(active.get("product_code")))
+                    && channel.equals(String.valueOf(active.get("channel")))) {
+                Map<String, Object> reused = orderView(activeOrderNo, userId);
+                reused.put("reused", true);
+                return reused;
+            }
+            if ("manual_review".equals(activeStatus)) {
+                throw new IllegalStateException("已有待人工核验的充值订单，请等待管理员确认后再创建新订单");
+            }
+            throw new IllegalStateException("已有待支付订单 " + activeOrderNo + "，请先完成支付或关闭该订单");
+        }
 
         String orderNo = newOrderNo();
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
         jdbc.update("INSERT INTO payment_order(order_no,user_id,product_code,product_name,amount_fen,credit_amount,channel,status,expired_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 orderNo, userId, pkg.code, pkg.name, pkg.amountFen, pkg.credits, channel, "pending", expiresAt);
         if ("manual_wechat_qr".equals(channel)) {
-            jdbc.update("UPDATE payment_order SET code_url=?,provider_response=? WHERE order_no=?", "/payment-collection-qr.jpg", "manual receipt QR", orderNo);
+            jdbc.update("UPDATE payment_order SET code_url=?,provider_response=? WHERE order_no=?", manualWechatQrUrl.trim(), "manual receipt QR", orderNo);
             return orderView(orderNo, userId);
         }
         try {
@@ -126,10 +161,33 @@ public class PaymentController {
     }
 
     @GetMapping("/orders/{orderNo}")
-    public Map<String, Object> order(@RequestHeader(value = "X-Current-User-Id", required = false) Long userId,
+    public Map<String, Object> order(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
                                      @PathVariable String orderNo) {
-        requireConsumer(userId);
+        Long userId = requireConsumer(principal);
         return orderView(orderNo, userId);
+    }
+
+    /** 当前登录用户的充值订单历史。过期订单会保留在历史中，并以 expired 状态返回。 */
+    @GetMapping("/orders")
+    public Map<String, Object> orders(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+                                      @RequestParam(value = "limit", required = false) Integer limit) {
+        Long userId = requireConsumer(principal);
+        expireOverdueOrders(userId);
+        int safeLimit = limit == null ? DEFAULT_ORDER_LIST_LIMIT : Math.max(1, Math.min(limit, MAX_ORDER_LIST_LIMIT));
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT order_no orderNo,product_code packageCode,product_name packageName,amount_fen amountFen," +
+                        "credit_amount credits,channel,status,code_url codeUrl,provider_order_no providerOrderNo," +
+                        "paid_at paidAt,expired_at expiredAt,created_at createdAt " +
+                        "FROM payment_order WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                userId, safeLimit);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Map<String, Object> row : rows) items.add(toOrderView(row));
+        Integer total = jdbc.queryForObject("SELECT COUNT(*) FROM payment_order WHERE user_id=?", Integer.class, userId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("items", items);
+        result.put("total", total == null ? 0 : total);
+        result.put("limit", safeLimit);
+        return result;
     }
 
     /** 微信支付 APIv3 支付结果通知。 */
@@ -162,46 +220,60 @@ public class PaymentController {
 
     /** 用户扫码付款后提交人工核验；此操作不会自动增加额度。 */
     @PostMapping("/orders/{orderNo}/manual-complete")
-    public Map<String, Object> markManualPaymentComplete(@RequestHeader(value = "X-Current-User-Id", required = false) Long userId,
+    @Transactional
+    public Map<String, Object> markManualPaymentComplete(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
                                                           @PathVariable String orderNo) {
-        requireConsumer(userId);
-        int changed = jdbc.update("UPDATE payment_order SET status='manual_review' WHERE order_no=? AND user_id=? AND channel='manual_wechat_qr' AND status='pending'", orderNo, userId);
-        if (changed == 0) throw new IllegalStateException("该订单当前无法提交核验");
+        Long userId = requireConsumer(principal);
+        expireOverdueOrder(orderNo, userId);
+        int changed = jdbc.update("UPDATE payment_order SET status='manual_review' WHERE order_no=? AND user_id=? " +
+                        "AND channel='manual_wechat_qr' AND status='pending' " +
+                        "AND (expired_at IS NULL OR expired_at>CURRENT_TIMESTAMP)",
+                orderNo, userId);
+        if (changed == 0) throwUnavailableOrderState(orderNo, userId, "该订单当前无法提交核验");
         return orderView(orderNo, userId);
     }
 
     /** 管理员人工核实收款后确认到账。 */
     @PostMapping("/admin/orders/{orderNo}/confirm")
     @Transactional
-    public Map<String, Object> confirmManualPayment(@RequestHeader(value = "X-Current-Role", required = false) String role,
+    public Map<String, Object> confirmManualPayment(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
                                                      @PathVariable String orderNo) {
-        if (!"admin".equals(role)) throw new IllegalArgumentException("仅超级管理员可确认人工收款");
+        requireAdmin(principal);
+        expireOverdueOrder(orderNo);
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM payment_order WHERE order_no=? FOR UPDATE", orderNo);
         if (rows.isEmpty()) throw new IllegalArgumentException("支付订单不存在");
         Map<String, Object> order = rows.get(0);
         if ("paid".equals(order.get("status"))) return orderViewForAdmin(orderNo);
+        if ("expired".equals(order.get("status"))) throw new IllegalStateException("订单已过期，不能再确认到账");
+        if ("closed".equals(order.get("status"))) throw new IllegalStateException("订单已关闭，不能再确认到账");
         if (!"manual_review".equals(order.get("status"))) throw new IllegalStateException("订单尚未提交人工核验");
         creditConfirmedOrder(order, "manual_qr", "人工核验收款 " + orderNo);
         return orderViewForAdmin(orderNo);
     }
 
     @GetMapping("/admin/orders")
-    public List<Map<String, Object>> adminOrders(@RequestHeader(value = "X-Current-Role", required = false) String role) {
-        if (!"admin".equals(role)) throw new IllegalArgumentException("仅超级管理员可查看支付订单");
-        return jdbc.queryForList("SELECT p.order_no orderNo,u.username,p.product_name packageName,p.amount_fen amountFen,p.credit_amount credits,p.channel,p.status,p.created_at createdAt,p.paid_at paidAt FROM payment_order p LEFT JOIN user u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 300");
+    public List<Map<String, Object>> adminOrders(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireAdmin(principal);
+        expireOverdueOrders();
+        return jdbc.queryForList("SELECT p.order_no orderNo,u.username,p.product_name packageName,p.amount_fen amountFen,p.credit_amount credits,p.channel,p.status,p.created_at createdAt,p.paid_at paidAt,p.expired_at expiredAt FROM payment_order p LEFT JOIN user u ON u.id=p.user_id ORDER BY p.id DESC LIMIT 300");
     }
 
     @PostMapping("/orders/{orderNo}/close")
-    public Map<String, Object> closeOrder(@RequestHeader(value = "X-Current-User-Id", required = false) Long userId,
+    @Transactional
+    public Map<String, Object> closeOrder(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
                                            @PathVariable String orderNo) {
-        requireConsumer(userId);
-        int changed = jdbc.update("UPDATE payment_order SET status='closed' WHERE order_no=? AND user_id=? AND status='pending'", orderNo, userId);
-        if (changed == 0) throw new IllegalStateException("订单无法关闭");
+        Long userId = requireConsumer(principal);
+        expireOverdueOrder(orderNo, userId);
+        int changed = jdbc.update("UPDATE payment_order SET status='closed' WHERE order_no=? AND user_id=? AND status='pending' " +
+                        "AND (expired_at IS NULL OR expired_at>CURRENT_TIMESTAMP)",
+                orderNo, userId);
+        if (changed == 0) throwUnavailableOrderState(orderNo, userId, "订单无法关闭");
         return orderView(orderNo, userId);
     }
 
     @Transactional
     public void confirmWechatPayment(String orderNo, String providerOrderNo, long paidAmountFen, String eventId) {
+        expireOverdueOrder(orderNo);
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM payment_order WHERE order_no=? FOR UPDATE", orderNo);
         if (rows.isEmpty()) throw new IllegalArgumentException("支付订单不存在");
         Map<String, Object> order = rows.get(0);
@@ -211,6 +283,13 @@ public class PaymentController {
         }
         long expected = ((Number) order.get("amount_fen")).longValue();
         if (expected != paidAmountFen) throw new IllegalArgumentException("支付金额校验失败");
+        // 本地已关单或已过期时，支付回调只做审计，不再自动发放积分，避免过期订单被重复入账。
+        if ("expired".equals(order.get("status")) || "closed".equals(order.get("status"))) {
+            jdbc.update("UPDATE payment_order SET provider_order_no=?,provider_response=? WHERE order_no=?",
+                    providerOrderNo, "支付回调到达时订单已" + ("expired".equals(order.get("status")) ? "过期" : "关闭") + "，需人工核对退款", orderNo);
+            jdbc.update("UPDATE payment_callback_log SET processed=1 WHERE channel='wechat' AND provider_event_id=?", eventId);
+            return;
+        }
         if (!"pending".equals(order.get("status"))) throw new IllegalStateException("订单状态不允许入账");
         creditConfirmedOrder(order, providerOrderNo, "微信支付订单 " + orderNo);
         jdbc.update("UPDATE payment_callback_log SET processed=1 WHERE channel='wechat' AND provider_event_id=?", eventId);
@@ -231,7 +310,7 @@ public class PaymentController {
     }
 
     private Map<String, Object> orderViewForAdmin(String orderNo) {
-        return jdbc.queryForMap("SELECT order_no orderNo,user_id userId,product_name packageName,amount_fen amountFen,credit_amount credits,channel,status,provider_order_no providerOrderNo,paid_at paidAt,created_at createdAt FROM payment_order WHERE order_no=?", orderNo);
+        return jdbc.queryForMap("SELECT order_no orderNo,user_id userId,product_name packageName,amount_fen amountFen,credit_amount credits,channel,status,provider_order_no providerOrderNo,paid_at paidAt,expired_at expiredAt,created_at createdAt FROM payment_order WHERE order_no=?", orderNo);
     }
 
     private Map<String, Object> createWechatNativeOrder(String orderNo, CreditPackage pkg) throws Exception {
@@ -300,17 +379,84 @@ public class PaymentController {
     }
 
     private Map<String, Object> orderView(String orderNo, Long userId) {
+        expireOverdueOrder(orderNo, userId);
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT order_no orderNo,product_code packageCode,product_name packageName,amount_fen amountFen,credit_amount credits,channel,status,code_url codeUrl,provider_order_no providerOrderNo,paid_at paidAt,expired_at expiredAt,created_at createdAt FROM payment_order WHERE order_no=? AND user_id=?", orderNo, userId);
         if (rows.isEmpty()) throw new IllegalArgumentException("支付订单不存在");
-        Map<String, Object> result = new LinkedHashMap<>(rows.get(0));
-        result.put("amountYuan", fenToYuan(((Number) result.get("amountFen")).longValue()));
+        Map<String, Object> result = toOrderView(rows.get(0));
+        if ("expired".equals(result.get("status"))) throw new IllegalStateException("订单已过期，请重新创建充值订单");
         return result;
     }
 
-    private void requireConsumer(Long userId) {
-        if (userId == null) throw new IllegalArgumentException("缺少当前用户ID");
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM user WHERE id=? AND role='user'", Integer.class, userId);
-        if (count == null || count == 0) throw new IllegalArgumentException("仅C端用户可发起充值");
+    /** 懒惰过期：每次涉及订单状态的请求都会先把过期中的订单收敛到 expired。 */
+    private void expireOverdueOrders() {
+        jdbc.update("UPDATE payment_order SET status='expired' WHERE status IN ('pending','manual_review') " +
+                "AND expired_at IS NOT NULL AND expired_at<=CURRENT_TIMESTAMP");
+    }
+
+    private void expireOverdueOrders(Long userId) {
+        jdbc.update("UPDATE payment_order SET status='expired' WHERE user_id=? AND status IN ('pending','manual_review') " +
+                "AND expired_at IS NOT NULL AND expired_at<=CURRENT_TIMESTAMP", userId);
+    }
+
+    private void expireOverdueOrder(String orderNo) {
+        jdbc.update("UPDATE payment_order SET status='expired' WHERE order_no=? AND status IN ('pending','manual_review') " +
+                "AND expired_at IS NOT NULL AND expired_at<=CURRENT_TIMESTAMP", orderNo);
+    }
+
+    private void expireOverdueOrder(String orderNo, Long userId) {
+        jdbc.update("UPDATE payment_order SET status='expired' WHERE order_no=? AND user_id=? " +
+                        "AND status IN ('pending','manual_review') AND expired_at IS NOT NULL " +
+                        "AND expired_at<=CURRENT_TIMESTAMP",
+                orderNo, userId);
+    }
+
+    private void throwUnavailableOrderState(String orderNo, Long userId, String fallback) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT status FROM payment_order WHERE order_no=? AND user_id=?", orderNo, userId);
+        if (rows.isEmpty()) throw new IllegalArgumentException("支付订单不存在");
+        String status = String.valueOf(rows.get(0).get("status"));
+        if ("expired".equals(status)) throw new IllegalStateException("订单已过期，请重新创建充值订单");
+        if ("closed".equals(status)) throw new IllegalStateException("订单已关闭，不能继续操作");
+        if ("paid".equals(status)) throw new IllegalStateException("订单已支付，无需重复操作");
+        throw new IllegalStateException(fallback);
+    }
+
+    private Map<String, Object> toOrderView(Map<String, Object> row) {
+        Map<String, Object> result = new LinkedHashMap<>(row);
+        Object amountFen = result.get("amountFen");
+        if (amountFen instanceof Number) result.put("amountYuan", fenToYuan(((Number) amountFen).longValue()));
+        String status = String.valueOf(result.get("status"));
+        result.put("expired", "expired".equals(status));
+        result.put("canManualComplete", "pending".equals(status) && "manual_wechat_qr".equals(result.get("channel")));
+        result.put("canClose", "pending".equals(status));
+        return result;
+    }
+
+    private Long requireConsumer(JwtService.Claims principal) {
+        if (principal == null || principal.userId() == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
+        }
+        if (!"user".equals(principal.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅C端用户可发起充值");
+        }
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM user WHERE id=? AND role='user'", Integer.class, principal.userId());
+        if (count == null || count == 0) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前登录身份已失效");
+        }
+        return principal.userId();
+    }
+
+    private void requireAdmin(JwtService.Claims principal) {
+        if (principal == null || principal.userId() == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
+        }
+        if (!"admin".equals(principal.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅超级管理员可执行此操作");
+        }
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM user WHERE id=? AND role='admin'", Integer.class, principal.userId());
+        if (count == null || count == 0) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前登录身份已失效");
+        }
     }
 
     private void ensureCreditAccount(Long userId) {
@@ -320,6 +466,14 @@ public class PaymentController {
     private boolean wechatReady() {
         return wechatEnabled && !blank(wechatAppId) && !blank(wechatMchId) && !blank(wechatSerialNo)
                 && !blank(wechatPrivateKeyPath) && !blank(wechatApiV3Key) && !blank(wechatNotifyUrl);
+    }
+
+    private boolean manualWechatQrReady() {
+        if (blank(manualWechatQrUrl)) return false;
+        String value = manualWechatQrUrl.trim();
+        if (value.startsWith("https://") || value.startsWith("http://")) return true;
+        String classpathPath = value.startsWith("/") ? value.substring(1) : value;
+        return new ClassPathResource("static/" + classpathPath).exists();
     }
 
     @SuppressWarnings("unchecked")

@@ -25,6 +25,9 @@ async function login() {
   try {
     const session = await request<any>('/api/users/login', { method: 'POST', data: { username: username.value, password: password.value }, header: { 'content-type': 'application/json' } })
     if (!session?.token || !session?.user) throw new Error('登录响应缺少令牌')
+    if (session.user.role !== 'user') {
+      throw new Error('该账号是管理端账号，请使用网页管理端登录')
+    }
     saveSession(session)
     uni.reLaunch({ url: '/pages/purpose/index' })
   } catch (error: any) { uni.showToast({ title: error.message || '登录失败', icon: 'none' }) } finally { loading.value = false }

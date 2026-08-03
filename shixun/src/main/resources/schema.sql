@@ -8,20 +8,11 @@ CREATE TABLE IF NOT EXISTS user (
     email VARCHAR(200),
     phone VARCHAR(20),
     password VARCHAR(255) NOT NULL,
-    role VARCHAR(20) NOT NULL DEFAULT 'admin' COMMENT 'admin=超级管理员, technician=审批主管, feeder=员工'
+    role VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT 'admin=超级管理员, technician=审批主管, feeder=员工, designer=设计师, user=C端用户'
 );
--- 兼容已存在的数据库：为旧表补加 role 列（列已存在时报错会被 continue-on-error 忽略）
-ALTER TABLE `user` ADD COLUMN `role` VARCHAR(20) NOT NULL DEFAULT 'admin';
-
--- 初始用户数据（密码在服务层经 BCrypt 编码后存储，通过 API 创建的账号可正常登录）
-INSERT IGNORE INTO user (username, age, email, phone, password, role) VALUES
-('superadmin', 30, 'superadmin@andtaste.com', '13800000001', '123456', 'admin'),
-('approver01', 28, 'approver01@andtaste.com', '13800000002', '123456', 'technician'),
-('employee01', 24, 'employee01@andtaste.com', '13800000003', '123456', 'feeder'),
-('审批员1', 28, 'approver1@andtaste.com', '13800000101', '123456', 'technician'),
-('审批员2', 28, 'approver2@andtaste.com', '13800000102', '123456', 'technician'),
-('审批员3', 28, 'approver3@andtaste.com', '13800000103', '123456', 'technician'),
-('审批员4', 28, 'approver4@andtaste.com', '13800000104', '123456', 'technician');
+-- No production users or passwords are seeded here. Bootstrap the first
+-- administrator explicitly through BOOTSTRAP_ADMIN_* deployment variables.
+-- Existing installations should run the versioned account-hardening migration.
 
 -- 供应商银行账户表：AI 助手和供应商列表都从这里实时读取，不再依赖前端/AI 写死数据
 CREATE TABLE IF NOT EXISTS supplier_bank_accounts (

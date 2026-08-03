@@ -23,7 +23,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/logistics")
-@CrossOrigin(origins = "*")
 public class LogisticsController {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -48,9 +47,11 @@ public class LogisticsController {
         return Map.of(
                 "provider", "kuaidi100",
                 "queryConfigured", kuaidi100Configured(),
-                "subscribeConfigured", kuaidi100Configured() && !blank(kuaidi100CallbackUrl),
+                "subscribeConfigured", kuaidi100Configured() && !blank(kuaidi100CallbackUrl) && !blank(kuaidi100Salt),
+                "callbackSignatureConfigured", !blank(kuaidi100Salt),
                 "callbackUrl", blank(kuaidi100CallbackUrl) ? "" : kuaidi100CallbackUrl,
-                "message", kuaidi100Configured() ? "已配置快递100真实API" : "未配置快递100 customer/key，不能查询真实物流"
+                "message", !kuaidi100Configured() ? "未配置快递100 customer/key，不能查询真实物流"
+                        : blank(kuaidi100Salt) ? "已配置查询，但未配置回调签名盐值，不能订阅物流推送" : "已配置快递100真实API"
         );
     }
 
@@ -159,10 +160,12 @@ public class LogisticsController {
             String sign = form.get("sign");
             jdbc.update("INSERT INTO logistics_callback_log (provider, tracking_no, payload_json, handled) VALUES (?,?,?,0)", "kuaidi100", "", param == null ? "{}" : param);
             if (blank(param)) throw new IllegalArgumentException("回调param为空");
-            if (!blank(kuaidi100Salt) && !blank(sign)) {
-                String expected = md5(param + kuaidi100Salt).toUpperCase(Locale.ROOT);
-                if (!expected.equalsIgnoreCase(sign)) throw new IllegalArgumentException("快递100回调签名验证失败");
-            }
+            // A callback is unauthenticated by design, therefore signing is mandatory.
+            // Never accept a missing `sign` merely because a deployment forgot to configure it.
+            if (blank(kuaidi100Salt)) throw new IllegalStateException("未配置快递100回调签名盐值，拒绝处理未验证回调");
+            if (blank(sign)) throw new IllegalArgumentException("快递100回调缺少签名");
+            String expected = md5(param + kuaidi100Salt).toUpperCase(Locale.ROOT);
+            if (!expected.equalsIgnoreCase(sign)) throw new IllegalArgumentException("快递100回调签名验证失败");
             JsonNode root = mapper.readTree(param);
             JsonNode last = root.path("lastResult").isMissingNode() ? root : root.path("lastResult");
             String com = text(last, "com", text(root, "company", ""));
@@ -206,11 +209,12 @@ public class LogisticsController {
     private void subscribeKuaidi100(Long shipmentId) throws Exception {
         if (!kuaidi100Configured()) throw new IllegalStateException("未配置快递100真实API customer/key");
         if (blank(kuaidi100CallbackUrl)) throw new IllegalStateException("未配置 kuaidi100.callback-url，无法订阅真实物流推送；该地址必须公网可访问");
+        if (blank(kuaidi100Salt)) throw new IllegalStateException("未配置 kuaidi100.salt，出于安全原因不能订阅未签名的物流回调");
         Map<String, Object> s = jdbc.queryForMap("SELECT carrier_code carrierCode, tracking_no trackingNo, receiver_address receiverAddress FROM logistics_shipment WHERE id=?", shipmentId);
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("callbackurl", kuaidi100CallbackUrl.trim());
         params.put("resultv2", "1");
-        if (!blank(kuaidi100Salt)) params.put("salt", kuaidi100Salt.trim());
+        params.put("salt", kuaidi100Salt.trim());
         Map<String, Object> paramMap = new LinkedHashMap<>();
         paramMap.put("company", str(s.get("carrierCode")));
         paramMap.put("number", str(s.get("trackingNo")));

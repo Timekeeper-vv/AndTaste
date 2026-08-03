@@ -1,11 +1,15 @@
 package com.example.shixun.controller;
 
+import com.example.shixun.security.JwtAuthenticationFilter;
+import com.example.shixun.security.JwtService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -18,7 +22,6 @@ import java.util.Set;
 
 @RestController
 @RequestMapping("/api/workflows")
-@CrossOrigin(origins = "*")
 public class WorkflowController {
 
     private static final TypeReference<Map<String, String>> FORM_TYPE = new TypeReference<>() {};
@@ -54,21 +57,23 @@ public class WorkflowController {
 
     @GetMapping("/summary")
     public Map<String, Object> summary() {
+        JwtService.Claims principal = authenticatedPrincipal();
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("totalCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0"));
-        result.put("pendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND status='pending'"));
-        result.put("approvedCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND status='approved'"));
-        result.put("rejectedCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND status='rejected'"));
-        result.put("withdrawnCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND status='withdrawn'"));
-        result.put("financePendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='finance' AND status='pending'"));
-        result.put("chainPendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='chain' AND status='pending'"));
-        result.put("marketDepartmentPendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='marketDepartment' AND status='pending'"));
-        result.put("projectDepartmentPendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='projectDepartment' AND status='pending'"));
-        result.put("humanResourcePendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='humanResource' AND status='pending'"));
-        result.put("attendancePendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='attendance' AND status='pending'"));
-        result.put("productionPendingCount", count("SELECT COUNT(*) FROM workflow_application WHERE deleted=0 AND category='production' AND status='pending'"));
-        result.put("recentPending", listApplications("pending", null, null, 5, 0));
-        result.put("recentApproved", listApplications("approved", null, null, 5, 0));
+        result.put("totalCount", summaryCount(principal, null, null));
+        result.put("pendingCount", summaryCount(principal, "pending", null));
+        result.put("approvedCount", summaryCount(principal, "approved", null));
+        result.put("rejectedCount", summaryCount(principal, "rejected", null));
+        result.put("withdrawnCount", summaryCount(principal, "withdrawn", null));
+        result.put("financePendingCount", summaryCount(principal, "pending", "finance"));
+        result.put("chainPendingCount", summaryCount(principal, "pending", "chain"));
+        result.put("marketDepartmentPendingCount", summaryCount(principal, "pending", "marketDepartment"));
+        result.put("projectDepartmentPendingCount", summaryCount(principal, "pending", "projectDepartment"));
+        result.put("humanResourcePendingCount", summaryCount(principal, "pending", "humanResource"));
+        result.put("attendancePendingCount", summaryCount(principal, "pending", "attendance"));
+        result.put("productionPendingCount", summaryCount(principal, "pending", "production"));
+        String ownApplicant = isSubmitter(principal) ? principal.username() : null;
+        result.put("recentPending", listApplications("pending", null, ownApplicant, 5, 0));
+        result.put("recentApproved", listApplications("approved", null, ownApplicant, 5, 0));
         return result;
     }
 
@@ -80,6 +85,13 @@ public class WorkflowController {
             @RequestParam(required = false) String applicantRole,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false, defaultValue = "20") int size) {
+        JwtService.Claims principal = authenticatedPrincipal();
+        if (isSubmitter(principal)) {
+            // A feeder may see only applications submitted by that account;
+            // the query parameter is retained only for old client URLs.
+            applicant = principal.username();
+            applicantRole = null;
+        }
         if (page != null) {
             int pageIndex = Math.max(1, page);
             int pageSize = Math.max(1, Math.min(size, 300));
@@ -98,13 +110,20 @@ public class WorkflowController {
 
     @GetMapping("/applications/{id}")
     public Map<String, Object> detail(@PathVariable Long id) {
-        return loadApplication(id, true);
+        JwtService.Claims principal = authenticatedPrincipal();
+        Map<String, Object> application = loadApplication(id, true);
+        if (isSubmitter(principal) && !principal.username().equals(String.valueOf(application.get("applicant")))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权查看其他账号的申请");
+        }
+        return application;
     }
 
     @PostMapping("/applications")
     public Map<String, Object> submit(@RequestBody WorkflowSubmitRequest req) {
         validateSubmitRequest(req);
-        String role = normalizeRole(req.applicantRole, "feeder");
+        JwtService.Claims principal = authenticatedPrincipal();
+        String applicant = principal.username();
+        String role = principal.role();
         validateRole(role, true);
         String title = blank(req.title) ? defaultTitle(req.category, req.typeKey) : req.title.trim();
         String appNo = no("WF");
@@ -115,64 +134,68 @@ public class WorkflowController {
 
         jdbc.update(
                 "INSERT INTO workflow_application (app_no,category,type_key,title,applicant,applicant_role,form_data_json,status,flow_type,flow_name,flow_config_json,current_step,current_step_name,current_handler,current_approval_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                appNo, req.category.trim(), req.typeKey.trim(), title, req.applicant.trim(), role, formJson, "pending", flowType, flowName(flowType), flowJson, 0, steps.get(0).name, handlerLabel(steps.get(0)), 0
+                appNo, req.category.trim(), req.typeKey.trim(), title, applicant, role, formJson, "pending", flowType, flowName(flowType), flowJson, 0, steps.get(0).name, handlerLabel(steps.get(0)), 0
         );
         Long id = jdbc.queryForObject("SELECT id FROM workflow_application WHERE app_no=?", Long.class, appNo);
-        insertLog(id, "submit", req.applicant.trim(), role, "提交申请", null, null, 0);
+        insertLog(id, "submit", applicant, role, "提交申请", null, null, 0);
         notifyRoles(id, steps.get(0), "审批待办", title + " 等待处理");
         return loadApplication(id, true);
     }
 
     @PostMapping("/applications/{id}/approve")
     public Map<String, Object> approve(@PathVariable Long id, @RequestBody WorkflowActionRequest req) {
-        return approveStep(id, req);
+        return approveStep(id, req, authenticatedPrincipal());
     }
 
     @PostMapping("/applications/{id}/reject")
     public Map<String, Object> reject(@PathVariable Long id, @RequestBody WorkflowActionRequest req) {
-        return rejectApplication(id, req);
+        return rejectApplication(id, req, authenticatedPrincipal());
     }
 
     @PostMapping("/applications/{id}/transfer")
     public Map<String, Object> transfer(@PathVariable Long id, @RequestBody WorkflowActionRequest req) {
-        validateOperator(req, false);
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateRole(principal.role(), false);
+        if (req == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
         if (blank(req.target)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "转交对象不能为空");
         Map<String, Object> current = loadApplication(id, false);
         ensurePending(current);
-        validateCurrentHandler(current, req);
+        validateCurrentHandler(current, principal);
         if (isFixedApprovalStep(current)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "四人会签流程必须由审批员1-4本人依次处理，不支持转交");
         }
         jdbc.update("UPDATE workflow_application SET current_handler=? WHERE id=?", req.target.trim(), id);
-        insertLog(id, "transfer", req.operator.trim(), req.operatorRole.trim(), "转交给 " + req.target.trim() + (blank(req.comment) ? "" : "；" + req.comment.trim()));
+        insertLog(id, "transfer", principal.username(), principal.role(), "转交给 " + req.target.trim() + (blank(req.comment) ? "" : "；" + req.comment.trim()));
         insertNotice(id, req.target.trim(), "审批转交", String.valueOf(current.get("title")) + " 已转交给你处理");
         return loadApplication(id, true);
     }
 
     @PostMapping("/applications/{id}/withdraw")
     public Map<String, Object> withdraw(@PathVariable Long id, @RequestBody WorkflowActionRequest req) {
-        validateOperator(req, true);
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateRole(principal.role(), true);
+        if (req == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
         Map<String, Object> current = loadApplication(id, false);
         ensurePending(current);
         String applicant = String.valueOf(current.get("applicant"));
-        String role = normalizeRole(req.operatorRole, "");
-        if (!"admin".equals(role) && !applicant.equals(req.operator.trim())) {
+        if (!"admin".equals(principal.role()) && !applicant.equals(principal.username())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只能撤回自己提交的申请");
         }
         jdbc.update("UPDATE workflow_application SET status='withdrawn', current_handler=NULL, withdrawn_at=CURRENT_TIMESTAMP WHERE id=?", id);
-        insertLog(id, "withdraw", req.operator.trim(), req.operatorRole.trim(), blank(req.comment) ? "撤回申请" : req.comment.trim());
+        insertLog(id, "withdraw", principal.username(), principal.role(), blank(req.comment) ? "撤回申请" : req.comment.trim());
         return loadApplication(id, true);
     }
 
     @PostMapping("/applications/{id}/resubmit")
     public Map<String, Object> resubmit(@PathVariable Long id, @RequestBody WorkflowResubmitRequest req) {
-        if (req == null || blank(req.operator) || blank(req.operatorRole)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "提交人信息不能为空");
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateRole(principal.role(), true);
+        if (req == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
         Map<String, Object> current = loadApplication(id, false);
         String status = String.valueOf(current.get("status"));
         if (!List.of("rejected", "withdrawn").contains(status)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "只有已驳回或已撤回的申请可以重新提交");
         String applicant = String.valueOf(current.get("applicant"));
-        String role = normalizeRole(req.operatorRole, "");
-        if (!"admin".equals(role) && !applicant.equals(req.operator.trim())) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只能重新提交自己的申请");
+        if (!"admin".equals(principal.role()) && !applicant.equals(principal.username())) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只能重新提交自己的申请");
         String flowType = normalizeFlowType(String.valueOf(current.get("flowType")), String.valueOf(current.get("category")), String.valueOf(current.get("type")));
         List<FlowStep> steps = stepsFor(flowType);
         int nextRound = intValue(current.get("resubmitCount")) + 1;
@@ -180,28 +203,35 @@ public class WorkflowController {
         String formJson = req.fields == null ? toJson((Map<?, ?>) current.get("fields")) : toJson(req.fields);
         jdbc.update("UPDATE workflow_application SET title=?, form_data_json=?, status='pending', current_step=0, current_step_name=?, current_handler=?, current_approval_count=0, approver=NULL, approval_comment=NULL, approved_at=NULL, rejected_at=NULL, withdrawn_at=NULL, finished_at=NULL, resubmit_count=resubmit_count+1 WHERE id=?",
                 title, formJson, steps.get(0).name, handlerLabel(steps.get(0)), id);
-        insertLog(id, "resubmit", req.operator.trim(), req.operatorRole.trim(), blank(req.comment) ? "重新提交申请" : req.comment.trim(), null, null, nextRound);
+        insertLog(id, "resubmit", principal.username(), principal.role(), blank(req.comment) ? "重新提交申请" : req.comment.trim(), null, null, nextRound);
         notifyRoles(id, steps.get(0), "重新提交待审批", title + " 已重新提交");
         return loadApplication(id, true);
     }
 
     @GetMapping("/notifications")
-    public List<Map<String, Object>> notifications(@RequestParam String receiver) {
-        return jdbc.queryForList("SELECT id, application_id applicationId, receiver, title, message, read_flag readFlag, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_notification WHERE receiver=? OR receiver IN ('admin','technician') ORDER BY id DESC LIMIT 50", receiver.trim());
+    public List<Map<String, Object>> notifications(@RequestParam(required = false) String receiver) {
+        JwtService.Claims principal = authenticatedPrincipal();
+        // Keep the query parameter for compatibility with older clients, but
+        // never use a caller-supplied receiver to select another user's notices.
+        if ("admin".equals(principal.role()) || "technician".equals(principal.role())) {
+            return jdbc.queryForList("SELECT id, application_id applicationId, receiver, title, message, read_flag readFlag, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_notification WHERE receiver=? OR receiver IN ('admin','technician') ORDER BY id DESC LIMIT 50", principal.username());
+        }
+        return jdbc.queryForList("SELECT id, application_id applicationId, receiver, title, message, read_flag readFlag, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_notification WHERE receiver=? ORDER BY id DESC LIMIT 50", principal.username());
     }
 
-    private Map<String, Object> approveStep(Long id, WorkflowActionRequest req) {
-        validateOperator(req, false);
+    private Map<String, Object> approveStep(Long id, WorkflowActionRequest req, JwtService.Claims principal) {
+        validateRole(principal.role(), false);
+        if (req == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
         Map<String, Object> current = loadApplication(id, false);
         ensurePending(current);
-        validateCurrentHandler(current, req);
+        validateCurrentHandler(current, principal);
         String flowType = normalizeFlowType(String.valueOf(current.get("flowType")), String.valueOf(current.get("category")), String.valueOf(current.get("type")));
         List<FlowStep> steps = stepsFor(flowType);
         int stepIndex = Math.max(0, intValue(current.get("currentStep")));
         if (stepIndex >= steps.size()) stepIndex = steps.size() - 1;
         FlowStep step = steps.get(stepIndex);
-        String operatorRole = normalizeRole(req.operatorRole, "");
-        String operator = req.operator.trim();
+        String operatorRole = principal.role();
+        String operator = principal.username();
         int round = intValue(current.get("resubmitCount"));
         if (!step.approvers.isEmpty()) {
             if (!step.approvers.contains(operator)) {
@@ -251,18 +281,19 @@ public class WorkflowController {
         return loadApplication(id, true);
     }
 
-    private Map<String, Object> rejectApplication(Long id, WorkflowActionRequest req) {
-        validateOperator(req, false);
+    private Map<String, Object> rejectApplication(Long id, WorkflowActionRequest req, JwtService.Claims principal) {
+        validateRole(principal.role(), false);
+        if (req == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
         Map<String, Object> current = loadApplication(id, false);
         ensurePending(current);
-        validateCurrentHandler(current, req);
-        validateFixedApproverIfNeeded(id, current, req);
+        validateCurrentHandler(current, principal);
+        validateFixedApproverIfNeeded(id, current, principal);
         String comment = blank(req.comment) ? "驳回" : req.comment.trim();
         jdbc.update("UPDATE workflow_application SET status='rejected', approver=?, approval_comment=?, rejected_at=CURRENT_TIMESTAMP, finished_at=CURRENT_TIMESTAMP, current_handler=NULL WHERE id=?",
-                req.operator.trim(), comment, id);
-        syncSampleRequestStatus(id, "rejected", req.operator.trim());
-        syncBulkProductionStatus(id, "rejected", req.operator.trim());
-        insertLog(id, "reject", req.operator.trim(), req.operatorRole.trim(), comment);
+                principal.username(), comment, id);
+        syncSampleRequestStatus(id, "rejected", principal.username());
+        syncBulkProductionStatus(id, "rejected", principal.username());
+        insertLog(id, "reject", principal.username(), principal.role(), comment);
         insertNotice(id, String.valueOf(current.get("applicant")), "申请已驳回", String.valueOf(current.get("title")) + " 已驳回，可修改后重新提交");
         return loadApplication(id, true);
     }
@@ -403,7 +434,14 @@ public class WorkflowController {
         }
     }
 
-    private long count(String sql) { Long value = jdbc.queryForObject(sql, Long.class); return value == null ? 0L : value; }
+    private long summaryCount(JwtService.Claims principal, String status, String category) {
+        String applicant = isSubmitter(principal) ? principal.username() : null;
+        return countApplications(status, category, applicant, null);
+    }
+
+    private boolean isSubmitter(JwtService.Claims principal) {
+        return principal != null && "feeder".equals(principal.role());
+    }
 
     private long countApplications(String status, String category, String applicant, String applicantRole) {
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM workflow_application WHERE deleted=0");
@@ -431,12 +469,24 @@ public class WorkflowController {
         if (req == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
         if (blank(req.category)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "申请分类不能为空");
         if (blank(req.typeKey)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "申请类型不能为空");
-        if (blank(req.applicant)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "申请人不能为空");
     }
 
-    private void validateOperator(WorkflowActionRequest req, boolean allowSubmitRole) {
-        if (req == null || blank(req.operator) || blank(req.operatorRole)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "操作人信息不能为空");
-        validateRole(req.operatorRole.trim(), allowSubmitRole);
+    /**
+     * The authentication filter puts the verified claims on the request.  All
+     * workflow audit fields and permission checks must use this value; the
+     * legacy operator/applicant fields in request DTOs are intentionally
+     * ignored so old clients remain wire-compatible without being trusted.
+     */
+    private JwtService.Claims authenticatedPrincipal() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        Object value = attributes == null ? null : attributes.getAttribute(
+                JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        if (!(value instanceof JwtService.Claims claims)
+                || claims.username() == null || claims.username().isBlank()
+                || claims.role() == null || claims.role().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
+        }
+        return claims;
     }
 
     private void validateRole(String role, boolean submit) {
@@ -452,10 +502,9 @@ public class WorkflowController {
         if (!"pending".equals(String.valueOf(current.get("status")))) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该申请当前不可审批");
     }
 
-    private void validateCurrentHandler(Map<String, Object> current, WorkflowActionRequest req) {
+    private void validateCurrentHandler(Map<String, Object> current, JwtService.Claims principal) {
         String handler = str(current.get("currentHandler"));
-        String role = normalizeRole(req.operatorRole, "");
-        if (!blank(handler) && !handler.contains("/") && !handler.equals(req.operator.trim()) && !"admin".equals(role)) {
+        if (!blank(handler) && !handler.contains("/") && !handler.equals(principal.username()) && !"admin".equals(principal.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "该申请已转交给 " + handler + " 处理");
         }
     }
@@ -552,14 +601,13 @@ public class WorkflowController {
         return new ArrayList<>(progressMap.values());
     }
 
-    private void validateFixedApproverIfNeeded(Long id, Map<String, Object> current, WorkflowActionRequest req) {
+    private void validateFixedApproverIfNeeded(Long id, Map<String, Object> current, JwtService.Claims principal) {
         String flowType = normalizeFlowType(String.valueOf(current.get("flowType")), String.valueOf(current.get("category")), String.valueOf(current.get("type")));
         List<FlowStep> steps = stepsFor(flowType);
         int stepIndex = Math.max(0, intValue(current.get("currentStep")));
         if (stepIndex >= steps.size()) stepIndex = steps.size() - 1;
         FlowStep step = steps.get(stepIndex);
-        String role = normalizeRole(req.operatorRole, "");
-        if (!step.approvers.isEmpty() && !step.approvers.contains(req.operator.trim()) && !"admin".equals(role)) {
+        if (!step.approvers.isEmpty() && !step.approvers.contains(principal.username()) && !"admin".equals(principal.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前节点仅允许审批员1-4处理");
         }
     }

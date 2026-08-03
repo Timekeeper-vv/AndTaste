@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { onLaunch } from '@dcloudio/uni-app'
-import { restoreSession } from './utils/session'
+import { restoreSession, sessionStartRoute } from './utils/session'
 
 onLaunch(() => {
-  restoreSession().catch(() => undefined)
+  restoreSession()
+    .then(() => {
+      const target = sessionStartRoute()
+      // login 是 pages.json 的启动页；启动后按本地会话恢复到用户应在的页面。
+      setTimeout(() => uni.reLaunch({ url: target }), 0)
+    })
+    .catch(() => undefined)
 })
 </script>
 

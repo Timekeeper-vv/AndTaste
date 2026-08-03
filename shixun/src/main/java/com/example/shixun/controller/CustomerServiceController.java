@@ -1,5 +1,7 @@
 package com.example.shixun.controller;
 
+import com.example.shixun.security.JwtAuthenticationFilter;
+import com.example.shixun.security.JwtService;
 import com.example.shixun.service.SiliconFlowChatService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -13,7 +15,6 @@ import java.util.*;
 /** C端客服：AI 首响 + 后台人工接管。 */
 @RestController
 @RequestMapping("/api/customer-service")
-@CrossOrigin(origins = "*")
 public class CustomerServiceController {
     private final JdbcTemplate jdbc;
     private final SiliconFlowChatService siliconFlow;
@@ -24,11 +25,10 @@ public class CustomerServiceController {
     }
 
     @PostMapping("/conversations/open")
-    public Map<String, Object> open(@RequestBody Map<String, Object> body) {
+    public Map<String, Object> open(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         ensureTables();
-        Long userId = longValue(body.get("currentUserId"));
-        if (userId == null) throw new IllegalArgumentException("缺少用户信息");
-        String username = userName(userId);
+        Long userId = requireConsumer(principal);
+        String username = principal.username();
         List<Map<String, Object>> existing = jdbc.queryForList("SELECT id, status FROM customer_service_conversation WHERE user_id=? ORDER BY updated_at DESC LIMIT 1", userId);
         Long conversationId;
         if (existing.isEmpty()) {
@@ -47,16 +47,17 @@ public class CustomerServiceController {
     }
 
     @GetMapping("/conversations/mine")
-    public Map<String, Object> mine(@RequestParam Long currentUserId) {
+    public Map<String, Object> mine(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         ensureTables();
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT id FROM customer_service_conversation WHERE user_id=? ORDER BY updated_at DESC LIMIT 1", currentUserId);
+        Long userId = requireConsumer(principal);
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT id FROM customer_service_conversation WHERE user_id=? ORDER BY updated_at DESC LIMIT 1", userId);
         if (rows.isEmpty()) return Map.of("conversation", null, "messages", List.of());
         return conversationDetail(((Number) rows.get(0).get("id")).longValue(), "user");
     }
 
     @GetMapping("/admin/conversations")
-    public List<Map<String, Object>> adminConversations(@RequestHeader(value = "X-Current-Role", required = false) String role) {
-        requireStaff(role); ensureTables();
+    public List<Map<String, Object>> adminConversations(@RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireStaff(principal); ensureTables();
         return jdbc.queryForList("SELECT c.id,u.id userId,u.username userName,COALESCE(c.status,'new') status,COALESCE(c.human_takeover,0) humanTakeover,c.taken_by_name takenByName,c.updated_at updatedAt, " +
                 "(SELECT content FROM customer_service_message m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) lastMessage, " +
                 "(SELECT COUNT(*) FROM customer_service_message m WHERE m.conversation_id=c.id AND m.sender_type='user' AND m.read_by_staff=0) unreadCount " +
@@ -65,8 +66,9 @@ public class CustomerServiceController {
     }
 
     @PostMapping("/admin/conversations/open")
-    public Map<String, Object> adminOpen(@RequestBody Map<String, Object> body, @RequestHeader(value = "X-Current-Role", required = false) String role) {
-        requireStaff(role); ensureTables();
+    public Map<String, Object> adminOpen(@RequestBody Map<String, Object> body,
+                                         @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireStaff(principal); ensureTables();
         Long userId = longValue(body.get("userId"));
         if (userId == null) throw new IllegalArgumentException("请选择C端用户");
         List<Map<String,Object>> rows = jdbc.queryForList("SELECT id FROM customer_service_conversation WHERE user_id=? ORDER BY updated_at DESC LIMIT 1", userId);
@@ -79,25 +81,25 @@ public class CustomerServiceController {
     }
 
     @GetMapping("/conversations/{id}")
-    public Map<String, Object> detail(@PathVariable Long id, @RequestParam String viewer, @RequestParam(required = false) Long currentUserId,
-                                      @RequestHeader(value = "X-Current-Role", required = false) String role) {
+    public Map<String, Object> detail(@PathVariable Long id, @RequestParam(required = false) String viewer,
+                                      @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         ensureTables();
-        if ("staff".equals(viewer)) requireStaff(role);
-        else requireOwner(id, currentUserId);
-        return conversationDetail(id, viewer);
+        boolean staffView = "staff".equals(viewer) && isStaff(principal);
+        if (staffView) requireStaff(principal);
+        else requireOwner(id, requireConsumer(principal));
+        return conversationDetail(id, staffView ? "staff" : "user");
     }
 
     @PostMapping("/conversations/{id}/messages")
     public Map<String, Object> send(@PathVariable Long id, @RequestBody Map<String, Object> body,
-                                    @RequestHeader(value = "X-Current-Role", required = false) String role) {
+                                    @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         ensureTables();
-        Long senderId = longValue(body.get("currentUserId"));
-        String senderType = string(body.get("senderType"));
         String content = string(body.get("content"));
-        if (senderId == null || content == null || content.isBlank()) throw new IllegalArgumentException("消息内容不能为空");
-        boolean staff = "staff".equals(senderType);
-        if (staff) requireStaff(role); else requireOwner(id, senderId);
-        addMessage(id, staff ? "staff" : "user", senderId, staff ? staffName(senderId) : userName(senderId), content.trim(), false);
+        if (content == null || content.isBlank()) throw new IllegalArgumentException("消息内容不能为空");
+        boolean staff = isStaff(principal);
+        Long senderId = requireAuthenticated(principal);
+        if (staff) requireStaff(principal); else requireOwner(id, senderId);
+        addMessage(id, staff ? "staff" : "user", senderId, principal.username(), content.trim(), false);
         jdbc.update("UPDATE customer_service_conversation SET status='open', updated_at=CURRENT_TIMESTAMP WHERE id=?", id);
         if (!staff && !humanTakeover(id)) {
             String reply = assistantReply(content.trim());
@@ -108,18 +110,19 @@ public class CustomerServiceController {
 
     @PostMapping("/conversations/{id}/human-takeover")
     public Map<String, Object> humanTakeover(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body,
-                                             @RequestHeader(value = "X-Current-Role", required = false) String role) {
-        requireStaff(role); ensureTables();
+                                             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireStaff(principal); ensureTables();
         boolean enabled = body == null || !Boolean.FALSE.equals(body.get("enabled"));
-        Long operatorId = body == null ? null : longValue(body.get("currentUserId"));
-        String operatorName = operatorId == null ? "人工客服" : staffName(operatorId);
+        Long operatorId = principal.userId();
+        String operatorName = principal.username();
         jdbc.update("UPDATE customer_service_conversation SET human_takeover=?, taken_by=?, taken_by_name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", enabled ? 1 : 0, enabled ? operatorId : null, enabled ? operatorName : null, id);
         return conversationDetail(id, "staff");
     }
 
     @PostMapping("/conversations/{id}/close")
-    public Map<String, Object> close(@PathVariable Long id, @RequestHeader(value = "X-Current-Role", required = false) String role) {
-        requireStaff(role); ensureTables(); jdbc.update("UPDATE customer_service_conversation SET status='closed',updated_at=CURRENT_TIMESTAMP WHERE id=?", id);
+    public Map<String, Object> close(@PathVariable Long id,
+                                     @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireStaff(principal); ensureTables(); jdbc.update("UPDATE customer_service_conversation SET status='closed',updated_at=CURRENT_TIMESTAMP WHERE id=?", id);
         return Map.of("message", "会话已关闭");
     }
 
@@ -150,13 +153,27 @@ public class CustomerServiceController {
     }
 
     private void requireOwner(Long conversationId, Long userId) {
-        if (userId == null) throw new IllegalArgumentException("缺少用户信息");
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM customer_service_conversation WHERE id=? AND user_id=?", Integer.class, conversationId, userId);
         if (count == null || count == 0) throw new IllegalStateException("无权访问该客服会话");
     }
-    private void requireStaff(String role) { if (!"admin".equals(role) && !"technician".equals(role) && !"feeder".equals(role)) throw new IllegalStateException("仅管理端账号可处理客服消息"); }
+    private Long requireAuthenticated(JwtService.Claims principal) {
+        if (principal == null || principal.userId() == null) throw new IllegalStateException("请先登录");
+        return principal.userId();
+    }
+    private Long requireConsumer(JwtService.Claims principal) {
+        Long userId = requireAuthenticated(principal);
+        // Designer accounts and other staff identities must not enter the C端
+        // conversation namespace.  Ownership checks use the canonical user id,
+        // so accepting any non-staff role here would let a designer create a
+        // consumer conversation that is invisible to the intended account.
+        if (!"user".equals(principal.role())) throw new IllegalStateException("请使用C端用户账号访问客服");
+        return userId;
+    }
+    private boolean isStaff(JwtService.Claims principal) {
+        return principal != null && ("admin".equals(principal.role()) || "technician".equals(principal.role()) || "feeder".equals(principal.role()));
+    }
+    private void requireStaff(JwtService.Claims principal) { if (!isStaff(principal)) throw new IllegalStateException("仅管理端账号可处理客服消息"); }
     private String userName(Long id) { return jdbc.queryForObject("SELECT username FROM user WHERE id=?", String.class, id); }
-    private String staffName(Long id) { try { return userName(id); } catch(Exception ignored) { return "人工客服"; } }
     private Long longValue(Object o) { return o instanceof Number ? ((Number)o).longValue() : o == null ? null : Long.valueOf(String.valueOf(o)); }
     private String string(Object o) { return o == null ? null : String.valueOf(o); }
     private void ensureTables() {

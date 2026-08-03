@@ -1,10 +1,14 @@
 package com.example.shixun.controller;
 
+import com.example.shixun.security.JwtAuthenticationFilter;
+import com.example.shixun.security.JwtService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -14,7 +18,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/supply-chain/sample-work-orders")
-@CrossOrigin(origins = "*")
 public class SupplyChainSampleWorkOrderController {
     private static final int EXPECTED_DATA_ROWS = 154;
     private static final int EXPECTED_WORKSHEET_ROWS = 155;
@@ -141,13 +144,16 @@ public class SupplyChainSampleWorkOrderController {
 
     @PostMapping
     public Map<String, Object> create(@RequestBody Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
         String productName = text(body.get("productName"));
         if (blank(productName)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "产品名称不能为空");
-        String applicant = firstNonBlank(text(body.get("applicant")), text(body.get("initiator")), "当前用户");
+        // applicant/initiator are retained in the DTO for old clients, but the
+        // persisted actor is always the verified JWT identity.
+        String applicant = principal.username();
         String sourceId = "MANUAL-" + UUID.randomUUID();
         String appNo = firstNonBlank(text(body.get("applicationNo")), no("DY"));
         int excelRowNo = nextManualRowNo();
-        String rawJson = rawJson(body, appNo, sourceId, excelRowNo);
+        String rawJson = rawJson(body, appNo, sourceId, excelRowNo, applicant);
         String checksum = sha256(sourceId + "|" + rawJson);
 
         jdbc.update("INSERT INTO supply_chain_sample_work_order (" +
@@ -169,15 +175,16 @@ public class SupplyChainSampleWorkOrderController {
 
     @PutMapping("/{id}")
     public Map<String, Object> update(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
         ensureExists(id);
         String productName = text(body.get("productName"));
         if (blank(productName)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "产品名称不能为空");
-        String updater = firstNonBlank(text(body.get("updatedBy")), text(body.get("applicant")), "当前用户");
+        String updater = principal.username();
         jdbc.update("UPDATE supply_chain_sample_work_order SET " +
                         "application_department=?, applicant=?, project_name=?, product_name=?, order_type=?, product_type=?, product_sub_type=?, product_estimate=?, product_estimate_currency=?, " +
                         "sample_quantity_text=?, spec_flavor=?, sample_fee_yuan=?, detail_remark=?, detail_project_name=?, linked_project_flow=?, attachment_summary=?, " +
                         "start_date=?, estimated_complete_date=?, actual_complete_date=?, owner=?, factory=?, sample_cost_yuan=?, sample_file_provided_date=?, updated_by=? WHERE id=? AND deleted=0",
-                text(body.get("applicationDepartment")), text(body.get("applicant")), text(body.get("projectName")), productName, text(body.get("orderType")), text(body.get("productType")),
+                text(body.get("applicationDepartment")), principal.username(), text(body.get("projectName")), productName, text(body.get("orderType")), text(body.get("productType")),
                 text(body.get("productSubType")), decimalText(body.get("productEstimate")), text(body.get("productEstimateCurrency")), text(body.get("sampleQuantityText")), text(body.get("specFlavor")),
                 decimalText(body.get("sampleFeeYuan")), text(body.get("detailRemark")), text(body.get("detailProjectName")), text(body.get("linkedProjectFlow")), text(body.get("attachmentSummary")),
                 dateText(body.get("startDate")), dateText(body.get("estimatedCompleteDate")), dateText(body.get("actualCompleteDate")), text(body.get("owner")), text(body.get("factory")),
@@ -187,21 +194,24 @@ public class SupplyChainSampleWorkOrderController {
 
     @PutMapping("/{id}/work-status")
     public Map<String, Object> updateWorkStatus(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
         ensureExists(id);
         String status = text(body.get("workOrderStatus"));
         if (blank(status)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "工单状态不能为空");
         jdbc.update("UPDATE supply_chain_sample_work_order SET work_order_status=?, start_date=?, estimated_complete_date=?, actual_complete_date=?, owner=?, factory=?, sample_cost_yuan=?, sample_file_provided_date=?, updated_by=? WHERE id=? AND deleted=0",
                 status, dateText(body.get("startDate")), dateText(body.get("estimatedCompleteDate")), dateText(body.get("actualCompleteDate")),
                 text(body.get("owner")), text(body.get("factory")), decimalText(body.get("sampleCostYuan")), dateText(body.get("sampleFileProvidedDate")),
-                firstNonBlank(text(body.get("updatedBy")), "当前用户"), id);
+                principal.username(), id);
         return detail(id);
     }
 
     @PostMapping("/{id}/submit-approval")
     public Map<String, Object> submitApproval(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateSubmitterRole(principal);
         Map<String, Object> row = detail(id);
-        String applicant = firstNonBlank(text(body.get("applicant")), text(row.get("applicant")), "当前用户");
-        String role = firstNonBlank(text(body.get("applicantRole")), "feeder");
+        String applicant = principal.username();
+        String role = principal.role();
         String title = "打样申请：" + firstNonBlank(text(row.get("projectName")), "未命名项目") + " / " + text(row.get("productName"));
         String appNo = no("WF");
         String formJson = workflowFormJson(row);
@@ -217,10 +227,28 @@ public class SupplyChainSampleWorkOrderController {
 
     @DeleteMapping("/{id}")
     public Map<String, Object> delete(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
         ensureExists(id);
-        String operator = body == null ? "当前用户" : firstNonBlank(text(body.get("operator")), "当前用户");
-        jdbc.update("UPDATE supply_chain_sample_work_order SET deleted=1, updated_by=? WHERE id=?", operator, id);
+        jdbc.update("UPDATE supply_chain_sample_work_order SET deleted=1, updated_by=? WHERE id=?", principal.username(), id);
         return Map.of("success", true, "id", id);
+    }
+
+    private JwtService.Claims authenticatedPrincipal() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        Object value = attributes == null ? null : attributes.getAttribute(
+                JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        if (!(value instanceof JwtService.Claims claims)
+                || claims.username() == null || claims.username().isBlank()
+                || claims.role() == null || claims.role().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
+        }
+        return claims;
+    }
+
+    private void validateSubmitterRole(JwtService.Claims principal) {
+        if (!Set.of("admin", "technician", "feeder").contains(principal.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交审批");
+        }
     }
 
     private Long longValue(String sql) {
@@ -315,9 +343,15 @@ public class SupplyChainSampleWorkOrderController {
         }
     }
 
-    private String rawJson(Map<String, Object> body, String appNo, String sourceId, int rowNo) {
+    private String rawJson(Map<String, Object> body, String appNo, String sourceId, int rowNo, String authenticatedUser) {
         try {
-            Map<String, Object> cells = new LinkedHashMap<>(body);
+            Map<String, Object> cells = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+            // Do not preserve caller-supplied identity/audit aliases in the
+            // historical payload; they are forgeable and would mislead review.
+            for (String key : List.of("applicant", "initiator", "operator", "updatedBy", "applicantRole", "operatorRole", "currentUserId", "role")) {
+                cells.remove(key);
+            }
+            cells.put("authenticatedUser", authenticatedUser);
             cells.put("申请编号", appNo);
             cells.put("SourceID", sourceId);
             return mapper.writeValueAsString(Map.of(

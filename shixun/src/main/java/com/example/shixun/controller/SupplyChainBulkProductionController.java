@@ -1,10 +1,14 @@
 package com.example.shixun.controller;
 
+import com.example.shixun.security.JwtAuthenticationFilter;
+import com.example.shixun.security.JwtService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -14,7 +18,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/supply-chain/bulk-production-orders")
-@CrossOrigin(origins = "*")
 public class SupplyChainBulkProductionController {
     private static final int EXPECTED_DATA_ROWS = 536;
     private static final int EXPECTED_WORKSHEET_ROWS = 537;
@@ -124,13 +127,16 @@ public class SupplyChainBulkProductionController {
 
     @PostMapping
     public Map<String, Object> create(@RequestBody Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
         String productName = text(body.get("productName"));
         if (blank(productName)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "产品名称不能为空");
-        String applicant = firstNonBlank(text(body.get("applicant")), text(body.get("initiator")), "当前用户");
+        // Legacy applicant/initiator fields are accepted for wire compatibility
+        // but never trusted for persisted identity or audit fields.
+        String applicant = principal.username();
         String sourceId = "MANUAL-BULK-" + UUID.randomUUID();
         String appNo = firstNonBlank(text(body.get("applicationNo")), no("DH"));
         int excelRowNo = nextManualRowNo();
-        String rawJson = rawJson(body, appNo, sourceId, excelRowNo);
+        String rawJson = rawJson(body, appNo, sourceId, excelRowNo, applicant);
         String checksum = sha256(sourceId + "|" + rawJson);
 
         jdbc.update("INSERT INTO supply_chain_bulk_production_order (" +
@@ -150,15 +156,16 @@ public class SupplyChainBulkProductionController {
 
     @PutMapping("/{id}")
     public Map<String, Object> update(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
         ensureExists(id);
         String productName = text(body.get("productName"));
         if (blank(productName)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "产品名称不能为空");
-        String updater = firstNonBlank(text(body.get("updatedBy")), text(body.get("applicant")), "当前用户");
+        String updater = principal.username();
         jdbc.update("UPDATE supply_chain_bulk_production_order SET " +
                         "application_department=?, applicant=?, project_name=?, project_type=?, project_level=?, project_detail=?, product_name=?, product_code=?, primary_category=?, secondary_category=?, " +
                         "production_type=?, production_quantity=?, spec_flavor=?, unit_price=?, unit_price_currency=?, product_remark=?, design_attachment_summary=?, linked_approval=?, contract_attachment_summary=?, " +
                         "start_date=?, estimated_complete_date=?, actual_complete_date=?, owner=?, factory=?, updated_by=? WHERE id=? AND deleted=0",
-                text(body.get("applicationDepartment")), text(body.get("applicant")), text(body.get("projectName")), text(body.get("projectType")), text(body.get("projectLevel")), text(body.get("projectDetail")), productName, text(body.get("productCode")), text(body.get("primaryCategory")), text(body.get("secondaryCategory")),
+                text(body.get("applicationDepartment")), principal.username(), text(body.get("projectName")), text(body.get("projectType")), text(body.get("projectLevel")), text(body.get("projectDetail")), productName, text(body.get("productCode")), text(body.get("primaryCategory")), text(body.get("secondaryCategory")),
                 text(body.get("productionType")), intText(body.get("productionQuantity")), text(body.get("specFlavor")), decimalText(body.get("unitPrice")), firstNonBlank(text(body.get("unitPriceCurrency")), "CNY"), text(body.get("productRemark")), text(body.get("designAttachmentSummary")), text(body.get("linkedApproval")), text(body.get("contractAttachmentSummary")),
                 dateText(body.get("startDate")), dateText(body.get("estimatedCompleteDate")), dateText(body.get("actualCompleteDate")), text(body.get("owner")), text(body.get("factory")), updater, id);
         return detail(id);
@@ -166,19 +173,22 @@ public class SupplyChainBulkProductionController {
 
     @PutMapping("/{id}/work-status")
     public Map<String, Object> updateWorkStatus(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
         ensureExists(id);
         String status = text(body.get("workOrderStatus"));
         if (blank(status)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "工单状态不能为空");
         jdbc.update("UPDATE supply_chain_bulk_production_order SET work_order_status=?, start_date=?, estimated_complete_date=?, actual_complete_date=?, owner=?, factory=?, updated_by=? WHERE id=? AND deleted=0",
-                status, dateText(body.get("startDate")), dateText(body.get("estimatedCompleteDate")), dateText(body.get("actualCompleteDate")), text(body.get("owner")), text(body.get("factory")), firstNonBlank(text(body.get("updatedBy")), "当前用户"), id);
+                status, dateText(body.get("startDate")), dateText(body.get("estimatedCompleteDate")), dateText(body.get("actualCompleteDate")), text(body.get("owner")), text(body.get("factory")), principal.username(), id);
         return detail(id);
     }
 
     @PostMapping("/{id}/submit-approval")
     public Map<String, Object> submitApproval(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateSubmitterRole(principal);
         Map<String, Object> row = detail(id);
-        String applicant = firstNonBlank(text(body.get("applicant")), text(row.get("applicant")), "当前用户");
-        String role = firstNonBlank(text(body.get("applicantRole")), "feeder");
+        String applicant = principal.username();
+        String role = principal.role();
         String title = "大货生产申请：" + firstNonBlank(text(row.get("projectName")), "未命名项目") + " / " + text(row.get("productName"));
         String appNo = no("WF");
         String formJson = workflowFormJson(row);
@@ -194,10 +204,28 @@ public class SupplyChainBulkProductionController {
 
     @DeleteMapping("/{id}")
     public Map<String, Object> delete(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body) {
+        JwtService.Claims principal = authenticatedPrincipal();
         ensureExists(id);
-        String operator = body == null ? "当前用户" : firstNonBlank(text(body.get("operator")), "当前用户");
-        jdbc.update("UPDATE supply_chain_bulk_production_order SET deleted=1, updated_by=? WHERE id=?", operator, id);
+        jdbc.update("UPDATE supply_chain_bulk_production_order SET deleted=1, updated_by=? WHERE id=?", principal.username(), id);
         return Map.of("success", true, "id", id);
+    }
+
+    private JwtService.Claims authenticatedPrincipal() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        Object value = attributes == null ? null : attributes.getAttribute(
+                JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        if (!(value instanceof JwtService.Claims claims)
+                || claims.username() == null || claims.username().isBlank()
+                || claims.role() == null || claims.role().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
+        }
+        return claims;
+    }
+
+    private void validateSubmitterRole(JwtService.Claims principal) {
+        if (!Set.of("admin", "technician", "feeder").contains(principal.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交审批");
+        }
     }
 
     private String selectSql(boolean detail) {
@@ -286,9 +314,15 @@ public class SupplyChainBulkProductionController {
         }
     }
 
-    private String rawJson(Map<String, Object> body, String appNo, String sourceId, int rowNo) {
+    private String rawJson(Map<String, Object> body, String appNo, String sourceId, int rowNo, String authenticatedUser) {
         try {
-            Map<String, Object> cells = new LinkedHashMap<>(body);
+            Map<String, Object> cells = body == null ? new LinkedHashMap<>() : new LinkedHashMap<>(body);
+            // Identity aliases from the request are not trustworthy and must
+            // not survive in the persisted raw payload as if they were audit.
+            for (String key : List.of("applicant", "initiator", "operator", "updatedBy", "applicantRole", "operatorRole", "currentUserId", "role")) {
+                cells.remove(key);
+            }
+            cells.put("authenticatedUser", authenticatedUser);
             cells.put("申请编号", appNo);
             cells.put("SourceID", sourceId);
             return mapper.writeValueAsString(Map.of("sourceFile", "系统新增", "sheet", SOURCE_SHEET, "excelRow", rowNo, "cells", cells));

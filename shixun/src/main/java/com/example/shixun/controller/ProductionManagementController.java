@@ -1,5 +1,7 @@
 package com.example.shixun.controller;
 
+import com.example.shixun.security.JwtAuthenticationFilter;
+import com.example.shixun.security.JwtService;
 import com.example.shixun.service.SiliconFlowChatService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -7,6 +9,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -19,7 +25,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/production")
-@CrossOrigin(origins = "*")
 public class ProductionManagementController {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -296,6 +301,8 @@ public class ProductionManagementController {
 
     @PostMapping("/commercial-orders/{id}/approval-request")
     public Map<String,Object> requestCommercialOrderApproval(@PathVariable Long id, @RequestBody OrderApprovalRequest req) throws Exception {
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateSubmitterRole(principal);
         Map<String,Object> o = commercialOrder(id);
         String action = req == null || req.action == null ? "" : req.action.trim();
         if (!List.of("confirm", "start").contains(action)) throw new IllegalArgumentException("审批动作必须为 confirm 或 start");
@@ -314,8 +321,10 @@ public class ProductionManagementController {
         String type = String.valueOf(o.get("orderType"));
         String typeName = "sample".equals(type) ? "打样" : "大货";
         String actionName = "confirm".equals(action) ? "订单确认" : "下达生产";
-        String applicant = blank(req == null ? null : req.applicant) ? "当前用户" : req.applicant.trim();
-        String applicantRole = blank(req == null ? null : req.applicantRole) ? "feeder" : req.applicantRole.trim();
+        // applicant/applicantRole remain in the request DTO for old clients,
+        // but workflow identity and audit records come from verified claims.
+        String applicant = principal.username();
+        String applicantRole = principal.role();
         String appNo = no("WF");
         String title = typeName + actionName + "申请 - " + o.get("orderNo");
         Map<String,String> fields = new LinkedHashMap<>();
@@ -421,6 +430,24 @@ public class ProductionManagementController {
     private BigDecimal bd(Object o) { if (o == null) return BigDecimal.ZERO; if (o instanceof BigDecimal) return (BigDecimal) o; if (o instanceof Number) return BigDecimal.valueOf(((Number)o).doubleValue()); return new BigDecimal(String.valueOf(o)); }
     private String no(String prefix) { return prefix + DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(LocalDateTime.now()) + (int)(Math.random()*900+100); }
     private boolean blank(String s) { return s == null || s.trim().isEmpty(); }
+
+    private JwtService.Claims authenticatedPrincipal() {
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        Object value = attributes == null ? null : attributes.getAttribute(
+                JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        if (!(value instanceof JwtService.Claims claims)
+                || claims.username() == null || claims.username().isBlank()
+                || claims.role() == null || claims.role().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
+        }
+        return claims;
+    }
+
+    private void validateSubmitterRole(JwtService.Claims principal) {
+        if (!Set.of("admin", "technician", "feeder").contains(principal.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交审批");
+        }
+    }
 
     public static class AutoBomRequest { public String productName; public String productType; public Long skuId; public Long assetId; public Integer plannedQty; public BigDecimal targetPrice; }
     public static class QuoteRequest { public Long bomId; public Integer quantity; public BigDecimal overheadRate; public BigDecimal targetMarginRate; public QuoteRequest(){} public QuoteRequest(Long bomId, Integer quantity, BigDecimal overheadRate, BigDecimal targetMarginRate){this.bomId=bomId;this.quantity=quantity;this.overheadRate=overheadRate;this.targetMarginRate=targetMarginRate;} }

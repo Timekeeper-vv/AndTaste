@@ -12,7 +12,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/creative/assistant")
-@CrossOrigin(origins = "*")
 public class CreativeBusinessAiController {
     private final JdbcTemplate jdbc;
     private final SiliconFlowChatService siliconFlow;

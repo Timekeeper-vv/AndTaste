@@ -6,8 +6,6 @@ import org.springframework.web.servlet.config.annotation.ContentNegotiationConfi
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-import java.nio.file.Path;
-
 @Configuration
 public class CreativeAssetWebConfig implements WebMvcConfigurer {
     @Override
@@ -16,14 +14,21 @@ public class CreativeAssetWebConfig implements WebMvcConfigurer {
         configurer.mediaType("gltf", MediaType.parseMediaType("model/gltf+json"));
     }
 
+    /**
+     * Keep legacy asset paths out of Spring's default static-resource handler.
+     *
+     * Older deployments wrote user uploads and generated files below
+     * {@code /uploads} and {@code /generated}.  If those directories happen to
+     * remain on the classpath or under a configured static location, Boot's
+     * catch-all handler could expose them without authentication.  Registering
+     * an intentionally empty handler for these paths makes requests resolve to
+     * a normal 404; private assets are served only by CreativeAiController's
+     * authenticated endpoints.
+     */
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        Path publicDir = Path.of(System.getProperty("user.dir"), "..", "shixun-vue", "public").normalize().toAbsolutePath();
-        registry.addResourceHandler("/generated/**")
-                .addResourceLocations(publicDir.resolve("generated").toUri().toString())
-                .setCachePeriod(0);
-        registry.addResourceHandler("/uploads/**")
-                .addResourceLocations(publicDir.resolve("uploads").toUri().toString())
-                .setCachePeriod(0);
+        registry.addResourceHandler("/generated/**", "/uploads/**")
+                .addResourceLocations("classpath:/__private-assets-disabled__/");
     }
+
 }

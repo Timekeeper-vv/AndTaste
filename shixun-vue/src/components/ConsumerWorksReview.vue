@@ -1,12 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
-
-function authMediaUrl(url: string): string {
-  const token = sessionStorage.getItem('accessToken')
-  return token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
-}
-
+import { requestAssetPreviewUrl } from '../utils/assetAccess'
 
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
@@ -37,6 +32,7 @@ const keywordUserId = ref('')
 const status = ref<'all' | ReviewStatus>('review')
 const comment = ref('')
 const activeWork = ref<ConsumerAsset | null>(null)
+const activeMediaUrl = ref('')
 
 const stats = computed(() => {
   const total = works.value.length
@@ -56,7 +52,6 @@ const statusText: Record<string, string> = {
 const statusClass = (s?: string) => s === 'approved' ? 'ok' : s === 'rejected' ? 'bad' : 'wait'
 const assetTypeText = (t?: string) => t === 'model' ? '3D模型' : '产品图片'
 const previewUrl = (w: ConsumerAsset) => w.previewUrl || w.fileUrl || ''
-const fileViewUrl = (w: ConsumerAsset) => w.assetType === 'model' && w.id ? authMediaUrl(`/api/creative/ai/assets/${w.id}/model-content`) : (w.fileUrl || w.previewUrl || '')
 function purposeOf(w: ConsumerAsset): 'museum_sale' | 'personal' | 'unknown' {
   const t = `${w.tags || ''} ${w.prompt || ''}`
   if (t.includes('用途=museum_sale') || t.includes('博物馆售卖') || t.includes('博物馆审批')) return 'museum_sale'
@@ -86,10 +81,6 @@ async function load() {
     if (status.value !== 'all') qs.set('status', status.value)
     const r = await fetch(`/api/creative/ai/consumer-assets/review?${qs}`, {
       cache: 'no-store',
-      headers: {
-        'X-Current-Role': props.currentUser.role,
-        'X-Current-User': props.currentUser.username,
-      },
     })
     if (!r.ok) {
       const err = await r.json().catch(() => null)
@@ -111,8 +102,6 @@ async function reviewWork(w: ConsumerAsset, nextStatus: ReviewStatus) {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'X-Current-Role': props.currentUser.role,
-        'X-Current-User': props.currentUser.username,
       },
       body: JSON.stringify({ status: nextStatus, operator: props.currentUser.username, comment: comment.value.trim() }),
     })
@@ -129,13 +118,20 @@ async function reviewWork(w: ConsumerAsset, nextStatus: ReviewStatus) {
   }
 }
 
-function openPreview(w: ConsumerAsset) {
+async function openPreview(w: ConsumerAsset) {
   activeWork.value = w
+  activeMediaUrl.value = ''
   document.body.style.overflow = 'hidden'
+  try {
+    activeMediaUrl.value = await requestAssetPreviewUrl(w.id)
+  } catch (e: any) {
+    emit('alert', `作品预览失败：${e?.message || e}`, 'error')
+  }
 }
 
 function closePreview() {
   activeWork.value = null
+  activeMediaUrl.value = ''
   document.body.style.overflow = ''
 }
 
@@ -234,15 +230,15 @@ onMounted(load)
             <button type="button" @click="closePreview">×</button>
           </header>
           <div class="modal-body">
-            <img v-if="activeWork.assetType === 'image' && previewUrl(activeWork)" :src="previewUrl(activeWork)" alt="作品预览" />
+            <img v-if="activeWork.assetType === 'image' && (activeMediaUrl || previewUrl(activeWork))" :src="activeMediaUrl || previewUrl(activeWork)" alt="作品预览" />
             <div v-else class="model-large">
               <b>3D模型文件</b>
               <span>可打开模型文件进行预览或下载。</span>
-              <a v-if="fileViewUrl(activeWork)" :href="fileViewUrl(activeWork)" target="_blank" rel="noopener">打开模型文件</a>
+              <a v-if="activeMediaUrl" :href="activeMediaUrl" target="_blank" rel="noopener">打开模型文件</a>
             </div>
           </div>
           <footer>
-            <a v-if="fileViewUrl(activeWork)" :href="fileViewUrl(activeWork)" target="_blank" rel="noopener">打开原文件</a>
+            <a v-if="activeMediaUrl" :href="activeMediaUrl" target="_blank" rel="noopener">打开原文件</a>
             <button type="button" class="approve" @click="reviewWork(activeWork, 'approved')">审核通过</button>
             <button type="button" class="reject" @click="reviewWork(activeWork, 'rejected')">审核不通过</button>
           </footer>

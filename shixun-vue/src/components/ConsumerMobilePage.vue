@@ -5,12 +5,7 @@ import andTasteLogo from '../assets/and_taste.png'
 import QRCode from 'qrcode'
 import MaterialModelStudio from './MaterialModelStudio.vue'
 import CustomerSupportWidget from './CustomerSupportWidget.vue'
-
-function authMediaUrl(url: string): string {
-  const token = sessionStorage.getItem('accessToken')
-  return token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
-}
-
+import { requestAssetPreviewAccess, requestAssetPreviewUrl } from '../utils/assetAccess'
 
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error']; logout: [] }>()
@@ -72,6 +67,8 @@ const previewDownloading = ref(false)
 const creditPanelOpen = ref(false)
 const rechargePackages = ref<any[]>([])
 const paymentChannelEnabled = ref(false)
+const wechatPaymentEnabled = ref(false)
+const manualPaymentEnabled = ref(false)
 const paymentOrder = ref<any | null>(null)
 const paymentQrUrl = ref('')
 const paymentLoading = ref(false)
@@ -165,8 +162,12 @@ const canGenerateModel = computed(() => {
   if (modelForm.mode === 'multiview_to_model') return !!modelForm.multiviewAssetIds.front && Object.values(modelForm.multiviewAssetIds).filter(Boolean).length >= 2
   return !!modelForm.rawPrompt.trim()
 })
-const previewModelUrl = computed(() => previewAsset.value?.id ? authMediaUrl(`/api/creative/ai/assets/${previewAsset.value.id}/model-content`) : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || '')
-const previewDownloadUrl = computed(() => previewAsset.value?.id ? `/api/creative/ai/assets/${previewAsset.value.id}/download-model?format=${previewDownloadFormat.value}&currentUserId=${props.currentUser.id}` : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
+const previewModelUrl = ref('')
+const previewDownloadUrl = computed(() => previewAsset.value?.id
+  ? previewDownloadFormat.value === 'GLB'
+    ? previewModelUrl.value
+    : `/api/creative/ai/assets/${encodeURIComponent(String(previewAsset.value.id))}/download-model?format=${encodeURIComponent(previewDownloadFormat.value)}`
+  : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
 
 const creditBalance = computed(() => Number(creditAccount.value?.balance ?? 0))
 const imageCost = computed(() => Number(creditRules.value?.image2d ?? 1))
@@ -224,7 +225,7 @@ const imageShowcaseTemplates = [
     id: 'museum-gift-box',
     title: '文博伴手礼礼盒',
     subtitle: '馆藏灵感 · 可售包装视觉',
-    image: '/generated/images/jimeng-image-1784783686097.png',
+    image: '/and-taste-sample-1.svg',
     prompt: '一款面向博物馆文创商店的高端文化伴手礼礼盒，以馆藏纹样和城市文化为灵感，温暖克制的东方配色，精致纸质包装与局部烫金工艺，产品正面展示，干净高级的商业产品摄影，适合游客送礼和陈列售卖',
     style: '官方文创',
     ratio: '1:1',
@@ -242,7 +243,7 @@ const modelShowcaseTemplates = [
     id: 'precision-model-demo',
     title: '精密文创摆件 3D 范例',
     subtitle: '3D 成品预览 · 可继续换材质',
-    image: '/generated/models/tripo-preview-1785312126915.webp',
+    image: '/and-taste-sample-3.svg',
     presetLabel: 'PPC 精密摆件',
   },
 ]
@@ -275,7 +276,7 @@ async function refreshProductionAssessment() {
 }
 async function submitRightsService(assetId?: number) {
   if (!rightsService.value) { emit('alert', '请选择需要咨询的版权服务', 'error'); return }
-  const response = await fetch('/api/creative/ai/consumer/copyright-consultations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ currentUserId: props.currentUser.id, assetId, service: rightsService.value }) })
+  const response = await fetch('/api/creative/ai/consumer/copyright-consultations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetId, service: rightsService.value }) })
   const data = await response.json().catch(() => null)
   if (!response.ok) { emit('alert', data?.message || '服务登记失败', 'error'); return }
   rightsServiceOpen.value = false; rightsService.value = ''
@@ -395,16 +396,21 @@ async function loadPaymentPackages() {
   try {
     const data = await json('/api/payments/packages')
     rechargePackages.value = Array.isArray(data?.items) ? data.items : []
-    paymentChannelEnabled.value = !!data?.channels?.find((x: any) => x.code === 'wechat')?.enabled
+    const channels = Array.isArray(data?.channels) ? data.channels : []
+    wechatPaymentEnabled.value = !!channels.find((x: any) => x.code === 'wechat' && x.enabled)
+    manualPaymentEnabled.value = !!channels.find((x: any) => x.code === 'manual_wechat_qr' && x.enabled)
+    paymentChannelEnabled.value = wechatPaymentEnabled.value || manualPaymentEnabled.value
   } catch {
     rechargePackages.value = []
     paymentChannelEnabled.value = false
+    wechatPaymentEnabled.value = false
+    manualPaymentEnabled.value = false
   }
 }
 async function refreshPaymentOrder() {
   if (!paymentOrder.value?.orderNo) return
   const r = await fetch(`/api/payments/orders/${encodeURIComponent(paymentOrder.value.orderNo)}`, {
-    headers: { 'X-Current-User-Id': String(props.currentUser.id) }, cache: 'no-store',
+    cache: 'no-store',
   })
   if (!r.ok) return
   const latest = await r.json()
@@ -419,22 +425,36 @@ async function refreshPaymentOrder() {
 async function createPaymentOrder(pkg: any) {
   paymentError.value = ''
   if (!paymentChannelEnabled.value) {
-    paymentError.value = '收款码当前不可用，请稍后再试。'
+    paymentError.value = '支付通道当前不可用，请稍后再试。'
     return
   }
   paymentLoading.value = true
   try {
+    const channel = wechatPaymentEnabled.value ? 'wechat' : 'manual_wechat_qr'
     const r = await fetch('/api/payments/orders', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Current-User-Id': String(props.currentUser.id) },
-      body: JSON.stringify({ packageCode: pkg.code, channel: 'wechat' }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ packageCode: pkg.code, channel }),
     })
     const data = await r.json().catch(() => null)
     if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
     paymentOrder.value = data
-    paymentQrUrl.value = data.codeUrl?.startsWith('/')
-      ? data.codeUrl
-      : await QRCode.toDataURL(data.codeUrl, { width: 360, margin: 1, color: { dark: '#1f1713', light: '#ffffff' } })
+    // 人工收款码本身就是一张图片：直接展示图片地址，不能再把图片
+    // 地址编码成另一张二维码，否则扫码后只会打开图片而不会完成收款。
+    // 微信 Native 返回的 weixin:// 链接则仍需在页面上生成二维码。
+    const codeUrl = String(data?.codeUrl || '').trim()
+    const isManualQr = data?.channel === 'manual_wechat_qr'
+    const isImageUrl = /^(?:https?:\/\/|\/|data:image\/|blob:)/i.test(codeUrl)
+    if (isManualQr && isImageUrl) {
+      paymentQrUrl.value = codeUrl
+    } else if (isManualQr && codeUrl) {
+      // 兼容管理员填写 `payment-collection-qr.jpg` 这类相对路径。
+      paymentQrUrl.value = `/${codeUrl.replace(/^\/+/, '')}`
+    } else if (codeUrl) {
+      paymentQrUrl.value = await QRCode.toDataURL(codeUrl, { width: 360, margin: 1, color: { dark: '#1f1713', light: '#ffffff' } })
+    } else {
+      throw new Error('支付服务未返回收款码，请联系平台管理员')
+    }
     stopPaymentPolling()
     if (data.channel === 'wechat') paymentTimer.value = setInterval(refreshPaymentOrder, 2000)
   } catch (e: any) {
@@ -453,7 +473,7 @@ async function completeManualPayment() {
   paymentLoading.value = true
   try {
     const r = await fetch(`/api/payments/orders/${encodeURIComponent(paymentOrder.value.orderNo)}/manual-complete`, {
-      method: 'POST', headers: { 'X-Current-User-Id': String(props.currentUser.id) },
+      method: 'POST',
     })
     const data = await r.json().catch(() => null)
     if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
@@ -479,11 +499,6 @@ async function downloadPreviewModel() {
   try {
     const response = await fetch(url, {
       cache: 'no-store',
-      headers: {
-        'X-Current-Role': 'user',
-        'X-Current-User-Id': String(props.currentUser.id),
-        'X-Current-User': props.currentUser.username,
-      },
     })
     if (!response.ok) {
       let message = ''
@@ -528,6 +543,19 @@ const workStatusText: Record<string, string> = { review: '待审核', approved: 
 function workStatusLabel(a: any): string { return workStatusText[String(a?.status || 'draft')] || String(a?.status || '草稿') }
 function workStatusClass(a: any): string { const s = String(a?.status || 'draft'); return s === 'approved' ? 'approved' : s === 'rejected' ? 'rejected' : s === 'review' ? 'review' : 'draft' }
 function assetIdOf(a: any): number { return Number(a?.id || a?.assetId || 0) }
+async function secureAssetResult(data: any, kind: 'image' | 'model') {
+  const id = assetIdOf(data)
+  if (!id) throw new Error('生成结果缺少作品编号')
+  const access = await requestAssetPreviewAccess(id)
+  return {
+    ...data,
+    id,
+    assetId: id,
+    fileUrl: access.url,
+    previewUrl: access.previewUrl,
+    ...(kind === 'model' ? { modelUrl: access.url } : { imageUrl: access.url }),
+  }
+}
 function isSubmittedForReview(a: any): boolean { const id = assetIdOf(a); return !!id && submittedAssetIds.value.has(id) }
 function isSubmittingForReview(a: any): boolean { const id = assetIdOf(a); return !!id && submittingAssetIds.value.has(id) }
 function isApprovedModel(a: any): boolean { return a?.assetType === 'model' && String(a?.assetStatus || a?.status || '') === 'approved' }
@@ -578,20 +606,13 @@ async function submitAssetForReview(a: any) {
   }
   submittingAssetIds.value = new Set([...submittingAssetIds.value, id])
   try {
-    const r = await fetch(`/api/creative/ai/consumer-assets/${id}/submit-review?currentUserId=${props.currentUser.id}`, {
+    const r = await fetch(`/api/creative/ai/consumer-assets/${id}/submit-review`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Current-Role': 'user',
-        'X-Current-User-Id': String(props.currentUser.id),
-        'X-Current-User': props.currentUser.username,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         purpose: creationPurpose.value,
         museumId: creationPurpose.value === 'museum_sale' ? selectedPurposeMuseum.value?.id || '' : '',
         note: `C端用户主动提交${reviewFlowTitle.value}；创作目的：${selectedPurposeFullText.value}${creationPurpose.value === 'museum_sale' && selectedPurposeMuseum.value ? `；审批博物馆：${selectedPurposeMuseum.value.name}` : ''}`,
-        currentUserId: String(props.currentUser.id),
-        currentUsername: props.currentUser.username,
       }),
     })
     if (!r.ok) {
@@ -639,13 +660,12 @@ async function json(url: string) {
 
 async function load() {
   try {
-    const assetParams = new URLSearchParams({ role: 'user', currentUserId: String(props.currentUser.id) })
     const [i, t, a, c, prs, ms] = await Promise.all([
       json('/api/creative/ai/jimeng/config'),
       json('/api/creative/ai/tripo/config'),
-      json(`/api/creative/ai/assets?${assetParams}`),
-      json(`/api/creative/ai/consumer-credits/account?currentUserId=${props.currentUser.id}`),
-      json(`/api/creative/ai/consumer-production/my?currentUserId=${props.currentUser.id}`),
+      json('/api/creative/ai/assets'),
+      json('/api/creative/ai/consumer-credits/account'),
+      json('/api/creative/ai/consumer-production/my'),
       json('/api/creative/ai/consumer-production/museums'),
     ])
     await loadPaymentPackages()
@@ -697,11 +717,14 @@ async function generateDoubaoMultiView() {
   setStage('Doubao-Seedream-5.0-lite 正在生成正/左/后/右视图', 'generate')
   const r = await fetch('/api/creative/ai/volcengine/seedream/multiview', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: imageForm.rawPrompt, inputAssetId: doubaoReferenceAssetId.value, size: '2K', watermark: true, currentUserId: props.currentUser.id }),
+    body: JSON.stringify({ prompt: imageForm.rawPrompt, inputAssetId: doubaoReferenceAssetId.value, size: '2K', watermark: true }),
   })
   if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }
   const data = await r.json()
-  doubaoMultiViewResult.value = Array.isArray(data.images) ? data.images : []
+  const rawImages = Array.isArray(data.images) ? data.images : []
+  doubaoMultiViewResult.value = await Promise.all(rawImages.map(async (item: any) => {
+    try { return await secureAssetResult(item, 'image') } catch { return { ...item, previewUrl: '', fileUrl: '' } }
+  }))
   if (!doubaoMultiViewResult.value.length) throw new Error('Doubao 未返回多视图结果')
   await load(); phase.value = 'done'
   emit('alert', data.message || 'Doubao 多视图已保存，可直接用于 3D 建模', 'success')
@@ -729,10 +752,10 @@ async function generateImage() {
     if (imageForm.generationMode === 'single' && !imageConfig.value.configured) throw new Error('即梦AI签名鉴权未配置，请联系管理员配置火山AccessKeyId和SecretAccessKey')
     await optimizeImagePrompt(); setStage(imageForm.generationMode === 'image_to_image' ? '正在融合参考图与文字描述' : '正在生成图片', 'generate')
     const endpoint = imageForm.generationMode === 'image_to_image' ? '/api/creative/ai/image-to-image' : '/api/creative/ai/jimeng/text-to-image'
-    const payload = imageForm.generationMode === 'image_to_image' ? { title: `图文结合 · ${productProfile.value.label}`, prompt: imageForm.prompt, inputAssetId: imageForm.inputAssetId, productCategory: productProfile.value.label, material: selectedMaterial.value, currentUserId: props.currentUser.id } : { provider: 'jimeng', rawPrompt: imageForm.rawPrompt, prompt: imageForm.prompt, productCategory: productProfile.value.label, material: selectedMaterial.value, imagenAspectRatio: imageForm.imagenAspectRatio, imagenImageSize: imageForm.imagenImageSize, imagenOutputFormat: imageForm.imagenOutputFormat, currentUserId: props.currentUser.id }
+    const payload = imageForm.generationMode === 'image_to_image' ? { title: `图文结合 · ${productProfile.value.label}`, prompt: imageForm.prompt, inputAssetId: imageForm.inputAssetId, productCategory: productProfile.value.label, material: selectedMaterial.value } : { provider: 'jimeng', rawPrompt: imageForm.rawPrompt, prompt: imageForm.prompt, productCategory: productProfile.value.label, material: selectedMaterial.value, imagenAspectRatio: imageForm.imagenAspectRatio, imagenImageSize: imageForm.imagenImageSize, imagenOutputFormat: imageForm.imagenOutputFormat }
     const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }
-    const d = await r.json(); if (d.creditAccount) creditAccount.value = d.creditAccount; imageResult.value = d
+    const d = await r.json(); if (d.creditAccount) creditAccount.value = d.creditAccount; imageResult.value = await secureAssetResult(d, 'image')
     setStage('正在保存作品', 'save'); await prepareAssetPreview(d.assetId, 'image'); await load(); await nextTick(); imageAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' }); phase.value = 'done'
     emit('alert', `图片已保存，可${reviewSubmitText.value}`, 'success')
   } catch (e: any) {
@@ -744,7 +767,7 @@ async function uploadImageEditReference(e: Event) {
   if (!file) return
   busy.value = true; setStage('正在上传图文结合参考图', 'save')
   try {
-    const fd = new FormData(); fd.append('file', file); fd.append('title', 'C端图文结合参考图'); fd.append('tags', 'C端,2D,图生图,参考图'); fd.append('currentUserId', String(props.currentUser.id))
+    const fd = new FormData(); fd.append('file', file); fd.append('title', 'C端图文结合参考图'); fd.append('tags', 'C端,2D,图生图,参考图')
     const r = await fetch('/api/creative/ai/assets/upload', { method: 'POST', body: fd })
     if (!r.ok) { const error = await r.json().catch(() => null); throw new Error(error?.message || `HTTP ${r.status}`) }
     const data = await r.json(); imageForm.inputAssetId = Number(data.assetId)
@@ -760,7 +783,7 @@ async function uploadDoubaoReference(e: Event) {
   if (!file) return
   busy.value = true; setStage('正在上传 Doubao 多视图参考图', 'save')
   try {
-    const fd = new FormData(); fd.append('file', file); fd.append('title', 'Doubao 多视图产品参考图'); fd.append('tags', 'C端,Doubao,多视图,3D参考'); fd.append('currentUserId', String(props.currentUser.id))
+    const fd = new FormData(); fd.append('file', file); fd.append('title', 'Doubao 多视图产品参考图'); fd.append('tags', 'C端,Doubao,多视图,3D参考')
     const r = await fetch('/api/creative/ai/assets/upload', { method: 'POST', body: fd })
     if (!r.ok) { const error = await r.json().catch(() => null); throw new Error(error?.message || `HTTP ${r.status}`) }
     const data = await r.json(); doubaoReferenceAssetId.value = Number(data.assetId)
@@ -781,7 +804,6 @@ async function uploadReference(e: Event, view?: 'front' | 'left' | 'back' | 'rig
     fd.append('file', file)
     fd.append('title', view ? `C端多视图3D参考图-${view}` : 'C端3D参考图')
     fd.append('tags', 'C端,3D参考图')
-    fd.append('currentUserId', String(props.currentUser.id))
     const r = await fetch('/api/creative/ai/assets/upload', { method: 'POST', body: fd })
     if (!r.ok) throw new Error(await r.text())
     const d = await r.json()
@@ -869,7 +891,6 @@ async function generateModel() {
       exportUv: true,
       compress: false,
       faceLimit: 2000000,
-      currentUserId: props.currentUser.id,
     }
     const r = await fetch('/api/creative/ai/tripo/generate', {
       method: 'POST',
@@ -905,7 +926,7 @@ async function pollModel(jobId: number) {
     setStage(d.status === 'succeeded' ? '3D模型已完成' : `正在生成3D模型 ${modelProgress.value || 0}%`, d.status === 'succeeded' ? 'save' : 'generate')
     if (d.status === 'succeeded') {
       if (d.creditAccount) creditAccount.value = d.creditAccount
-      modelResult.value = d
+      modelResult.value = await secureAssetResult(d, 'model')
       busy.value = false
       stage.value = ''
       await load()
@@ -995,11 +1016,10 @@ async function submitProductionRequest() {
   }
   submittingProduction.value = true
   try {
-    const r = await fetch(`/api/creative/ai/consumer-production/submit?currentUserId=${props.currentUser.id}`, {
+    const r = await fetch('/api/creative/ai/consumer-production/submit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Current-Role': 'user', 'X-Current-User-Id': String(props.currentUser.id), 'X-Current-User': props.currentUser.username },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        currentUserId: props.currentUser.id,
         assetId: productionModal.value.id,
         requestType: productionForm.requestType,
         purpose: creationPurpose.value,
@@ -1050,11 +1070,17 @@ async function openModelPreview(a?: any) {
     id: asset.id || asset.assetId,
     fileUrl: asset.fileUrl || asset.modelUrl,
   }
+  previewModelUrl.value = ''
   previewReady.value = false
   previewLoadFailed.value = false
   previewDownloadFormat.value = 'GLB'
   document.body.style.overflow = 'hidden'
-  previewReady.value = false
+  try {
+    previewModelUrl.value = await requestAssetPreviewUrl(Number(previewAsset.value.id))
+  } catch (e: any) {
+    closeModelPreview()
+    emit('alert', `模型预览失败：${e?.message || e}`, 'error')
+  }
 }
 
 async function saveMaterialVariant(payload: { blob: Blob; materialLabel: string }) {
@@ -1069,7 +1095,6 @@ async function saveMaterialVariant(payload: { blob: Blob; materialLabel: string 
     const fd = new FormData()
     fd.append('file', new File([payload.blob], `${String(previewAsset.value?.title || '3d-model')}-${payload.materialLabel}.glb`, { type: 'model/gltf-binary' }))
     fd.append('materialLabel', payload.materialLabel)
-    fd.append('currentUserId', String(props.currentUser.id))
     const response = await fetch(`/api/creative/ai/assets/${assetId}/material-variants`, { method: 'POST', body: fd })
     const data = await response.json().catch(() => null)
     if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`)
@@ -1080,6 +1105,7 @@ async function saveMaterialVariant(payload: { blob: Blob; materialLabel: string 
 
 function closeModelPreview() {
   previewAsset.value = null
+  previewModelUrl.value = ''
   previewReady.value = false
   previewLoadFailed.value = false
   document.body.style.overflow = ''
@@ -1308,22 +1334,23 @@ function closeModelPreview() {
               <p>OBJ/STL转换下载：{{ convertCost }}点 / 次</p>
             </div>
             <div v-if="paymentOrder" class="payment-order-card">
-              <div class="payment-order-head"><span>微信支付</span><b>支付成功后系统会自动到账，无需人工审批</b></div>
+              <div class="payment-order-head"><span>{{ paymentOrder.channel === 'wechat' ? '微信支付' : '微信收款码' }}</span><b>{{ paymentOrder.channel === 'wechat' ? '支付成功后系统会自动到账，无需人工审批' : '扫码付款后点击“提交核验”，管理员确认后额度到账' }}</b></div>
               <img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信收款二维码" class="payment-qr" />
               <strong>¥ {{ paymentOrder.amountYuan }} · {{ paymentOrder.credits }} 点</strong>
-              <small>订单 {{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功，积分已到账' : paymentOrder.status === 'failed' ? '支付失败' : '等待微信支付结果回调，系统自动确认' }}</small>
-              <button v-if="paymentOrder.status === 'pending'" type="button" class="copy-payment" disabled>等待自动到账</button>
+              <small>订单 {{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功，积分已到账' : paymentOrder.status === 'failed' ? '支付失败' : paymentOrder.channel === 'wechat' ? '等待微信支付结果回调，系统自动确认' : '扫码付款后请点击提交核验' }}</small>
+              <button v-if="paymentOrder.status === 'pending' && paymentOrder.channel === 'manual_wechat_qr'" type="button" class="manual-complete" :disabled="paymentLoading" @click="completeManualPayment">{{ paymentLoading ? '提交中…' : '我已完成支付，提交核验' }}</button>
+              <button v-else-if="paymentOrder.status === 'pending'" type="button" class="copy-payment" disabled>等待微信支付结果回调</button>
             </div>
             <div v-else class="packages">
-              <button v-for="pkg in rechargePackages" :key="pkg.code" type="button" :disabled="paymentLoading" @click="createPaymentOrder(pkg)">
+              <button v-for="pkg in rechargePackages" :key="pkg.code" type="button" :disabled="paymentLoading || !paymentChannelEnabled" @click="createPaymentOrder(pkg)">
                 <strong>{{ pkg.credits }} 点</strong>
                 <span>{{ pkg.name }} · ¥{{ pkg.amountYuan }}</span>
                 <em>{{ pkg.description }}</em>
               </button>
-              <p v-if="!rechargePackages.length" class="recharge-note">充值套餐加载中，请稍后重试。</p><p v-else-if="!paymentChannelEnabled" class="recharge-note">自动微信支付尚未配置，暂不能充值。请管理员配置微信商户号、API v3 密钥、证书和 HTTPS 回调地址。</p>
+              <p v-if="!rechargePackages.length" class="recharge-note">充值套餐加载中，请稍后重试。</p><p v-else-if="!paymentChannelEnabled" class="recharge-note">当前暂无可用支付方式，请管理员配置真实微信支付或有效收款码后重试。</p>
             </div>
             <p v-if="paymentError" class="payment-error">{{ paymentError }}</p>
-            <p class="recharge-note">请使用微信完成付款。微信支付成功后由官方回调自动验签，系统会自动为账户增加积分，不需要人工审批。</p>
+            <p class="recharge-note">{{ paymentOrder?.channel === 'wechat' ? '请使用微信完成付款。微信支付成功后由官方回调自动验签，系统会自动为账户增加积分，不需要人工审批。' : '请扫描收款码完成付款。付款后点击“提交核验”，管理员确认后额度到账。' }}</p>
           </main>
           <footer>
             <button v-if="paymentOrder" type="button" @click="closePaymentOrder">返回套餐</button>

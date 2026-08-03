@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed,nextTick,onBeforeUnmount,onMounted,reactive,ref } from 'vue'
+import { requestAssetPreviewAccess } from '../utils/assetAccess'
 const props=withDefaults(defineProps<{initialView?:'image2d'|'model3d'|'review'}>(),{initialView:'image2d'})
 const emit=defineEmits<{alert:[msg:string,type?:'success'|'error']}>()
 const active=ref<'image2d'|'model3d'|'review'>(props.initialView),styles=ref<any[]>([]),assets=ref<any[]>([]),jobs=ref<any[]>([]),reviews=ref<any[]>([]),busy=ref(false)
@@ -28,24 +29,31 @@ function syncTripoCompatibility(){if(isP1.value||isLegacy25.value){form3d.quad=f
 const reviewForm=reactive({title:'新文创产品可行性评估',productType:'文创礼品',copy:'',targetAudience:'',priceRange:'',material:'',salesScene:'',productionRequirement:'',hotReference:'',competitorPrice:'',competitorSales:'',channelPlan:'景区/小红书/抖音/线下礼品店',targetCost:'',expectedVolume:'',assetId:null as number|null})
 const imageAssets=computed(()=>assets.value.filter(x=>x.assetType==='image'))
 const modelAssets=computed(()=>assets.value.filter(x=>x.assetType==='model'))
-function showSavedModel(a:any){modelResult.value={assetId:a.id,modelUrl:a.fileUrl,previewUrl:a.previewUrl,format:a.format,taskId:a.assetNo,source:a.sourceType,saved:true};document.querySelector('.model-output')?.scrollIntoView({behavior:'smooth',block:'center'})}
-function modelDownloadUrl(a:any,format='GLB'){const id=a?.assetId||a?.id;return id?`/api/creative/ai/assets/${id}/download-model?format=${format}`:(format==='GLB'?(a?.modelUrl||a?.fileUrl||''):'')}
+function assetIdOf(a:any):number|null{const value=Number(a?.assetId??a?.id);return Number.isInteger(value)&&value>0?value:null}
+async function showSavedModel(a:any){
+  const id=assetIdOf(a)
+  if(!id){emit('alert','该模型缺少有效的作品编号','error');return}
+  try{
+    const access=await requestAssetPreviewAccess(id)
+    modelResult.value={...a,assetId:id,modelUrl:access.url,previewUrl:access.previewUrl,saved:true}
+    await nextTick();document.querySelector('.model-output')?.scrollIntoView({behavior:'smooth',block:'center'})
+  }catch(e:any){emit('alert','模型预览地址获取失败：'+(e?.message||e),'error')}
+}
+function modelDownloadUrl(a:any,format='GLB'){const id=assetIdOf(a);return id?`/api/creative/ai/assets/${id}/download-model?format=${format}`:''}
 async function downloadModelAsset(a:any,format='GLB'){const url=modelDownloadUrl(a,format),id=a?.assetId||a?.id||'';if(!url){emit('alert','该模型暂不支持下载此格式','error');return}modelDownloadingFormat.value=`${id}-${format}`;emit('alert',format==='GLB'?'正在准备模型文件…':`正在转换为 ${format} 格式，首次转换可能需要1-2分钟，请不要关闭页面`,'success');try{const r=await fetch(url,{cache:'no-store'});if(!r.ok){let msg='';try{const ct=r.headers.get('content-type')||'';msg=ct.includes('application/json')?(await r.json()).message:await r.text()}catch{}throw new Error(msg||`HTTP ${r.status}`)}const blob=await r.blob();const cd=r.headers.get('content-disposition')||'';const m=/filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i.exec(cd);const filename=m?decodeURIComponent(m[1]||m[2]):`and-taste-3d-${id||Date.now()}-${format.toLowerCase()}.${format.toLowerCase()}`;const objectUrl=URL.createObjectURL(blob);const link=document.createElement('a');link.href=objectUrl;link.download=filename;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),1500);emit('alert',`已开始下载 ${format} 模型`,'success');await load()}catch(e:any){emit('alert',`下载${format}失败：${e.message||e}`,'error')}finally{modelDownloadingFormat.value=''}}
 function libraryFormat(a:any){return libraryDownloadFormats[a.id]||'GLB'}
 function startStage(text:string){aiStage.value=text;elapsed.value=0;clearInterval(stageTimer.value);clearTimeout(tripoTimer.value);stageTimer.value=setInterval(()=>elapsed.value++,1000)}
 function endStage(){clearInterval(stageTimer.value);clearTimeout(tripoTimer.value);stageTimer.value=null;aiStage.value=''}
-function imageSrc(x:any){return imagePreviewUrl.value||(x?.imageUrl||x?.previewUrl||x?.fileUrl||'')}
+function imageSrc(_x:any){return imagePreviewUrl.value}
 async function prepareImagePreview(data:any){
   imageLoadError.value=''; if(!data?.assetId)throw new Error('生图接口未返回资产ID')
   let lastError:any=null
   for(let attempt=1;attempt<=6;attempt++){
     try{
       aiStage.value=`图片已生成，正在读取高清文件（第 ${attempt}/6 次）…`
-      const response=await fetch(`/api/creative/ai/assets/${data.assetId}/content?v=${Date.now()}`,{cache:'no-store'})
-      if(!response.ok)throw new Error(`图片读取失败 HTTP ${response.status}`)
-      const blob=await response.blob(); if(!blob.type.startsWith('image/'))throw new Error(`图片接口返回类型异常：${blob.type||'unknown'}`)
-      if(imagePreviewUrl.value.startsWith('blob:'))URL.revokeObjectURL(imagePreviewUrl.value)
-      imagePreviewUrl.value=URL.createObjectURL(blob); await nextTick(); resultAnchor.value?.scrollIntoView({behavior:'smooth',block:'center'}); return
+      const access=await requestAssetPreviewAccess(data.assetId)
+      imagePreviewUrl.value=access.previewUrl
+      await nextTick(); resultAnchor.value?.scrollIntoView({behavior:'smooth',block:'center'}); return
     }catch(e){lastError=e;if(attempt<6)await new Promise(resolve=>setTimeout(resolve,500*attempt))}
   }
   throw lastError
@@ -54,11 +62,8 @@ async function prepareUploadPreview(assetId:number){
   uploadLoadError.value=''; let lastError:any=null
   for(let attempt=1;attempt<=5;attempt++){
     try{
-      const response=await fetch(`/api/creative/ai/assets/${assetId}/content?v=${Date.now()}`,{cache:'no-store'})
-      if(!response.ok)throw new Error(`参考图读取失败 HTTP ${response.status}`)
-      const blob=await response.blob(); if(!blob.type.startsWith('image/'))throw new Error(`参考图接口返回类型异常：${blob.type||'unknown'}`)
-      if(uploadPreviewUrl.value.startsWith('blob:'))URL.revokeObjectURL(uploadPreviewUrl.value)
-      uploadPreviewUrl.value=URL.createObjectURL(blob); return
+      const access=await requestAssetPreviewAccess(assetId)
+      uploadPreviewUrl.value=access.previewUrl; return
     }catch(e){lastError=e;if(attempt<5)await new Promise(resolve=>setTimeout(resolve,300*attempt))}
   }
   uploadLoadError.value=lastError?.message||String(lastError);throw lastError
@@ -74,10 +79,16 @@ async function generateTripo2d(){if(!tripoConfigured.value||!tripoConfig.value.s
 async function pollTripoImage(jobId:number){clearTimeout(tripoImageTimer.value);try{const r=await fetch(`/api/creative/ai/tripo/image-tasks/${jobId}`,{cache:'no-store'});if(!r.ok){const err=await r.json().catch(()=>null);throw new Error(err?.message||`HTTP ${r.status}`)}const d=await r.json();tripoImagePollFailures.value=0;tripoImageProgress.value=Number(d.progress||0);aiStage.value=d.status==='succeeded'?'Tripo图片生成完成，服务器已自动保存，正在加载高清图片…':`Tripo ${form2d.tripoImageModel} 正在生成图片 · ${tripoImageProgress.value||'等待'}%`;if(d.status==='succeeded'){imageResult.value=d;await prepareImagePreview(d);busy.value=false;endStage();emit('alert','Tripo文本生图完成并已自动保存','success');await load();return}if(d.status==='failed')throw new Error(d.errorMessage||'Tripo生图任务失败');tripoImageTimer.value=setTimeout(()=>pollTripoImage(jobId),2500)}catch(e:any){tripoImagePollFailures.value++;if(tripoImagePollFailures.value<=12){aiStage.value=`页面查询失败：${e.message}；服务器后台仍在自动保存，5秒后重试（${tripoImagePollFailures.value}/12）…`;tripoImageTimer.value=setTimeout(()=>pollTripoImage(jobId),5000);return}busy.value=false;endStage();emit('alert','页面查询多次失败；后台仍会继续保存，可稍后刷新资产库。原因：'+e.message,'error')}}
 async function upload(file:File,title:string){const fd=new FormData();fd.append('file',file);fd.append('title',title);fd.append('tags','创意评估,用户上传');const r=await fetch('/api/creative/ai/assets/upload',{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());return await r.json()}
 async function optimize3dPrompt(){if(!form3d.rawPrompt.trim()){emit('alert','请先填写基础3D模型描述','error');return}busy.value=true;startStage('正在调用 SiliconFlow · Qwen3，为 Tripo 文生3D整理优化提示词…');try{const r=await fetch('/api/creative/ai/prompt/tripo-3d-optimize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:form3d.rawPrompt,promptTemplate:form3d.promptTemplate})});if(!r.ok){const err=await r.json().catch(()=>null);throw new Error(err?.message||`HTTP ${r.status}`)}const d=await r.json();form3d.prompt=d.prompt||'';if(d.negativePrompt)form3d.negativePrompt=d.negativePrompt;tripo3dUsageTips.value=d.usageTips||'';emit('alert',`Qwen3已按${d.templateName||selected3dPromptTemplate.value.name}优化Tripo 3D提示词`,'success')}catch(e:any){emit('alert','3D提示词优化失败：'+e.message,'error')}finally{busy.value=false;endStage()}}
-async function upload3d(e:Event,view='single'){const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;busy.value=true;try{const d=await upload(f,`3D建模${view==='single'?'参考图':view+'视图'}`);if(view==='single')form3d.inputAssetId=d.assetId;else (form3d.multiviewAssetIds as any)[view]=d.assetId;const r=await fetch(`/api/creative/ai/assets/${d.assetId}/content?v=${Date.now()}`,{cache:'no-store'});if(!r.ok)throw new Error(`参考图读取失败 HTTP ${r.status}`);const blob=await r.blob();if(tripoPreviews[view]?.startsWith('blob:'))URL.revokeObjectURL(tripoPreviews[view]);tripoPreviews[view]=URL.createObjectURL(blob);emit('alert','3D参考图已上传并显示','success')}catch(x:any){emit('alert','上传失败：'+x.message,'error')}finally{busy.value=false}}
+async function upload3d(e:Event,view='single'){const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;busy.value=true;try{const d=await upload(f,`3D建模${view==='single'?'参考图':view+'视图'}`);if(view==='single')form3d.inputAssetId=d.assetId;else (form3d.multiviewAssetIds as any)[view]=d.assetId;const access=await requestAssetPreviewAccess(d.assetId);tripoPreviews[view]=access.previewUrl;emit('alert','3D参考图已上传并显示','success')}catch(x:any){emit('alert','上传失败：'+(x?.message||x),'error')}finally{busy.value=false}}
 async function generate3d(){if(!canGenerate3d.value){emit('alert',form3d.mode==='text_to_model'?'请填写模型描述':'请先上传所需参考图','error');return}syncTripoCompatibility();busy.value=true;modelResult.value=null;tripoProgress.value=0;tripoStatus.value=`正在提交 ${selected3dModelLabel.value} · ${tripoModeLabel.value}任务…`;try{const r=await fetch('/api/creative/ai/tripo/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form3d)});if(!r.ok){const err=await r.json().catch(()=>null);throw new Error(err?.message||`HTTP ${r.status}`)}const d=await r.json();emit('alert',`Tripo ${d.modelVersion||form3d.modelVersion}任务已提交，正在云端生成`,'success');await pollTripo(d.jobId)}catch(e:any){busy.value=false;tripoStatus.value='生成失败';emit('alert','Tripo 3D生成失败：'+e.message,'error')}}
-async function pollTripo(jobId:number){clearTimeout(tripoTimer.value);try{const r=await fetch(`/api/creative/ai/tripo/tasks/${jobId}`,{cache:'no-store'});if(!r.ok){const err=await r.json().catch(()=>null);throw new Error(err?.message||`HTTP ${r.status}`)}const d=await r.json();tripoPollFailures.value=0;tripoProgress.value=Number(d.progress||0);tripoStatus.value=d.status==='succeeded'?'模型生成完成，文件已由后台自动下载到资产库':d.status==='failed'?`任务失败：${d.errorMessage||'未知错误'}`:`Tripo正在云端生成；后台服务会自动下载结果，关闭页面也不影响…`;if(d.status==='succeeded'){modelResult.value=d;busy.value=false;emit('alert','Tripo 3D模型生成完成并已自动下载','success');await load();return}if(d.status==='failed'){busy.value=false;throw new Error(d.errorMessage||'Tripo任务失败')}tripoTimer.value=setTimeout(()=>pollTripo(jobId),3000)}catch(e:any){tripoPollFailures.value++;if(tripoPollFailures.value<=20){tripoStatus.value=`页面查询暂时失败，后台仍会自动下载；正在重试（${tripoPollFailures.value}/20）…`;tripoTimer.value=setTimeout(()=>pollTripo(jobId),5000);return}busy.value=false;emit('alert','页面查询多次失败，但后台任务仍会继续：'+e.message,'error')}}
-async function selectReviewImage(e:Event){const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;busy.value=true;try{const d=await upload(f,reviewForm.title||'智能评估图片');reviewForm.assetId=d.assetId;uploadPreview.value=d.url;await prepareUploadPreview(d.assetId);emit('alert','评估图片已上传并显示','success')}catch(x:any){emit('alert','图片上传失败：'+x.message,'error')}finally{busy.value=false}}
+async function secureModelResult(data:any){
+  const id=assetIdOf(data)
+  if(!id) throw new Error('模型任务完成但未返回作品编号')
+  const access=await requestAssetPreviewAccess(id)
+  return {...data,assetId:id,modelUrl:access.url,fileUrl:access.url,previewUrl:access.previewUrl,saved:true}
+}
+async function pollTripo(jobId:number){clearTimeout(tripoTimer.value);try{const r=await fetch(`/api/creative/ai/tripo/tasks/${jobId}`,{cache:'no-store'});if(!r.ok){const err=await r.json().catch(()=>null);throw new Error(err?.message||`HTTP ${r.status}`)}const d=await r.json();tripoPollFailures.value=0;tripoProgress.value=Number(d.progress||0);tripoStatus.value=d.status==='succeeded'?'模型生成完成，文件已由后台自动下载到资产库':d.status==='failed'?`任务失败：${d.errorMessage||'未知错误'}`:`Tripo正在云端生成；后台服务会自动下载结果，关闭页面也不影响…`;if(d.status==='succeeded'){modelResult.value=await secureModelResult(d);busy.value=false;emit('alert','Tripo 3D模型生成完成并已自动下载','success');await load();return}if(d.status==='failed'){busy.value=false;throw new Error(d.errorMessage||'Tripo任务失败')}tripoTimer.value=setTimeout(()=>pollTripo(jobId),3000)}catch(e:any){tripoPollFailures.value++;if(tripoPollFailures.value<=20){tripoStatus.value=`页面查询暂时失败，后台仍会自动下载；正在重试（${tripoPollFailures.value}/20）…`;tripoTimer.value=setTimeout(()=>pollTripo(jobId),5000);return}busy.value=false;emit('alert','页面查询多次失败，但后台任务仍会继续：'+e.message,'error')}}
+async function selectReviewImage(e:Event){const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;busy.value=true;try{const d=await upload(f,reviewForm.title||'智能评估图片');reviewForm.assetId=d.assetId;uploadPreview.value='';await prepareUploadPreview(d.assetId);emit('alert','评估图片已上传并显示','success')}catch(x:any){emit('alert','图片上传失败：'+(x?.message||x),'error')}finally{busy.value=false}}
 async function evaluate(){if(!reviewForm.assetId){emit('alert','请先上传需要评估的产品图、设计稿或参考图','error');return}if(!reviewForm.copy.trim()){emit('alert','请填写产品创意文案或方案说明','error');return}busy.value=true;reviewResult.value=null;try{const context=`产品类型：${reviewForm.productType}
 创意文案：${reviewForm.copy}
 目标人群：${reviewForm.targetAudience}

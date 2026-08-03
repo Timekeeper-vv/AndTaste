@@ -8,7 +8,6 @@ const skus = ref<any[]>([])
 const selectedCategory = ref('')
 const keyword = ref('')
 const loading = ref(false)
-const orderLoading = ref<number | null>(null)
 
 const filteredSkus = computed(() => skus.value)
 
@@ -29,21 +28,6 @@ async function load() {
   } catch (e: any) {
     emit('alert', `加载商品失败：${e.message || e}`, 'error')
   } finally { loading.value = false }
-}
-
-async function buy(sku: any) {
-  orderLoading.value = sku.id
-  try {
-    const res = await fetch('/api/creative/orders', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: 3, paymentMethod: 'mock', remark: '前端MVP模拟下单', items: [{ skuId: sku.id, quantity: 1 }] })
-    })
-    if (!res.ok) throw new Error(await res.text())
-    const order = await res.json()
-    emit('alert', `下单成功：${order.orderNo}`, 'success')
-    await load()
-  } catch (e: any) { emit('alert', `下单失败：${e.message || e}`, 'error') }
-  finally { orderLoading.value = null }
 }
 
 onMounted(load)
@@ -92,7 +76,7 @@ onMounted(load)
             <td>¥{{ Number(sku.price).toFixed(2) }}</td>
             <td>{{ sku.stock }}</td>
             <td><span class="badge ok">{{ sku.status }}</span></td>
-            <td><button class="btn btn-primary btn-sm" :disabled="orderLoading === sku.id" @click="buy(sku)">{{ orderLoading === sku.id ? '下单中' : '模拟购买' }}</button></td>
+            <td><button class="btn btn-secondary btn-sm" disabled title="商品支付通道尚未配置">商品支付待接入</button></td>
           </tr>
         </tbody>
       </table>

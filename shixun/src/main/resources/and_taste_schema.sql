@@ -8,7 +8,7 @@ USE shixun;
 CREATE TABLE IF NOT EXISTS platform_user (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(100) NOT NULL UNIQUE COMMENT '登录用户名',
-    password VARCHAR(255) NOT NULL COMMENT 'BCrypt 或兼容密码',
+    password VARCHAR(255) NOT NULL COMMENT '仅存储 BCrypt 密码哈希',
     display_name VARCHAR(100) COMMENT '展示昵称',
     email VARCHAR(200),
     phone VARCHAR(30),
@@ -18,6 +18,15 @@ CREATE TABLE IF NOT EXISTS platform_user (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) COMMENT='之间味道平台用户';
+
+-- Canonical 登录用户与商城/文创平台用户的显式映射。不能假设两个表的
+-- 自增 ID 相同；登录与注册时由 UserController 维护此关系。
+CREATE TABLE IF NOT EXISTS user_platform_identity (
+    user_id BIGINT NOT NULL PRIMARY KEY COMMENT 'user.id（统一登录主体）',
+    platform_user_id BIGINT NOT NULL UNIQUE COMMENT 'platform_user.id（商城主体）',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) COMMENT='统一登录用户与文创商城用户映射';
 
 CREATE TABLE IF NOT EXISTS designer_profile (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -186,11 +195,12 @@ CREATE TABLE IF NOT EXISTS product_review (
     CONSTRAINT fk_review_order_item FOREIGN KEY (order_item_id) REFERENCES order_item(id)
 ) COMMENT='商品评价';
 
--- 样本数据：可重复执行
+-- 样本内容所需的展示主体。它们是禁用的目录夹具，不是可登录的演示账号；
+-- 密码为一次性随机 BCrypt 哈希，生产环境默认不会执行本文件的样本导入。
 INSERT IGNORE INTO platform_user (id, username, password, display_name, email, phone, role, status) VALUES
-(1, 'admin', '123456', '平台运营', 'admin@andtaste.com', '13800000001', 'admin', 'active'),
-(2, 'designer01', '123456', '山间造物', 'designer@andtaste.com', '13800000002', 'designer', 'active'),
-(3, 'consumer01', '123456', '味道收藏家', 'buyer@andtaste.com', '13800000003', 'consumer', 'active');
+(1, 'catalog-admin-fixture', '$2y$12$OAP9EiizzztceO63bbRgru523hOinMXMcPvcT16CayLJ8Wb1lkXnK', '平台运营（目录夹具）', 'catalog-admin@invalid.local', '13800000001', 'admin', 'disabled'),
+(2, 'catalog-designer-fixture', '$2y$12$u7mFOyXB8JdYnHpew7cz/OQXaYkeQMgE7T/o90yBfcxMBeU..tD9u', '山间造物', 'catalog-designer@invalid.local', '13800000002', 'designer', 'disabled'),
+(3, 'catalog-consumer-fixture', '$2y$12$IrynVNOkHaRbnnrXqRXxeuIBBqbWIZGzBCjaZtu/lSBwwq0fa3XY6', '味道收藏家', 'catalog-consumer@invalid.local', '13800000003', 'consumer', 'disabled');
 
 INSERT IGNORE INTO designer_profile (id, user_id, brand_name, bio, revenue_share, audit_status) VALUES
 (1, 2, '山间造物工作室', '以地域文化、自然风物和生活记忆为核心，创作具有温度的图片IP。', 70.00, 'approved');

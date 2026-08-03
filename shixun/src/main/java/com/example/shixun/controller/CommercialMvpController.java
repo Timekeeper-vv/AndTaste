@@ -18,7 +18,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/mvp")
-@CrossOrigin(origins = "*")
 public class CommercialMvpController {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;

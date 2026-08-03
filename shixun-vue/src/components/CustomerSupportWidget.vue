@@ -12,12 +12,12 @@ function scroll() { nextTick(() => end.value?.scrollIntoView({ behavior: 'smooth
 async function request(url: string, options?: RequestInit) { const r=await fetch(url, options); const d=await r.json().catch(()=>null); if(!r.ok) throw new Error(d?.message||`HTTP ${r.status}`); return d }
 async function load(opening=false) {
   if (loading.value) return; loading.value=true
-  try { const d = opening ? await request('/api/customer-service/conversations/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentUserId:props.currentUser.id})}) : await request(`/api/customer-service/conversations/mine?currentUserId=${props.currentUser.id}`); conversation.value=d.conversation; messages.value=d.messages||[]; scroll() }
+  try { const d = opening ? await request('/api/customer-service/conversations/open',{method:'POST'}) : await request('/api/customer-service/conversations/mine'); conversation.value=d.conversation; messages.value=d.messages||[]; scroll() }
   catch(e:any) { if(opening) emit('alert','客服连接失败：'+(e?.message||e),'error') }
   finally { loading.value=false }
 }
 async function toggle() { open.value=!open.value; if(open.value) { await load(true); if(timer) clearInterval(timer); timer=setInterval(()=>{ if(open.value) load() },10000) } else if(timer) { clearInterval(timer); timer=null } }
-async function send(text?: string) { const content=(text||input.value).trim(); if(!content||sending.value||!conversation.value) return; sending.value=true; input.value=''; try { const d=await request(`/api/customer-service/conversations/${conversation.value.id}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({currentUserId:props.currentUser.id,senderType:'user',content})}); messages.value=d.messages||[]; scroll() } catch(e:any) { emit('alert','发送失败：'+(e?.message||e),'error') } finally { sending.value=false } }
+async function send(text?: string) { const content=(text||input.value).trim(); if(!content||sending.value||!conversation.value) return; sending.value=true; input.value=''; try { const d=await request(`/api/customer-service/conversations/${conversation.value.id}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})}); messages.value=d.messages||[]; scroll() } catch(e:any) { emit('alert','发送失败：'+(e?.message||e),'error') } finally { sending.value=false } }
 function keydown(e:KeyboardEvent){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}}
 onBeforeUnmount(()=>{if(timer)clearInterval(timer)})
 </script>

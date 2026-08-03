@@ -1,12 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
-
-function authMediaUrl(url: string): string {
-  const token = sessionStorage.getItem('accessToken')
-  return token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
-}
-
+import { requestAssetPreviewUrl } from '../utils/assetAccess'
 
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
@@ -19,6 +14,8 @@ interface InventoryAsset {
   sourceType?: string
   fileUrl?: string
   previewUrl?: string
+  signedPreviewUrl?: string
+  signedFileUrl?: string
   prompt?: string
   status?: string
   format?: string
@@ -35,6 +32,7 @@ const userId = ref('')
 const keyword = ref('')
 const type = ref<'all' | 'image' | 'model'>('all')
 const active = ref<InventoryAsset | null>(null)
+const activeMediaUrl = ref('')
 type ModelFormat = 'GLB' | 'OBJ' | 'STL'
 const modelFormats: ModelFormat[] = ['GLB', 'OBJ', 'STL']
 const selectedFormats = ref<Record<number, ModelFormat>>({})
@@ -58,12 +56,29 @@ function assetTypeText(v?: string) {
 }
 
 function previewUrl(a: InventoryAsset) {
-  return a.previewUrl || a.fileUrl || ''
+  if (a.id === active.value?.id && activeMediaUrl.value) return activeMediaUrl.value
+  return safeSignedMediaUrl(a, a.signedPreviewUrl || a.previewUrl || a.fileUrl, 'preview-content')
 }
 
 function fileUrl(a: InventoryAsset) {
-  if (a.assetType === 'model' && a.id) return authMediaUrl(`/api/creative/ai/assets/${a.id}/model-content`)
-  return a.fileUrl || a.previewUrl || ''
+  if (a.id === active.value?.id && activeMediaUrl.value) return activeMediaUrl.value
+  const endpoint = a.assetType === 'model' ? 'model-content' : 'content'
+  const candidate = a.signedFileUrl || a.fileUrl || a.previewUrl
+  return safeSignedMediaUrl(a, candidate, endpoint)
+}
+
+/** Only allow short-lived, same-origin URLs issued by the asset API. */
+function safeSignedMediaUrl(a: InventoryAsset, value: unknown, endpoint: string) {
+  if (typeof value !== 'string' || !value || !a.id) return ''
+  try {
+    const parsed = new URL(value, window.location.origin)
+    const prefix = `/api/creative/ai/assets/${encodeURIComponent(String(a.id))}/`
+    if (parsed.origin !== window.location.origin || parsed.pathname !== `${prefix}${endpoint}`) return ''
+    if (!parsed.searchParams.get('access_token')) return ''
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return ''
+  }
 }
 
 async function load() {
@@ -75,10 +90,6 @@ async function load() {
     if (type.value !== 'all') qs.set('type', type.value)
     const r = await fetch(`/api/creative/ai/consumer-assets/inventory?${qs}`, {
       cache: 'no-store',
-      headers: {
-        'X-Current-Role': props.currentUser.role,
-        'X-Current-User': props.currentUser.username,
-      },
     })
     if (!r.ok) {
       const err = await r.json().catch(() => null)
@@ -95,12 +106,23 @@ async function load() {
 
 function open(a: InventoryAsset) {
   active.value = a
+  activeMediaUrl.value = ''
   modalFormat.value = selectedFormats.value[a.id] || 'GLB'
   document.body.style.overflow = 'hidden'
+  void loadActiveMedia(a)
 }
 function close() {
   active.value = null
+  activeMediaUrl.value = ''
   document.body.style.overflow = ''
+}
+
+async function loadActiveMedia(a: InventoryAsset) {
+  try {
+    activeMediaUrl.value = await requestAssetPreviewUrl(a.id)
+  } catch (e: any) {
+    emit('alert', `作品预览失败：${e?.message || e}`, 'error')
+  }
 }
 
 function modelFormatOf(a: InventoryAsset): ModelFormat {
@@ -157,7 +179,13 @@ async function downloadBlob(url: string, fallbackName: string) {
 }
 
 async function downloadImage(a: InventoryAsset) {
-  const url = fileUrl(a)
+  let url = fileUrl(a)
+  if (!url) {
+    try { url = await requestAssetPreviewUrl(a.id) } catch (e: any) {
+      emit('alert', `图片预览地址获取失败：${e?.message || e}`, 'error')
+      return
+    }
+  }
   if (!url) {
     emit('alert', '图片文件不存在，无法下载', 'error')
     return
@@ -227,7 +255,7 @@ onMounted(load)
       <article v-for="a in rows" :key="a.id" class="asset-card">
         <div class="cover" @click="open(a)">
           <img v-if="a.assetType === 'image' && previewUrl(a)" :src="previewUrl(a)" alt="库存图片" />
-          <img v-else-if="a.assetType === 'model' && a.previewUrl" :src="a.previewUrl" alt="3D预览" />
+          <img v-else-if="a.assetType === 'model' && previewUrl(a)" :src="previewUrl(a)" alt="3D预览" />
           <div v-else class="model-cover">3D</div>
           <i>{{ assetTypeText(a.assetType) }}</i>
           <strong>已入库</strong>
