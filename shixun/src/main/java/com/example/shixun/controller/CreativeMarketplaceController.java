@@ -83,12 +83,17 @@ public class CreativeMarketplaceController {
 
     @GetMapping("/artworks/{id}")
     public Map<String, Object> artworkDetail(@PathVariable Long id) {
-        jdbc.update("UPDATE artwork SET view_count=view_count+1 WHERE id=?", id);
-        Map<String, Object> artwork = jdbc.queryForMap(
+        // 详情页同列表页一样只暴露审核通过的作品。此前只要猜中 ID 就可能读到
+        // 尚未审核的后台草稿；浏览量也只能在成功读取公开作品后才增加。
+        List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT a.id, a.title, a.subtitle, a.image_url imageUrl, a.thumbnail_url thumbnailUrl, a.story, " +
                 "a.license_type licenseType, a.sale_status saleStatus, a.view_count viewCount, a.favorite_count favoriteCount, " +
                 "c.id categoryId, c.name categoryName, d.id designerId, d.brand_name designerName, d.bio designerBio " +
-                "FROM artwork a LEFT JOIN category c ON a.category_id=c.id LEFT JOIN designer_profile d ON a.designer_id=d.id WHERE a.id=?", id);
+                "FROM artwork a LEFT JOIN category c ON a.category_id=c.id LEFT JOIN designer_profile d ON a.designer_id=d.id " +
+                "WHERE a.id=? AND a.audit_status='approved'", id);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "作品不存在或尚未上架");
+        jdbc.update("UPDATE artwork SET view_count=view_count+1 WHERE id=?", id);
+        Map<String, Object> artwork = rows.get(0);
         artwork.put("tags", jdbc.queryForList(
                 "SELECT t.id, t.name FROM tag t JOIN artwork_tag at ON t.id=at.tag_id WHERE at.artwork_id=? ORDER BY t.id", id));
         artwork.put("skus", skus(id));

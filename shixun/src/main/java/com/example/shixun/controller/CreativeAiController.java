@@ -1429,6 +1429,31 @@ public class CreativeAiController {
         return Map.of("assetId", id, "accessToken", token, "url", url, "previewUrl", previewUrl, "expiresIn", 300, "message", "预览链接将在5分钟后失效");
     }
 
+    /**
+     * Gives the C-end material laboratory only the minimum authority it needs:
+     * read this one model and save a derived GLB material variant.  The token
+     * cannot be used as a normal login token or for another asset.
+     */
+    @PostMapping("/assets/{id}/material-lab-access")
+    public Map<String,Object> createMaterialLabAccess(@PathVariable Long id) {
+        Long userId = requireCurrentConsumerUser();
+        requireAssetAccess(id);
+        Map<String,Object> asset = jdbc.queryForMap("SELECT asset_type assetType FROM digital_asset WHERE id=?", id);
+        if (!"model".equals(String.valueOf(asset.get("assetType")))) {
+            throw new IllegalArgumentException("仅支持为 3D 模型开启材质实验室");
+        }
+        JwtService.Claims principal = authenticatedPrincipal();
+        String token = jwtService.issueMaterialLabAccessToken(userId, principal.username(), principal.role(), id);
+        String encodedToken = URLEncoder.encode(token, StandardCharsets.UTF_8);
+        String modelUrl = "/api/creative/ai/assets/" + id + "/model-content?access_token=" + encodedToken;
+        return Map.of(
+                "assetId", id,
+                "modelUrl", modelUrl,
+                "accessToken", token,
+                "expiresIn", 300
+        );
+    }
+
     @GetMapping("/assets/{id}/download-model")
     public ResponseEntity<Resource> downloadModel(@PathVariable Long id,
                                                 @RequestParam(defaultValue="GLB") String format) throws Exception {
@@ -2604,7 +2629,15 @@ public class CreativeAiController {
         return "AI评审团平均分 " + avg + "，结论：" + rec + "。重点关注设计表达、市场卖点、成本可行性与消费者购买理由四个维度。";
     }
 
-    private Map<String, Object> style(Long id) { return jdbc.queryForMap("SELECT id, name, base_prompt basePrompt, negative_prompt negativePrompt, cultural_guardrails culturalGuardrails FROM brand_style_profile WHERE id=?", id == null ? 1L : id); }
+    private Map<String, Object> style(Long id) {
+        // Both C 端的“风格工作台”和图片生成都只能使用已启用的风格。这样用户
+        // 即使篡改 styleId 也无法读取或套用后台停用中的内部风格草稿。
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT id, name, base_prompt basePrompt, negative_prompt negativePrompt, cultural_guardrails culturalGuardrails " +
+                        "FROM brand_style_profile WHERE id=? AND enabled=1", id == null ? 1L : id);
+        if (rows.isEmpty()) throw new IllegalArgumentException("所选风格不存在或已停用，请重新选择");
+        return rows.get(0);
+    }
 
     private String buildPrompt(String userPrompt, Map<String, Object> style, String scene, String productType) {
         StringBuilder sb = new StringBuilder();

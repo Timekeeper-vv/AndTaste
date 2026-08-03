@@ -22,7 +22,9 @@ public class JwtService {
     private static final String ISSUER = "smart-pig";
     private static final String AUDIENCE = "smart-pig-api";
     private static final int MIN_SECRET_LENGTH = 32;
-    private static final long MEDIA_TOKEN_TTL_SECONDS = 300;
+    private static final long ASSET_ACCESS_TOKEN_TTL_SECONDS = 300;
+    private static final String ASSET_READ_SCOPE = "asset:read";
+    private static final String ASSET_MATERIAL_LAB_SCOPE = "asset:material-lab";
     private static final Set<String> SUPPORTED_ROLES = Set.of("admin", "technician", "feeder", "designer", "user");
 
     private final ObjectMapper mapper;
@@ -67,9 +69,27 @@ public class JwtService {
      * intentionally not a general login token and cannot be used for APIs.
      */
     public String issueMediaAccessToken(Long userId, String username, String role, Long assetId) {
+        return issueAssetAccessToken(userId, username, role, assetId, ASSET_READ_SCOPE);
+    }
+
+    /**
+     * Issues a five-minute token for the material laboratory of one model.
+     * It is deliberately more narrow than a normal login token: the filter
+     * only accepts it for that asset's read endpoints and material-variant
+     * upload endpoint.
+     */
+    public String issueMaterialLabAccessToken(Long userId, String username, String role, Long assetId) {
+        return issueAssetAccessToken(userId, username, role, assetId, ASSET_MATERIAL_LAB_SCOPE);
+    }
+
+    private String issueAssetAccessToken(Long userId, String username, String role, Long assetId, String scope) {
         if (userId == null || userId <= 0 || assetId == null || assetId <= 0
-                || username == null || username.isBlank() || !SUPPORTED_ROLES.contains(role)) {
+                || username == null || username.isBlank() || !SUPPORTED_ROLES.contains(role)
+                || !Set.of(ASSET_READ_SCOPE, ASSET_MATERIAL_LAB_SCOPE).contains(scope)) {
             throw new IllegalArgumentException("媒体访问令牌参数无效");
+        }
+        if (ASSET_MATERIAL_LAB_SCOPE.equals(scope) && !"user".equals(role)) {
+            throw new IllegalArgumentException("材质实验室仅支持C端用户");
         }
         try {
             long now = Instant.now().getEpochSecond();
@@ -79,10 +99,10 @@ public class JwtService {
             payload.put("sub", String.valueOf(userId));
             payload.put("username", username);
             payload.put("role", role);
-            payload.put("scope", "asset:read");
+            payload.put("scope", scope);
             payload.put("assetId", assetId);
             payload.put("iat", now);
-            payload.put("exp", now + MEDIA_TOKEN_TTL_SECONDS);
+            payload.put("exp", now + ASSET_ACCESS_TOKEN_TTL_SECONDS);
             payload.put("jti", UUID.randomUUID().toString());
             return sign(payload);
         } catch (Exception e) { throw new IllegalStateException("媒体访问令牌签发失败", e); }
@@ -97,13 +117,37 @@ public class JwtService {
     }
 
     public Claims verifyMediaAccessToken(String token, long expectedAssetId) {
+        return verifyScopedAssetAccessToken(token, expectedAssetId, Set.of(ASSET_READ_SCOPE));
+    }
+
+    /** Verifies the upload-capable, single-asset material-lab token only. */
+    public Claims verifyMaterialLabAccessToken(String token, long expectedAssetId) {
+        return verifyScopedAssetAccessToken(token, expectedAssetId, Set.of(ASSET_MATERIAL_LAB_SCOPE));
+    }
+
+    /**
+     * Read endpoints retain compatibility with the original asset:read token
+     * and also accept a material-lab token for the same asset.  Callers that
+     * mutate state must use {@link #verifyMaterialLabAccessToken(String, long)}
+     * instead.
+     */
+    public Claims verifyAssetReadOrMaterialLabAccessToken(String token, long expectedAssetId) {
+        return verifyScopedAssetAccessToken(token, expectedAssetId,
+                Set.of(ASSET_READ_SCOPE, ASSET_MATERIAL_LAB_SCOPE));
+    }
+
+    private Claims verifyScopedAssetAccessToken(String token, long expectedAssetId, Set<String> allowedScopes) {
         VerifiedToken verified = verifyAndRead(token);
         try {
-            if (!"asset:read".equals(String.valueOf(verified.payload().get("scope")))) {
+            String scope = String.valueOf(verified.payload().get("scope"));
+            if (!allowedScopes.contains(scope)) {
                 throw new IllegalArgumentException("媒体访问令牌权限无效");
             }
+            if (ASSET_MATERIAL_LAB_SCOPE.equals(scope) && !"user".equals(verified.claims().role())) {
+                throw new IllegalArgumentException("材质实验室令牌身份无效");
+            }
             long assetId = Long.parseLong(String.valueOf(verified.payload().get("assetId")));
-            if (assetId != expectedAssetId || verified.claims().expiresAt() - verified.issuedAt() > MEDIA_TOKEN_TTL_SECONDS) {
+            if (assetId != expectedAssetId || verified.claims().expiresAt() - verified.issuedAt() > ASSET_ACCESS_TOKEN_TTL_SECONDS) {
                 throw new IllegalArgumentException("媒体访问令牌无效");
             }
             return verified.claims();

@@ -55,16 +55,34 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String authorization = request.getHeader("Authorization");
         String token = authorization != null && authorization.startsWith("Bearer ") ? authorization.substring(7).trim() : null;
         String requestPath = path(request);
-        Long mediaAssetId = mediaAssetId(requestPath, request.getMethod());
-        // Browser model/image viewers cannot set Authorization headers. The URL
-        // may therefore carry only a five-minute, asset-bound media token.
-        boolean mediaToken = (token == null || token.isBlank()) && mediaAssetId != null;
-        if (mediaToken) {
+        Long readableAssetId = assetReadIdForRequest(requestPath, request.getMethod());
+        Long materialLabUploadAssetId = materialLabUploadAssetIdForRequest(requestPath, request.getMethod());
+        // Browser model/image viewers cannot set Authorization headers.  A
+        // scoped token may therefore appear only on a private asset read URL,
+        // or on the single material-variant upload URL.  Do not generalize
+        // this branch to arbitrary API paths.
+        boolean scopedAssetToken = (token == null || token.isBlank())
+                && (readableAssetId != null || materialLabUploadAssetId != null);
+        if (scopedAssetToken) {
             token = request.getParameter("access_token");
         }
         if (token == null || token.isBlank()) { unauthorized(response, "请先登录"); return; }
         JwtService.Claims claims;
-        try { claims = mediaToken ? jwtService.verifyMediaAccessToken(token.trim(), mediaAssetId) : jwtService.verify(token.trim()); }
+        try {
+            if (materialLabUploadAssetId != null && scopedAssetToken) {
+                // State-changing access must use the narrower material-lab
+                // scope; an ordinary asset:read token is never enough.
+                claims = jwtService.verifyMaterialLabAccessToken(token.trim(), materialLabUploadAssetId);
+            } else if (readableAssetId != null && scopedAssetToken) {
+                // Existing asset:read preview URLs remain valid.  A
+                // material-lab token can also read the model it is editing.
+                claims = jwtService.verifyAssetReadOrMaterialLabAccessToken(token.trim(), readableAssetId);
+            } else {
+                // verify() rejects every scoped asset token, preventing a
+                // material-lab token from becoming a general-purpose JWT.
+                claims = jwtService.verify(token.trim());
+            }
+        }
         catch (IllegalArgumentException e) { unauthorized(response, e.getMessage()); return; }
         // JWTs are deliberately stateless, but account roles and status can be
         // changed by an administrator.  Check the canonical row on every API
@@ -124,10 +142,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 : uri;
     }
 
-    private Long mediaAssetId(String path, String method) {
+    private Long assetReadIdForRequest(String path, String method) {
         if (!"GET".equalsIgnoreCase(method)) return null;
         java.util.regex.Matcher matcher = java.util.regex.Pattern
                 .compile("/api/creative/ai/assets/(\\d+)/(?:model-content|content|preview-content)")
+                .matcher(path);
+        if (!matcher.matches()) return null;
+        try {
+            return Long.valueOf(matcher.group(1));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private Long materialLabUploadAssetIdForRequest(String path, String method) {
+        if (!"POST".equalsIgnoreCase(method)) return null;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("/api/creative/ai/assets/(\\d+)/material-variants")
                 .matcher(path);
         if (!matcher.matches()) return null;
         try {

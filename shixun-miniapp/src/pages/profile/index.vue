@@ -40,6 +40,28 @@
         <view class="menu-copy"><text>切换创作用途</text><text>个人收藏或景区、博物馆售卖</text></view>
         <text class="arrow">›</text>
       </view>
+      <view class="menu-row" @tap="go('/pages/style-lab/index')">
+        <view class="menu-icon style">风</view>
+        <view class="menu-copy"><text>灵感风格工作台</text><text>组合品牌风格、文化约束与产品提示词</text></view>
+        <text class="arrow">›</text>
+      </view>
+    </view>
+
+    <view class="section-heading market-heading">
+      <text>文创商城</text>
+      <text>MARKET &amp; ORDERS</text>
+    </view>
+    <view class="menu-card market-card">
+      <view class="menu-row" @tap="go('/pages/market/index')">
+        <view class="menu-icon market">集</view>
+        <view class="menu-copy"><text>文创商城</text><text>浏览已审核的文化作品与实体衍生品</text></view>
+        <text class="arrow">›</text>
+      </view>
+      <view class="menu-row" @tap="go('/pages/orders/index')">
+        <view class="menu-icon orders">单</view>
+        <view class="menu-copy"><text>我的商城订单</text><text>查看待支付订单；支付能力即将接入</text></view>
+        <text class="arrow">›</text>
+      </view>
     </view>
 
     <view class="section-heading service-heading">
@@ -115,12 +137,13 @@ function logout() {
 .section-heading text:first-child { color: #3f453e; font-family: "Songti SC", "STSong", serif; font-size: 29rpx; font-weight: 800; }
 .section-heading text:last-child { color: #93a198; font-size: 17rpx; font-weight: 800; letter-spacing: 1.6rpx; }
 .service-heading { margin-top: 37rpx; }
+.market-heading { margin-top: 37rpx; }
 .menu-card { overflow: hidden; border: 1rpx solid rgba(116, 103, 83, .14); border-radius: 28rpx; background: rgba(255, 253, 249, .9); box-shadow: 0 13rpx 32rpx rgba(67, 53, 37, .055); }
 .menu-row { display: flex; align-items: center; min-height: 122rpx; padding: 0 24rpx; border-bottom: 1rpx solid #eee7de; }
 .menu-row:last-child { border-bottom: 0; }
 .menu-row:active { background: #f8f4ed; }
 .menu-icon { display: flex; align-items: center; justify-content: center; flex: none; width: 58rpx; height: 58rpx; margin-right: 19rpx; border-radius: 18rpx; font-family: "Songti SC", "STSong", serif; font-size: 27rpx; font-weight: 800; }
-.artwork { color: #55796a; background: #e8f0e9; }.credit { color: #b56b46; background: #f9ebdf; }.purpose { color: #8d7655; background: #f4efe2; }.service { color: #4f8374; background: #e4f2ed; }.rights { color: #a26047; background: #f6e9e2; }
+.artwork { color: #55796a; background: #e8f0e9; }.credit { color: #b56b46; background: #f9ebdf; }.purpose { color: #8d7655; background: #f4efe2; }.style { color: #667b95; background: #e8edf5; }.market { color: #5d7e70; background: #e6f0e8; }.orders { color: #a06249; background: #f8ebe2; }.service { color: #4f8374; background: #e4f2ed; }.rights { color: #a26047; background: #f6e9e2; }
 .menu-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .menu-copy text:first-child { color: #33352f; font-size: 29rpx; font-weight: 700; }
 .menu-copy text:last-child { overflow: hidden; margin-top: 7rpx; color: #909087; font-size: 20rpx; text-overflow: ellipsis; white-space: nowrap; }

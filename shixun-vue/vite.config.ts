@@ -64,6 +64,7 @@ export default defineConfig({
       input: {
         index: new URL('./index.html', import.meta.url).pathname,
         'model-preview': new URL('./model-preview.html', import.meta.url).pathname,
+        'material-lab': new URL('./material-lab.html', import.meta.url).pathname,
       },
     },
   },

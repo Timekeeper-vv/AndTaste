@@ -27,7 +27,11 @@ export type RequestOptions = Omit<UniApp.RequestOptions, 'url'>
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const session = getSession()
   const headers: Record<string, string> = { ...(options.header as Record<string, string> || {}) }
-  if (session?.token && !headers.Authorization) headers.Authorization = `Bearer ${session.token}`
+  // Some endpoints (such as public consumer registration) must deliberately
+  // remain anonymous even when the device still has a previous session. An
+  // explicit empty Authorization header is therefore an opt-out, rather than
+  // being overwritten with the stored token.
+  if (session?.token && !Object.prototype.hasOwnProperty.call(headers, 'Authorization')) headers.Authorization = `Bearer ${session.token}`
   let response: UniApp.RequestSuccessCallbackResult
   try {
     response = await uni.request({ url: apiUrl(path), ...options, header: headers })

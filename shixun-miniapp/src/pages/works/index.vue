@@ -38,6 +38,9 @@
           <view class="body">
             <view class="row"><text class="name">{{ item.title || '未命名作品' }}</text><text class="status" :class="assetDisplayStatus(item)">{{ statusText(assetDisplayStatus(item)) }}</text></view>
             <text class="meta">{{ item.assetType === 'model' ? '3D 模型' : 'AI 图片' }} · {{ item.format?.toUpperCase() || '文件' }}</text>
+            <view v-if="materialFor(item)" class="material-summary">
+              <text>本次工艺</text><text>{{ materialFor(item)?.name }}</text><text>{{ materialFor(item)?.hint }}</text>
+            </view>
             <text v-if="generationText(item)" class="generation">{{ generationText(item) }}</text>
             <view v-if="isGenerating(assetDisplayStatus(item))" class="progress-line"><view class="progress-value" :style="{ width: `${assetProgress(item)}%` }" /></view>
             <text v-if="assetFailure(item)" class="failure">失败原因：{{ assetFailure(item) }}</text>
@@ -45,6 +48,9 @@
             <text v-if="requestFor(item)" class="request-state">{{ requestTypeText(requestFor(item)?.requestType) }}：{{ statusText(requestFor(item)?.status) }}{{ requestFor(item)?.reviewComment ? ` · ${requestFor(item).reviewComment}` : '' }}</text>
             <view class="actions">
               <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button>
+              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" :loading="openingMaterialId === String(item.id)" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
+              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="export" :loading="downloadingModelId === String(item.id)" @tap="chooseModelExport(item)">导出模型</button>
+              <button v-if="canRunDesignReview(item)" size="mini" class="design-review" @tap="openDesignReview(item)">AI 深度评审</button>
               <button v-if="canSubmitReview(item)" size="mini" :loading="submittingId === item.id" @tap="submitReview(item)">提交审核</button>
               <button v-if="canApplyProduction(item)" size="mini" class="production" @tap="applyProduction(item)">打样 / 生产</button>
               <button size="mini" @tap="copy(item)">复制编号</button>
@@ -68,9 +74,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
-import { getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
+import { getAssetPreviewAccess, getAssets, getJobs, getMaterialLabAccess, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
-import { requireSession } from '../../utils/session'
+import { getSession, requireSession } from '../../utils/session'
 import { statusText } from '../../utils/format'
 
 const assets = ref<any[]>([])
@@ -79,6 +85,10 @@ const productionRequests = ref<any[]>([])
 const securedPreviews = ref<Record<string, string>>({})
 const loading = ref(true)
 const submittingId = ref<number | null>(null)
+const openingMaterialId = ref('')
+const downloadingModelId = ref('')
+const previewBase = (import.meta.env.VITE_MODEL_PREVIEW_BASE_URL || '').replace(/\/$/, '')
+const configuredMaterialLabBase = ((import.meta.env as ImportMetaEnv & { VITE_MATERIAL_LAB_BASE_URL?: string }).VITE_MATERIAL_LAB_BASE_URL || '').replace(/\/$/, '')
 
 const assetJobMap = computed(() => {
   const result: Record<string, any> = {}
@@ -145,6 +155,29 @@ const canSubmitReview = (asset: any) => {
   return !['review', 'approved'].includes(String(asset.status || 'draft'))
 }
 const canApplyProduction = (asset: any) => asset.assetType === 'model' && asset.status === 'approved' && !requestFor(asset)
+const canRunDesignReview = (asset: any) => ['image', 'model'].includes(String(asset?.assetType || '')) && !isGenerating(assetDisplayStatus(asset))
+
+const materialDefinitions = [
+  { tokens: ['PPC', 'PPC 高精硬塑'], name: 'PPC 高精硬塑', hint: '精密注塑 · 细节稳定' },
+  { tokens: ['ABS', 'ABS 工程硬塑'], name: 'ABS 工程硬塑', hint: '工程硬塑 · 稳定量产' },
+  { tokens: ['搪胶', '糖胶'], name: '搪胶（糖胶）', hint: '软触潮玩 · 圆润中空' },
+  { tokens: ['软胶', 'soft vinyl'], name: '软胶', hint: '柔韧包胶 · 低反射' },
+  { tokens: ['超柔绒'], name: '超柔绒', hint: '亲肤细绒 · 柔光触感' },
+  { tokens: ['短毛绒'], name: '短毛绒', hint: '短密绒面 · 轮廓清晰' },
+  { tokens: ['全毛绒', '毛绒'], name: '全毛绒', hint: '填充玩偶 · 刺绣细节' },
+  { tokens: ['PVC'], name: 'PVC 潮玩', hint: '量产塑胶 · 易还原' },
+  { tokens: ['树脂'], name: '树脂潮玩', hint: '细腻半哑 · 收藏感' },
+  { tokens: ['陶瓷'], name: '陶瓷釉面', hint: '温润釉色 · 器物感' },
+  { tokens: ['金属'], name: '金属', hint: '五金/徽章 · 细节浮雕' },
+  { tokens: ['亚克力'], name: '透明亚克力', hint: '通透挂件 · 边缘高光' },
+  { tokens: ['纸质'], name: '纸质礼盒', hint: '礼赠包装 · 低反射纸感' },
+  { tokens: ['木质'], name: '木质温润', hint: '自然木作 · 细腻纹理' },
+]
+
+function materialFor(asset: any) {
+  const text = [asset?.tags, asset?.prompt, asset?.title, asset?.metadataJson].filter(Boolean).join(' ').toLowerCase()
+  return materialDefinitions.find(item => item.tokens.some(token => text.includes(token.toLowerCase())))
+}
 
 function absoluteMediaUrl(value: string | undefined, assetId: string, accessToken?: string) {
   if (!value && !accessToken) return ''
@@ -154,6 +187,43 @@ function absoluteMediaUrl(value: string | undefined, assetId: string, accessToke
   }
   if (value?.startsWith('/')) return apiUrl(value)
   return accessToken ? apiUrl(`/api/creative/ai/assets/${encodeURIComponent(assetId)}/content?access_token=${encodeURIComponent(accessToken)}`) : ''
+}
+
+function appendQuery(base: string, values: Record<string, string>) {
+  const hashIndex = base.indexOf('#')
+  const path = hashIndex >= 0 ? base.slice(0, hashIndex) : base
+  const hash = hashIndex >= 0 ? base.slice(hashIndex) : ''
+  const query = Object.entries(values).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&')
+  return `${path}${path.includes('?') ? '&' : '?'}${query}${hash}`
+}
+
+function materialLabBaseUrl() {
+  if (/^https:\/\//.test(configuredMaterialLabBase)) return configuredMaterialLabBase
+  if (!/^https:\/\//.test(previewBase)) return ''
+  try {
+    const previewUrl = new URL(previewBase)
+    const directory = previewUrl.pathname.replace(/\/[^/]*$/, '/')
+    previewUrl.pathname = `${directory}material-lab.html`
+    previewUrl.search = ''
+    previewUrl.hash = ''
+    return previewUrl.toString()
+  } catch {
+    return ''
+  }
+}
+
+function absoluteModelUrl(value: string | undefined, assetId: string, accessToken?: string) {
+  const fallback = accessToken
+    ? apiUrl(`/api/creative/ai/assets/${encodeURIComponent(assetId)}/model-content?access_token=${encodeURIComponent(accessToken)}`)
+    : ''
+  if (!value) return fallback
+  const withAccessToken = (url: string) => {
+    if (!accessToken || /[?&]access_token=/.test(url)) return url
+    return `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(accessToken)}`
+  }
+  if (/^https:\/\//.test(value)) return withAccessToken(value)
+  if (value.startsWith('/')) return withAccessToken(apiUrl(value))
+  return fallback
 }
 
 async function hydratePreviews(rows: any[]) {
@@ -196,6 +266,106 @@ function preview(asset: any) {
   uni.navigateTo({ url: `/pages/preview/index?id=${encodeURIComponent(String(asset.id))}&title=${encodeURIComponent(asset.title || '3D模型')}` })
 }
 
+async function openMaterialLab(asset: any) {
+  const assetId = String(asset?.id || '')
+  if (!/^\d+$/.test(assetId)) {
+    uni.showToast({ title: '作品编号无效，无法打开材质实验室', icon: 'none' })
+    return
+  }
+  const labBase = materialLabBaseUrl()
+  if (!labBase) {
+    uni.showToast({ title: '请先配置 HTTPS 材质实验室域名', icon: 'none' })
+    return
+  }
+  if (openingMaterialId.value) return
+  openingMaterialId.value = assetId
+  try {
+    const access = await getMaterialLabAccess(assetId)
+    const accessToken = String(access?.accessToken || '')
+    const modelUrl = absoluteModelUrl(access?.modelUrl, assetId, accessToken)
+    if (!accessToken || !/^https:\/\//.test(modelUrl)) throw new Error('未能获取安全的模型编辑权限，请稍后重试')
+    const title = String(asset.title || '3D 模型')
+    const h5Url = appendQuery(labBase, { assetId, title, modelUrl, labToken: accessToken })
+    // 仅交给当前 web-view 一次；短时材质令牌不保存到普通小程序存储。
+    uni.setStorageSync('smart_pig_model_preview_url', h5Url)
+    uni.navigateTo({ url: '/pages/model-webview/index?mode=material' })
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '暂时无法打开材质实验室，请稍后重试', icon: 'none' })
+  } finally {
+    openingMaterialId.value = ''
+  }
+}
+
+type ModelExportFormat = 'GLB' | 'OBJ' | 'STL'
+
+const modelExportOptions: Array<{ format: ModelExportFormat; label: string }> = [
+  { format: 'GLB', label: 'GLB · 通用 3D 模型' },
+  { format: 'OBJ', label: 'OBJ · ZIP 压缩包' },
+  { format: 'STL', label: 'STL · 3D 打印模型' },
+]
+
+function chooseModelExport(asset: any) {
+  const assetId = String(asset?.id || '')
+  if (!/^\d+$/.test(assetId)) {
+    uni.showToast({ title: '作品编号无效，无法导出模型', icon: 'none' })
+    return
+  }
+  uni.showActionSheet({
+    itemList: modelExportOptions.map(item => item.label),
+    success: (result) => {
+      const selected = modelExportOptions[result.tapIndex]
+      if (!selected) return
+      if (selected.format === 'OBJ') {
+        uni.showModal({
+          title: '导出 OBJ（ZIP）',
+          content: 'OBJ 会以 ZIP 压缩包下载。服务端可能需要转换，请耐心等待。',
+          confirmText: '开始导出',
+          success: (confirmation) => { if (confirmation.confirm) void downloadModel(asset, selected.format) },
+        })
+        return
+      }
+      void downloadModel(asset, selected.format)
+    },
+  })
+}
+
+async function downloadModel(asset: any, format: ModelExportFormat) {
+  const assetId = String(asset?.id || '')
+  const session = getSession()
+  if (!session?.token) {
+    requireSession()
+    return
+  }
+  if (downloadingModelId.value) return
+  downloadingModelId.value = assetId
+  const outputName = format === 'OBJ' ? 'OBJ（ZIP）' : format
+  uni.showLoading({ title: format === 'OBJ' ? '正在转换 OBJ（ZIP）…' : `正在导出 ${outputName}…`, mask: true })
+  try {
+    const result = await uni.downloadFile({
+      url: apiUrl(`/api/creative/ai/assets/${encodeURIComponent(assetId)}/download-model?format=${format}`),
+      header: { Authorization: `Bearer ${session.token}` },
+    })
+    if (result.statusCode < 200 || result.statusCode >= 300 || !result.tempFilePath) {
+      throw new Error(`导出失败（${result.statusCode || '网络异常'}）`)
+    }
+    const saved = await uni.saveFile({ tempFilePath: result.tempFilePath })
+    try {
+      await uni.openDocument({ filePath: saved.savedFilePath, showMenu: true })
+    } catch {
+      uni.showModal({
+        title: '模型已保存',
+        content: `${outputName} 已保存到微信文件。若当前设备不能直接打开，请在“微信文件”中发送到电脑或专业建模软件。`,
+        showCancel: false,
+      })
+    }
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || `${outputName} 导出失败，请稍后重试`, icon: 'none' })
+  } finally {
+    uni.hideLoading()
+    downloadingModelId.value = ''
+  }
+}
+
 function copy(asset: any) {
   uni.setClipboardData({ data: String(asset.assetNo || asset.id) })
 }
@@ -206,6 +376,10 @@ function goCreate() {
 
 function applyProduction(asset: any) {
   uni.navigateTo({ url: `/pages/production/index?assetId=${encodeURIComponent(String(asset.id))}&title=${encodeURIComponent(asset.title || '3D模型')}` })
+}
+
+function openDesignReview(asset: any) {
+  uni.navigateTo({ url: `/pages/review/index?assetId=${encodeURIComponent(String(asset.id))}&title=${encodeURIComponent(asset.title || '作品')}` })
 }
 
 function submitReview(asset: any) {
@@ -251,5 +425,5 @@ onPullDownRefresh(() => {
 </style>
 
 <style scoped lang="scss">
-.page{background:radial-gradient(ellipse at 10% 0%,rgba(151,177,163,.17),transparent 29%),linear-gradient(180deg,#faf8f3,#f0e9df)}.title{font-family:"Songti SC","STSong",serif;color:#302b26}.sub{color:#82786d}.refresh{background:#edf3ed;color:#607b6e}.section-head{font-family:"Songti SC","STSong",serif}.asset,.job-card,.request-card{border:1rpx solid rgba(129,112,93,.13);box-shadow:0 9rpx 21rpx rgba(67,53,37,.055)}.cover{background:#eef2eb}.model,.job-icon{background:linear-gradient(145deg,#5f7f71,#9eb5a8)}.job-card.failed .job-icon{background:linear-gradient(145deg,#865346,#bf765f)}.status{background:#f5ece4;color:#9d5c48}.status.approved,.status.succeeded,.status.paid{background:#e7f1e8;color:#567a67}.status.running,.status.queued,.status.processing{background:#f6f0df;color:#9b7540}.meta,.source,.generation,.request-state,.progress-text{color:#8c8176}.source{color:#7d9587}.progress-line{background:#ebe5dc}.progress-value{background:linear-gradient(90deg,#a56e58,#6e8b7c)}.actions button{background:#f2f5ef;color:#59776a}.actions .production{background:#efe1d5;color:#8c5947}.create-first{border-radius:17rpx;background:linear-gradient(135deg,#3e3933,#617e71)}
+.page{background:radial-gradient(ellipse at 10% 0%,rgba(151,177,163,.17),transparent 29%),linear-gradient(180deg,#faf8f3,#f0e9df)}.title{font-family:"Songti SC","STSong",serif;color:#302b26}.sub{color:#82786d}.refresh{background:#edf3ed;color:#607b6e}.section-head{font-family:"Songti SC","STSong",serif}.asset,.job-card,.request-card{border:1rpx solid rgba(129,112,93,.13);box-shadow:0 9rpx 21rpx rgba(67,53,37,.055)}.cover{background:#eef2eb}.model,.job-icon{background:linear-gradient(145deg,#5f7f71,#9eb5a8)}.job-card.failed .job-icon{background:linear-gradient(145deg,#865346,#bf765f)}.status{background:#f5ece4;color:#9d5c48}.status.approved,.status.succeeded,.status.paid{background:#e7f1e8;color:#567a67}.status.running,.status.queued,.status.processing{background:#f6f0df;color:#9b7540}.meta,.source,.generation,.request-state,.progress-text{color:#8c8176}.source{color:#7d9587}.progress-line{background:#ebe5dc}.progress-value{background:linear-gradient(90deg,#a56e58,#6e8b7c)}.actions button{background:#f2f5ef;color:#59776a}.actions .material{background:#dcece2;color:#426d5a}.actions .export{background:#e8edf5;color:#526b85}.actions .production{background:#efe1d5;color:#8c5947}.actions .design-review{background:#eeeaf5;color:#6b5b8b}.create-first{border-radius:17rpx;background:linear-gradient(135deg,#3e3933,#617e71)}.material-summary{display:flex;align-items:center;flex-wrap:wrap;gap:7rpx;margin-top:11rpx}.material-summary text:first-child{padding:3rpx 8rpx;border-radius:8rpx;background:#eef2ec;color:#728578;font-size:16rpx;font-weight:800}.material-summary text:nth-child(2){color:#476c5b;font-size:20rpx;font-weight:850}.material-summary text:last-child{color:#978c80;font-size:17rpx}
 </style>
