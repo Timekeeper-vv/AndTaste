@@ -229,7 +229,11 @@ build(){
   # same-origin Spring Boot static resources.  Fail before deleting the
   # existing bundle if the frontend build accidentally omitted it.
   [ -f "$FRONTEND_DIR/dist/payment-collection-qr.jpg" ] || die "前端构建产物缺少 payment-collection-qr.jpg；请确认 shixun-vue/public/payment-collection-qr.jpg 存在"
-  rm -rf "$BACKEND_DIR/src/main/resources/static"/*
+  # Static/generated and static/uploads are runtime data, not build output.
+  # Replace only the web bundle so a frontend release cannot delete users'
+  # previously generated images/models or uploaded reference files.
+  find "$BACKEND_DIR/src/main/resources/static" -mindepth 1 -maxdepth 1 \
+    ! -name generated ! -name uploads -exec rm -rf -- {} +
   # Copy the directory itself (including dotfiles) instead of relying on a
   # shell glob; this keeps model-preview and any future static assets intact.
   cp -a "$FRONTEND_DIR/dist/." "$BACKEND_DIR/src/main/resources/static/"
