@@ -169,6 +169,45 @@ const salesRankings: Record<RankingPeriod, Array<{ name: string; category: strin
   ],
 }
 
+// 首页“东方创作台”只复用现有的图片 / 3D 生成能力，不另起一套接口，
+// 这样用户无论从首页还是从下方业务面板进入，作品、积分和审核流都保持一致。
+type AtelierMode = 'concept' | 'reference' | 'prototype'
+const atelierMode = ref<AtelierMode>('concept')
+const atelierPatternCategory = ref('全部')
+const selectedAtelierPatternId = ref('taotie')
+const atelierMaterial = ref('陶瓷釉面')
+const atelierFinish = reactive({ glaze: 72, texture: 42, relief: 36 })
+
+const atelierModes: Array<{ key: AtelierMode; label: string; eyebrow: string; description: string; action: string }> = [
+  { key: 'concept', label: '灵感生图', eyebrow: '01 · IDEA TO IMAGE', description: '从一句文化灵感，生成可继续打样的产品视觉。', action: '生成产品视觉' },
+  { key: 'reference', label: '参考图改造', eyebrow: '02 · REFERENCE REMIX', description: '保留产品特征，用文创语言重构材质、纹样与场景。', action: '上传参考图' },
+  { key: 'prototype', label: '3D 原型', eyebrow: '03 · FORM TO OBJECT', description: '将构思推进为可预览、可换材质的三维原型。', action: '生成 3D 原型' },
+]
+const atelierPatternCategories = ['全部', '青铜纹样', '织绣纹样', '山水意境', '建筑纹样']
+const patternLibrary = [
+  { id: 'taotie', name: '饕餮回纹', category: '青铜纹样', en: 'Taotie rhythm', prompt: '简化饕餮回纹，适合文创产品边缘与局部浮雕装饰', color: '#667768', mark: '饕' },
+  { id: 'cloud', name: '如意云纹', category: '青铜纹样', en: 'Auspicious cloud', prompt: '灵动如意云纹，以留白和连续曲线构成现代东方装饰', color: '#A76652', mark: '云' },
+  { id: 'brocade', name: '团花锦纹', category: '织绣纹样', en: 'Brocade bloom', prompt: '精简团花锦纹，采用对称但不过度繁复的织锦节奏', color: '#B68C52', mark: '锦' },
+  { id: 'mountain', name: '青绿山水', category: '山水意境', en: 'Green landscape', prompt: '青绿山水的层叠远近关系，留出宣纸般呼吸感', color: '#789791', mark: '山' },
+  { id: 'window', name: '花窗几何', category: '建筑纹样', en: 'Lattice geometry', prompt: '传统花窗几何结构，以现代简化比例呈现秩序感', color: '#897567', mark: '窗' },
+  { id: 'lotus', name: '莲瓣雅纹', category: '织绣纹样', en: 'Lotus cadence', prompt: '克制的莲瓣纹样与温润器物比例，适合陶瓷釉面表达', color: '#9B806B', mark: '莲' },
+]
+const atelierMaterialOptions = [
+  { label: '陶瓷釉面', productMaterial: '树脂', modelMaterial: '陶瓷釉面', note: '温润通透，适合器物与礼盒摆件' },
+  { label: '青铜金属', productMaterial: '金属', modelMaterial: '金属质感', note: '克制哑光，适合浮雕与纪念章感' },
+  { label: '木质温润', productMaterial: '木质', modelMaterial: '木质温润', note: '自然年轮，适合文具与随身小物' },
+  { label: '玉感树脂', productMaterial: '树脂', modelMaterial: '树脂潮玩', note: '细腻半透，适合潮玩与桌面陈列' },
+]
+const activeAtelierMode = computed(() => atelierModes.find(item => item.key === atelierMode.value) || atelierModes[0])
+const visibleAtelierPatterns = computed(() => atelierPatternCategory.value === '全部'
+  ? patternLibrary
+  : patternLibrary.filter(item => item.category === atelierPatternCategory.value))
+const selectedAtelierPattern = computed(() => patternLibrary.find(item => item.id === selectedAtelierPatternId.value) || patternLibrary[0])
+const atelierPreviewImage = computed(() => imageResult.value?.previewUrl || imageResult.value?.imageUrl || recentImages.value[0]?.previewUrl || imageShowcaseTemplates[0]?.image || '')
+const atelierPreviewTitle = computed(() => imageResult.value ? '本次生成预览' : '灵感产品预览')
+const atelierProgressText = computed(() => busy.value ? (stage.value || '正在为作品落下第一笔') : '已同步到作品库、审核与生产流程')
+const atelierFinishDirection = computed(() => `材质表现：${atelierMaterial.value}，釉面光泽 ${atelierFinish.glaze}%，肌理颗粒 ${atelierFinish.texture}%，浮雕层次 ${atelierFinish.relief}%`)
+
 const modelForm = reactive({
   mode: 'image_to_model' as 'image_to_model' | 'multiview_to_model' | 'text_to_model',
   rawPrompt: '山城街巷主题亚克力钥匙扣，立体浮雕层次，适合文创打样',
@@ -370,6 +409,57 @@ function applyImageShowcase(template: typeof imageShowcaseTemplates[number]) {
   imageForm.style = template.style
   imageForm.imagenAspectRatio = template.ratio
   emit('alert', `已套用「${template.title}」视觉模板，可继续修改文字后生成`, 'success')
+}
+
+function chooseAtelierMode(mode: AtelierMode) {
+  atelierMode.value = mode
+  if (mode === 'concept') imageForm.generationMode = 'single'
+  if (mode === 'reference') imageForm.generationMode = 'image_to_image'
+  if (mode === 'prototype') modelForm.mode = 'text_to_model'
+}
+
+function applyAtelierPattern(pattern: typeof patternLibrary[number]) {
+  selectedAtelierPatternId.value = pattern.id
+  const prompt = pattern.prompt
+  if (!imageForm.rawPrompt.includes(prompt)) {
+    imageForm.rawPrompt = `${imageForm.rawPrompt.replace(/[，,。；;\s]+$/, '')}，${prompt}`
+  }
+  if (!modelForm.rawPrompt.includes(prompt)) {
+    modelForm.rawPrompt = `${modelForm.rawPrompt.replace(/[，,。；;\s]+$/, '')}，${prompt}`
+  }
+  emit('alert', `已加入「${pattern.name}」灵感，可继续调整后生成`, 'success')
+}
+
+function selectAtelierMaterial(item: typeof atelierMaterialOptions[number]) {
+  atelierMaterial.value = item.label
+  selectedMaterial.value = item.productMaterial
+  chooseModelMaterial(item.modelMaterial)
+}
+
+function mergeAtelierFinishDirection(prompt: string) {
+  const withoutPreviousDirection = prompt.replace(/(?:，|,)?材质表现：[^。；;]*(?:[。；;]|$)/g, '').replace(/[，,。；;\s]+$/, '')
+  return `${withoutPreviousDirection}，${atelierFinishDirection.value}`
+}
+
+async function runAtelierGeneration() {
+  // 让三个材质滑杆真正参与生成，而不是只做视觉装饰。
+  imageForm.rawPrompt = mergeAtelierFinishDirection(imageForm.rawPrompt)
+  modelForm.rawPrompt = mergeAtelierFinishDirection(modelForm.rawPrompt)
+  if (atelierMode.value === 'prototype') {
+    modelForm.mode = 'text_to_model'
+    if (!modelForm.rawPrompt.trim()) modelForm.rawPrompt = imageForm.rawPrompt
+    switchTab('model')
+    await nextTick()
+    await generateModel()
+    return
+  }
+  imageForm.generationMode = atelierMode.value === 'reference' ? 'image_to_image' : 'single'
+  if (atelierMode.value === 'reference' && !imageForm.inputAssetId) {
+    switchTab('image')
+    emit('alert', '请先在下方“图文结合”区域上传一张参考图，再回到这里生成', 'error')
+    return
+  }
+  await generateImage()
 }
 
 function chooseModelMaterial(label: string) {
@@ -1210,6 +1300,87 @@ function closeModelPreview() {
         </div>
         <div class="studio-hero-art" aria-hidden="true"><i class="art-ring ring-one"></i><i class="art-ring ring-two"></i><div class="art-tile tile-one"><span>AI</span><b>文化灵感</b></div><div class="art-tile tile-two"><span>3D</span><b>产品原型</b></div><em>✦</em></div>
       </div>
+
+      <section class="atelier-workbench" aria-label="东方 AI 文创创作台">
+        <header class="atelier-heading">
+          <div>
+            <span>ORIENTAL CREATIVE ATELIER</span>
+            <h2>让文化灵感，<em>在手心成为产品。</em></h2>
+            <p>一个移动端就能完成灵感、视觉、3D 与生产准备的创作台。你现在写下的每一句，都会同步进入真实业务流程。</p>
+          </div>
+          <div class="atelier-device-note" aria-label="适配 iOS 和 Android">
+            <i>iOS</i><i>Android</i><b>移动优先</b>
+          </div>
+        </header>
+
+        <div class="atelier-canvas-grid">
+          <section class="atelier-compose-card">
+            <div class="atelier-card-head">
+              <div><span>{{ activeAtelierMode.eyebrow }}</span><b>{{ activeAtelierMode.label }}</b></div>
+              <small>已连接你的作品库</small>
+            </div>
+            <div class="atelier-mode-tabs" role="tablist" aria-label="选择创作方式">
+              <button v-for="item in atelierModes" :key="item.key" type="button" :class="{ active: atelierMode === item.key }" :aria-selected="atelierMode === item.key" role="tab" @click="chooseAtelierMode(item.key)">
+                <i>{{ item.key === 'concept' ? '墨' : item.key === 'reference' ? '鉴' : '形' }}</i><span>{{ item.label }}</span>
+              </button>
+            </div>
+            <p class="atelier-mode-description">{{ activeAtelierMode.description }}</p>
+            <label class="atelier-prompt-field">
+              <span>此刻的创作想法</span>
+              <textarea v-model="imageForm.rawPrompt" rows="4" maxlength="800" placeholder="例如：以青绿山水和馆藏纹样为灵感，做一款适合年轻人的博物馆冰箱贴。"></textarea>
+              <small><b>AI 正在理解：</b>{{ selectedAtelierPattern.name }} · {{ atelierMaterial }} · {{ productProfile.label }}</small>
+            </label>
+            <div class="atelier-action-row">
+              <button type="button" class="atelier-generate" :disabled="busy" @click="runAtelierGeneration">
+                <span class="brush-stroke" aria-hidden="true"></span>
+                <i>{{ busy ? '印' : '✦' }}</i>
+                {{ busy ? '正在生成' : activeAtelierMode.action }}
+                <em>{{ atelierMode === 'prototype' ? `${modelCost} 点` : `${imageCost} 点` }}</em>
+              </button>
+              <button type="button" class="atelier-library-link" @click="switchTab('gallery')">我的作品 <span>→</span></button>
+            </div>
+          </section>
+
+          <aside class="atelier-preview-card" :class="{ generating: busy }">
+            <div class="atelier-preview-topline"><span>LIVE PRODUCT PREVIEW</span><b>{{ atelierPreviewTitle }}</b><i>{{ busy ? '生成中' : '实时预览' }}</i></div>
+            <div class="atelier-preview-stage">
+              <div class="atelier-ink-cloud cloud-one"></div><div class="atelier-ink-cloud cloud-two"></div>
+              <img v-if="atelierPreviewImage" :src="atelierPreviewImage" alt="AI 文创产品实时预览" />
+              <div v-else class="atelier-preview-placeholder"><span>{{ selectedAtelierPattern.mark }}</span><b>等待你的灵感</b></div>
+              <div class="atelier-preview-caption"><b>{{ selectedAtelierPattern.name }}</b><small>{{ atelierMaterial }} · {{ productProfile.label }}</small></div>
+              <div v-if="busy" class="atelier-seal-loader" aria-label="AI 正在生成"><span>创</span><i></i><b>{{ stage || '生成中' }}</b></div>
+            </div>
+            <div class="atelier-preview-foot"><span><i></i>{{ atelierProgressText }}</span><small>{{ imageForm.rawPrompt.length }}/800</small></div>
+          </aside>
+        </div>
+
+        <section class="atelier-pattern-library" aria-label="传统纹样灵感库">
+          <div class="atelier-section-heading"><div><span>HERITAGE PATTERN LIBRARY</span><b>从传统纹样中，挑一笔自己的当代语言。</b></div><small>点击即同步到图片与 3D 提示词</small></div>
+          <div class="atelier-filter-row" role="tablist" aria-label="筛选纹样类型"><button v-for="category in atelierPatternCategories" :key="category" type="button" :class="{ active: atelierPatternCategory === category }" @click="atelierPatternCategory = category">{{ category }}</button></div>
+          <div class="atelier-pattern-scroll">
+            <button v-for="pattern in visibleAtelierPatterns" :key="pattern.id" type="button" class="atelier-pattern-card" :class="{ active: selectedAtelierPatternId === pattern.id }" :style="{ '--pattern-color': pattern.color }" @click="applyAtelierPattern(pattern)">
+              <span class="atelier-pattern-mark">{{ pattern.mark }}</span><i>{{ pattern.category }}</i><b>{{ pattern.name }}</b><small>{{ pattern.en }}</small><em>加入灵感 <strong>→</strong></em>
+            </button>
+          </div>
+        </section>
+
+        <section class="atelier-material-dock" aria-label="产品材质定制">
+          <div class="atelier-section-heading"><div><span>MATERIAL & FINISH LAB</span><b>像挑一件器物一样，决定它的温度与光泽。</b></div><small>将同步 3D 材质和生成提示词</small></div>
+          <div class="atelier-material-layout">
+            <div class="atelier-material-options">
+              <button v-for="item in atelierMaterialOptions" :key="item.label" type="button" :class="{ active: atelierMaterial === item.label }" @click="selectAtelierMaterial(item)"><i></i><span><b>{{ item.label }}</b><small>{{ item.note }}</small></span><em>✓</em></button>
+            </div>
+            <div class="atelier-finish-controls">
+              <label><span>釉面光泽 <b>{{ atelierFinish.glaze }}%</b></span><input v-model.number="atelierFinish.glaze" type="range" min="0" max="100" /></label>
+              <label><span>肌理颗粒 <b>{{ atelierFinish.texture }}%</b></span><input v-model.number="atelierFinish.texture" type="range" min="0" max="100" /></label>
+              <label><span>浮雕层次 <b>{{ atelierFinish.relief }}%</b></span><input v-model.number="atelierFinish.relief" type="range" min="0" max="100" /></label>
+            </div>
+            <div class="atelier-glaze-visual" :style="{ '--atelier-glaze': `${atelierFinish.glaze}%`, '--atelier-texture': `${atelierFinish.texture}%`, '--atelier-relief': `${atelierFinish.relief}%`, '--pattern-color': selectedAtelierPattern.color }" aria-label="材质效果预览">
+              <i></i><span>{{ selectedAtelierPattern.mark }}</span><b>{{ atelierMaterial }}</b><small>触感与视觉同步预览</small>
+            </div>
+          </div>
+        </section>
+      </section>
 
       <section class="studio-launcher">
         <div class="studio-section-title"><div><span>CREATE NOW</span><b>今天想先做什么？</b></div><small>选择一个创作入口，即刻开始</small></div>
@@ -2762,3 +2933,69 @@ function closeModelPreview() {
 </style>
 
 <style scoped>.image-edit-upload{display:grid;gap:10px;margin:12px 0;padding:13px;border:1px solid #f1cfb4;border-radius:18px;background:linear-gradient(135deg,#fff7ef,#fffdf9)}.image-edit-upload>div span,.image-edit-upload>div small{display:block;color:#a05a34;font-size:10px;line-height:1.45}.image-edit-upload>div b{display:block;margin:3px 0;color:#5a2a18;font-size:13px}.image-edit-upload label{position:relative;display:grid;place-items:center;min-height:138px;overflow:hidden;border:1.5px dashed #d98a5c;border-radius:15px;background:#fff;text-align:center;color:#9a4d2a}.image-edit-upload label input{position:absolute;inset:0;opacity:0;cursor:pointer}.image-edit-upload label img{width:100%;height:160px;object-fit:contain}.image-edit-upload label>template,.image-edit-upload label>span{display:grid}.image-edit-upload label i{display:grid;place-items:center;width:34px;height:34px;margin:auto;border-radius:10px;background:#b4512d;color:#fff;font-size:21px;font-style:normal}.image-edit-upload label b,.image-edit-upload label small{display:block;margin-top:5px;font-size:11px}.image-edit-upload label em{position:absolute;right:8px;top:8px;padding:3px 6px;border-radius:99px;background:#0f766e;color:#fff;font-size:9px;font-style:normal}</style>
+
+<style scoped>
+/* --------------------------------------------------------------------------
+   New Chinese mobile atelier.  This layer intentionally sits last: legacy
+   creation, review, payment and production controls remain intact underneath.
+   -------------------------------------------------------------------------- */
+.consumer-shell.immersive-shell{
+  --paper:#f8f5ef;
+  --paper-deep:#eee8de;
+  --ink:#292722;
+  --muted:#847d73;
+  --line:#e5ded2;
+  --celadon:#8fa59a;
+  --celadon-deep:#587a70;
+  --terracotta:#b9664f;
+  --gold:#c6a36d;
+  --song:"Songti SC","STSong","SimSun",serif;
+  position:relative;
+  isolation:isolate;
+  background:
+    radial-gradient(ellipse 120% 28% at 50% -5%,rgba(169,185,167,.20),transparent 62%),
+    radial-gradient(circle at 92% 20%,rgba(185,102,79,.09),transparent 19%),
+    linear-gradient(180deg,#faf8f3 0%,#f6f2eb 45%,#efe9df 100%);
+  color:var(--ink);
+  font-family:"PingFang SC","Helvetica Neue",Arial,sans-serif;
+}
+.consumer-shell.immersive-shell::before{
+  content:"";
+  position:absolute;
+  z-index:-1;
+  inset:0;
+  pointer-events:none;
+  opacity:.62;
+  background-image:
+    radial-gradient(circle at 1px 1px,rgba(71,61,48,.08) .65px,transparent .8px),
+    radial-gradient(ellipse 55% 7% at 16% 23%,rgba(104,122,112,.08),transparent 71%),
+    radial-gradient(ellipse 46% 6% at 84% 48%,rgba(173,112,86,.055),transparent 72%);
+  background-size:8px 8px,100% 880px,100% 760px;
+  mix-blend-mode:multiply;
+}
+.consumer-shell.immersive-shell .ambient-layer{opacity:.32;background:radial-gradient(ellipse at 14% 12%,rgba(140,163,150,.18),transparent 19%),radial-gradient(ellipse at 87% 27%,rgba(196,132,103,.13),transparent 21%);mix-blend-mode:multiply}
+.consumer-shell.immersive-shell .consumer-top{position:sticky;background:rgba(250,248,243,.86);color:var(--ink);border-bottom:1px solid rgba(91,77,60,.09);box-shadow:0 8px 20px rgba(65,54,40,.025)}
+.consumer-shell.immersive-shell .brand b{font-family:var(--song);font-size:17px;letter-spacing:.04em}.consumer-shell.immersive-shell .brand span{color:#8a8176}.consumer-shell.immersive-shell .icon-btn{border:1px solid #e8e1d7;background:#fffdf9;color:#4a443c;box-shadow:none}
+
+.consumer-shell.immersive-shell .studio-home{display:grid;gap:18px;margin:0 auto 23px}.consumer-shell.immersive-shell .studio-hero{min-height:0;padding:29px 25px 27px;border:1px solid rgba(135,124,106,.15);border-radius:26px;background:linear-gradient(121deg,rgba(255,255,255,.92),rgba(248,246,238,.90) 52%,rgba(220,229,218,.74));box-shadow:0 18px 42px rgba(68,55,39,.08);color:var(--ink)}
+.consumer-shell.immersive-shell .studio-hero::before{opacity:.68;background:radial-gradient(ellipse 90% 25% at 105% 104%,rgba(135,164,150,.23),transparent 72%),linear-gradient(100deg,rgba(130,112,91,.06) 1px,transparent 1px);background-size:auto,13px 13px;mask-image:none}.studio-hero-copy{max-width:575px}.studio-kicker{color:var(--celadon-deep);font-size:9px;letter-spacing:.18em}.studio-kicker span{color:var(--terracotta)}.studio-kicker i{color:#b8afa3}.studio-purpose-pill{margin-top:16px;padding:7px 10px;border-color:#e4dbd0;background:rgba(255,253,249,.78);color:#605a52;box-shadow:0 5px 14px rgba(72,60,42,.045)}.studio-purpose-pill b{background:#e9f0e9;color:#587a70}.studio-hero h1{margin:20px 0 11px;font-family:var(--song);font-size:clamp(34px,5.2vw,56px);font-weight:650;line-height:1.1;letter-spacing:-.06em}.studio-hero h1 strong{color:var(--terracotta);font-weight:650}.studio-hero p{max-width:500px;color:#716a61;font-size:14px}.studio-hero-actions{margin-top:23px}.studio-hero-actions button{height:46px;border-radius:13px}.studio-main-action{position:relative;overflow:hidden;background:#332f2a;color:#fff;box-shadow:0 11px 24px rgba(47,42,36,.18)}.studio-main-action::after{content:"";position:absolute;inset:auto -24% -55% auto;width:100px;height:60px;border-radius:50%;background:rgba(255,255,255,.16);transform:rotate(-18deg)}.studio-sub-action{color:#655e56}.studio-hero-art{right:4%;bottom:6%;width:250px;height:205px;opacity:.86}.art-ring{border-color:rgba(84,120,109,.2)}.art-tile{border-color:rgba(255,255,255,.75);box-shadow:0 14px 26px rgba(69,62,48,.12);backdrop-filter:blur(8px)}.tile-one{left:15px;top:21px;width:105px;height:112px;background:linear-gradient(145deg,#edf1e9,#a7baad);color:#435c53}.tile-two{right:14px;bottom:10px;width:113px;height:124px;background:linear-gradient(145deg,#f2ddd0,#b86d55);color:#fff}.studio-hero-art em{color:#af775f;text-shadow:none}
+
+.atelier-workbench{display:grid;gap:16px;padding:20px;border:1px solid rgba(133,120,102,.15);border-radius:26px;background:rgba(255,253,249,.76);box-shadow:0 16px 40px rgba(70,56,39,.055);backdrop-filter:blur(10px)}
+.atelier-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}.atelier-heading>div:first-child{max-width:560px}.atelier-heading span,.atelier-section-heading span{display:block;color:var(--celadon-deep);font-size:9px;font-weight:900;letter-spacing:.16em}.atelier-heading h2{margin:6px 0 7px;font-family:var(--song);font-size:clamp(22px,3.6vw,31px);font-weight:650;line-height:1.22;letter-spacing:-.045em}.atelier-heading h2 em{color:var(--terracotta);font-style:normal}.atelier-heading p{margin:0;color:var(--muted);font-size:12px;line-height:1.65}.atelier-device-note{display:flex;flex:none;flex-wrap:wrap;justify-content:flex-end;gap:5px;max-width:135px}.atelier-device-note i,.atelier-device-note b{padding:5px 7px;border:1px solid #e5ddd1;border-radius:999px;background:#fffdfa;color:#7a7268;font-size:9px;font-style:normal;font-weight:800}.atelier-device-note b{border-color:#d9e6dc;background:#edf4ee;color:#5c776c}
+.atelier-canvas-grid{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(250px,.98fr);gap:14px}.atelier-compose-card,.atelier-preview-card{min-width:0;border:1px solid var(--line);border-radius:21px;background:#fffefb}.atelier-compose-card{padding:17px;box-shadow:0 8px 20px rgba(78,62,43,.035)}.atelier-card-head,.atelier-preview-topline{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.atelier-card-head>div{display:grid;gap:3px}.atelier-card-head span,.atelier-preview-topline span{color:#99836e;font-size:9px;font-weight:900;letter-spacing:.11em}.atelier-card-head b{font-family:var(--song);font-size:18px}.atelier-card-head small{padding:4px 6px;border-radius:999px;background:#f0f5f0;color:#688075;font-size:9px;font-weight:800;white-space:nowrap}.atelier-mode-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:14px 0 9px}.atelier-mode-tabs button{display:grid;justify-items:center;gap:4px;padding:8px 4px;border:1px solid #e8e0d5;border-radius:13px;background:#fffdfa;color:#837a70;font-size:10px;font-weight:800;transition:transform .22s ease,border-color .22s ease,background .22s ease}.atelier-mode-tabs i{display:grid;place-items:center;width:23px;height:23px;border-radius:8px;background:#f2eee7;color:#907561;font-family:var(--song);font-size:13px;font-style:normal}.atelier-mode-tabs button.active{border-color:#9caf9f;background:#edf4ee;color:#3f6257;box-shadow:0 6px 15px rgba(77,108,96,.1)}.atelier-mode-tabs button.active i{background:#5d7d70;color:#fff}.atelier-mode-description{min-height:34px;margin:0;color:#827970;font-size:11px;line-height:1.55}.atelier-prompt-field{margin-top:11px}.atelier-prompt-field>span{display:flex;justify-content:space-between;color:#5b554d;font-size:11px;font-weight:900}.atelier-prompt-field textarea{min-height:104px;margin-top:7px;padding:12px;border:1px solid #e5ddd2;border-radius:15px;background:linear-gradient(135deg,#fffefa,#fbf9f4);color:#403b34;font:inherit;font-size:13px;line-height:1.65;resize:vertical;box-shadow:none}.atelier-prompt-field textarea:focus{border-color:#8da397;box-shadow:0 0 0 3px rgba(143,165,154,.12);outline:0}.atelier-prompt-field small{display:block;margin-top:7px;color:#9b9085;font-size:10px;line-height:1.45}.atelier-prompt-field small b{color:#667d72}.atelier-action-row{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-top:15px}.atelier-generate{position:relative;isolation:isolate;display:flex;align-items:center;justify-content:center;gap:7px;min-height:45px;min-width:166px;overflow:hidden;padding:0 13px;border:0;border-radius:14px;background:#322f2a;color:#fff;font-size:12px;font-weight:900;box-shadow:0 10px 20px rgba(45,40,35,.17);transition:transform .24s ease,box-shadow .24s ease}.atelier-generate>*:not(.brush-stroke){position:relative;z-index:2}.atelier-generate i{display:grid;place-items:center;width:22px;height:22px;border:1px solid rgba(255,255,255,.22);border-radius:7px;color:#f0c59f;font-family:var(--song);font-size:13px;font-style:normal}.atelier-generate em{margin-left:2px;color:#d8d0c3;font-size:9px;font-style:normal}.brush-stroke{position:absolute;z-index:1;left:-38%;top:8px;width:71%;height:80%;border-radius:46% 55% 48% 57%;background:linear-gradient(90deg,transparent,rgba(185,102,79,.86),rgba(205,156,104,.72),transparent);filter:blur(.1px);transform:rotate(-10deg) translateX(-55%);transition:transform .52s cubic-bezier(.2,.85,.2,1)}.atelier-generate:disabled{opacity:.65}.atelier-library-link{padding:7px 4px;border:0;background:transparent;color:#746b61;font-size:11px;font-weight:800}.atelier-library-link span{margin-left:2px;color:var(--terracotta);font-size:16px;vertical-align:-1px}.atelier-preview-card{display:flex;flex-direction:column;overflow:hidden;background:linear-gradient(145deg,#f4f1e9,#e7eee9)}.atelier-preview-topline{padding:13px 14px 8px}.atelier-preview-topline b{flex:1;color:#463e36;font-family:var(--song);font-size:15px}.atelier-preview-topline i{padding:3px 6px;border-radius:999px;background:rgba(255,255,255,.65);color:#698076;font-size:8px;font-style:normal;font-weight:900}.atelier-preview-stage{position:relative;isolation:isolate;display:grid;flex:1;min-height:250px;place-items:center;overflow:hidden;margin:0 11px 11px;border:1px solid rgba(131,139,124,.16);border-radius:17px;background:radial-gradient(circle at 50% 19%,rgba(255,255,255,.85),transparent 38%),linear-gradient(145deg,#dbe5dc,#ede1d3)}.atelier-preview-stage::after{content:"";position:absolute;z-index:-1;bottom:-22%;left:8%;width:78%;height:34%;border-radius:50%;background:rgba(65,83,70,.15);filter:blur(19px)}.atelier-preview-stage img{position:relative;z-index:1;display:block;width:100%;height:100%;max-height:345px;object-fit:cover;mix-blend-mode:multiply;filter:saturate(.86) contrast(1.02)}.atelier-preview-card.generating .atelier-preview-stage img{opacity:.45;filter:blur(1.4px) saturate(.65)}.atelier-ink-cloud{position:absolute;z-index:0;width:170px;height:58px;border-radius:50%;background:rgba(74,99,85,.16);filter:blur(24px);transform:rotate(-12deg)}.cloud-one{top:16%;left:-14%}.cloud-two{right:-13%;bottom:17%;background:rgba(177,95,72,.13);transform:rotate(19deg)}.atelier-preview-placeholder{position:relative;z-index:1;display:grid;justify-items:center;gap:8px;color:#62786c}.atelier-preview-placeholder span{display:grid;place-items:center;width:94px;height:94px;border:1px solid rgba(95,121,110,.28);border-radius:50%;background:rgba(255,255,255,.34);font-family:var(--song);font-size:44px}.atelier-preview-placeholder b{font-size:12px}.atelier-preview-caption{position:absolute;z-index:3;left:10px;bottom:10px;display:grid;gap:2px;padding:8px 10px;border:1px solid rgba(255,255,255,.64);border-radius:11px;background:rgba(255,253,248,.74);backdrop-filter:blur(9px)}.atelier-preview-caption b{color:#433b33;font-size:11px}.atelier-preview-caption small{color:#80766b;font-size:9px}.atelier-seal-loader{position:absolute;z-index:5;display:grid;place-items:center;gap:7px;inset:0;background:rgba(249,247,240,.5);backdrop-filter:blur(2px);color:#714d3f}.atelier-seal-loader span{display:grid;place-items:center;width:52px;height:52px;border:2px solid currentColor;outline:1px solid rgba(113,77,63,.36);outline-offset:3px;background:rgba(255,249,241,.74);font-family:var(--song);font-size:30px;font-weight:700;transform:rotate(-8deg);animation:sealPress 1.25s ease-in-out infinite}.atelier-seal-loader i{width:72px;height:1px;background:rgba(113,77,63,.35);transform:scaleX(.45);animation:sealLine 1.25s ease-in-out infinite}.atelier-seal-loader b{max-width:80%;font-size:10px;text-align:center}.atelier-preview-foot{display:flex;justify-content:space-between;gap:10px;padding:0 14px 13px;color:#827970;font-size:9px;line-height:1.5}.atelier-preview-foot span{display:flex;align-items:flex-start;gap:5px}.atelier-preview-foot i{width:6px;height:6px;margin-top:4px;border-radius:50%;background:#7fa390}.atelier-preview-foot small{white-space:nowrap}
+
+.atelier-pattern-library,.atelier-material-dock{padding:15px;border:1px solid var(--line);border-radius:20px;background:rgba(255,255,255,.55)}.atelier-section-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}.atelier-section-heading>div{display:grid;gap:4px}.atelier-section-heading b{font-family:var(--song);font-size:17px;font-weight:650;letter-spacing:-.035em}.atelier-section-heading>small{max-width:155px;color:#958b80;font-size:9px;line-height:1.45;text-align:right}.atelier-filter-row{display:flex;gap:6px;overflow-x:auto;margin-top:12px;padding-bottom:2px;scrollbar-width:none}.atelier-filter-row::-webkit-scrollbar,.atelier-pattern-scroll::-webkit-scrollbar{display:none}.atelier-filter-row button{flex:none;padding:6px 10px;border:1px solid #e5ddd1;border-radius:999px;background:#fffdfa;color:#847b70;font-size:10px;font-weight:800}.atelier-filter-row button.active{border-color:#799589;background:#eaf2eb;color:#4d6e61}.atelier-pattern-scroll{display:flex;gap:9px;overflow-x:auto;margin:12px -2px -2px;padding:1px 2px 8px;scroll-snap-type:x proximity;scrollbar-width:none}.atelier-pattern-card{position:relative;isolation:isolate;display:grid;flex:0 0 142px;min-height:164px;align-content:start;gap:4px;overflow:hidden;padding:13px;border:1px solid #e5ddd2;border-radius:16px;background:linear-gradient(150deg,#fffefa,#f7f2e9);color:#403a34;text-align:left;scroll-snap-align:start;transition:transform .22s ease,border-color .22s ease,box-shadow .22s ease}.atelier-pattern-card::before{content:"";position:absolute;z-index:-1;right:-33px;top:-33px;width:102px;height:102px;border-radius:50%;background:var(--pattern-color);opacity:.16}.atelier-pattern-card.active{border-color:var(--pattern-color);box-shadow:0 10px 20px color-mix(in srgb,var(--pattern-color) 16%,transparent);transform:translateY(-2px)}.atelier-pattern-mark{display:grid;place-items:center;width:37px;height:37px;margin-bottom:4px;border-radius:11px;background:color-mix(in srgb,var(--pattern-color) 14%,#fff);color:var(--pattern-color);font-family:var(--song);font-size:20px;font-weight:700}.atelier-pattern-card i{color:#948779;font-size:8px;font-style:normal;letter-spacing:.05em}.atelier-pattern-card b{font-family:var(--song);font-size:16px;letter-spacing:.02em}.atelier-pattern-card small{color:#9a9187;font-size:9px}.atelier-pattern-card em{margin-top:auto;color:#806d5e;font-size:9px;font-style:normal;font-weight:800}.atelier-pattern-card em strong{margin-left:4px;color:var(--pattern-color);font-size:13px}
+.atelier-material-layout{display:grid;grid-template-columns:minmax(190px,.88fr) minmax(185px,.84fr) minmax(145px,.64fr);gap:13px;margin-top:13px}.atelier-material-options{display:grid;gap:6px}.atelier-material-options button{display:grid;grid-template-columns:19px 1fr 15px;align-items:center;gap:8px;padding:8px;border:1px solid #e7dfd4;border-radius:12px;background:#fffdfa;color:#6d655d;text-align:left}.atelier-material-options button>i{width:15px;height:15px;border:1px solid rgba(54,59,53,.08);border-radius:5px;background:linear-gradient(140deg,#e9e0d3,#a9b9a7 48%,#f8f4ec 51%,#ac6d58)}.atelier-material-options button:nth-child(2)>i{background:linear-gradient(145deg,#d6c9ab,#776b5a 44%,#b6aa8f 47%,#473f36)}.atelier-material-options button:nth-child(3)>i{background:repeating-linear-gradient(65deg,#c19466 0 2px,#e6cba8 2px 5px,#977047 5px 7px)}.atelier-material-options button:nth-child(4)>i{background:radial-gradient(circle at 32% 25%,#fff 0 5%,transparent 6%),linear-gradient(145deg,#e4e8d6,#9eb6aa)}.atelier-material-options button span{display:grid;gap:2px;min-width:0}.atelier-material-options button b{font-size:11px}.atelier-material-options button small{overflow:hidden;color:#958b81;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.atelier-material-options button em{color:transparent;font-size:10px;font-style:normal}.atelier-material-options button.active{border-color:#91aa9c;background:#f1f6f1;color:#466257}.atelier-material-options button.active em{color:#5c8170}.atelier-finish-controls{display:grid;align-content:center;gap:11px;padding:10px 12px;border:1px solid #e8e0d5;border-radius:15px;background:linear-gradient(150deg,#fbfaf6,#f1f4ef)}.atelier-finish-controls label{display:grid;gap:6px;margin:0}.atelier-finish-controls label span{display:flex;justify-content:space-between;color:#6f665c;font-size:10px;font-weight:800}.atelier-finish-controls label span b{color:#52776a;font-size:10px}.atelier-finish-controls input{width:100%;height:4px;margin:0;accent-color:#749184;cursor:pointer}.atelier-glaze-visual{position:relative;isolation:isolate;display:grid;min-height:163px;place-items:center;align-content:center;overflow:hidden;border:1px solid rgba(93,117,104,.24);border-radius:17px;background:radial-gradient(circle at 36% 24%,rgba(255,255,255,calc(var(--atelier-glaze) / 100)),transparent 18%),radial-gradient(circle at 63% 69%,var(--pattern-color),transparent calc(20% + var(--atelier-relief) / 9)),linear-gradient(145deg,#d2ddd4,#8fa79a 52%,#d9c5b4);box-shadow:inset 0 0 calc(4px + var(--atelier-texture) / 11px) rgba(40,63,54,.18),0 7px 18px rgba(69,87,72,.09)}.atelier-glaze-visual::before{content:"";position:absolute;z-index:-1;inset:10%;border:1px solid rgba(255,255,255,.44);border-radius:50%;transform:rotate(-17deg) scaleY(.7)}.atelier-glaze-visual>i{position:absolute;inset:0;z-index:-1;opacity:calc(var(--atelier-texture) / 150);background-image:radial-gradient(rgba(40,61,52,.8) .6px,transparent .8px);background-size:4px 4px;mix-blend-mode:soft-light}.atelier-glaze-visual span{display:grid;place-items:center;width:76px;height:76px;border:1px solid rgba(255,255,255,.7);border-radius:50%;background:rgba(255,255,255,.15);color:rgba(255,255,255,.92);font-family:var(--song);font-size:39px;text-shadow:0 2px 7px rgba(34,53,46,.26);box-shadow:inset 0 2px 9px rgba(255,255,255,.55),0 10px 17px rgba(46,65,55,.2)}.atelier-glaze-visual b,.atelier-glaze-visual small{position:relative;color:#fff;text-shadow:0 1px 4px rgba(36,49,43,.4)}.atelier-glaze-visual b{margin-top:9px;font-size:11px}.atelier-glaze-visual small{margin-top:3px;font-size:8px}
+
+.consumer-shell.immersive-shell .studio-launcher{padding:18px;border:1px solid rgba(133,120,102,.15);border-radius:24px;background:rgba(255,253,249,.66);box-shadow:none}.studio-section-title>div{display:grid;gap:4px}.studio-section-title span{color:#9d846b}.studio-section-title b{font-family:var(--song);font-size:20px;font-weight:650}.studio-section-title small{color:#958a7f}.studio-launch-grid{gap:9px;margin-top:13px}.studio-launch-grid button{position:relative;overflow:hidden;border-radius:17px;border:1px solid #e5ddd2;background:#fffefa;color:#403a34;box-shadow:none;transition:transform .22s ease,box-shadow .22s ease}.studio-launch-grid button::before{content:"";position:absolute;right:-22px;top:-29px;width:86px;height:86px;border-radius:50%;background:rgba(143,165,154,.12)}.studio-launch-grid .launch-model::before{background:rgba(185,102,79,.11)}.studio-launch-grid .launch-library::before{background:rgba(198,163,109,.12)}.studio-launch-grid button i{color:#9a8b7a}.studio-launch-grid .launch-icon{color:#718b80}.studio-launch-grid button em{background:#f5f1eb;color:#7d7163}.studio-launch-grid button strong{color:#ba6951}.consumer-shell.immersive-shell .market-discovery{margin:0;padding:19px;border:1px solid rgba(133,120,102,.15);border-radius:24px;background:rgba(255,253,249,.72);color:var(--ink);box-shadow:0 12px 34px rgba(70,56,39,.045)}.discovery-heading span{color:var(--celadon-deep)}.discovery-heading b{font-family:var(--song);font-size:21px;font-weight:650}.discovery-heading small{color:#8d8378}.channel-card{border-color:#e8e0d5;background:#fffefa;box-shadow:0 5px 15px rgba(72,59,42,.035)}.channel-mark{background:linear-gradient(145deg,#e9f0e9,#a8bdaf);color:#4c675c}.channel-card:nth-child(2) .channel-mark{background:linear-gradient(145deg,#f1e2d7,#c98c76);color:#714839}.channel-card:nth-child(3) .channel-mark{background:linear-gradient(145deg,#f1ead8,#c9ae78);color:#6f5935}.channel-card span{color:#7c998c}.channel-card b{color:#39342f}.channel-card p{color:#7b7268}.channel-card em{background:#f1f5ed;color:#607a6d}.channel-card small{color:#9a705e}.proof-cases{border:1px solid #e8e0d5;background:#fffefa}.proof-cases>span{color:#668175}.proof-cases i{background:#edf3ec;color:#6a897b}.proof-cases em{color:#688678}.consumer-shell.immersive-shell .studio-overview{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.studio-overview article{border:1px solid #e4ddd2;border-radius:17px;background:rgba(255,253,249,.78);box-shadow:none}.studio-overview span{color:#948171}.studio-overview b{font-family:var(--song);color:#3d3730}.studio-overview p,.studio-overview small{color:#867b70}.studio-overview button{color:#8c5e4d}
+
+@keyframes sealPress{0%,100%{transform:rotate(-8deg) scale(.88);opacity:.68}50%{transform:rotate(-8deg) scale(1);opacity:1}}@keyframes sealLine{0%,100%{transform:scaleX(.42);opacity:.4}50%{transform:scaleX(1);opacity:.85}}
+@media(hover:hover){.atelier-generate:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 15px 26px rgba(45,40,35,.23)}.atelier-generate:hover .brush-stroke{transform:rotate(-10deg) translateX(145%)}.atelier-pattern-card:hover{transform:translateY(-3px);border-color:var(--pattern-color);box-shadow:0 12px 22px color-mix(in srgb,var(--pattern-color) 16%,transparent)}.studio-launch-grid button:hover{transform:translateY(-3px);box-shadow:0 12px 22px rgba(72,59,42,.1)}}
+@media(max-width:760px){.consumer-shell.immersive-shell .studio-hero{padding:24px 19px 23px}.studio-hero h1{font-size:33px}.studio-hero p{max-width:28ch;font-size:13px}.studio-hero-art{right:-3%;bottom:-2%;width:180px;height:154px;opacity:.54}.art-tile{padding:11px;border-radius:17px}.tile-one{width:70px;height:76px}.tile-two{width:78px;height:83px}.atelier-workbench{padding:15px;border-radius:22px}.atelier-heading{display:block}.atelier-device-note{justify-content:flex-start;max-width:none;margin-top:10px}.atelier-canvas-grid{grid-template-columns:1fr}.atelier-preview-stage{min-height:275px}.atelier-material-layout{grid-template-columns:1fr}.atelier-glaze-visual{min-height:142px}.atelier-finish-controls{grid-template-columns:repeat(3,1fr);gap:8px}.atelier-finish-controls label{gap:7px}.atelier-section-heading>small{display:none}.consumer-shell.immersive-shell .studio-overview{grid-template-columns:1fr}.studio-launch-grid{grid-template-columns:1fr}.consumer-shell.immersive-shell .market-discovery{padding:16px}.channel-card-row{grid-template-columns:1fr}.proof-board{grid-template-columns:1fr}.consumer-shell.immersive-shell .quick-tabs{border:1px solid rgba(99,87,71,.14);background:rgba(255,253,249,.93);box-shadow:0 14px 37px rgba(61,50,37,.16)}.consumer-shell.immersive-shell .quick-tabs button.active{background:#38332e}}
+@media(max-width:430px){.studio-hero h1{font-size:30px}.studio-hero-actions{gap:7px}.studio-main-action{padding:0 13px}.atelier-heading h2{font-size:23px}.atelier-compose-card{padding:14px}.atelier-preview-stage{min-height:235px}.atelier-finish-controls{grid-template-columns:1fr}.atelier-glaze-visual{min-height:130px}.atelier-material-options button small{white-space:normal}.atelier-pattern-card{flex-basis:132px;min-height:155px}}
+@media(prefers-reduced-motion:reduce){.atelier-seal-loader span,.atelier-seal-loader i{animation:none}.atelier-generate,.atelier-pattern-card,.studio-launch-grid button,.brush-stroke{transition:none}}
+
+/* First-touch and existing functional panels: retain their flows, remove the old dark-tech skin. */
+.consumer-shell.immersive-shell .purpose-gate{color:var(--ink)!important;background:radial-gradient(circle at 8% 7%,rgba(143,165,154,.28),transparent 29%),radial-gradient(circle at 91% 92%,rgba(185,102,79,.16),transparent 32%),linear-gradient(145deg,#f7f3ed,#e9e1d6)!important}.consumer-shell.immersive-shell .purpose-gate::before,.consumer-shell.immersive-shell .purpose-gate::after{opacity:.55!important;background:radial-gradient(circle,rgba(96,82,67,.08),transparent 68%)!important;mask-image:none!important;animation:none!important}.consumer-shell.immersive-shell .purpose-card{color:var(--ink)!important;background:rgba(255,253,249,.88)!important;border-color:rgba(117,99,81,.16)!important;box-shadow:0 24px 70px rgba(72,52,35,.12)!important}.consumer-shell.immersive-shell .purpose-brand span,.consumer-shell.immersive-shell .purpose-brand small,.consumer-shell.immersive-shell .purpose-brand em,.consumer-shell.immersive-shell .purpose-card>p,.consumer-shell.immersive-shell .purpose-step,.consumer-shell.immersive-shell .purpose-footnote,.consumer-shell.immersive-shell .purpose-back{color:#7c7267!important}.consumer-shell.immersive-shell .purpose-card h1{font-family:var(--song)!important;color:var(--ink)!important}.consumer-shell.immersive-shell .purpose-card h1 strong{color:var(--terracotta)!important}.consumer-shell.immersive-shell .purpose-options button{border-color:var(--line)!important;background:linear-gradient(145deg,#fffdfa,#f3ede5)!important;color:var(--ink)!important;box-shadow:0 12px 30px rgba(71,50,31,.075)!important}.consumer-shell.immersive-shell .purpose-options button:nth-child(2){background:linear-gradient(145deg,#f6f8f2,#e4eee6)!important}.consumer-shell.immersive-shell .purpose-options button::after{color:var(--terracotta)!important;background:none!important}.consumer-shell.immersive-shell .purpose-options i{background:#f7ebe3!important;color:#9d5843!important}.consumer-shell.immersive-shell .purpose-options span{color:#756b61!important}.consumer-shell.immersive-shell .purpose-options em{color:var(--terracotta)!important}.consumer-shell.immersive-shell .purpose-museum-select{border-color:var(--line)!important;background:#f8f4ee!important}.consumer-shell.immersive-shell .purpose-confirm{background:var(--terracotta)!important;color:#fff!important;box-shadow:0 12px 24px rgba(152,75,55,.18)!important}
+.consumer-shell.immersive-shell .creation-spotlight,.consumer-shell.immersive-shell .model-redesign .creation-spotlight{color:var(--ink)!important;background:linear-gradient(135deg,#faf6ef,#e9e2d8)!important}.consumer-shell.immersive-shell .creation-spotlight span,.consumer-shell.immersive-shell .model-redesign .creation-spotlight>div>span{color:var(--terracotta)!important}.consumer-shell.immersive-shell .creation-spotlight h2{font-family:var(--song)!important;color:var(--ink)!important}.consumer-shell.immersive-shell .creation-spotlight h2 strong{color:var(--terracotta)!important}.consumer-shell.immersive-shell .creation-spotlight p,.consumer-shell.immersive-shell .creation-spotlight aside small{color:#7b7166!important}.consumer-shell.immersive-shell .creation-spotlight aside{border-color:rgba(88,114,102,.18)!important;background:rgba(255,253,249,.76)!important}.consumer-shell.immersive-shell .creation-spotlight aside span{color:var(--celadon-deep)!important}.consumer-shell.immersive-shell .choice-grid button.active,.consumer-shell.immersive-shell .choice-grid .doubao-choice.active,.consumer-shell.immersive-shell .model-mode-switch button.active,.consumer-shell.immersive-shell .material-chips button.active,.consumer-shell.immersive-shell .model-template-picker button.active,.consumer-shell.immersive-shell .brief-selectors button.active{background:var(--celadon-deep)!important;border-color:var(--celadon-deep)!important;color:#fff!important;box-shadow:0 7px 16px rgba(83,104,94,.18)!important}.consumer-shell.immersive-shell .product-brief{border-color:rgba(83,104,94,.18)!important;background:linear-gradient(135deg,#f8fbf6,#fffaf4)!important}.consumer-shell.immersive-shell .product-brief-title span{color:var(--terracotta)!important}.consumer-shell.immersive-shell .product-brief aside,.consumer-shell.immersive-shell .model-guidance{background:linear-gradient(145deg,#edf3ed,#dce9df)!important;color:#33473c!important}.consumer-shell.immersive-shell .product-brief aside p,.consumer-shell.immersive-shell .product-brief aside small,.consumer-shell.immersive-shell .model-guidance li,.consumer-shell.immersive-shell .model-guidance p{color:#586b61!important}.consumer-shell.immersive-shell .model-guidance>span,.consumer-shell.immersive-shell .model-guidance li::before{color:var(--celadon-deep)!important}.consumer-shell.immersive-shell .image-submit{background:linear-gradient(135deg,#6d4032,#b9664f)!important}.consumer-shell.immersive-shell .model-submit{background:linear-gradient(135deg,#3d6255,#739887)!important}.consumer-shell.immersive-shell .generation-stage .stage-orbit{display:grid!important;place-items:center;border:1px solid rgba(152,75,55,.46);border-radius:5px!important;background:#fffaf4!important;animation:sealPulseLegacy 1.45s ease-in-out infinite!important}.consumer-shell.immersive-shell .generation-stage .stage-orbit::before{content:"制";color:var(--terracotta);font-family:var(--song);font-size:17px;font-weight:900}.consumer-shell.immersive-shell .generation-stage .stage-orbit i{display:none!important}@keyframes sealPulseLegacy{50%{transform:rotate(-4deg) scale(.93);opacity:.68}}
+</style>
