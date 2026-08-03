@@ -22,7 +22,7 @@ const creationPurpose = ref<CreationPurpose>('')
 const purposeGate = ref<HTMLElement | null>(null)
 const purposeStep = ref<'purpose' | 'museum'>('purpose')
 const selectedPurposeMuseum = ref<any | null>(null)
-const purposeRegion = ref('')
+const purposeProvince = ref('')
 function recommendationForMuseum(museum: any) {
   if (!museum) return null
   if (museum.recommendation) return museum.recommendation
@@ -78,7 +78,7 @@ const submittedAssetIds = ref<Set<number>>(new Set())
 const submittingAssetIds = ref<Set<number>>(new Set())
 const productionRequests = ref<any[]>([])
 const museums = ref<any[]>([])
-const museumRegion = reactive({ province: '', city: '' })
+const museumRegion = reactive({ province: '' })
 const productionModal = ref<any | null>(null)
 const submittingProduction = ref(false)
 const productionForm = reactive({
@@ -240,25 +240,8 @@ const imageCost = computed(() => Number(creditRules.value?.image2d ?? 1))
 const modelCost = computed(() => modelForm.mode === 'text_to_model' ? Number(creditRules.value?.textTo3d ?? 60) : Number(creditRules.value?.imageTo3d ?? 70))
 const convertCost = computed(() => Number(creditRules.value?.modelConvert ?? 1))
 const museumProvinces = computed(() => [...new Set(museums.value.map(m => m.province).filter(Boolean))])
-const museumCities = computed(() => [...new Set(museums.value.filter(m => !museumRegion.province || m.province === museumRegion.province).map(m => m.city).filter(Boolean))])
-const filteredMuseums = computed(() => museums.value.filter(m =>
-  (!museumRegion.province || m.province === museumRegion.province) &&
-  (!museumRegion.city || m.city === museumRegion.city)
-))
-const purposeRegions = computed(() => {
-  const seen = new Set<string>()
-  return museums.value.reduce<Array<{ value: string; label: string; province: string; city: string }>>((items, museum) => {
-    const province = String(museum.province || '')
-    const city = String(museum.city || '')
-    const value = `${province}${city}`
-    if (province && city && !seen.has(value)) { seen.add(value); items.push({ value, label: `${province} · ${city}`, province, city }) }
-    return items
-  }, [])
-})
-const purposeMuseums = computed(() => {
-  const region = purposeRegions.value.find(item => item.value === purposeRegion.value)
-  return region ? museums.value.filter(museum => museum.province === region.province && museum.city === region.city) : []
-})
+const filteredMuseums = computed(() => museums.value.filter(m => m.province === museumRegion.province))
+const purposeMuseums = computed(() => museums.value.filter(museum => museum.province === purposeProvince.value))
 const selectedPurposeLabel = computed(() => purposeOptions.find(x => x.value === creationPurpose.value)?.title || '')
 const selectedPurposeFullText = computed(() => creationPurpose.value === 'personal' ? '个人收藏/送礼（不可售卖）' : creationPurpose.value === 'museum_sale' ? '售卖（景区、博物馆）' : '未选择')
 const reviewFlowTitle = computed(() => creationPurpose.value === 'museum_sale' ? '博物馆审批' : '作品审核')
@@ -359,11 +342,15 @@ function selectCreationPurpose(value: 'personal' | 'museum_sale') {
   document.body.style.overflow = ''
   emit('alert', `已选择创作目的：${selectedPurposeFullText.value}`, 'success')
 }
-function backToPurposeChoice() { purposeStep.value = 'purpose' }
-function changePurposeRegion() {
+function backToPurposeChoice() {
+  purposeStep.value = 'purpose'
   selectedPurposeMuseum.value = null
+  purposeProvince.value = ''
   museumRegion.province = ''
-  museumRegion.city = ''
+  productionForm.museumDistribution = []
+}
+function changePurposeProvince() {
+  selectedPurposeMuseum.value = null
   productionForm.museumDistribution = []
 }
 function confirmMuseumPurpose() {
@@ -489,6 +476,9 @@ function changeCreationPurpose() {
   creationPurpose.value = ''
   purposeStep.value = 'purpose'
   selectedPurposeMuseum.value = null
+  purposeProvince.value = ''
+  museumRegion.province = ''
+  productionForm.museumDistribution = []
   document.body.style.overflow = 'hidden'
   window.scrollTo({ top: 0, behavior: 'smooth' })
   nextTick(() => purposeGate.value?.focus())
@@ -683,13 +673,8 @@ function productionStatusClass(v?: string) { const st=String(v || 'review'); ret
 function isMuseumSalePurpose() { return creationPurpose.value === 'museum_sale' }
 
 function ensureSingleMuseumSelection() {
-  if (!isMuseumSalePurpose()) return
-  if (!productionForm.museumDistribution.length) {
-    const firstMuseum = filteredMuseums.value[0] || museums.value[0]
-    if (firstMuseum) {
-      selectMuseum(firstMuseum)
-    }
-  }
+  if (!isMuseumSalePurpose() || productionForm.museumDistribution.length) return
+  if (selectedPurposeMuseum.value) selectMuseum(selectedPurposeMuseum.value)
 }
 
 function currentMuseumDistribution() {
@@ -697,7 +682,7 @@ function currentMuseumDistribution() {
   ensureSingleMuseumSelection()
   const row = productionForm.museumDistribution[0]
   if (!row?.museumId) return []
-  const known = museums.value.find(m => m.id === row.museumId)
+  const known = museums.value.find(m => String(m.id) === String(row.museumId))
   return [{
     museumId: row.museumId,
     museumName: known?.name || row.museumName || '博物馆',
@@ -1080,9 +1065,11 @@ function openProductionRequest(a: any, type: 'sample' | 'bulk') {
   productionForm.recipientPhone = ''
   productionForm.recipientAddress = ''
   productionForm.note = type === 'sample' ? `创作目的：${selectedPurposeFullText.value}。希望先打样确认材质、尺寸和包装效果` : `创作目的：${selectedPurposeFullText.value}。计划按所选用途执行，不做个人/博物馆拆分`
-  const firstMuseum = filteredMuseums.value[0] || museums.value[0]
   productionForm.museumDistribution = []
-  if (isMuseumSalePurpose() && firstMuseum) selectMuseum(firstMuseum)
+  if (isMuseumSalePurpose()) {
+    productionForm.museumDistribution = [{ museumId: '', museumName: '', quantity: Number(productionForm.quantity || 0) }]
+    if (selectedPurposeMuseum.value) selectMuseum(selectedPurposeMuseum.value)
+  }
   document.body.style.overflow = 'hidden'
 }
 
@@ -1094,24 +1081,15 @@ function closeProductionRequest() {
 function selectMuseum(found: any) {
   if (!found) return
   selectedPurposeMuseum.value = found
+  purposeProvince.value = found.province || ''
   museumRegion.province = found.province || ''
-  museumRegion.city = found.city || ''
   productionForm.museumDistribution = [{ museumId: found.id, museumName: found.name, quantity: Number(productionForm.quantity || 0) }]
 }
-function selectFirstMuseumInRegion() {
-  const found = filteredMuseums.value[0]
-  if (found) selectMuseum(found)
-  else productionForm.museumDistribution = []
-}
 function changeMuseumProvince() {
-  museumRegion.city = ''
-  selectFirstMuseumInRegion()
-}
-function changeMuseumCity() {
-  selectFirstMuseumInRegion()
+  productionForm.museumDistribution = [{ museumId: '', museumName: '', quantity: Number(productionForm.quantity || 0) }]
 }
 function changeMuseum(row: any) {
-  const found = museums.value.find(m => m.id === row.museumId)
+  const found = museums.value.find(m => String(m.id) === String(row.museumId))
   if (found) selectMuseum(found)
 }
 
@@ -1264,11 +1242,11 @@ function closeModelPreview() {
           <button type="button" class="purpose-back" @click="backToPurposeChoice">← 返回作品去向</button>
           <div class="purpose-step"><span>02</span><i></i><b>选择合作博物馆</b><small>获取渠道策略建议</small></div>
           <h1 id="purpose-gate-title">选对渠道，<strong>让好作品被看见。</strong></h1>
-          <p>只需选择省 / 市与博物馆名称，即可查看客流、竞争、爆款潜力及优缺点建议。</p>
+          <p>只需选择省份与博物馆名称，即可查看客流、竞争、爆款潜力及优缺点建议。</p>
           <div class="purpose-museum-layout">
             <div class="purpose-museum-select purpose-museum-select-simple">
-              <label><span>省 / 市</span><select v-model="purposeRegion" @change="changePurposeRegion"><option value="">请选择省 / 市</option><option v-for="region in purposeRegions" :key="region.value" :value="region.value">{{ region.label }}</option></select></label>
-              <label><span>博物馆名称</span><select v-model="selectedPurposeMuseum" :disabled="!purposeMuseums.length" @change="selectMuseum(selectedPurposeMuseum)"><option :value="null">请选择博物馆</option><option v-for="museum in purposeMuseums" :key="museum.id" :value="museum">{{ museum.name }}</option></select></label>
+              <label><span>省份 / 直辖市</span><select v-model="purposeProvince" @change="changePurposeProvince"><option value="">请选择省份 / 直辖市</option><option v-for="province in museumProvinces" :key="province" :value="province">{{ province }}</option></select></label>
+              <label><span>博物馆名称</span><select v-model="selectedPurposeMuseum" :disabled="!purposeProvince || !purposeMuseums.length" @change="selectMuseum(selectedPurposeMuseum)"><option :value="null">请选择该省博物馆</option><option v-for="museum in purposeMuseums" :key="museum.id" :value="museum">{{ museum.name }} · {{ museum.city }}</option></select></label>
             </div>
             <aside class="museum-recommendation" aria-live="polite">
               <template v-if="selectedMuseumRecommendation">
@@ -1278,7 +1256,7 @@ function closeModelPreview() {
                 <p><strong>注意：</strong>{{ selectedMuseumRecommendation.risks }}</p>
                 <small>{{ selectedMuseumRecommendation.disclaimer }}</small>
               </template>
-              <template v-else><div class="museum-recommendation-head"><span>推荐博物馆卡片</span><b>待选择</b></div><p>先选择“省 / 市”和博物馆名称，系统会在这里显示该渠道的客流、竞争、爆款潜力，以及优缺点建议。</p></template>
+              <template v-else><div class="museum-recommendation-head"><span>推荐博物馆卡片</span><b>待选择</b></div><p>先选择省份和该省博物馆，系统会在这里显示该渠道的客流、竞争、爆款潜力，以及优缺点建议。</p></template>
             </aside>
           </div>
           <button type="button" class="purpose-confirm" :disabled="!selectedPurposeMuseum" @click="confirmMuseumPurpose">确认并进入创作</button>
@@ -1579,13 +1557,12 @@ function closeModelPreview() {
               <div class="dist-head"><b>选择投放博物馆</b><small>全部 {{ productionForm.quantity || 0 }} 个</small></div>
               <div class="museum-location-select">
                 <select v-model="museumRegion.province" @change="changeMuseumProvince"><option value="">省 / 直辖市</option><option v-for="province in museumProvinces" :key="province" :value="province">{{ province }}</option></select>
-                <select v-model="museumRegion.city" :disabled="!museumRegion.province" @change="changeMuseumCity"><option value="">市</option><option v-for="city in museumCities" :key="city" :value="city">{{ city }}</option></select>
               </div>
               <div v-if="productionForm.museumDistribution[0]" class="dist-row single museum-final-select">
-                <select v-model="productionForm.museumDistribution[0].museumId" @change="changeMuseum(productionForm.museumDistribution[0])"><option v-for="m in filteredMuseums" :key="m.id" :value="m.id">{{ m.name }} · {{ m.scene }}</option></select>
+                <select v-model="productionForm.museumDistribution[0].museumId" :disabled="!museumRegion.province || !filteredMuseums.length" @change="changeMuseum(productionForm.museumDistribution[0])"><option value="">请选择该省博物馆</option><option v-for="m in filteredMuseums" :key="m.id" :value="m.id">{{ m.name }} · {{ m.city }} · {{ m.scene }}</option></select>
               </div>
-              <p v-if="productionForm.museumDistribution[0]" class="museum-selection-tip">将投放至：{{ productionForm.museumDistribution[0].museumName }}（{{ museumRegion.province }} {{ museumRegion.city }}）</p>
-              <p v-else class="alloc-tip bad">当前区域暂无可选博物馆，请调整省、市。</p>
+              <p v-if="productionForm.museumDistribution[0]?.museumName" class="museum-selection-tip">将投放至：{{ productionForm.museumDistribution[0].museumName }}（{{ museumRegion.province }} · {{ selectedPurposeMuseum?.city }} · {{ selectedPurposeMuseum?.district }}）</p>
+              <p v-else class="alloc-tip bad">请先选择省份，再选择该省博物馆。</p>
             </template>
             <template v-if="creationPurpose === 'personal'">
               <label><span>收件人</span><input v-model.trim="productionForm.recipientName" placeholder="收件人姓名" /></label>
@@ -2770,7 +2747,7 @@ function closeModelPreview() {
 </style>
 
 <style scoped>
-.museum-location-select{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}.museum-location-select select,.museum-final-select select{width:100%;min-width:0}.museum-selection-tip{margin:9px 0 0;padding:9px 11px;border-radius:12px;background:#f0fdfa;color:#047857;font-size:12px;line-height:1.45;font-weight:700}.museum-final-select{grid-template-columns:1fr !important}@media(max-width:420px){.museum-location-select{grid-template-columns:1fr}.museum-location-select select{height:39px}}
+.museum-location-select{display:grid;grid-template-columns:1fr;gap:8px;margin:10px 0}.museum-location-select select,.museum-final-select select{width:100%;min-width:0}.museum-selection-tip{margin:9px 0 0;padding:9px 11px;border-radius:12px;background:#f0fdfa;color:#047857;font-size:12px;line-height:1.45;font-weight:700}.museum-final-select{grid-template-columns:1fr !important}@media(max-width:420px){.museum-location-select{grid-template-columns:1fr}.museum-location-select select{height:39px}}
 </style>
 
 <style scoped>
