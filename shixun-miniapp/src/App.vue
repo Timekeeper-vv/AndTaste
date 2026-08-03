@@ -6,7 +6,7 @@ onLaunch(() => {
   restoreSession()
     .then(() => {
       const target = sessionStartRoute()
-      // login 是 pages.json 的启动页；启动后按本地会话恢复到用户应在的页面。
+      // 用户端统一由网页端承载；本地令牌只用于 web-view 启动时的一次性引导。
       setTimeout(() => uni.reLaunch({ url: target }), 0)
     })
     .catch(() => undefined)

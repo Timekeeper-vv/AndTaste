@@ -1,5 +1,6 @@
 {
   "pages": [
+    { "path": "pages/webview/index", "style": { "navigationStyle": "custom", "disableScroll": true } },
     { "path": "pages/login/index", "style": { "navigationStyle": "custom" } },
     { "path": "pages/home/index", "style": { "navigationBarTitleText": "之间智造", "navigationBarBackgroundColor": "#fffaf5" } },
     { "path": "pages/purpose/index", "style": { "navigationStyle": "custom" } },

@@ -2,6 +2,12 @@ import { createApp } from 'vue'
 import './style.css'
 import './shared.css'
 import App from './App.vue'
+import { bootstrapEmbeddedSession } from './utils/miniappBridge'
+
+// Must run before App.restoreSession() so a mini-program web-view can reuse
+// the same consumer H5 interface and authenticated API flow.  The bootstrap
+// token is consumed from the URL fragment and removed immediately.
+bootstrapEmbeddedSession()
 
 const nativeFetch = window.fetch.bind(window)
 const publicApiPaths = ['/api/users/login']

@@ -34,6 +34,7 @@ import ConsumerWorksReview from './components/ConsumerWorksReview.vue'
 import ConsumerAssetInventory from './components/ConsumerAssetInventory.vue'
 import ConsumerCreditManagement from './components/ConsumerCreditManagement.vue'
 import ConsumerProductionReview from './components/ConsumerProductionReview.vue'
+import { isEmbeddedMiniapp, notifyMiniapp } from './utils/miniappBridge'
 
 // 角色兼容说明：
 // admin      = 超级管理员：拥有全部功能，包括账号权限、审批和系统配置
@@ -145,12 +146,27 @@ async function restoreSession(): Promise<void> {
     const response = await fetch('/api/auth/me', { cache: 'no-store' })
     if (!response.ok) throw new Error('session invalid')
     const data = await response.json()
+    if (isEmbeddedMiniapp() && data.user?.role !== 'user') {
+      // The embedded entry is intentionally a consumer-only surface.  Do not
+      // let a cached staff/admin JWT turn the mini-program into a back-office
+      // console just because the same H5 bundle serves both audiences.
+      sessionStorage.removeItem('accessToken')
+      sessionStorage.removeItem('currentUser')
+      localStorage.removeItem('accessToken')
+      localStorage.removeItem('currentUser')
+      showAlert('微信小程序仅支持用户端账号，请使用 user 账号登录', 'error')
+      return
+    }
     currentUser.value = data.user as User
     sessionStorage.setItem('currentUser', JSON.stringify(data.user))
     currentPage.value = firstAllowedPage(data.user.role || 'admin')
   } catch {
     sessionStorage.removeItem('accessToken')
     sessionStorage.removeItem('currentUser')
+    if (isEmbeddedMiniapp()) {
+      localStorage.removeItem('accessToken')
+      localStorage.removeItem('currentUser')
+    }
   }
 }
 
@@ -176,16 +192,36 @@ function showAlert(msg: string, type: AlertType = 'success'): void {
 }
 
 function onLogin(session: AuthSession): void {
+  if (isEmbeddedMiniapp() && session.user?.role !== 'user') {
+    sessionStorage.removeItem('accessToken')
+    sessionStorage.removeItem('currentUser')
+    localStorage.removeItem('accessToken')
+    localStorage.removeItem('currentUser')
+    notifyMiniapp('AUTH_LOGOUT')
+    showAlert('微信小程序仅支持用户端账号，请使用 user 账号登录', 'error')
+    return
+  }
   currentUser.value = session.user
   sessionStorage.setItem('accessToken', session.token)
   sessionStorage.setItem('currentUser', JSON.stringify(session.user))
+  if (isEmbeddedMiniapp()) {
+    localStorage.setItem('accessToken', session.token)
+    localStorage.setItem('currentUser', JSON.stringify(session.user))
+  }
   currentPage.value = firstAllowedPage(session.user.role || 'admin')
 }
 
 function onLogout(): void {
+  // If this H5 surface is embedded by the mini-program, let the native shell
+  // clear its own session as well.  Browser sessionStorage is isolated from
+  // `uni` storage, so clearing only one side would otherwise re-inject a stale
+  // token the next time the web-view is opened.
+  notifyMiniapp('AUTH_LOGOUT')
   currentUser.value = null
   sessionStorage.removeItem('accessToken')
   sessionStorage.removeItem('currentUser')
+  localStorage.removeItem('accessToken')
+  localStorage.removeItem('currentUser')
 }
 
 const pageLabels: Record<string, string> = {
