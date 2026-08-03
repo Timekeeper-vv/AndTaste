@@ -1,3 +1,130 @@
-<template><view class="page"><view class="profile"><view class="avatar">{{ user?.username?.slice(0,1).toUpperCase() }}</view><view><text class="name">{{ user?.username }}</text><text class="role">创作用户</text></view></view><view class="card"><view @tap="go('/pages/works/index')">我的作品 <text>›</text></view><view @tap="go('/pages/recharge/index')">积分充值 <text>›</text></view><view @tap="go('/pages/purpose/index')">切换创作用途 <text>›</text></view></view><button class="logout" @tap="logout">退出登录</button></view></template>
-<script setup lang="ts">import { ref } from 'vue';import { clearSession,getSession } from '../../utils/session';const user=ref(getSession()?.user);const go=(url:string)=>uni.navigateTo({url});function logout(){uni.showModal({title:'退出登录',content:'确定退出当前账号吗？',success:r=>{if(r.confirm){clearSession();uni.reLaunch({url:'/pages/login/index'})}}})}</script>
-<style scoped lang="scss">.page{min-height:100vh;padding:64rpx 34rpx}.profile{display:flex;align-items:center;gap:22rpx;padding:28rpx 12rpx 45rpx}.avatar{width:100rpx;height:100rpx;line-height:100rpx;text-align:center;border-radius:50%;background:#943b22;color:#fff;font-size:42rpx;font-weight:800}.name,.role{display:block}.name{font-size:38rpx;font-weight:800}.role{font-size:22rpx;color:#967b6d;margin-top:10rpx}.card{background:#fff;border-radius:24rpx;padding:0 28rpx}.card view{padding:31rpx 0;border-bottom:1rpx solid #f0e6e0;font-size:29rpx}.card view:last-child{border:0}.card text{float:right;color:#a4482a}.logout{margin-top:48rpx;background:#f5e5dc;color:#903d24;border-radius:46rpx;height:90rpx;line-height:90rpx;font-size:28rpx}</style>
+<template>
+  <view class="page">
+    <view class="ink-wash ink-wash-one" />
+    <view class="ink-wash ink-wash-two" />
+
+    <view class="profile-hero">
+      <view class="seal-avatar">{{ displayName.slice(0, 1).toUpperCase() }}</view>
+      <view class="identity">
+        <text class="eyebrow">MY ATELIER</text>
+        <text class="name">{{ displayName }}</text>
+        <text class="role">创作用户 · 灵感与作品都在这里沉淀</text>
+      </view>
+    </view>
+
+    <view class="welcome-card">
+      <view>
+        <text class="welcome-kicker">之间智造 · 创作服务</text>
+        <text class="welcome-title">把一个灵感，慢慢做成一件好作品。</text>
+      </view>
+      <text class="welcome-seal">印</text>
+    </view>
+
+    <view class="section-heading">
+      <text>创作与账户</text>
+      <text>ACCOUNT</text>
+    </view>
+    <view class="menu-card">
+      <view class="menu-row" @tap="go('/pages/works/index')">
+        <view class="menu-icon artwork">作</view>
+        <view class="menu-copy"><text>我的作品</text><text>查看创作成果与审核状态</text></view>
+        <text class="arrow">›</text>
+      </view>
+      <view class="menu-row" @tap="go('/pages/recharge/index')">
+        <view class="menu-icon credit">点</view>
+        <view class="menu-copy"><text>积分充值</text><text>管理创作所需积分</text></view>
+        <text class="arrow">›</text>
+      </view>
+      <view class="menu-row" @tap="go('/pages/purpose/index')">
+        <view class="menu-icon purpose">向</view>
+        <view class="menu-copy"><text>切换创作用途</text><text>个人收藏或景区、博物馆售卖</text></view>
+        <text class="arrow">›</text>
+      </view>
+    </view>
+
+    <view class="section-heading service-heading">
+      <text>服务与保障</text>
+      <text>CARE &amp; RIGHTS</text>
+    </view>
+    <view class="menu-card service-card">
+      <view class="menu-row" @tap="go('/pages/support/index?tab=chat')">
+        <view class="menu-icon service">问</view>
+        <view class="menu-copy"><text>在线客服</text><text>查看历史消息，咨询创作、生产与订单</text></view>
+        <view class="service-badge">在线</view>
+        <text class="arrow">›</text>
+      </view>
+      <view class="menu-row" @tap="go('/pages/support/index?tab=rights')">
+        <view class="menu-icon rights">权</view>
+        <view class="menu-copy"><text>版权咨询</text><text>为作品登记著作权、专利或 IP 咨询</text></view>
+        <text class="arrow">›</text>
+      </view>
+    </view>
+
+    <button class="logout" @tap="logout">退出当前账号</button>
+  </view>
+</template>
+
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { clearSession, getSession } from '../../utils/session'
+
+const user = ref(getSession()?.user)
+const displayName = computed(() => user.value?.username || '创作用户')
+const go = (url: string) => uni.navigateTo({ url })
+
+function logout() {
+  uni.showModal({
+    title: '退出登录',
+    content: '退出后需要重新登录才能继续管理作品和服务咨询，确定退出吗？',
+    success: result => {
+      if (!result.confirm) return
+      clearSession()
+      uni.reLaunch({ url: '/pages/login/index' })
+    },
+  })
+}
+</script>
+
+<style scoped lang="scss">
+.page {
+  position: relative;
+  min-height: 100vh;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 58rpx 32rpx calc(68rpx + env(safe-area-inset-bottom));
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, .8), rgba(245, 240, 230, .92)),
+    #f7f3ed;
+}
+.ink-wash { position: absolute; border-radius: 999rpx; pointer-events: none; filter: blur(2rpx); }
+.ink-wash-one { top: -116rpx; right: -116rpx; width: 420rpx; height: 360rpx; opacity: .68; background: radial-gradient(ellipse, rgba(113, 143, 128, .2) 0%, rgba(113, 143, 128, .04) 48%, transparent 72%); transform: rotate(-24deg); }
+.ink-wash-two { left: -220rpx; bottom: 130rpx; width: 460rpx; height: 280rpx; opacity: .6; background: radial-gradient(ellipse, rgba(177, 111, 84, .12), transparent 67%); transform: rotate(17deg); }
+.profile-hero, .welcome-card, .section-heading, .menu-card, .logout { position: relative; z-index: 1; }
+.profile-hero { display: flex; align-items: center; gap: 23rpx; padding: 18rpx 7rpx 42rpx; }
+.seal-avatar { display: flex; align-items: center; justify-content: center; flex: none; width: 106rpx; height: 106rpx; border: 5rpx solid rgba(255, 255, 255, .74); border-radius: 36rpx 30rpx 38rpx 26rpx; color: #fffaf2; background: linear-gradient(145deg, #587669, #88a293); box-shadow: 0 15rpx 29rpx rgba(48, 78, 67, .23), inset 0 0 0 1rpx rgba(255, 255, 255, .28); font-family: "Songti SC", "STSong", serif; font-size: 47rpx; font-weight: 800; transform: rotate(-5deg); }
+.identity { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+.eyebrow { color: #81958b; font-size: 18rpx; font-weight: 800; letter-spacing: 2.1rpx; }
+.name { overflow: hidden; margin-top: 7rpx; color: #292c28; font-family: "Songti SC", "STSong", serif; font-size: 40rpx; font-weight: 800; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.role { margin-top: 10rpx; color: #7a8078; font-size: 22rpx; }
+.welcome-card { display: flex; align-items: center; justify-content: space-between; gap: 24rpx; overflow: hidden; box-sizing: border-box; min-height: 170rpx; padding: 29rpx 28rpx 27rpx; border: 1rpx solid rgba(100, 112, 94, .15); border-radius: 30rpx; background: linear-gradient(125deg, rgba(249, 252, 247, .97), rgba(232, 239, 231, .89)); box-shadow: 0 17rpx 38rpx rgba(57, 63, 50, .08); }
+.welcome-card::before { position: absolute; top: -35rpx; right: 32rpx; width: 188rpx; height: 156rpx; border: 1rpx solid rgba(107, 135, 116, .12); border-radius: 50%; content: ''; }
+.welcome-kicker { display: block; color: #6e8c7d; font-size: 19rpx; font-weight: 800; letter-spacing: 1.6rpx; }
+.welcome-title { display: block; max-width: 480rpx; margin-top: 11rpx; color: #31362f; font-family: "Songti SC", "STSong", serif; font-size: 31rpx; font-weight: 700; line-height: 1.45; }
+.welcome-seal { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; width: 53rpx; height: 53rpx; border: 2rpx solid rgba(154, 77, 52, .72); border-radius: 7rpx; color: #a4553c; font-family: "Songti SC", "STSong", serif; font-size: 27rpx; font-weight: 800; transform: rotate(-9deg); }
+.section-heading { display: flex; align-items: baseline; justify-content: space-between; margin: 43rpx 6rpx 17rpx; }
+.section-heading text:first-child { color: #3f453e; font-family: "Songti SC", "STSong", serif; font-size: 29rpx; font-weight: 800; }
+.section-heading text:last-child { color: #93a198; font-size: 17rpx; font-weight: 800; letter-spacing: 1.6rpx; }
+.service-heading { margin-top: 37rpx; }
+.menu-card { overflow: hidden; border: 1rpx solid rgba(116, 103, 83, .14); border-radius: 28rpx; background: rgba(255, 253, 249, .9); box-shadow: 0 13rpx 32rpx rgba(67, 53, 37, .055); }
+.menu-row { display: flex; align-items: center; min-height: 122rpx; padding: 0 24rpx; border-bottom: 1rpx solid #eee7de; }
+.menu-row:last-child { border-bottom: 0; }
+.menu-row:active { background: #f8f4ed; }
+.menu-icon { display: flex; align-items: center; justify-content: center; flex: none; width: 58rpx; height: 58rpx; margin-right: 19rpx; border-radius: 18rpx; font-family: "Songti SC", "STSong", serif; font-size: 27rpx; font-weight: 800; }
+.artwork { color: #55796a; background: #e8f0e9; }.credit { color: #b56b46; background: #f9ebdf; }.purpose { color: #8d7655; background: #f4efe2; }.service { color: #4f8374; background: #e4f2ed; }.rights { color: #a26047; background: #f6e9e2; }
+.menu-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+.menu-copy text:first-child { color: #33352f; font-size: 29rpx; font-weight: 700; }
+.menu-copy text:last-child { overflow: hidden; margin-top: 7rpx; color: #909087; font-size: 20rpx; text-overflow: ellipsis; white-space: nowrap; }
+.arrow { margin-left: 14rpx; color: #8ba094; font-size: 42rpx; font-weight: 300; line-height: 1; }
+.service-badge { margin-left: 10rpx; padding: 4rpx 10rpx; border-radius: 99rpx; color: #4a8370; background: #e5f5ed; font-size: 18rpx; font-weight: 800; }
+.logout { width: 100%; height: 91rpx; margin-top: 49rpx; border: 1rpx solid #ecdcd1; border-radius: 22rpx; color: #a3654d; background: rgba(250, 242, 236, .9); font-size: 27rpx; }
+</style>

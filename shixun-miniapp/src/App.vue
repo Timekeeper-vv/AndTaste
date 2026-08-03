@@ -14,6 +14,10 @@ onLaunch(() => {
 </script>
 
 <style lang="scss">
-page { background: #fffaf5; color: #251b17; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+page {
+  background: #f7f3ed;
+  color: #292622;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
 button::after { border: none; }
 </style>

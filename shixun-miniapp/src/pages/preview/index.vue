@@ -82,3 +82,7 @@ onLoad((query: any) => {
 <style scoped lang="scss">
 .page{min-height:100vh;padding:130rpx 58rpx;text-align:center;box-sizing:border-box}.cube{width:210rpx;height:210rpx;margin:0 auto 48rpx;border-radius:32rpx;background:linear-gradient(145deg,#3a1d15,#b75632);color:#fff;display:flex;align-items:center;justify-content:center;font-size:56rpx;font-weight:800;box-shadow:26rpx 26rpx 0 #f0c5a6}.title{font-size:42rpx;font-weight:800;display:block}.description{display:block;color:#866c60;line-height:1.8;font-size:27rpx;margin:26rpx 0}.open{height:94rpx;line-height:94rpx;border-radius:48rpx;background:#953d24;color:#fff;font-size:29rpx}.open[disabled]{background:#c8afa1;color:#fff}.open-error{margin-top:22rpx;padding:20rpx;background:#fff0ec;border-radius:16rpx;color:#b04632;font-size:23rpx;line-height:1.6;text-align:left}.config-notice{margin-top:30rpx;padding:26rpx;background:#fff4e8;border-radius:20rpx;color:#9b7160;text-align:left;font-size:22rpx;line-height:1.7}.notice-title{display:block;color:#8e3e26;font-size:26rpx;font-weight:700;margin-bottom:8rpx}
 </style>
+
+<style scoped lang="scss">
+.page{background:radial-gradient(ellipse at 10% 0%,rgba(151,177,163,.18),transparent 29%),linear-gradient(180deg,#faf8f3,#f0e9df)}.cube{background:linear-gradient(145deg,#5b7b6d,#9fb7a9);box-shadow:26rpx 26rpx 0 #dde7dd}.title{font-family:"Songti SC","STSong",serif;color:#302b26}.description{color:#81776c}.open{border-radius:17rpx;background:linear-gradient(135deg,#3e3933,#617e71)}.config-notice{background:#f4efe7;color:#7f756b}.notice-title{color:#a4644f}
+</style>

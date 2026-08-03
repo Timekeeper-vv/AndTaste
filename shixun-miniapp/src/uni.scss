@@ -1,4 +1,14 @@
-$brand: #9d3f22;
-$brand-dark: #662312;
-$cream: #fffaf5;
-$ink: #251b17;
+$paper: #f7f3ed;
+$paper-strong: #fffdfa;
+$ink: #292622;
+$ink-soft: #7c7369;
+$celadon: #91a397;
+$celadon-deep: #5b776c;
+$terracotta: #b9664f;
+$gold: #c6a36d;
+$line: #e8ded1;
+
+// 保留旧变量名，避免后续页面或插件仍依赖它们。
+$brand: $terracotta;
+$brand-dark: #744133;
+$cream: $paper;

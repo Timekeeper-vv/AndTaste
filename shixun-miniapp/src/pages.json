@@ -1,20 +1,21 @@
 {
   "pages": [
     { "path": "pages/login/index", "style": { "navigationStyle": "custom" } },
-    { "path": "pages/home/index", "style": { "navigationBarTitleText": "之间智造", "navigationBarBackgroundColor": "#fffaf5" } },
+    { "path": "pages/home/index", "style": { "navigationBarTitleText": "之间智造", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/purpose/index", "style": { "navigationStyle": "custom" } },
-    { "path": "pages/create/index", "style": { "navigationBarTitleText": "AI 创作" } },
-    { "path": "pages/works/index", "style": { "navigationBarTitleText": "我的作品" } },
-    { "path": "pages/production/index", "style": { "navigationBarTitleText": "打样 / 生产申请" } },
-    { "path": "pages/recharge/index", "style": { "navigationBarTitleText": "积分充值" } },
-    { "path": "pages/profile/index", "style": { "navigationBarTitleText": "个人中心" } },
+    { "path": "pages/create/index", "style": { "navigationBarTitleText": "AI 创作", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/works/index", "style": { "navigationBarTitleText": "我的作品", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/production/index", "style": { "navigationBarTitleText": "打样 / 生产申请", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/recharge/index", "style": { "navigationBarTitleText": "积分充值", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/profile/index", "style": { "navigationBarTitleText": "个人中心", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/support/index", "style": { "navigationBarTitleText": "服务与版权咨询", "navigationBarBackgroundColor": "#f7f3ed", "enablePullDownRefresh": true, "backgroundTextStyle": "dark" } },
     { "path": "pages/preview/index", "style": { "navigationBarTitleText": "3D 模型预览" } },
     { "path": "pages/model-webview/index", "style": { "navigationBarTitleText": "3D 模型预览" } }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",
-    "navigationBarBackgroundColor": "#fffaf5",
-    "backgroundColor": "#fffaf5",
+    "navigationBarBackgroundColor": "#f7f3ed",
+    "backgroundColor": "#f7f3ed",
     "backgroundTextStyle": "light"
   }
 }
