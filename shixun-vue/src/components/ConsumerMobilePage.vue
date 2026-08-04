@@ -54,6 +54,7 @@ const creditRules = ref<any>({})
 const rewardOverview = ref<any>({ missions: [], campaign: null })
 const rewardBusy = ref('')
 const campaignAssetId = ref<number | null>(null)
+const selectedMissionKey = ref('first_image_success')
 const assets = ref<any[]>([])
 const imageResult = ref<any>(null)
 const doubaoMultiViewResult = ref<any[]>([])
@@ -304,10 +305,19 @@ const imageCost = computed(() => Number(creditRules.value?.image2d ?? 1))
 const modelCost = computed(() => modelForm.mode === 'text_to_model' ? Number(creditRules.value?.textTo3d ?? 60) : Number(creditRules.value?.imageTo3d ?? 70))
 const convertCost = computed(() => Number(creditRules.value?.modelConvert ?? 1))
 const rewardMissions = computed(() => Array.isArray(rewardOverview.value?.missions) ? rewardOverview.value.missions : [])
+const selectedMission = computed(() => rewardMissions.value.find(mission => mission.key === selectedMissionKey.value) || rewardMissions.value[0] || null)
 const activeCampaign = computed(() => rewardOverview.value?.campaign || null)
 const campaignCandidateAssets = computed(() => assets.value.filter(asset => ['image', 'model'].includes(String(asset.assetType || asset.asset_type || '')) && String(asset.status || asset.assetStatus || '') === 'review'))
 const rewardMissionStatusText: Record<string, string> = { in_progress: '待完成', claimable: '可领取', claimed: '已领取' }
 const campaignStatusText: Record<string, string> = { not_joined: '等待投稿', pending_review: '审核中', rewarded: '积分已到账', rejected: '未通过' }
+function missionIcon(key?: string) {
+  return key === 'first_image_success' ? '图' : key === 'first_model_success' ? '3D' : key === 'first_review_submit' ? '审' : key === 'first_approved_work' ? '过' : '样'
+}
+function missionActionLabel(mission: any) {
+  if (mission?.status === 'claimable') return '立即领取积分'
+  if (mission?.status === 'claimed') return '已完成'
+  return mission?.key === 'first_image_success' ? '立即去做 2D 生图' : mission?.key === 'first_model_success' ? '立即去做 3D 建模' : mission?.key === 'first_review_submit' ? '立即去提交审核' : mission?.key === 'first_approved_work' ? '查看审核进度' : '立即去申请打样'
+}
 const museumProvinces = computed(() => [...new Set(museums.value.map(m => m.province).filter(Boolean))])
 const filteredMuseums = computed(() => museums.value.filter(m => m.province === museumRegion.province))
 const purposeMuseums = computed(() => museums.value.filter(museum => museum.province === purposeProvince.value))
@@ -853,6 +863,31 @@ async function claimRewardMission(mission: any) {
     emit('alert', `领取任务奖励失败：${e?.message || e}`, 'error')
   } finally {
     rewardBusy.value = ''
+  }
+}
+
+function goSelectedMission() {
+  const mission = selectedMission.value
+  if (!mission || mission.status === 'claimed') return
+  if (mission.status === 'claimable') {
+    claimRewardMission(mission)
+    return
+  }
+  if (mission.key === 'first_image_success') {
+    switchTab('image')
+    emit('alert', '已进入 2D 生图。先选择产品与材质，再写下第一句创作想法。', 'success')
+  } else if (mission.key === 'first_model_success') {
+    switchTab('model')
+    emit('alert', '已进入 3D 建模。可以上传产品图，或直接从文字构建立体原型。', 'success')
+  } else if (mission.key === 'first_review_submit') {
+    switchTab('gallery')
+    emit('alert', '已打开作品库。选择一件未审核作品，点击“提交作品审核”。', 'success')
+  } else if (mission.key === 'first_approved_work') {
+    switchTab('gallery')
+    emit('alert', '已打开作品库。审核状态会显示在每件作品上，审核通过后即可领取任务积分。', 'success')
+  } else {
+    switchTab('gallery')
+    emit('alert', '已打开作品库。选择审核通过的 3D 作品后，可提交打样申请。', 'success')
   }
 }
 
@@ -1580,11 +1615,18 @@ function closeModelPreview() {
         </article>
 
         <section v-if="rewardMissions.length" class="first-creation-missions">
-          <header><div><span>FIRST MILESTONES</span><b>把第一次，变成下一次的底气。</b></div><small>任务依据真实创作记录结算</small></header>
-          <div class="mission-grid">
-            <article v-for="mission in rewardMissions" :key="mission.key" :class="`mission-${mission.status}`">
-              <div><i>{{ mission.key === 'first_image_success' ? '图' : mission.key === 'first_model_success' ? '3D' : '审' }}</i><span>{{ rewardMissionStatusText[mission.status] || mission.status }}</span></div>
-              <b>{{ mission.title }}</b><p>{{ mission.description }}</p><footer><strong>+{{ mission.rewardAmount }} 点</strong><button v-if="mission.status === 'claimable'" type="button" :disabled="rewardBusy === `mission:${mission.key}`" @click="claimRewardMission(mission)">{{ rewardBusy === `mission:${mission.key}` ? '领取中…' : '领取' }}</button><button v-else-if="mission.status === 'in_progress'" type="button" @click="mission.key === 'first_model_success' ? switchTab('model') : mission.key === 'first_review_submit' ? switchTab('gallery') : switchTab('image')">去完成</button><small v-else>已到账</small></footer>
+          <header><div><span>CREATIVE MISSION PATH</span><b>选一个目标，平台带你走完第一轮创作。</b></div><small>任务依据真实创作、审核与打样记录结算</small></header>
+          <div class="mission-selector-layout">
+            <div class="mission-selector" role="listbox" aria-label="选择创作任务">
+              <button v-for="mission in rewardMissions" :key="mission.key" type="button" :class="{ active: selectedMission?.key === mission.key, claimable: mission.status === 'claimable', claimed: mission.status === 'claimed' }" :aria-selected="selectedMission?.key === mission.key" @click="selectedMissionKey = mission.key">
+                <i>{{ missionIcon(mission.key) }}</i><span><b>{{ mission.title }}</b><small>{{ rewardMissionStatusText[mission.status] || mission.status }}</small></span><em>+{{ mission.rewardAmount }}</em>
+              </button>
+            </div>
+            <article v-if="selectedMission" class="mission-focus" :class="`mission-${selectedMission.status}`">
+              <div class="mission-focus-top"><i>{{ missionIcon(selectedMission.key) }}</i><span>{{ rewardMissionStatusText[selectedMission.status] || selectedMission.status }}</span></div>
+              <b>{{ selectedMission.title }}</b><p>{{ selectedMission.description }}</p>
+              <div class="mission-focus-guide"><span>下一步</span><strong>{{ selectedMission.status === 'in_progress' ? missionActionLabel(selectedMission).replace('立即去', '') : selectedMission.status === 'claimable' ? '现在领取已完成任务的积分' : '这项成长已沉淀到你的账户' }}</strong></div>
+              <footer><em>完成奖励 <strong>+{{ selectedMission.rewardAmount }} 点</strong></em><button v-if="selectedMission.status !== 'claimed'" type="button" :disabled="rewardBusy === `mission:${selectedMission.key}`" @click="goSelectedMission">{{ rewardBusy === `mission:${selectedMission.key}` ? '处理中…' : missionActionLabel(selectedMission) }} <span v-if="selectedMission.status === 'in_progress'">→</span></button><small v-else>已到账</small></footer>
             </article>
           </div>
         </section>
@@ -1949,7 +1991,8 @@ function closeModelPreview() {
 <style scoped>
 /* Server-settled rewards: visible enough to guide the next action, never styled as a game wall. */
 .creative-reward-board{display:grid;gap:11px}.campaign-feature{position:relative;display:grid;grid-template-columns:minmax(0,1.32fr) minmax(220px,.68fr);gap:20px;overflow:hidden;padding:21px 22px 15px;border:1px solid #d9e2d8;border-radius:23px;background:linear-gradient(122deg,#fbf8f1,#edf3ea 54%,#f5e8de);box-shadow:0 11px 28px rgba(66,80,66,.06)}.campaign-feature::before{content:"器";position:absolute;right:31%;bottom:-51px;color:rgba(91,119,99,.07);font-family:var(--song);font-size:150px;line-height:1}.campaign-feature-copy,.campaign-feature-action{position:relative;z-index:1}.campaign-feature-copy>span,.first-creation-missions header span{display:block;color:#648172;font-size:9px;font-weight:950;letter-spacing:.16em}.campaign-title-line{display:flex;align-items:center;gap:10px;margin-top:9px}.campaign-title-line i{display:grid;place-items:center;width:30px;height:30px;border:1px solid #c9d8c9;border-radius:10px;background:#fdfcf7;color:#617d6d;font-family:var(--song);font-size:16px;font-style:normal;font-weight:700}.campaign-title-line b{color:#3e453d;font-family:var(--song);font-size:22px;font-weight:650;letter-spacing:-.035em}.campaign-feature p{max-width:590px;margin:9px 0 0;color:#70766e;font-size:12px;line-height:1.65}.campaign-meta{display:flex;align-items:center;gap:9px;margin-top:14px}.campaign-meta em{padding:5px 7px;border-radius:999px;background:rgba(255,255,255,.72);color:#8b7e70;font-size:9px;font-style:normal;font-weight:800}.campaign-meta strong{color:#9b624d;font-size:11px}.campaign-feature-action{display:grid;align-content:center;gap:8px}.campaign-feature-action label{display:grid;gap:5px}.campaign-feature-action label span{color:#7a8176;font-size:9px;font-weight:800}.campaign-feature-action select{height:37px;border:1px solid #d8ddd4;border-radius:10px;background:#fffefb;color:#575c55;padding:0 9px;font-size:11px}.campaign-feature-action button{min-height:41px;padding:0 13px;border:0;border-radius:12px;background:#3f584a;color:#fff;font-size:11px;font-weight:900;box-shadow:0 9px 18px rgba(63,88,74,.16)}.campaign-feature-action button span{margin-left:4px;font-size:15px}.campaign-feature-action>b{color:#486957;font-family:var(--song);font-size:18px}.campaign-feature-action small{color:#8a8277;font-size:10px;line-height:1.5}.campaign-feature>footer{grid-column:1/-1;position:relative;z-index:1;padding-top:10px;border-top:1px solid rgba(126,145,126,.16);color:#8d867b;font-size:9px;line-height:1.55}.first-creation-missions{padding:16px 17px;border:1px solid #e4ddd2;border-radius:22px;background:rgba(255,253,249,.72)}.first-creation-missions header{display:flex;align-items:end;justify-content:space-between;gap:10px;margin-bottom:12px}.first-creation-missions header>div{display:grid;gap:4px}.first-creation-missions header b{color:#4a433b;font-family:var(--song);font-size:18px;font-weight:650}.first-creation-missions header small{max-width:145px;color:#958b80;font-size:9px;line-height:1.45;text-align:right}.mission-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.mission-grid article{display:grid;min-height:140px;padding:12px;border:1px solid #e8e1d7;border-radius:15px;background:#fffefa}.mission-grid article>div,.mission-grid footer{display:flex;align-items:center;justify-content:space-between;gap:6px}.mission-grid article>div i{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;background:#edf2eb;color:#658073;font-family:var(--song);font-size:10px;font-style:normal;font-weight:800}.mission-grid article>div span{color:#968a7d;font-size:9px;font-weight:800}.mission-grid article>b{align-self:end;margin-top:10px;color:#4a443d;font-size:12px}.mission-grid article p{min-height:32px;margin:5px 0 10px;color:#8b8176;font-size:9px;line-height:1.5}.mission-grid footer{margin-top:auto}.mission-grid footer strong{color:#a4654e;font-size:11px}.mission-grid footer button{height:29px;padding:0 9px;border:1px solid #d7ded5;border-radius:9px;background:#f3f7f2;color:#527060;font-size:10px;font-weight:900}.mission-grid .mission-claimable{border-color:#b6cdb8;background:linear-gradient(145deg,#fbfdf9,#eff6ee)}.mission-grid .mission-claimable>div i{background:#5d7c6b;color:#fff}.mission-grid .mission-claimable footer button{border-color:#4e705d;background:#4e705d;color:#fff}.mission-grid .mission-claimed{background:#fbfaf7}.mission-grid .mission-claimed footer small{color:#77907f;font-size:10px;font-weight:900}
-@media(max-width:760px){.campaign-feature{grid-template-columns:1fr;gap:15px;padding:18px}.campaign-feature::before{right:1%;bottom:-42px}.campaign-feature-action{align-content:start}.campaign-feature-action button{width:100%}.first-creation-missions{padding:15px}.mission-grid{grid-template-columns:1fr}.mission-grid article{min-height:0;grid-template-columns:1fr auto;column-gap:12px}.mission-grid article>div,.mission-grid article>b,.mission-grid article p{grid-column:1}.mission-grid footer{grid-column:2;grid-row:1/4;align-self:center;display:grid;justify-items:end;gap:7px}.mission-grid article p{min-height:0;margin-bottom:0}.first-creation-missions header small{display:none}}
+.mission-selector-layout{display:grid;grid-template-columns:minmax(0,.96fr) minmax(245px,1.04fr);gap:10px}.mission-selector{display:grid;gap:6px;align-content:start;max-height:262px;overflow:auto;padding-right:2px}.mission-selector button{display:grid;grid-template-columns:29px minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:9px 10px;border:1px solid #e8e0d5;border-radius:13px;background:#fffefa;color:#595249;text-align:left;transition:border-color .2s ease,background .2s ease,transform .2s ease}.mission-selector button i,.mission-focus-top i{display:grid;place-items:center;width:27px;height:27px;border-radius:8px;background:#edf2eb;color:#5d7b6d;font-family:var(--song);font-size:10px;font-style:normal;font-weight:800}.mission-selector button span{display:grid;gap:2px;min-width:0}.mission-selector button b{overflow:hidden;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.mission-selector button small{color:#958b80;font-size:9px}.mission-selector button em{color:#ab6a53;font-size:10px;font-style:normal;font-weight:900}.mission-selector button.active{border-color:#809d8c;background:linear-gradient(145deg,#f5faf5,#eaf2ea);box-shadow:0 7px 16px rgba(76,105,87,.08)}.mission-selector button.active i{background:#557563;color:#fff}.mission-selector button.claimable{border-color:#bcd1be}.mission-selector button.claimed{opacity:.62}.mission-focus{display:grid;min-height:238px;padding:16px 17px;border:1px solid #d8e2d8;border-radius:17px;background:linear-gradient(145deg,#fbfdf9,#edf4ed)}.mission-focus-top{display:flex;align-items:center;justify-content:space-between}.mission-focus-top i{width:32px;height:32px;font-size:11px;background:#5a7968;color:#fff}.mission-focus-top span{padding:4px 7px;border-radius:999px;background:#fffefa;color:#688173;font-size:9px;font-weight:900}.mission-focus>b{align-self:end;margin-top:10px;color:#3f4c42;font-family:var(--song);font-size:20px;font-weight:650}.mission-focus p{min-height:36px;margin:6px 0 10px;color:#748076;font-size:11px;line-height:1.55}.mission-focus-guide{display:grid;gap:3px;padding:9px 10px;border:1px solid rgba(116,143,125,.18);border-radius:11px;background:rgba(255,255,255,.58)}.mission-focus-guide span{color:#8b958b;font-size:9px;font-weight:900;letter-spacing:.08em}.mission-focus-guide strong{color:#506456;font-size:11px}.mission-focus footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;padding-top:12px}.mission-focus footer>em{display:grid;gap:2px;color:#907a68;font-size:9px;font-style:normal}.mission-focus footer>em strong{color:#a5614b;font-size:13px}.mission-focus footer button{min-height:37px;padding:0 11px;border:0;border-radius:11px;background:#3f594a;color:#fff;font-size:10px;font-weight:900;box-shadow:0 8px 16px rgba(53,78,63,.14)}.mission-focus footer button:disabled{opacity:.62}.mission-focus footer button span{margin-left:3px;font-size:14px}.mission-focus footer small{color:#668071;font-size:10px;font-weight:900}.mission-focus.mission-claimable{border-color:#b4cdb7;background:linear-gradient(145deg,#fafff9,#e8f4e7)}.mission-focus.mission-claimed{border-color:#e2ddd3;background:#fbfaf7}.mission-focus.mission-claimed .mission-focus-top i{background:#9aa79e}
+@media(max-width:760px){.campaign-feature{grid-template-columns:1fr;gap:15px;padding:18px}.campaign-feature::before{right:1%;bottom:-42px}.campaign-feature-action{align-content:start}.campaign-feature-action button{width:100%}.first-creation-missions{padding:15px}.first-creation-missions header small{display:none}.mission-selector-layout{grid-template-columns:1fr}.mission-selector{grid-template-columns:1fr 1fr;max-height:none;gap:7px}.mission-selector button{grid-template-columns:26px minmax(0,1fr);padding:9px}.mission-selector button em{display:none}.mission-selector button b{white-space:normal;line-height:1.3}.mission-focus{min-height:220px}}
 </style>
 
 <style scoped>

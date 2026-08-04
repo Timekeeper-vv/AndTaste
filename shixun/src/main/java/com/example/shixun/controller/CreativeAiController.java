@@ -2959,7 +2959,9 @@ public class CreativeAiController {
     }
 
     private Set<String> rewardMissionKeys() {
-        return Set.of("first_image_success", "first_model_success", "first_review_submit");
+        return new LinkedHashSet<>(List.of(
+                "first_image_success", "first_model_success", "first_review_submit",
+                "first_approved_work", "first_sample_request"));
     }
 
     private String rewardMissionTitle(String missionKey) {
@@ -2967,6 +2969,8 @@ public class CreativeAiController {
             case "first_image_success" -> "完成第一张 AI 产品图";
             case "first_model_success" -> "完成第一个 3D 原型";
             case "first_review_submit" -> "完成第一次作品提交审核";
+            case "first_approved_work" -> "让第一件作品通过审核";
+            case "first_sample_request" -> "提交第一次打样申请";
             default -> throw new IllegalArgumentException("不支持的创作任务");
         };
     }
@@ -2976,6 +2980,8 @@ public class CreativeAiController {
             case "first_image_success" -> BigDecimal.valueOf(5);
             case "first_model_success" -> BigDecimal.valueOf(15);
             case "first_review_submit" -> BigDecimal.valueOf(10);
+            case "first_approved_work" -> BigDecimal.valueOf(20);
+            case "first_sample_request" -> BigDecimal.valueOf(20);
             default -> throw new IllegalArgumentException("不支持的创作任务");
         };
     }
@@ -2985,6 +2991,8 @@ public class CreativeAiController {
             case "first_image_success" -> "首次成功生成并保存一张 AI 文创产品图。";
             case "first_model_success" -> "首次成功生成并保存一个可预览的 3D 原型。";
             case "first_review_submit" -> "首次将自己的图片或 3D 作品提交给审核员。";
+            case "first_approved_work" -> "第一件作品获得审核通过，进入可继续生产的状态。";
+            case "first_sample_request" -> "为已通过的 3D 作品提交一次真实打样申请。";
             default -> "";
         };
     }
@@ -3001,6 +3009,8 @@ public class CreativeAiController {
             case "first_image_success" -> "asset_type='image' AND created_by=? AND COALESCE(source_type,'ai_generated')<>'upload'";
             case "first_model_success" -> "asset_type='model' AND created_by=?";
             case "first_review_submit" -> "created_by=? AND asset_type IN ('image','model') AND tags LIKE '%用户提交审核%'";
+            case "first_approved_work" -> "created_by=? AND asset_type IN ('image','model') AND status='approved'";
+            case "first_sample_request" -> "id IN (SELECT asset_id FROM consumer_production_request WHERE user_id=? AND request_type='sample')";
             default -> throw new IllegalArgumentException("不支持的创作任务");
         };
         List<Map<String,Object>> assetRows = jdbc.queryForList("SELECT id FROM digital_asset WHERE " + predicate + " ORDER BY id ASC LIMIT 1", userId);
