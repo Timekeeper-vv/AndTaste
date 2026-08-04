@@ -409,6 +409,12 @@ function chooseCreatorProfile(profile: Exclude<CreatorProfile, ''>) {
   creatorProfilePromptOpen.value = false
   document.body.style.overflow = ''
   if (profile === 'professional') loadProfessionalSubmissions()
+  nextTick(() => {
+    if (!creationPurpose.value) {
+      document.body.style.overflow = 'hidden'
+      purposeGate.value?.focus()
+    }
+  })
   emit('alert', profile === 'professional' ? '已进入专业设计师模式，可提交 ZIP 作品包审核' : `已选择创作目的：${selectedPurposeFullText.value}`, 'success')
 }
 function backToPurposeChoice() {
@@ -544,7 +550,7 @@ function applyModelShowcase(template: typeof modelShowcaseTemplates[number]) {
 function changeCreationPurpose() {
   creationPurpose.value = ''
   creatorProfile.value = ''
-  creatorProfilePromptOpen.value = false
+  creatorProfilePromptOpen.value = true
   purposeStep.value = 'purpose'
   selectedPurposeMuseum.value = null
   purposeProvince.value = ''
@@ -811,10 +817,10 @@ function setStage(text: string, nextPhase: Phase) {
 }
 
 onMounted(() => {
-  // Every login starts with a deliberate destination choice; it is not persisted between sessions.
+  // Every login starts with a mandatory creator-mode choice before the destination gate.
+  creatorProfilePromptOpen.value = true
   document.body.style.overflow = 'hidden'
   load()
-  nextTick(() => purposeGate.value?.focus())
 })
 onBeforeUnmount(() => {
   if (modelTimer.value) clearTimeout(modelTimer.value)
@@ -1335,7 +1341,7 @@ function closeModelPreview() {
       </button>
     </header>
 
-    <section v-if="!creationPurpose" ref="purposeGate" class="purpose-gate" role="dialog" aria-modal="true" aria-labelledby="purpose-gate-title" tabindex="-1" @keydown.esc.prevent>
+    <section v-if="!creationPurpose && !creatorProfilePromptOpen" ref="purposeGate" class="purpose-gate" role="dialog" aria-modal="true" aria-labelledby="purpose-gate-title" tabindex="-1" @keydown.esc.prevent>
       <div class="purpose-card">
         <div class="purpose-aurora"></div>
         <div class="purpose-brand"><img :src="andTasteLogo" alt="之间味道" /><div><span>之间智造 · AI CULTURAL CREATION</span><small>从灵感到可售文创</small></div><em>2026</em></div>
@@ -1444,9 +1450,9 @@ function closeModelPreview() {
       aria-labelledby="creator-profile-title"
     >
       <div class="creator-profile-card">
-        <span class="creator-profile-kicker">CREATOR MODE</span>
-        <h2 id="creator-profile-title">你更接近哪一种创作方式？</h2>
-        <p>选择后不影响当前作品和用途。专业模式会额外开启 ZIP 作品包审核通道。</p>
+        <span class="creator-profile-kicker">WELCOME TO BETWEEN TASTE</span>
+        <h2 id="creator-profile-title">先选择你的创作身份</h2>
+        <p>这是进入创作台前的必选设置。选择后，平台会为你打开对应的创作路径和服务。</p>
         <div class="creator-profile-options">
           <button type="button" @click="chooseCreatorProfile('amateur')">
             <i>闲</i><b>业余设计师</b>
