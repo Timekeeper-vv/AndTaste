@@ -33,6 +33,8 @@ const status = ref<'all' | ReviewStatus>('review')
 const comment = ref('')
 const activeWork = ref<ConsumerAsset | null>(null)
 const activeMediaUrl = ref('')
+const professionalSubmissions = ref<any[]>([])
+const reviewingSubmissionId = ref<number | null>(null)
 
 const stats = computed(() => {
   const total = works.value.length
@@ -88,10 +90,67 @@ async function load() {
     }
     const data = await r.json()
     works.value = Array.isArray(data) ? data : []
+    await loadProfessionalSubmissions()
   } catch (e: any) {
     emit('alert', '加载C端作品失败：' + (e?.message || e), 'error')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadProfessionalSubmissions() {
+  try {
+    const r = await fetch('/api/creative/ai/consumer-professional-submissions/review', { cache: 'no-store' })
+    if (!r.ok) {
+      const err = await r.json().catch(() => null)
+      throw new Error(err?.message || `HTTP ${r.status}`)
+    }
+    const data = await r.json()
+    professionalSubmissions.value = Array.isArray(data) ? data : []
+  } catch (e: any) {
+    emit('alert', '加载专业作品包失败：' + (e?.message || e), 'error')
+  }
+}
+
+async function reviewProfessionalSubmission(item: any, nextStatus: ReviewStatus) {
+  reviewingSubmissionId.value = item.id
+  try {
+    const r = await fetch(`/api/creative/ai/consumer-professional-submissions/${item.id}/review`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: nextStatus, comment: comment.value.trim() }),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => null)
+      throw new Error(err?.message || `HTTP ${r.status}`)
+    }
+    emit('alert', nextStatus === 'approved' ? '专业作品包已审核通过' : nextStatus === 'rejected' ? '专业作品包已标记不通过' : '专业作品包已退回待审核', 'success')
+    await loadProfessionalSubmissions()
+  } catch (e: any) {
+    emit('alert', '专业作品包审核失败：' + (e?.message || e), 'error')
+  } finally {
+    reviewingSubmissionId.value = null
+  }
+}
+
+async function downloadProfessionalSubmission(item: any) {
+  try {
+    const r = await fetch(`/api/creative/ai/consumer-professional-submissions/${item.id}/download`)
+    if (!r.ok) {
+      const err = await r.json().catch(() => null)
+      throw new Error(err?.message || `HTTP ${r.status}`)
+    }
+    const blob = await r.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = item.originalName || 'professional-submission.zip'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (e: any) {
+    emit('alert', '下载专业作品包失败：' + (e?.message || e), 'error')
   }
 }
 
@@ -219,6 +278,28 @@ onMounted(load)
       <span>可以切换状态或输入其他用户 ID 再查询。</span>
     </section>
 
+    <section class="professional-review-panel">
+      <header>
+        <div><span>PROFESSIONAL SUBMISSIONS</span><h2>专业作品包审核</h2><p>这里的 ZIP 文件由专业设计师真实提交，只有审核管理员可下载查看和给出审核结论。</p></div>
+        <b>{{ professionalSubmissions.length }} <small>份作品包</small></b>
+      </header>
+      <div v-if="professionalSubmissions.length" class="submission-table-wrap">
+        <table>
+          <thead><tr><th>作品包</th><th>提交人 / 用途</th><th>文件与时间</th><th>审核状态</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr v-for="item in professionalSubmissions" :key="item.id">
+              <td><strong>{{ item.title }}</strong><small>{{ item.submissionNo }}</small><p v-if="item.note">{{ item.note }}</p></td>
+              <td><strong>{{ item.createdByName || `用户 #${item.userId}` }}</strong><small>{{ item.purpose === 'museum_sale' ? `博物馆售卖${item.museumName ? ` · ${item.museumName}` : ''}` : '个人创作' }}</small></td>
+              <td><strong>{{ item.originalName }}</strong><small>{{ item.fileSize ? `${(item.fileSize / 1024 / 1024).toFixed(1)} MB` : '-' }} · {{ formatTime(item.createdAt) }}</small></td>
+              <td><span class="submission-status" :class="statusClass(item.status)">{{ statusText[item.status || 'review'] || item.status }}</span><small v-if="item.reviewComment" class="review-note">{{ item.reviewComment }}</small></td>
+              <td><div class="submission-actions"><button type="button" class="outline" @click="downloadProfessionalSubmission(item)">下载 ZIP</button><button type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'rejected')">不通过</button><button v-if="item.status !== 'review'" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else class="submission-empty">暂无专业设计师提交的 ZIP 作品包。</div>
+    </section>
+
     <Teleport to="body">
       <div v-if="activeWork" class="preview-modal" @click.self="closePreview">
         <div class="modal-card">
@@ -258,4 +339,8 @@ onMounted(load)
 
 <style scoped>
 .approval-source{margin:9px 0;padding:8px 10px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;font-size:12px;font-weight:800;line-height:1.45}
+</style>
+
+<style scoped>
+.professional-review-panel{overflow:hidden;border:1px solid rgba(112,139,119,.24);border-radius:24px;background:linear-gradient(145deg,#f8fbf7,#edf4ed);box-shadow:0 15px 37px rgba(67,92,72,.07)}.professional-review-panel>header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:21px 23px;border-bottom:1px solid rgba(126,151,130,.17)}.professional-review-panel header span{display:block;color:#5f7b69;font-size:10px;font-weight:950;letter-spacing:.14em}.professional-review-panel h2{margin:6px 0;color:#34483b;font-size:22px}.professional-review-panel header p{max-width:620px;margin:0;color:#718072;font-size:12px;line-height:1.6}.professional-review-panel>header>b{display:grid;place-items:center;min-width:82px;min-height:65px;border:1px solid #d4e2d4;border-radius:16px;background:#fffefa;color:#476958;font-size:25px}.professional-review-panel>header>b small{color:#839185;font-size:10px}.submission-table-wrap{overflow:auto}.submission-table-wrap table{width:100%;min-width:980px;border-collapse:collapse}.submission-table-wrap th,.submission-table-wrap td{padding:15px 17px;border-bottom:1px solid rgba(126,151,130,.16);text-align:left;vertical-align:top}.submission-table-wrap th{background:rgba(255,255,255,.38);color:#617366;font-size:11px}.submission-table-wrap td strong,.submission-table-wrap td small{display:block}.submission-table-wrap td strong{max-width:260px;overflow:hidden;color:#33483b;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.submission-table-wrap td small{margin-top:5px;color:#7a887d;font-size:11px;line-height:1.45}.submission-table-wrap td p{max-width:270px;margin:8px 0 0;color:#6e786e;font-size:11px;line-height:1.5}.submission-status{display:inline-flex;padding:6px 8px;border-radius:999px;font-size:11px;font-weight:900}.submission-status.wait{color:#9a6700;background:#fff4d8}.submission-status.ok{color:#23734e;background:#e7f7ed}.submission-status.bad{color:#b42318;background:#ffeded}.review-note{max-width:190px}.submission-actions{display:flex;flex-wrap:wrap;gap:7px}.submission-actions button{height:35px;padding:0 10px;border-radius:10px;font-size:11px}.submission-empty{padding:38px 20px;color:#748174;text-align:center;font-size:13px}@media(max-width:640px){.professional-review-panel>header{padding:18px}.professional-review-panel h2{font-size:19px}.professional-review-panel>header>b{min-width:64px;min-height:54px;font-size:21px}}
 </style>

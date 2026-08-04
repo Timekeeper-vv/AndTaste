@@ -18,7 +18,15 @@ const busy = ref(false)
 const stage = ref('')
 const phase = ref<Phase>('idle')
 type CreationPurpose = '' | 'personal' | 'museum_sale'
+type CreatorProfile = '' | 'amateur' | 'professional'
 const creationPurpose = ref<CreationPurpose>('')
+const creatorProfile = ref<CreatorProfile>('')
+const creatorProfilePromptOpen = ref(false)
+const professionalSubmissionFile = ref<File | null>(null)
+const professionalSubmissionTitle = ref('')
+const professionalSubmissionNote = ref('')
+const professionalSubmissionBusy = ref(false)
+const professionalSubmissions = ref<any[]>([])
 const purposeGate = ref<HTMLElement | null>(null)
 const purposeStep = ref<'purpose' | 'museum'>('purpose')
 const selectedPurposeMuseum = ref<any | null>(null)
@@ -355,8 +363,15 @@ function selectCreationPurpose(value: 'personal' | 'museum_sale') {
     return
   }
   creationPurpose.value = value
+  creatorProfilePromptOpen.value = true
+  document.body.style.overflow = 'hidden'
+}
+function chooseCreatorProfile(profile: Exclude<CreatorProfile, ''>) {
+  creatorProfile.value = profile
+  creatorProfilePromptOpen.value = false
   document.body.style.overflow = ''
-  emit('alert', `已选择创作目的：${selectedPurposeFullText.value}`, 'success')
+  if (profile === 'professional') loadProfessionalSubmissions()
+  emit('alert', profile === 'professional' ? '已进入专业设计师模式，可提交 ZIP 作品包审核' : `已选择创作目的：${selectedPurposeFullText.value}`, 'success')
 }
 function backToPurposeChoice() {
   purposeStep.value = 'purpose'
@@ -377,8 +392,8 @@ function confirmMuseumPurpose() {
   }
   selectMuseum(museum)
   creationPurpose.value = 'museum_sale'
-  document.body.style.overflow = ''
-  emit('alert', `已选择售卖去向：${museum.name}`, 'success')
+  creatorProfilePromptOpen.value = true
+  document.body.style.overflow = 'hidden'
 }
 
 function switchTab(next: Tab) {
@@ -490,6 +505,8 @@ function applyModelShowcase(template: typeof modelShowcaseTemplates[number]) {
 
 function changeCreationPurpose() {
   creationPurpose.value = ''
+  creatorProfile.value = ''
+  creatorProfilePromptOpen.value = false
   purposeStep.value = 'purpose'
   selectedPurposeMuseum.value = null
   purposeProvince.value = ''
@@ -797,6 +814,45 @@ async function load() {
   } catch (e: any) {
     emit('alert', '加载移动创作页失败：' + (e?.message || e), 'error')
   }
+}
+
+async function loadProfessionalSubmissions() {
+  try {
+    const data = await json('/api/creative/ai/consumer-professional-submissions/my')
+    professionalSubmissions.value = Array.isArray(data) ? data : []
+  } catch (e: any) {
+    emit('alert', '读取专业作品包失败：' + (e?.message || e), 'error')
+  }
+}
+function chooseProfessionalSubmissionFile(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0] || null
+  professionalSubmissionFile.value = file
+  if (file && !professionalSubmissionTitle.value) professionalSubmissionTitle.value = file.name.replace(/\.zip$/i, '')
+}
+async function submitProfessionalSubmission() {
+  const file = professionalSubmissionFile.value
+  if (!file) { emit('alert', '请先选择 ZIP 作品包', 'error'); return }
+  if (!/\.zip$/i.test(file.name)) { emit('alert', '专业审核仅支持 ZIP 作品包', 'error'); return }
+  professionalSubmissionBusy.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('title', professionalSubmissionTitle.value.trim() || file.name.replace(/\.zip$/i, ''))
+    fd.append('note', professionalSubmissionNote.value.trim())
+    fd.append('purpose', creationPurpose.value || 'personal')
+    fd.append('museumId', creationPurpose.value === 'museum_sale' ? selectedPurposeMuseum.value?.id || '' : '')
+    fd.append('museumName', creationPurpose.value === 'museum_sale' ? selectedPurposeMuseum.value?.name || '' : '')
+    const r = await fetch('/api/creative/ai/consumer-professional-submissions', { method: 'POST', body: fd })
+    const data = await r.json().catch(() => null)
+    if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
+    professionalSubmissionFile.value = null
+    professionalSubmissionTitle.value = ''
+    professionalSubmissionNote.value = ''
+    await loadProfessionalSubmissions()
+    emit('alert', data?.message || '专业作品包已提交审核', 'success')
+  } catch (e: any) {
+    emit('alert', '提交专业作品包失败：' + (e?.message || e), 'error')
+  } finally { professionalSubmissionBusy.value = false }
 }
 
 async function prepareAssetPreview(assetId: number, target: 'image' | 'upload') {
@@ -1340,6 +1396,32 @@ function closeModelPreview() {
       </div>
     </section>
 
+    <section
+      v-if="creatorProfilePromptOpen"
+      class="creator-profile-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="creator-profile-title"
+    >
+      <div class="creator-profile-card">
+        <span class="creator-profile-kicker">CREATOR MODE</span>
+        <h2 id="creator-profile-title">你更接近哪一种创作方式？</h2>
+        <p>选择后不影响当前作品和用途。专业模式会额外开启 ZIP 作品包审核通道。</p>
+        <div class="creator-profile-options">
+          <button type="button" @click="chooseCreatorProfile('amateur')">
+            <i>闲</i><b>业余设计师</b>
+            <span>随心创作、收藏或送礼，保留现在的 AI 图片、3D 和作品库流程。</span>
+            <small>轻松体验</small>
+          </button>
+          <button type="button" class="featured" @click="chooseCreatorProfile('professional')">
+            <i>专</i><b>专业设计师</b>
+            <span>除了当前创作能力，还可提交 ZIP 作品包给平台审核与后续合作评估。</span>
+            <small>作品包审核</small>
+          </button>
+        </div>
+      </div>
+    </section>
+
     <section class="studio-home">
       <div class="studio-hero">
         <div class="studio-hero-copy">
@@ -1354,6 +1436,24 @@ function closeModelPreview() {
         </div>
         <div class="studio-hero-art" aria-hidden="true"><i class="art-ring ring-one"></i><i class="art-ring ring-two"></i><div class="art-tile tile-one"><span>AI</span><b>文化灵感</b></div><div class="art-tile tile-two"><span>3D</span><b>产品原型</b></div><em>✦</em></div>
       </div>
+
+      <section v-if="creatorProfile === 'professional'" class="professional-submission-panel" aria-label="专业作品包审核">
+        <header>
+          <div><span>PROFESSIONAL REVIEW</span><b>提交专业作品包</b><p>上传包含效果图、3D 文件、说明文档或源文件的 ZIP，审核员可在后台下载审核。</p></div>
+          <em>ZIP · 最大 100MB</em>
+        </header>
+        <div class="professional-submission-form">
+          <label class="professional-zip-drop">
+            <input type="file" accept=".zip,application/zip" @change="chooseProfessionalSubmissionFile" />
+            <b>{{ professionalSubmissionFile ? professionalSubmissionFile.name : '选择 ZIP 作品包' }}</b>
+            <small>{{ professionalSubmissionFile ? `${(professionalSubmissionFile.size / 1024 / 1024).toFixed(1)} MB` : '可包含效果图、3D 文件、设计说明与源文件' }}</small>
+          </label>
+          <label><span>作品包名称</span><input v-model="professionalSubmissionTitle" maxlength="200" placeholder="例如：青绿山水冰箱贴系列提案" /></label>
+          <label><span>给审核员的说明</span><textarea v-model="professionalSubmissionNote" rows="3" maxlength="1000" placeholder="说明作品亮点、目标渠道、包含文件和希望审核的重点"></textarea></label>
+        </div>
+        <footer><small>提交后，仅你本人和具备审核权限的管理员可以访问 ZIP 文件。</small><button type="button" :disabled="professionalSubmissionBusy || !professionalSubmissionFile" @click="submitProfessionalSubmission">{{ professionalSubmissionBusy ? '正在提交…' : '提交作品包审核' }}</button></footer>
+        <div v-if="professionalSubmissions.length" class="professional-submission-history"><b>我的作品包审核记录</b><article v-for="item in professionalSubmissions" :key="item.id"><div><strong>{{ item.title }}</strong><span>{{ item.originalName }} · {{ item.status === 'approved' ? '已通过' : item.status === 'rejected' ? '未通过' : '审核中' }}</span></div><small v-if="item.reviewComment">{{ item.reviewComment }}</small></article></div>
+      </section>
 
       <section v-if="showAtelierWorkbench" class="atelier-workbench" aria-label="东方 AI 文创创作台">
         <header class="atelier-heading">
@@ -1691,6 +1791,12 @@ function closeModelPreview() {
 
 <style scoped>
 .purpose-gate{position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(circle at 80% 10%,rgba(255,255,255,.24),transparent 180px),linear-gradient(160deg,#2a1c16,#7c3f2b 58%,#e0a35d);color:#fff}.purpose-card{width:min(420px,100%);padding:24px;border-radius:28px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);box-shadow:0 30px 80px rgba(37,22,14,.35);backdrop-filter:blur(18px)}.purpose-brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}.purpose-brand img{width:38px;height:38px;border-radius:10px;background:#fff}.purpose-brand span{font-size:12px;font-weight:900;letter-spacing:1.4px}.purpose-card h1{margin:0 0 10px;font-size:30px;letter-spacing:-.04em}.purpose-card p{margin:0 0 16px;color:rgba(255,255,255,.78);line-height:1.7}.purpose-options{display:flex;flex-direction:column;gap:10px}.purpose-options button{position:relative;text-align:left;padding:16px;border:1px solid rgba(255,255,255,.24);border-radius:18px;background:rgba(255,255,255,.92);color:#201a17;box-shadow:0 12px 30px rgba(32,26,23,.12)}.purpose-options i{display:inline-flex;margin-bottom:8px;padding:4px 8px;border-radius:999px;background:#fff7ed;color:#b4532a;font-style:normal;font-size:11px;font-weight:950}.purpose-options b,.purpose-options span{display:block}.purpose-options b{font-size:18px}.purpose-options span{margin-top:5px;color:#6e5547;font-size:13px;line-height:1.5}.purpose-change{position:relative;z-index:1;align-self:flex-start;margin-top:8px;height:30px;border:1px solid rgba(255,255,255,.3);border-radius:999px;background:rgba(255,255,255,.12);color:#fff;font-size:11px;font-weight:900}.purpose-in-form{margin:0 0 10px;padding:9px 10px;border-radius:12px;background:#fff7ed;color:#9a3412;font-size:12px;font-weight:900}.credit-modal{position:fixed;inset:0;z-index:260;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.credit-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden;color:#201a17}.credit-card header,.credit-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.credit-card footer{border-top:1px solid #eadfd4;border-bottom:0}.credit-card header b,.credit-card header span{display:block}.credit-card header span{margin-top:3px;color:#8a7161;font-size:12px}.credit-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.credit-card main{padding:14px;overflow:auto}.balance-card{position:relative;padding:18px;border-radius:20px;background:linear-gradient(135deg,#201a17,#7c3f2b);color:#fff}.balance-card span,.balance-card em{font-style:normal;color:rgba(255,255,255,.72);font-size:12px;font-weight:900}.balance-card b{display:inline-block;margin:8px 6px 0 0;font-size:42px}.rules-card{margin-top:10px;padding:14px;border-radius:18px;background:#fffaf4;border:1px solid #eadfd4}.rules-card b{display:block;margin-bottom:8px}.rules-card p{margin:5px 0;color:#6e5547;font-size:13px}.packages{display:grid;grid-template-columns:1fr;gap:9px;margin-top:10px}.packages button{text-align:left;padding:13px;border:1px solid #eadfd4;border-radius:16px;background:#fff;color:#201a17}.packages strong,.packages span,.packages em{display:block}.packages strong{font-size:20px}.packages span{margin-top:3px;font-weight:900}.packages em{margin-top:4px;color:#8a7161;font-size:12px;font-style:normal}.recharge-note{margin:12px 0 0;color:#8a7161;font-size:12px;line-height:1.6}.credit-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.credit-card footer .done{background:#b4532a}.hero-actions .recharge-hero{background:rgba(255,255,255,.92);color:#7c2d12;border-color:rgba(255,255,255,.92)}.consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.submitted-tip{display:inline-flex;height:30px;align-items:center;padding:0 10px;border-radius:999px;background:#fff7ed;color:#b45309;font-size:12px;font-weight:900}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{position:relative;overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.work-status{position:absolute;top:8px;right:8px;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.92);font-size:10px;font-weight:900}.work-status.draft{color:#64748b}.work-status.review{color:#b45309}.work-status.approved{color:#047857}.work-status.rejected{color:#dc2626}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.gallery .review-submit{background:#b4532a}.production-actions{display:flex;gap:6px;padding:0 9px 9px}.gallery .production-actions button{flex:1;margin:0;background:#0f766e}.gallery .production-actions .prod{background:#7c2d12}.production-list{margin-top:14px;display:flex;flex-direction:column;gap:8px}.production-list h3{margin:4px 0;font-size:15px}.production-list article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:10px;background:#fffaf4;border:1px solid #eadfd4}.production-list b,.production-list span{display:block}.production-list span{margin-top:3px;color:#8a7161;font-size:12px}.production-list em{font-style:normal;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:900}.production-list em.review{background:#fff7ed;color:#b45309}.production-list em.approved{background:#ecfdf5;color:#047857}.production-list em.rejected{background:#fef2f2;color:#dc2626}.production-modal{position:fixed;inset:0;z-index:220;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.production-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden}.production-card header,.production-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.production-card footer{border-top:1px solid #eadfd4;border-bottom:0}.production-card header b,.production-card header span{display:block}.production-card header span{margin-top:3px;color:#8a7161;font-size:12px}.production-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.production-card main{padding:14px;overflow:auto}.production-card input,.production-card select{width:100%;height:40px;box-sizing:border-box;border:1px solid #eadfd4;border-radius:10px;background:#fffaf4;padding:0 10px}.dist-head{display:flex;align-items:center;justify-content:space-between;margin-top:12px}.dist-head button,.production-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.dist-row{display:grid;grid-template-columns:1fr 74px 52px;gap:7px;margin-top:8px}.dist-row button{border:0;border-radius:10px;background:#fef2f2;color:#dc2626;font-weight:900}.alloc-tip{margin:8px 0 0;color:#047857;font-size:12px;font-weight:900}.alloc-tip.bad{color:#dc2626}.production-card footer .submit{background:#b4532a}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
+</style>
+
+<style scoped>
+.creator-profile-modal{position:fixed;inset:0;z-index:160;display:grid;place-items:center;padding:20px;background:rgba(47,43,37,.5);backdrop-filter:blur(9px)}.creator-profile-card{width:min(720px,100%);padding:31px;border:1px solid rgba(255,255,255,.7);border-radius:28px;background:linear-gradient(145deg,#fffdfa,#f4f0e9);box-shadow:0 30px 84px rgba(52,42,31,.28);color:#38322c}.creator-profile-kicker{display:block;color:#678071;font-size:10px;font-weight:950;letter-spacing:.16em}.creator-profile-card h2{margin:9px 0 7px;font-family:var(--song);font-size:31px;font-weight:650;line-height:1.2}.creator-profile-card>p{max-width:50ch;margin:0;color:#80776c;font-size:13px;line-height:1.65}.creator-profile-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin-top:23px}.creator-profile-options button{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:9px;padding:19px;border:1px solid #e1d9ce;border-radius:19px;background:#fffdfa;color:#423b34;text-align:left;transition:transform .2s ease,box-shadow .2s ease}.creator-profile-options button:hover{transform:translateY(-3px);box-shadow:0 13px 25px rgba(70,56,40,.1)}.creator-profile-options button i{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:#f3ece3;color:#99715b;font-family:var(--song);font-size:19px;font-style:normal}.creator-profile-options button b{font-family:var(--song);font-size:20px;font-weight:650}.creator-profile-options button span,.creator-profile-options button small{grid-column:1/-1;line-height:1.55}.creator-profile-options button span{min-height:40px;color:#81776c;font-size:12px}.creator-profile-options button small{color:#7d9182;font-size:10px;font-weight:900;letter-spacing:.08em}.creator-profile-options button.featured{border-color:#b9cbbd;background:linear-gradient(145deg,#f6faf4,#e4eee4)}.creator-profile-options button.featured i{background:#618071;color:#fff}.creator-profile-options button.featured small{color:#547263}
+.professional-submission-panel{display:grid;gap:16px;padding:21px;border:1px solid #d8e3d9;border-radius:23px;background:linear-gradient(145deg,#fcfdf9,#edf4ed);box-shadow:0 13px 31px rgba(66,85,66,.07)}.professional-submission-panel>header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.professional-submission-panel header>div{display:grid;gap:5px}.professional-submission-panel header span{color:#668174;font-size:9px;font-weight:950;letter-spacing:.15em}.professional-submission-panel header b{color:#3f5446;font-family:var(--song);font-size:22px;font-weight:650}.professional-submission-panel header p{max-width:600px;margin:0;color:#748076;font-size:12px;line-height:1.6}.professional-submission-panel header em{flex:none;padding:7px 9px;border:1px solid #cbdcce;border-radius:999px;background:#fffefa;color:#607969;font-size:10px;font-style:normal;font-weight:900}.professional-submission-form{display:grid;grid-template-columns:minmax(210px,.85fr) minmax(180px,.7fr) minmax(220px,1fr);gap:12px;align-items:stretch}.professional-submission-form label{display:grid;gap:7px;color:#655e56;font-size:11px;font-weight:900}.professional-submission-form input:not([type=file]),.professional-submission-form textarea{box-sizing:border-box;width:100%;border:1px solid #dfe3db;border-radius:13px;background:#fffefa;color:#433d36;font:inherit;outline:0}.professional-submission-form input:not([type=file]){height:44px;padding:0 11px}.professional-submission-form textarea{min-height:87px;padding:10px 11px;resize:vertical}.professional-submission-form input:focus,.professional-submission-form textarea:focus{border-color:#91a998;box-shadow:0 0 0 3px rgba(119,146,126,.12)}.professional-zip-drop{position:relative;align-content:center;min-height:104px;padding:13px;border:1.5px dashed #9aae9d!important;border-radius:16px;background:rgba(255,255,255,.64);text-align:center;cursor:pointer}.professional-zip-drop input{position:absolute;inset:0;width:100%;opacity:0;cursor:pointer}.professional-zip-drop b{overflow:hidden;color:#4f6657;text-overflow:ellipsis;white-space:nowrap}.professional-zip-drop small{color:#89948b;font-size:10px;line-height:1.45}.professional-submission-panel>footer{display:flex;align-items:center;justify-content:space-between;gap:13px;padding-top:14px;border-top:1px solid #dce6dc}.professional-submission-panel>footer small{max-width:58ch;color:#7f8a7f;font-size:10px;line-height:1.5}.professional-submission-panel>footer button{min-height:43px;flex:none;padding:0 16px;border:0;border-radius:13px;background:#476758;color:#fff;font-size:12px;font-weight:900;box-shadow:0 9px 18px rgba(67,98,79,.16)}.professional-submission-panel>footer button:disabled{opacity:.52}.professional-submission-history{display:grid;gap:9px;padding-top:4px}.professional-submission-history>b{color:#4d5e51;font-size:12px}.professional-submission-history article{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:11px 12px;border:1px solid #dfe7df;border-radius:13px;background:rgba(255,255,255,.72)}.professional-submission-history article>div{display:grid;gap:3px;min-width:0}.professional-submission-history strong{overflow:hidden;color:#474038;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.professional-submission-history span,.professional-submission-history article>small{color:#8b8379;font-size:10px}.professional-submission-history article>small{max-width:35%;color:#657d6c;line-height:1.45}
+@media(max-width:760px){.creator-profile-card{padding:23px 19px;border-radius:23px}.creator-profile-card h2{font-size:27px}.creator-profile-options{grid-template-columns:1fr}.creator-profile-options button span{min-height:0}.professional-submission-panel{padding:17px}.professional-submission-panel>header{display:grid;gap:10px}.professional-submission-panel header em{justify-self:start}.professional-submission-form{grid-template-columns:1fr}.professional-submission-panel>footer{display:grid;gap:11px}.professional-submission-panel>footer button{width:100%}.professional-submission-history article{align-items:flex-start;flex-direction:column}.professional-submission-history article>small{max-width:none}}
 </style>
 
 <style scoped>

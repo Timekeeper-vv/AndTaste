@@ -27,6 +27,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.math.BigDecimal;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -177,6 +178,7 @@ public class CreativeAiController {
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_account (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL UNIQUE, balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, frozen_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_recharged DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_consumed DECIMAL(12,2) NOT NULL DEFAULT 0.00, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='C端用户额度账户'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_transaction (id BIGINT AUTO_INCREMENT PRIMARY KEY, transaction_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NULL, job_id BIGINT NULL, biz_type VARCHAR(50) NOT NULL, amount DECIMAL(12,2) NOT NULL, direction VARCHAR(20) NOT NULL, status VARCHAR(30) NOT NULL, balance_before DECIMAL(12,2) NOT NULL DEFAULT 0.00, balance_after DECIMAL(12,2) NOT NULL DEFAULT 0.00, remark VARCHAR(500), operator VARCHAR(80), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_credit_user(user_id), INDEX idx_credit_status(status), INDEX idx_credit_biz(biz_type)) COMMENT='C端用户额度流水'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY, request_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NOT NULL, request_type VARCHAR(20) NOT NULL, title VARCHAR(200), quantity INT NOT NULL DEFAULT 1, self_ship_quantity INT NOT NULL DEFAULT 0, museum_distribution_json TEXT, recipient_name VARCHAR(80), recipient_phone VARCHAR(80), recipient_address VARCHAR(500), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cpr_user(user_id), INDEX idx_cpr_asset(asset_id), INDEX idx_cpr_type(request_type), INDEX idx_cpr_status(status)) COMMENT='C端作品打样与生产申请'");
+        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_professional_submission (id BIGINT AUTO_INCREMENT PRIMARY KEY, submission_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, title VARCHAR(200) NOT NULL, original_name VARCHAR(260) NOT NULL, storage_name VARCHAR(260) NOT NULL, file_size BIGINT NOT NULL, purpose VARCHAR(30) NOT NULL DEFAULT 'personal', museum_id VARCHAR(80), museum_name VARCHAR(200), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cps_user(user_id), INDEX idx_cps_status(status)) COMMENT='C端专业设计师ZIP作品包审核'");
         try { this.jdbc.execute("ALTER TABLE digital_asset ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
         try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
         try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN credit_transaction_id BIGINT NULL"); } catch (Exception ignored) {}
@@ -1325,6 +1327,77 @@ public class CreativeAiController {
         // short-lived signed URL rather than the private /uploads path.
         result.put("url", result.get("imageUrl"));
         return result;
+    }
+
+    @PostMapping(value = "/consumer-professional-submissions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Map<String,Object> uploadProfessionalSubmission(@RequestParam("file") MultipartFile file,
+                                                           @RequestParam(required=false) String title,
+                                                           @RequestParam(required=false) String note,
+                                                           @RequestParam(required=false) String purpose,
+                                                           @RequestParam(required=false) String museumId,
+                                                           @RequestParam(required=false) String museumName) throws Exception {
+        Long userId = requireCurrentConsumerUser();
+        if (file == null || file.isEmpty()) throw new IllegalArgumentException("请选择要提交的 ZIP 作品包");
+        if (file.getSize() > 100L * 1024 * 1024) throw new IllegalArgumentException("ZIP 作品包不能超过 100MB");
+        String original = nullToEmpty(file.getOriginalFilename()).replaceAll("[\\r\\n]", "").trim();
+        if (!original.toLowerCase(Locale.ROOT).endsWith(".zip")) throw new IllegalArgumentException("专业审核仅支持 ZIP 作品包");
+        if (!hasZipSignature(file)) throw new IllegalArgumentException("上传文件不是有效的 ZIP 作品包");
+        String normalizedPurpose = Set.of("personal", "museum_sale").contains(purpose) ? purpose : "personal";
+        if ("museum_sale".equals(normalizedPurpose) && blank(museumId)) throw new IllegalArgumentException("售卖作品包必须先选择合作博物馆");
+        Path directory = creativeAssetRoot().resolve("professional-submissions").normalize();
+        Files.createDirectories(directory);
+        String stored = "professional-" + System.currentTimeMillis() + "-" + UUID.randomUUID() + ".zip";
+        Files.copy(file.getInputStream(), directory.resolve(stored), StandardCopyOption.REPLACE_EXISTING);
+        String submissionNo = no("CPS");
+        String safeTitle = blank(title) ? original.replaceFirst("(?i)\\.zip$", "") : title.trim();
+        jdbc.update("INSERT INTO consumer_professional_submission (submission_no,user_id,title,original_name,storage_name,file_size,purpose,museum_id,museum_name,note) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                submissionNo, userId, safeTitle, original, stored, file.getSize(), normalizedPurpose, nullToEmpty(museumId), nullToEmpty(museumName), nullToEmpty(note));
+        return Map.of("success", true, "submissionNo", submissionNo, "status", "review", "message", "专业作品包已提交，审核员可在后台下载审核");
+    }
+
+    private boolean hasZipSignature(MultipartFile file) throws IOException {
+        try (InputStream in = file.getInputStream()) {
+            byte[] head = in.readNBytes(4);
+            return head.length == 4 && head[0] == 'P' && head[1] == 'K'
+                    && ((head[2] == 3 && head[3] == 4) || (head[2] == 5 && head[3] == 6) || (head[2] == 7 && head[3] == 8));
+        }
+    }
+
+    @GetMapping("/consumer-professional-submissions/my")
+    public List<Map<String,Object>> myProfessionalSubmissions() {
+        Long userId = requireCurrentConsumerUser();
+        return jdbc.queryForList("SELECT id,submission_no submissionNo,title,original_name originalName,file_size fileSize,purpose,museum_name museumName,note,status,review_comment reviewComment,reviewed_by reviewedBy,reviewed_at reviewedAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
+    }
+
+    @GetMapping("/consumer-professional-submissions/review")
+    public List<Map<String,Object>> professionalSubmissionsForReview() {
+        requireCreativeAdmin();
+        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_name museumName,s.note,s.status,s.review_comment reviewComment,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
+    }
+
+    @GetMapping("/consumer-professional-submissions/{id}/download")
+    public ResponseEntity<Resource> downloadProfessionalSubmission(@PathVariable Long id) throws Exception {
+        Map<String,Object> row = jdbc.queryForMap("SELECT user_id userId,original_name originalName,storage_name storageName FROM consumer_professional_submission WHERE id=?", id);
+        JwtService.Claims principal = authenticatedPrincipal();
+        Long owner = ((Number) row.get("userId")).longValue();
+        if (!isCreativeAdmin(principal) && !owner.equals(principal.userId())) throw new IllegalArgumentException("无权下载该作品包");
+        Path file = creativeAssetRoot().resolve("professional-submissions").resolve(String.valueOf(row.get("storageName"))).normalize();
+        if (!file.startsWith(creativeAssetRoot().resolve("professional-submissions").normalize()) || !Files.isRegularFile(file)) throw new IOException("作品包文件不存在");
+        String filename = URLEncoder.encode(String.valueOf(row.get("originalName")), StandardCharsets.UTF_8).replace("+", "%20");
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/zip"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + filename)
+                .contentLength(Files.size(file)).body(new FileSystemResource(file));
+    }
+
+    @PutMapping("/consumer-professional-submissions/{id}/review")
+    public Map<String,Object> reviewProfessionalSubmission(@PathVariable Long id, @RequestBody Map<String,String> body) {
+        requireCreativeAdmin();
+        String status = body == null ? "" : nullToEmpty(body.get("status")).trim();
+        if (!Set.of("review", "approved", "rejected").contains(status)) throw new IllegalArgumentException("审核状态只能是 review / approved / rejected");
+        String comment = body == null ? "" : nullToEmpty(body.get("comment"));
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET status=?,review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=?", status, comment, authenticatedPrincipal().username(), id);
+        if (updated == 0) throw new IllegalArgumentException("专业作品包不存在");
+        return Map.of("success", true, "status", status, "message", "专业作品包审核状态已更新");
     }
 
     @PostMapping(value = "/assets/{id}/material-variants", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
