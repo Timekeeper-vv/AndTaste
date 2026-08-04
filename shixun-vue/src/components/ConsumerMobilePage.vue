@@ -177,6 +177,9 @@ const atelierPatternCategory = ref('全部')
 const selectedAtelierPatternId = ref('taotie')
 const atelierMaterial = ref('陶瓷釉面')
 const atelierFinish = reactive({ glaze: 72, texture: 42, relief: 36 })
+// Temporarily hide the decorative atelier block so users land directly on
+// the functional image, 3D, and work-library entry points below.
+const showAtelierWorkbench = false
 
 const atelierModes: Array<{ key: AtelierMode; label: string; eyebrow: string; description: string; action: string }> = [
   { key: 'concept', label: '灵感生图', eyebrow: '01 · IDEA TO IMAGE', description: '从一句文化灵感，生成可继续打样的产品视觉。', action: '生成产品视觉' },
@@ -1279,7 +1282,7 @@ function closeModelPreview() {
         <div class="studio-hero-art" aria-hidden="true"><i class="art-ring ring-one"></i><i class="art-ring ring-two"></i><div class="art-tile tile-one"><span>AI</span><b>文化灵感</b></div><div class="art-tile tile-two"><span>3D</span><b>产品原型</b></div><em>✦</em></div>
       </div>
 
-      <section class="atelier-workbench" aria-label="东方 AI 文创创作台">
+      <section v-if="showAtelierWorkbench" class="atelier-workbench" aria-label="东方 AI 文创创作台">
         <header class="atelier-heading">
           <div>
             <span>ORIENTAL CREATIVE ATELIER</span>
