@@ -1572,19 +1572,6 @@ function closeModelPreview() {
               </template>
               <template v-else><div class="recommendation-empty-mark">选</div><div class="museum-recommendation-head"><span>渠道策略卡片</span><b>等待选择</b></div><p>完成博物馆选择后，这里会汇总该渠道的客流、竞争、爆款潜力，以及适合切入的产品方向。</p><small>先选一处渠道，再决定第一款作品从哪里打开市场。</small></template>
             </aside>
-            <aside class="market-opportunity-panel" aria-live="polite" aria-label="爆款机会推荐">
-              <div class="market-opportunity-head"><div><span>HISTORICAL SIGNALS · 历史样本</span><b>{{ marketOpportunityTitle }}</b><small>{{ selectedPurposeMuseum && marketInsights.matchedMuseum === false ? '该馆暂无历史样本，先参考全部项目的验证方向' : '根据历史项目销量、跨项目复用和耗损表现生成方向建议' }}</small></div><i v-if="marketInsightsLoading">正在分析</i><i v-else>创作参考</i></div>
-              <div class="market-opportunity-grid">
-                <article v-for="item in visibleMarketOpportunities" :key="item.id" class="market-opportunity-card">
-                  <div class="market-opportunity-card-top"><span>{{ item.level || '可复制' }}</span><strong>{{ item.score || 0 }}<small>潜力分</small></strong></div>
-                  <b>{{ item.title }}</b>
-                  <p>{{ item.reason }}</p>
-                  <div class="market-opportunity-meta"><span v-if="item.sales">历史销量 {{ formatInsightNumber(item.sales) }}</span><span v-if="item.projectCount">验证项目 {{ item.projectCount }} 个</span><span v-if="item.lossRate !== undefined">耗损 {{ item.lossRate }}%</span></div>
-                  <button type="button" @click="launchMarketOpportunity(item)">用这个方向创作 <em>→</em></button>
-                </article>
-              </div>
-              <small class="market-opportunity-note">{{ marketInsights.disclaimer || '历史销量样本只用于创作方向参考，不代表销售承诺；实际合作、授权和定价以审核及协议为准。' }}</small>
-            </aside>
             <aside class="channel-leaderboard" aria-live="polite" aria-label="渠道热卖参考排行榜">
               <div class="channel-leaderboard-head">
                 <div><span>SELLING SIGNALS</span><b>{{ channelLeaderboardTitle }}</b></div>
@@ -1845,6 +1832,21 @@ function closeModelPreview() {
     </nav>
 
     <div class="mobile-page-wrap">
+    <section v-if="tab === 'image' || tab === 'model'" class="creation-market-guidance" aria-label="创作页爆款机会推荐">
+      <aside class="market-opportunity-panel" aria-live="polite">
+        <div class="market-opportunity-head"><div><span>CREATE WITH SIGNALS · 创作前参考</span><b>{{ marketOpportunityTitle }}</b><small>{{ selectedPurposeMuseum && marketInsights.matchedMuseum === false ? '该馆暂无历史样本，先参考全部项目的验证方向' : '根据历史项目销量、跨项目复用和耗损表现，给你一个更有依据的起点' }}</small></div><i v-if="marketInsightsLoading">正在分析</i><i v-else>创作参考</i></div>
+        <div class="market-opportunity-grid">
+          <article v-for="item in visibleMarketOpportunities" :key="item.id" class="market-opportunity-card">
+            <div class="market-opportunity-card-top"><span>{{ item.level || '可复制' }}</span><strong>{{ item.score || 0 }}<small>潜力分</small></strong></div>
+            <b>{{ item.title }}</b>
+            <p>{{ item.reason }}</p>
+            <div class="market-opportunity-meta"><span v-if="item.sales">历史销量 {{ formatInsightNumber(item.sales) }}</span><span v-if="item.projectCount">验证项目 {{ item.projectCount }} 个</span><span v-if="item.lossRate !== undefined">耗损 {{ item.lossRate }}%</span></div>
+            <button type="button" @click="launchMarketOpportunity(item)">用这个方向创作 <em>→</em></button>
+          </article>
+        </div>
+        <small class="market-opportunity-note">{{ marketInsights.disclaimer || '历史销量样本只用于创作方向参考，不代表销售承诺；实际合作、授权和定价以审核及协议为准。' }}</small>
+      </aside>
+    </section>
     <Transition name="mobile-page" mode="out-in">
     <section v-if="tab==='image'" key="image" class="panel creation-panel creation-redesign image-redesign">
       <header class="creation-spotlight">
@@ -2065,10 +2067,11 @@ function closeModelPreview() {
 </style>
 
 <style scoped>
-/* Historical sales insight: evidence-led opportunity cards for the channel gate. */
+/* Historical sales insight: keep the evidence-led opportunity cards next to the creation controls. */
+.creation-market-guidance{margin:0 0 14px}
 .consumer-shell.immersive-shell .market-opportunity-panel{grid-column:1/-1;min-width:0;padding:19px 20px;border:1px solid #d9e3da;border-radius:22px;background:linear-gradient(145deg,#f8fbf7,#edf3ed);box-shadow:0 13px 28px rgba(64,88,70,.065)}
 .market-opportunity-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.market-opportunity-head>div{display:grid;gap:4px;min-width:0}.market-opportunity-head span{color:#6d897a;font-size:9px;font-weight:950;letter-spacing:1.35px}.market-opportunity-head b{color:#3f5548;font-family:var(--song);font-size:21px;font-weight:650}.market-opportunity-head small{color:#849287;font-size:10px;line-height:1.45}.market-opportunity-head i{flex:none;padding:5px 8px;border:1px solid #d3e0d5;border-radius:999px;background:#fffdfa;color:#668575;font-size:9px;font-style:normal;font-weight:900}.market-opportunity-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}.market-opportunity-card{display:grid;align-content:start;gap:7px;min-width:0;padding:14px;border:1px solid #dce7de;border-radius:17px;background:rgba(255,255,255,.78);box-shadow:0 8px 18px rgba(57,82,65,.045)}.market-opportunity-card-top{display:flex;align-items:center;justify-content:space-between;gap:7px}.market-opportunity-card-top>span{padding:4px 7px;border-radius:999px;background:#e7f1e8;color:#5f7f6e;font-size:9px;font-weight:900}.market-opportunity-card-top>strong{display:flex;align-items:baseline;gap:3px;color:#b1674f;font-family:var(--song);font-size:25px;font-weight:700}.market-opportunity-card-top>strong small{color:#9a887c;font-family:inherit;font-size:8px;font-weight:800}.market-opportunity-card>b{overflow:hidden;color:#3d4e43;font-family:var(--song);font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.market-opportunity-card>p{min-height:39px;margin:0;color:#75847a;font-size:10px;line-height:1.55}.market-opportunity-meta{display:flex;flex-wrap:wrap;gap:5px}.market-opportunity-meta span{padding:4px 6px;border-radius:7px;background:#f2f6f1;color:#718278;font-size:8px}.market-opportunity-card button{display:flex;align-items:center;justify-content:space-between;height:34px;margin-top:2px;padding:0 10px;border:1px solid #c7d9cb;border-radius:10px;background:#fffdfa;color:#527362;font:inherit;font-size:10px;font-weight:900;cursor:pointer}.market-opportunity-card button em{color:#b9664f;font-size:15px;font-style:normal}.market-opportunity-card button:hover{border-color:#89a995;background:#edf5ee}.market-opportunity-note{display:block;margin-top:12px;padding-top:10px;border-top:1px solid rgba(108,137,119,.18);color:#8c9a90;font-size:9px;line-height:1.5}
-@media(max-width:700px){.consumer-shell.immersive-shell .market-opportunity-panel{padding:16px;border-radius:18px}.market-opportunity-head b{font-size:18px}.market-opportunity-grid{grid-template-columns:1fr;gap:8px}.market-opportunity-card{padding:12px}.market-opportunity-card>p{min-height:0}.market-opportunity-card-top>strong{font-size:22px}}
+@media(max-width:700px){.creation-market-guidance{margin-bottom:10px}.consumer-shell.immersive-shell .market-opportunity-panel{padding:16px;border-radius:18px}.market-opportunity-head b{font-size:18px}.market-opportunity-grid{grid-template-columns:1fr;gap:8px}.market-opportunity-card{padding:12px}.market-opportunity-card>p{min-height:0}.market-opportunity-card-top>strong{font-size:22px}}
 </style>
 
 <style scoped>
