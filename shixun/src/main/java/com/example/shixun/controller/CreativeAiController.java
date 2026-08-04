@@ -177,6 +177,8 @@ public class CreativeAiController {
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS design_review_report (id BIGINT AUTO_INCREMENT PRIMARY KEY, review_id BIGINT NOT NULL UNIQUE, report_json JSON NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='智能评估完整报告留存'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_account (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL UNIQUE, balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, frozen_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_recharged DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_consumed DECIMAL(12,2) NOT NULL DEFAULT 0.00, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='C端用户额度账户'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_transaction (id BIGINT AUTO_INCREMENT PRIMARY KEY, transaction_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NULL, job_id BIGINT NULL, biz_type VARCHAR(50) NOT NULL, amount DECIMAL(12,2) NOT NULL, direction VARCHAR(20) NOT NULL, status VARCHAR(30) NOT NULL, balance_before DECIMAL(12,2) NOT NULL DEFAULT 0.00, balance_after DECIMAL(12,2) NOT NULL DEFAULT 0.00, remark VARCHAR(500), operator VARCHAR(80), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_credit_user(user_id), INDEX idx_credit_status(status), INDEX idx_credit_biz(biz_type)) COMMENT='C端用户额度流水'");
+        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_reward_mission_claim (id BIGINT AUTO_INCREMENT PRIMARY KEY, claim_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, mission_key VARCHAR(80) NOT NULL, asset_id BIGINT NULL, credit_transaction_id BIGINT NULL, status VARCHAR(30) NOT NULL DEFAULT 'claimed', claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_consumer_reward_mission (user_id, mission_key), INDEX idx_reward_mission_user(user_id)) COMMENT='C端一次性创作任务奖励领取记录'");
+        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_campaign_reward (id BIGINT AUTO_INCREMENT PRIMARY KEY, participation_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, campaign_key VARCHAR(80) NOT NULL, asset_id BIGINT NOT NULL, status VARCHAR(30) NOT NULL DEFAULT 'pending_review', reward_amount DECIMAL(12,2) NOT NULL, credit_transaction_id BIGINT NULL, reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uq_consumer_campaign_user (user_id, campaign_key), UNIQUE KEY uq_consumer_campaign_asset (asset_id), INDEX idx_campaign_reward_status(status), INDEX idx_campaign_reward_user(user_id)) COMMENT='C端主题活动投稿与奖励记录'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY, request_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NOT NULL, request_type VARCHAR(20) NOT NULL, title VARCHAR(200), quantity INT NOT NULL DEFAULT 1, self_ship_quantity INT NOT NULL DEFAULT 0, museum_distribution_json TEXT, recipient_name VARCHAR(80), recipient_phone VARCHAR(80), recipient_address VARCHAR(500), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cpr_user(user_id), INDEX idx_cpr_asset(asset_id), INDEX idx_cpr_type(request_type), INDEX idx_cpr_status(status)) COMMENT='C端作品打样与生产申请'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_professional_submission (id BIGINT AUTO_INCREMENT PRIMARY KEY, submission_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, title VARCHAR(200) NOT NULL, original_name VARCHAR(260) NOT NULL, storage_name VARCHAR(260) NOT NULL, file_size BIGINT NOT NULL, purpose VARCHAR(30) NOT NULL DEFAULT 'personal', museum_id VARCHAR(80), museum_name VARCHAR(200), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cps_user(user_id), INDEX idx_cps_status(status)) COMMENT='C端专业设计师ZIP作品包审核'");
         try { this.jdbc.execute("ALTER TABLE digital_asset ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
@@ -401,6 +403,87 @@ public class CreativeAiController {
         Long userId = requireCurrentConsumerUser();
         ensureConsumerCreditAccount(userId);
         return creditAccountMap(userId);
+    }
+
+    @GetMapping("/consumer-rewards/overview")
+    public Map<String,Object> consumerRewardOverview() {
+        Long userId = requireCurrentConsumerUser();
+        ensureConsumerCreditAccount(userId);
+        List<Map<String,Object>> missions = new ArrayList<>();
+        for (String missionKey : rewardMissionKeys()) missions.add(rewardMissionOverview(userId, missionKey));
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("missions", missions);
+        out.put("campaign", campaignOverview(userId, defaultCampaignKey()));
+        out.put("creditAccount", creditAccountMap(userId));
+        return out;
+    }
+
+    @GetMapping("/consumer-rewards/history")
+    public Map<String,Object> consumerRewardHistory() {
+        Long userId = requireCurrentConsumerUser();
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("missions", jdbc.queryForList("SELECT mission_key missionKey,asset_id assetId,status,claimed_at claimedAt FROM consumer_reward_mission_claim WHERE user_id=? ORDER BY id DESC", userId));
+        out.put("campaigns", jdbc.queryForList("SELECT c.participation_no participationNo,c.campaign_key campaignKey,c.asset_id assetId,a.title assetTitle,c.status,c.reward_amount rewardAmount,c.reviewed_at reviewedAt,c.created_at createdAt FROM consumer_campaign_reward c LEFT JOIN digital_asset a ON a.id=c.asset_id WHERE c.user_id=? ORDER BY c.id DESC", userId));
+        out.put("transactions", jdbc.queryForList("SELECT transaction_no transactionNo,asset_id assetId,amount,status,remark,created_at createdAt FROM consumer_credit_transaction WHERE user_id=? AND biz_type='reward' ORDER BY id DESC LIMIT 100", userId));
+        return out;
+    }
+
+    @PostMapping("/consumer-rewards/missions/{missionKey}/claim")
+    public Map<String,Object> claimConsumerRewardMission(@PathVariable String missionKey) {
+        Long userId = requireCurrentConsumerUser();
+        if (!rewardMissionKeys().contains(missionKey)) throw new IllegalArgumentException("不支持的创作任务");
+        creditTransactions.execute(status -> {
+            Map<String,Object> mission = rewardMissionOverview(userId, missionKey);
+            if (!"claimable".equals(String.valueOf(mission.get("status")))) {
+                throw new IllegalStateException("claimed".equals(String.valueOf(mission.get("status"))) ? "该任务积分已领取" : "请先完成对应创作任务");
+            }
+            Long assetId = mission.get("assetId") instanceof Number ? ((Number) mission.get("assetId")).longValue() : null;
+            int inserted = jdbc.update("INSERT INTO consumer_reward_mission_claim (claim_no,user_id,mission_key,asset_id,status) VALUES (?,?,?,?, 'claimed') ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)", no("RMC"), userId, missionKey, assetId);
+            if (inserted != 1) throw new IllegalStateException("该任务积分已领取");
+            Long txId = grantRewardCreditInTransaction(userId, assetId, rewardMissionAmount(missionKey), "完成创作任务：" + rewardMissionTitle(missionKey));
+            jdbc.update("UPDATE consumer_reward_mission_claim SET credit_transaction_id=? WHERE user_id=? AND mission_key=?", txId, userId, missionKey);
+            return null;
+        });
+        Map<String,Object> out = new LinkedHashMap<>(rewardMissionOverview(userId, missionKey));
+        out.put("creditAccount", creditAccountMap(userId));
+        out.put("message", "任务积分已到账");
+        return out;
+    }
+
+    @PostMapping("/consumer-rewards/campaigns/{campaignKey}/participations")
+    public Map<String,Object> joinConsumerCampaign(@PathVariable String campaignKey, @RequestBody Map<String,Object> body) {
+        Long userId = requireCurrentConsumerUser();
+        if (!defaultCampaignKey().equals(campaignKey)) throw new IllegalArgumentException("活动不存在或已结束");
+        Long assetId = body != null && body.get("assetId") instanceof Number ? ((Number) body.get("assetId")).longValue() : null;
+        if (assetId == null) throw new IllegalArgumentException("请选择要投稿的作品");
+        requireAssetAccess(assetId);
+        List<Map<String,Object>> assets = jdbc.queryForList("SELECT id,status,asset_type assetType,created_by createdBy FROM digital_asset WHERE id=? AND created_by=? AND asset_type IN ('image','model') LIMIT 1", assetId, userId);
+        if (assets.isEmpty()) throw new IllegalArgumentException("仅可投稿本人生成的图片或3D作品");
+        if (!"review".equals(String.valueOf(assets.get(0).get("status")))) throw new IllegalStateException("请先把作品提交审核，再参加本期活动");
+        BigDecimal amount = campaignRewardAmount(campaignKey);
+        try {
+            int inserted = jdbc.update("INSERT INTO consumer_campaign_reward (participation_no,user_id,campaign_key,asset_id,status,reward_amount) VALUES (?,?,?,?, 'pending_review',?)", no("CRW"), userId, campaignKey, assetId, amount);
+            if (inserted != 1) throw new IllegalStateException("活动投稿创建失败");
+            jdbc.update("UPDATE digital_asset SET tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=?", ";活动投稿=" + campaignKey, assetId, userId);
+        } catch (Exception e) {
+            List<Map<String,Object>> existing = jdbc.queryForList("SELECT asset_id assetId,status FROM consumer_campaign_reward WHERE user_id=? AND campaign_key=? LIMIT 1", userId, campaignKey);
+            if (!existing.isEmpty()) throw new IllegalStateException("本期活动每人限投稿一件作品，当前投稿正在审核");
+            throw e;
+        }
+        Map<String,Object> out = campaignOverview(userId, campaignKey);
+        out.put("message", "活动投稿已进入审核，通过后系统自动发放积分");
+        return out;
+    }
+
+    @GetMapping("/consumer-rewards/admin/campaigns")
+    public List<Map<String,Object>> adminCampaignRewards(@RequestParam(required=false) String status,
+                                                         @RequestParam(required=false,defaultValue="200") int size) {
+        requireCreativeAdmin();
+        StringBuilder sql = new StringBuilder("SELECT c.id,c.participation_no participationNo,c.campaign_key campaignKey,c.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.status assetStatus,u.username,c.status,c.reward_amount rewardAmount,c.reviewed_by reviewedBy,c.reviewed_at reviewedAt,c.created_at createdAt FROM consumer_campaign_reward c JOIN user u ON u.id=c.user_id JOIN digital_asset a ON a.id=c.asset_id WHERE 1=1");
+        List<Object> args = new ArrayList<>();
+        if (!blank(status)) { sql.append(" AND c.status=?"); args.add(status.trim()); }
+        sql.append(" ORDER BY c.id DESC LIMIT ?"); args.add(Math.max(1, Math.min(size, 500)));
+        return jdbc.queryForList(sql.toString(), args.toArray());
     }
 
     @GetMapping("/consumer-credits/admin/accounts")
@@ -1631,7 +1714,16 @@ public class CreativeAiController {
         String comment=body==null?"":nullToEmpty(body.get("comment"));
         int n=jdbc.update("UPDATE digital_asset a SET a.status=?, a.tags=CONCAT(COALESCE(a.tags,''), ?) WHERE a.id=? AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')",status,";审核:"+status+(blank(comment)?"":"-"+comment),id);
         if(n==0) throw new IllegalArgumentException("作品不存在或不是C端用户作品");
-        return Map.of("success",true,"id",id,"status",status,"operator",blank(operator)?"admin":operator,"message","approved".equals(status)?"审核已通过，作品已进入C端用户端库存":"审核状态已更新");
+        BigDecimal campaignReward = settleCampaignRewardForReview(id, status, blank(operator) ? "admin" : operator);
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("success", true); out.put("id", id); out.put("status", status); out.put("operator", blank(operator) ? "admin" : operator);
+        if (campaignReward.compareTo(BigDecimal.ZERO) > 0) {
+            out.put("campaignReward", campaignReward);
+            out.put("message", "审核已通过，活动积分已自动发放");
+        } else {
+            out.put("message", "approved".equals(status) ? "审核已通过，作品已进入C端用户端库存" : "审核状态已更新");
+        }
+        return out;
     }
 
     @GetMapping("/consumer-production/museums")
@@ -2864,6 +2956,125 @@ public class CreativeAiController {
         if(userId==null) throw new IllegalArgumentException("缺少C端用户ID");
         List<Map<String,Object>> rows=jdbc.queryForList("SELECT id,role FROM user WHERE id=? LIMIT 1",userId);
         if(rows.isEmpty()||!"user".equals(String.valueOf(rows.get(0).get("role")))) throw new IllegalStateException("仅C端用户可使用额度账户");
+    }
+
+    private Set<String> rewardMissionKeys() {
+        return Set.of("first_image_success", "first_model_success", "first_review_submit");
+    }
+
+    private String rewardMissionTitle(String missionKey) {
+        return switch (missionKey) {
+            case "first_image_success" -> "完成第一张 AI 产品图";
+            case "first_model_success" -> "完成第一个 3D 原型";
+            case "first_review_submit" -> "完成第一次作品提交审核";
+            default -> throw new IllegalArgumentException("不支持的创作任务");
+        };
+    }
+
+    private BigDecimal rewardMissionAmount(String missionKey) {
+        return switch (missionKey) {
+            case "first_image_success" -> BigDecimal.valueOf(5);
+            case "first_model_success" -> BigDecimal.valueOf(15);
+            case "first_review_submit" -> BigDecimal.valueOf(10);
+            default -> throw new IllegalArgumentException("不支持的创作任务");
+        };
+    }
+
+    private String rewardMissionDescription(String missionKey) {
+        return switch (missionKey) {
+            case "first_image_success" -> "首次成功生成并保存一张 AI 文创产品图。";
+            case "first_model_success" -> "首次成功生成并保存一个可预览的 3D 原型。";
+            case "first_review_submit" -> "首次将自己的图片或 3D 作品提交给审核员。";
+            default -> "";
+        };
+    }
+
+    private Map<String,Object> rewardMissionOverview(Long userId, String missionKey) {
+        List<Map<String,Object>> claimedRows = jdbc.queryForList("SELECT asset_id assetId,status,claimed_at claimedAt FROM consumer_reward_mission_claim WHERE user_id=? AND mission_key=? LIMIT 1", userId, missionKey);
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("key", missionKey); out.put("title", rewardMissionTitle(missionKey)); out.put("description", rewardMissionDescription(missionKey)); out.put("rewardAmount", rewardMissionAmount(missionKey));
+        if (!claimedRows.isEmpty()) {
+            out.put("status", "claimed"); out.put("assetId", claimedRows.get(0).get("assetId")); out.put("claimedAt", claimedRows.get(0).get("claimedAt"));
+            return out;
+        }
+        String predicate = switch (missionKey) {
+            case "first_image_success" -> "asset_type='image' AND created_by=? AND COALESCE(source_type,'ai_generated')<>'upload'";
+            case "first_model_success" -> "asset_type='model' AND created_by=?";
+            case "first_review_submit" -> "created_by=? AND asset_type IN ('image','model') AND tags LIKE '%用户提交审核%'";
+            default -> throw new IllegalArgumentException("不支持的创作任务");
+        };
+        List<Map<String,Object>> assetRows = jdbc.queryForList("SELECT id FROM digital_asset WHERE " + predicate + " ORDER BY id ASC LIMIT 1", userId);
+        if (assetRows.isEmpty()) {
+            out.put("status", "in_progress");
+        } else {
+            out.put("status", "claimable"); out.put("assetId", assetRows.get(0).get("id"));
+        }
+        return out;
+    }
+
+    private String defaultCampaignKey() { return "museum_summer_gift_2026"; }
+
+    private BigDecimal campaignRewardAmount(String campaignKey) {
+        if (!defaultCampaignKey().equals(campaignKey)) throw new IllegalArgumentException("活动不存在或已结束");
+        return BigDecimal.valueOf(50);
+    }
+
+    private Map<String,Object> campaignOverview(Long userId, String campaignKey) {
+        if (!defaultCampaignKey().equals(campaignKey)) throw new IllegalArgumentException("活动不存在或已结束");
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("key", campaignKey); out.put("title", "东方器物新生 · 夏日伴手礼");
+        out.put("brief", "围绕一座城市、一件馆藏或一种地方工艺，创作适合游客带走的当代伴手礼。");
+        out.put("promptHint", "以一件馆藏器物或地方工艺为灵感，设计一款适合夏日旅行的当代文创伴手礼；突出文化出处、真实材质、易携带结构和商品陈列感。");
+        out.put("rewardAmount", campaignRewardAmount(campaignKey));
+        out.put("deadline", "2026-09-30");
+        out.put("reviewNotice", "投稿须先提交作品审核；审核通过后由系统自动发放积分，积分不构成现金或销售收益承诺。");
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT c.asset_id assetId,a.title assetTitle,c.status,c.reward_amount rewardAmount,c.reviewed_at reviewedAt,c.created_at createdAt FROM consumer_campaign_reward c LEFT JOIN digital_asset a ON a.id=c.asset_id WHERE c.user_id=? AND c.campaign_key=? LIMIT 1", userId, campaignKey);
+        if (rows.isEmpty()) {
+            out.put("status", "not_joined");
+        } else {
+            out.putAll(rows.get(0));
+        }
+        return out;
+    }
+
+    private BigDecimal settleCampaignRewardForReview(Long assetId, String assetStatus, String operator) {
+        if (!"approved".equals(assetStatus) && !"rejected".equals(assetStatus)) return BigDecimal.ZERO;
+        BigDecimal result = creditTransactions.execute(status -> {
+            List<Map<String,Object>> rows = jdbc.queryForList("SELECT id,user_id userId,campaign_key campaignKey,asset_id assetId,status,reward_amount rewardAmount FROM consumer_campaign_reward WHERE asset_id=? FOR UPDATE", assetId);
+            if (rows.isEmpty()) return BigDecimal.ZERO;
+            Map<String,Object> row = rows.get(0);
+            if (!"pending_review".equals(String.valueOf(row.get("status")))) return BigDecimal.ZERO;
+            Long userId = ((Number) row.get("userId")).longValue();
+            if ("rejected".equals(assetStatus)) {
+                jdbc.update("UPDATE consumer_campaign_reward SET status='rejected',reviewed_by=?,reviewed_at=NOW() WHERE id=? AND status='pending_review'", operator, row.get("id"));
+                return BigDecimal.ZERO;
+            }
+            BigDecimal amount = toDecimal(row.get("rewardAmount"));
+            Long txId = grantRewardCreditInTransaction(userId, assetId, amount, "活动审核通过：" + String.valueOf(row.get("campaignKey")));
+            int updated = jdbc.update("UPDATE consumer_campaign_reward SET status='rewarded',credit_transaction_id=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND status='pending_review'", txId, operator, row.get("id"));
+            if (updated != 1) throw new IllegalStateException("活动奖励状态并发变化，已回滚");
+            return amount;
+        });
+        return result == null ? BigDecimal.ZERO : result;
+    }
+
+    private Long grantRewardCreditInTransaction(Long userId, Long assetId, BigDecimal amount, String remark) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) throw new IllegalArgumentException("奖励积分必须大于0");
+        ensureConsumerCreditAccount(userId);
+        List<Map<String,Object>> accounts = jdbc.queryForList("SELECT balance FROM consumer_credit_account WHERE user_id=? FOR UPDATE", userId);
+        if (accounts.isEmpty()) throw new IllegalStateException("积分账户不存在");
+        BigDecimal before = toDecimal(accounts.get(0).get("balance"));
+        BigDecimal after = before.add(amount);
+        int changed = jdbc.update("UPDATE consumer_credit_account SET balance=? WHERE user_id=?", after, userId);
+        if (changed != 1) throw new IllegalStateException("积分账户更新失败");
+        KeyHolder kh = new GeneratedKeyHolder();
+        jdbc.update(con -> {
+            PreparedStatement ps = con.prepareStatement("INSERT INTO consumer_credit_transaction (transaction_no,user_id,asset_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1, no("CRT")); ps.setLong(2, userId); if (assetId == null) ps.setNull(3, java.sql.Types.BIGINT); else ps.setLong(3, assetId);
+            ps.setString(4, "reward"); ps.setBigDecimal(5, amount); ps.setString(6, "income"); ps.setString(7, "completed"); ps.setBigDecimal(8, before); ps.setBigDecimal(9, after); ps.setString(10, remark); ps.setString(11, "system");
+            return ps;
+        }, kh);
+        return Objects.requireNonNull(kh.getKey()).longValue();
     }
 
     private synchronized void ensureConsumerCreditAccount(Long userId) {

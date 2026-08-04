@@ -51,6 +51,9 @@ const imageConfig = ref<any>({})
 const tripoConfig = ref<any>({})
 const creditAccount = ref<any>(null)
 const creditRules = ref<any>({})
+const rewardOverview = ref<any>({ missions: [], campaign: null })
+const rewardBusy = ref('')
+const campaignAssetId = ref<number | null>(null)
 const assets = ref<any[]>([])
 const imageResult = ref<any>(null)
 const doubaoMultiViewResult = ref<any[]>([])
@@ -300,6 +303,11 @@ const creditBalance = computed(() => Number(creditAccount.value?.balance ?? 0))
 const imageCost = computed(() => Number(creditRules.value?.image2d ?? 1))
 const modelCost = computed(() => modelForm.mode === 'text_to_model' ? Number(creditRules.value?.textTo3d ?? 60) : Number(creditRules.value?.imageTo3d ?? 70))
 const convertCost = computed(() => Number(creditRules.value?.modelConvert ?? 1))
+const rewardMissions = computed(() => Array.isArray(rewardOverview.value?.missions) ? rewardOverview.value.missions : [])
+const activeCampaign = computed(() => rewardOverview.value?.campaign || null)
+const campaignCandidateAssets = computed(() => assets.value.filter(asset => ['image', 'model'].includes(String(asset.assetType || asset.asset_type || '')) && String(asset.status || asset.assetStatus || '') === 'review'))
+const rewardMissionStatusText: Record<string, string> = { in_progress: '待完成', claimable: '可领取', claimed: '已领取' }
+const campaignStatusText: Record<string, string> = { not_joined: '等待投稿', pending_review: '审核中', rewarded: '积分已到账', rejected: '未通过' }
 const museumProvinces = computed(() => [...new Set(museums.value.map(m => m.province).filter(Boolean))])
 const filteredMuseums = computed(() => museums.value.filter(m => m.province === museumRegion.province))
 const purposeMuseums = computed(() => museums.value.filter(museum => museum.province === purposeProvince.value))
@@ -811,6 +819,68 @@ async function submitAssetForReview(a: any) {
   }
 }
 
+async function loadRewards() {
+  try {
+    rewardOverview.value = await json('/api/creative/ai/consumer-rewards/overview')
+  } catch (e) {
+    // A reward panel outage must not prevent the core creation workspace from loading.
+    rewardOverview.value = { missions: [], campaign: null }
+  }
+}
+
+function startCampaignCreation() {
+  const hint = String(activeCampaign.value?.promptHint || '').trim()
+  if (hint) imageForm.rawPrompt = hint
+  switchTab('image')
+  emit('alert', '已带入本期活动创作方向；完成后先提交作品审核，再回到首页投稿。', 'success')
+}
+
+async function claimRewardMission(mission: any) {
+  const key = String(mission?.key || '')
+  if (!key || rewardBusy.value) return
+  rewardBusy.value = `mission:${key}`
+  try {
+    const r = await fetch(`/api/creative/ai/consumer-rewards/missions/${encodeURIComponent(key)}/claim`, { method: 'POST' })
+    if (!r.ok) {
+      const err = await r.json().catch(() => null)
+      throw new Error(err?.message || `HTTP ${r.status}`)
+    }
+    const data = await r.json()
+    if (data?.creditAccount) creditAccount.value = data.creditAccount
+    await loadRewards()
+    emit('alert', `${mission.title}奖励已到账`, 'success')
+  } catch (e: any) {
+    emit('alert', `领取任务奖励失败：${e?.message || e}`, 'error')
+  } finally {
+    rewardBusy.value = ''
+  }
+}
+
+async function submitCampaignParticipation() {
+  const campaign = activeCampaign.value
+  const assetId = campaignAssetId.value || Number(campaignCandidateAssets.value[0]?.id || 0)
+  if (!campaign || !assetId) {
+    emit('alert', '先完成一件作品并提交审核，才能参加本期活动', 'error')
+    return
+  }
+  rewardBusy.value = 'campaign'
+  try {
+    const r = await fetch(`/api/creative/ai/consumer-rewards/campaigns/${encodeURIComponent(String(campaign.key))}/participations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetId }),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => null)
+      throw new Error(err?.message || `HTTP ${r.status}`)
+    }
+    await loadRewards()
+    emit('alert', '活动投稿已进入审核，通过后积分会自动到账', 'success')
+  } catch (e: any) {
+    emit('alert', `活动投稿失败：${e?.message || e}`, 'error')
+  } finally {
+    rewardBusy.value = ''
+  }
+}
+
 function setStage(text: string, nextPhase: Phase) {
   stage.value = text
   phase.value = nextPhase
@@ -855,6 +925,7 @@ async function load() {
     creditRules.value = c?.rules || {}
     productionRequests.value = Array.isArray(prs) ? prs : []
     museums.value = Array.isArray(ms) ? ms : []
+    await loadRewards()
   } catch (e: any) {
     emit('alert', '加载移动创作页失败：' + (e?.message || e), 'error')
   }
@@ -1485,6 +1556,40 @@ function closeModelPreview() {
         <div class="studio-hero-art" aria-hidden="true"><i class="art-ring ring-one"></i><i class="art-ring ring-two"></i><div class="art-tile tile-one"><span>AI</span><b>文化灵感</b></div><div class="art-tile tile-two"><span>3D</span><b>产品原型</b></div><em>✦</em></div>
       </div>
 
+      <section v-if="activeCampaign || rewardMissions.length" class="creative-reward-board" aria-label="创作任务与活动激励">
+        <article v-if="activeCampaign" class="campaign-feature">
+          <div class="campaign-feature-copy">
+            <span>CURATED CREATIVE BRIEF</span>
+            <div class="campaign-title-line"><i>夏</i><b>{{ activeCampaign.title }}</b></div>
+            <p>{{ activeCampaign.brief }}</p>
+            <div class="campaign-meta"><em>至 {{ activeCampaign.deadline }}</em><strong>审核通过 +{{ activeCampaign.rewardAmount }} 点</strong></div>
+          </div>
+          <div class="campaign-feature-action">
+            <template v-if="activeCampaign.status === 'not_joined'">
+              <label v-if="campaignCandidateAssets.length"><span>选择已提交审核的作品</span><select v-model.number="campaignAssetId"><option :value="null">请选择作品</option><option v-for="asset in campaignCandidateAssets" :key="asset.id" :value="Number(asset.id)">{{ displayAssetTitle(asset) }}</option></select></label>
+              <button v-if="campaignCandidateAssets.length" type="button" :disabled="rewardBusy === 'campaign'" @click="submitCampaignParticipation">{{ rewardBusy === 'campaign' ? '提交中…' : '提交本期活动' }}</button>
+              <button v-else type="button" @click="startCampaignCreation">按主题开始创作 <span>→</span></button>
+            </template>
+            <template v-else>
+              <b>{{ campaignStatusText[activeCampaign.status] || activeCampaign.status }}</b>
+              <small v-if="activeCampaign.assetTitle">作品：{{ activeCampaign.assetTitle }}</small>
+              <small v-else>审核结论将同步到这里</small>
+            </template>
+          </div>
+          <footer>{{ activeCampaign.reviewNotice }}</footer>
+        </article>
+
+        <section v-if="rewardMissions.length" class="first-creation-missions">
+          <header><div><span>FIRST MILESTONES</span><b>把第一次，变成下一次的底气。</b></div><small>任务依据真实创作记录结算</small></header>
+          <div class="mission-grid">
+            <article v-for="mission in rewardMissions" :key="mission.key" :class="`mission-${mission.status}`">
+              <div><i>{{ mission.key === 'first_image_success' ? '图' : mission.key === 'first_model_success' ? '3D' : '审' }}</i><span>{{ rewardMissionStatusText[mission.status] || mission.status }}</span></div>
+              <b>{{ mission.title }}</b><p>{{ mission.description }}</p><footer><strong>+{{ mission.rewardAmount }} 点</strong><button v-if="mission.status === 'claimable'" type="button" :disabled="rewardBusy === `mission:${mission.key}`" @click="claimRewardMission(mission)">{{ rewardBusy === `mission:${mission.key}` ? '领取中…' : '领取' }}</button><button v-else-if="mission.status === 'in_progress'" type="button" @click="mission.key === 'first_model_success' ? switchTab('model') : mission.key === 'first_review_submit' ? switchTab('gallery') : switchTab('image')">去完成</button><small v-else>已到账</small></footer>
+            </article>
+          </div>
+        </section>
+      </section>
+
       <section v-if="creatorProfile === 'professional'" class="professional-submission-panel" aria-label="专业作品包审核">
         <header>
           <div><span>PROFESSIONAL REVIEW</span><b>提交专业作品包</b><p>上传包含效果图、3D 文件、说明文档或源文件的 ZIP，审核员可在后台下载审核。</p></div>
@@ -1839,6 +1944,12 @@ function closeModelPreview() {
 
 <style scoped>
 .purpose-gate{position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(circle at 80% 10%,rgba(255,255,255,.24),transparent 180px),linear-gradient(160deg,#2a1c16,#7c3f2b 58%,#e0a35d);color:#fff}.purpose-card{width:min(420px,100%);padding:24px;border-radius:28px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);box-shadow:0 30px 80px rgba(37,22,14,.35);backdrop-filter:blur(18px)}.purpose-brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}.purpose-brand img{width:38px;height:38px;border-radius:10px;background:#fff}.purpose-brand span{font-size:12px;font-weight:900;letter-spacing:1.4px}.purpose-card h1{margin:0 0 10px;font-size:30px;letter-spacing:-.04em}.purpose-card p{margin:0 0 16px;color:rgba(255,255,255,.78);line-height:1.7}.purpose-options{display:flex;flex-direction:column;gap:10px}.purpose-options button{position:relative;text-align:left;padding:16px;border:1px solid rgba(255,255,255,.24);border-radius:18px;background:rgba(255,255,255,.92);color:#201a17;box-shadow:0 12px 30px rgba(32,26,23,.12)}.purpose-options i{display:inline-flex;margin-bottom:8px;padding:4px 8px;border-radius:999px;background:#fff7ed;color:#b4532a;font-style:normal;font-size:11px;font-weight:950}.purpose-options b,.purpose-options span{display:block}.purpose-options b{font-size:18px}.purpose-options span{margin-top:5px;color:#6e5547;font-size:13px;line-height:1.5}.purpose-change{position:relative;z-index:1;align-self:flex-start;margin-top:8px;height:30px;border:1px solid rgba(255,255,255,.3);border-radius:999px;background:rgba(255,255,255,.12);color:#fff;font-size:11px;font-weight:900}.purpose-in-form{margin:0 0 10px;padding:9px 10px;border-radius:12px;background:#fff7ed;color:#9a3412;font-size:12px;font-weight:900}.credit-modal{position:fixed;inset:0;z-index:260;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.credit-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden;color:#201a17}.credit-card header,.credit-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.credit-card footer{border-top:1px solid #eadfd4;border-bottom:0}.credit-card header b,.credit-card header span{display:block}.credit-card header span{margin-top:3px;color:#8a7161;font-size:12px}.credit-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.credit-card main{padding:14px;overflow:auto}.balance-card{position:relative;padding:18px;border-radius:20px;background:linear-gradient(135deg,#201a17,#7c3f2b);color:#fff}.balance-card span,.balance-card em{font-style:normal;color:rgba(255,255,255,.72);font-size:12px;font-weight:900}.balance-card b{display:inline-block;margin:8px 6px 0 0;font-size:42px}.rules-card{margin-top:10px;padding:14px;border-radius:18px;background:#fffaf4;border:1px solid #eadfd4}.rules-card b{display:block;margin-bottom:8px}.rules-card p{margin:5px 0;color:#6e5547;font-size:13px}.packages{display:grid;grid-template-columns:1fr;gap:9px;margin-top:10px}.packages button{text-align:left;padding:13px;border:1px solid #eadfd4;border-radius:16px;background:#fff;color:#201a17}.packages strong,.packages span,.packages em{display:block}.packages strong{font-size:20px}.packages span{margin-top:3px;font-weight:900}.packages em{margin-top:4px;color:#8a7161;font-size:12px;font-style:normal}.recharge-note{margin:12px 0 0;color:#8a7161;font-size:12px;line-height:1.6}.credit-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.credit-card footer .done{background:#b4532a}.hero-actions .recharge-hero{background:rgba(255,255,255,.92);color:#7c2d12;border-color:rgba(255,255,255,.92)}.consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.submitted-tip{display:inline-flex;height:30px;align-items:center;padding:0 10px;border-radius:999px;background:#fff7ed;color:#b45309;font-size:12px;font-weight:900}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{position:relative;overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.work-status{position:absolute;top:8px;right:8px;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.92);font-size:10px;font-weight:900}.work-status.draft{color:#64748b}.work-status.review{color:#b45309}.work-status.approved{color:#047857}.work-status.rejected{color:#dc2626}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.gallery .review-submit{background:#b4532a}.production-actions{display:flex;gap:6px;padding:0 9px 9px}.gallery .production-actions button{flex:1;margin:0;background:#0f766e}.gallery .production-actions .prod{background:#7c2d12}.production-list{margin-top:14px;display:flex;flex-direction:column;gap:8px}.production-list h3{margin:4px 0;font-size:15px}.production-list article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:10px;background:#fffaf4;border:1px solid #eadfd4}.production-list b,.production-list span{display:block}.production-list span{margin-top:3px;color:#8a7161;font-size:12px}.production-list em{font-style:normal;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:900}.production-list em.review{background:#fff7ed;color:#b45309}.production-list em.approved{background:#ecfdf5;color:#047857}.production-list em.rejected{background:#fef2f2;color:#dc2626}.production-modal{position:fixed;inset:0;z-index:220;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.production-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden}.production-card header,.production-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.production-card footer{border-top:1px solid #eadfd4;border-bottom:0}.production-card header b,.production-card header span{display:block}.production-card header span{margin-top:3px;color:#8a7161;font-size:12px}.production-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.production-card main{padding:14px;overflow:auto}.production-card input,.production-card select{width:100%;height:40px;box-sizing:border-box;border:1px solid #eadfd4;border-radius:10px;background:#fffaf4;padding:0 10px}.dist-head{display:flex;align-items:center;justify-content:space-between;margin-top:12px}.dist-head button,.production-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.dist-row{display:grid;grid-template-columns:1fr 74px 52px;gap:7px;margin-top:8px}.dist-row button{border:0;border-radius:10px;background:#fef2f2;color:#dc2626;font-weight:900}.alloc-tip{margin:8px 0 0;color:#047857;font-size:12px;font-weight:900}.alloc-tip.bad{color:#dc2626}.production-card footer .submit{background:#b4532a}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
+</style>
+
+<style scoped>
+/* Server-settled rewards: visible enough to guide the next action, never styled as a game wall. */
+.creative-reward-board{display:grid;gap:11px}.campaign-feature{position:relative;display:grid;grid-template-columns:minmax(0,1.32fr) minmax(220px,.68fr);gap:20px;overflow:hidden;padding:21px 22px 15px;border:1px solid #d9e2d8;border-radius:23px;background:linear-gradient(122deg,#fbf8f1,#edf3ea 54%,#f5e8de);box-shadow:0 11px 28px rgba(66,80,66,.06)}.campaign-feature::before{content:"器";position:absolute;right:31%;bottom:-51px;color:rgba(91,119,99,.07);font-family:var(--song);font-size:150px;line-height:1}.campaign-feature-copy,.campaign-feature-action{position:relative;z-index:1}.campaign-feature-copy>span,.first-creation-missions header span{display:block;color:#648172;font-size:9px;font-weight:950;letter-spacing:.16em}.campaign-title-line{display:flex;align-items:center;gap:10px;margin-top:9px}.campaign-title-line i{display:grid;place-items:center;width:30px;height:30px;border:1px solid #c9d8c9;border-radius:10px;background:#fdfcf7;color:#617d6d;font-family:var(--song);font-size:16px;font-style:normal;font-weight:700}.campaign-title-line b{color:#3e453d;font-family:var(--song);font-size:22px;font-weight:650;letter-spacing:-.035em}.campaign-feature p{max-width:590px;margin:9px 0 0;color:#70766e;font-size:12px;line-height:1.65}.campaign-meta{display:flex;align-items:center;gap:9px;margin-top:14px}.campaign-meta em{padding:5px 7px;border-radius:999px;background:rgba(255,255,255,.72);color:#8b7e70;font-size:9px;font-style:normal;font-weight:800}.campaign-meta strong{color:#9b624d;font-size:11px}.campaign-feature-action{display:grid;align-content:center;gap:8px}.campaign-feature-action label{display:grid;gap:5px}.campaign-feature-action label span{color:#7a8176;font-size:9px;font-weight:800}.campaign-feature-action select{height:37px;border:1px solid #d8ddd4;border-radius:10px;background:#fffefb;color:#575c55;padding:0 9px;font-size:11px}.campaign-feature-action button{min-height:41px;padding:0 13px;border:0;border-radius:12px;background:#3f584a;color:#fff;font-size:11px;font-weight:900;box-shadow:0 9px 18px rgba(63,88,74,.16)}.campaign-feature-action button span{margin-left:4px;font-size:15px}.campaign-feature-action>b{color:#486957;font-family:var(--song);font-size:18px}.campaign-feature-action small{color:#8a8277;font-size:10px;line-height:1.5}.campaign-feature>footer{grid-column:1/-1;position:relative;z-index:1;padding-top:10px;border-top:1px solid rgba(126,145,126,.16);color:#8d867b;font-size:9px;line-height:1.55}.first-creation-missions{padding:16px 17px;border:1px solid #e4ddd2;border-radius:22px;background:rgba(255,253,249,.72)}.first-creation-missions header{display:flex;align-items:end;justify-content:space-between;gap:10px;margin-bottom:12px}.first-creation-missions header>div{display:grid;gap:4px}.first-creation-missions header b{color:#4a433b;font-family:var(--song);font-size:18px;font-weight:650}.first-creation-missions header small{max-width:145px;color:#958b80;font-size:9px;line-height:1.45;text-align:right}.mission-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.mission-grid article{display:grid;min-height:140px;padding:12px;border:1px solid #e8e1d7;border-radius:15px;background:#fffefa}.mission-grid article>div,.mission-grid footer{display:flex;align-items:center;justify-content:space-between;gap:6px}.mission-grid article>div i{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;background:#edf2eb;color:#658073;font-family:var(--song);font-size:10px;font-style:normal;font-weight:800}.mission-grid article>div span{color:#968a7d;font-size:9px;font-weight:800}.mission-grid article>b{align-self:end;margin-top:10px;color:#4a443d;font-size:12px}.mission-grid article p{min-height:32px;margin:5px 0 10px;color:#8b8176;font-size:9px;line-height:1.5}.mission-grid footer{margin-top:auto}.mission-grid footer strong{color:#a4654e;font-size:11px}.mission-grid footer button{height:29px;padding:0 9px;border:1px solid #d7ded5;border-radius:9px;background:#f3f7f2;color:#527060;font-size:10px;font-weight:900}.mission-grid .mission-claimable{border-color:#b6cdb8;background:linear-gradient(145deg,#fbfdf9,#eff6ee)}.mission-grid .mission-claimable>div i{background:#5d7c6b;color:#fff}.mission-grid .mission-claimable footer button{border-color:#4e705d;background:#4e705d;color:#fff}.mission-grid .mission-claimed{background:#fbfaf7}.mission-grid .mission-claimed footer small{color:#77907f;font-size:10px;font-weight:900}
+@media(max-width:760px){.campaign-feature{grid-template-columns:1fr;gap:15px;padding:18px}.campaign-feature::before{right:1%;bottom:-42px}.campaign-feature-action{align-content:start}.campaign-feature-action button{width:100%}.first-creation-missions{padding:15px}.mission-grid{grid-template-columns:1fr}.mission-grid article{min-height:0;grid-template-columns:1fr auto;column-gap:12px}.mission-grid article>div,.mission-grid article>b,.mission-grid article p{grid-column:1}.mission-grid footer{grid-column:2;grid-row:1/4;align-self:center;display:grid;justify-items:end;gap:7px}.mission-grid article p{min-height:0;margin-bottom:0}.first-creation-missions header small{display:none}}
 </style>
 
 <style scoped>

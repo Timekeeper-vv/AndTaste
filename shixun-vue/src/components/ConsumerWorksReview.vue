@@ -68,6 +68,10 @@ function approvalSource(w: ConsumerAsset) {
   const matched = /审批出处=([^;]+)/.exec(String(w.tags || ''))
   return matched?.[1]?.trim() || ''
 }
+function campaignOf(w: ConsumerAsset) {
+  const matched = /活动投稿=([^;]+)/.exec(String(w.tags || ''))
+  return matched?.[1] === 'museum_summer_gift_2026' ? '夏日伴手礼活动' : ''
+}
 function purposeClass(w: ConsumerAsset) { return purposeOf(w) === 'museum_sale' ? 'museum' : purposeOf(w) === 'personal' ? 'personal' : 'unknown' }
 
 function formatTime(v?: string) {
@@ -168,7 +172,8 @@ async function reviewWork(w: ConsumerAsset, nextStatus: ReviewStatus) {
       const err = await r.json().catch(() => null)
       throw new Error(err?.message || `HTTP ${r.status}`)
     }
-    emit('alert', nextStatus === 'approved' ? '作品已审核通过，已进入C端用户端库存' : nextStatus === 'rejected' ? '作品已标记不通过' : '作品已退回待审核', 'success')
+    const data = await r.json().catch(() => null)
+    emit('alert', data?.message || (nextStatus === 'approved' ? '作品已审核通过，已进入C端用户端库存' : nextStatus === 'rejected' ? '作品已标记不通过' : '作品已退回待审核'), 'success')
     await load()
   } catch (e: any) {
     emit('alert', '审核失败：' + (e?.message || e), 'error')
@@ -258,6 +263,7 @@ onMounted(load)
             <span>{{ purposeOf(w) === 'museum_sale' ? '博物馆准入审批' : '普通作品审核' }}</span>
           </div>
           <div v-if="approvalSource(w)" class="approval-source">审批出处：{{ approvalSource(w) }}</div>
+          <div v-if="campaignOf(w)" class="campaign-source">活动投稿：{{ campaignOf(w) }} · 通过时由系统自动结算积分</div>
           <div class="meta-row">
             <span>格式：{{ (w.format || '-').toUpperCase() }}</span>
             <span>{{ formatTime(w.createdAt) }}</span>
@@ -339,6 +345,7 @@ onMounted(load)
 
 <style scoped>
 .approval-source{margin:9px 0;padding:8px 10px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;font-size:12px;font-weight:800;line-height:1.45}
+.campaign-source{margin:9px 0;padding:8px 10px;border-radius:10px;background:#fff7ed;border:1px solid #fed7aa;color:#9a4f20;font-size:12px;font-weight:800;line-height:1.45}
 </style>
 
 <style scoped>
