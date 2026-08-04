@@ -12,9 +12,8 @@
     <view v-if="failed" class="fallback" role="alert">
       <view class="fallback-mark">之</view>
       <text class="fallback-title">暂时无法打开创作空间</text>
-      <text class="fallback-copy">请确认小程序业务域名已配置为当前 HTTPS 域名，然后重试。</text>
+      <text class="fallback-copy">创作空间与网站用户端使用同一套页面和功能。请确认小程序业务域名已配置为当前 HTTPS 域名后重试。</text>
       <button class="fallback-action" @tap="reload">重新打开</button>
-      <button class="fallback-secondary" @tap="openNativeLogin">使用小程序页面</button>
     </view>
   </view>
 </template>
@@ -100,10 +99,6 @@ function handleMessage(event: any) {
     uni.removeStorageSync('smart_pig_auth')
     uni.reLaunch({ url: '/pages/webview/index' })
   }
-}
-
-function openNativeLogin() {
-  uni.reLaunch({ url: '/pages/login/index' })
 }
 
 onLoad(() => {
