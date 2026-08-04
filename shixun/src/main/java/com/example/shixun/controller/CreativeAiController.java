@@ -2199,7 +2199,7 @@ public class CreativeAiController {
             meta.put("createdByUserId", ownerUserId);
             if (hasPersistedRole(ownerUserId, "user")) meta.put("consumerWork", true);
         }
-        Long assetId = createAsset("即梦AI 4.6 2D创意图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, format, "即梦AI,火山引擎,2D创意生图,AI生成", meta);
+        Long assetId = createAsset("之间智造AI效果图-" + jobNo, "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, format, "即梦AI,火山引擎,2D创意生图,AI生成", meta);
         jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, taskId, jobId);
         completeConsumerCredit(creditTransactionIdForJob(jobId),jobId,assetId);
         Map<String,Object> out = new LinkedHashMap<>();
