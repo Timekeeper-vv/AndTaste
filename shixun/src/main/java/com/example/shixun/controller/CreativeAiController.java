@@ -1794,6 +1794,124 @@ public class CreativeAiController {
         return item;
     }
 
+    /**
+     * 历史项目销量只用于创作方向洞察，不写入用户订单或仓库库存。
+     * 返回产品形态的可复制信号，避免用单个大客户的绝对销量冒充普遍爆款概率。
+     */
+    @GetMapping("/consumer-insights/opportunities")
+    public Map<String,Object> consumerInsightOpportunities(@RequestParam(required=false) String museumName) {
+        requireCurrentConsumerUser();
+        String requestedMuseum = blank(museumName) ? "" : museumName.trim();
+        String scope = blank(requestedMuseum) ? "全部历史项目" : requestedMuseum;
+        String where = blank(requestedMuseum) ? "" : " WHERE project_name=?";
+        List<Object> args = blank(requestedMuseum) ? List.of() : List.of(requestedMuseum);
+        String aggregateSql = "SELECT COALESCE(NULLIF(TRIM(product_type),''),'其他') productType, "
+                + "COALESCE(NULLIF(TRIM(secondary_type),''),'综合文创') secondaryType, "
+                + "COALESCE(SUM(sales_ytd),0) sales, COALESCE(SUM(loss_ytd),0) loss, "
+                + "COUNT(*) sampleCount, COUNT(DISTINCT NULLIF(TRIM(project_name),'')) projectCount, "
+                + "COUNT(DISTINCT NULLIF(TRIM(product_code),'')) productCount, "
+                + "COALESCE(SUM(sales_jan),0) janSales, COALESCE(SUM(sales_feb),0) febSales, "
+                + "COALESCE(SUM(sales_mar),0) marSales, COALESCE(SUM(sales_apr),0) aprSales, "
+                + "COALESCE(SUM(sales_may),0) maySales, COALESCE(SUM(sales_jun),0) junSales, "
+                + "COALESCE(SUM(sales_jul),0) julSales FROM historical_sales_fact"
+                + where + " GROUP BY product_type, secondary_type ORDER BY sales DESC LIMIT 12";
+        List<Map<String,Object>> groups = jdbc.queryForList(aggregateSql, args.toArray());
+        boolean matchedMuseum = !blank(requestedMuseum) && !groups.isEmpty();
+        if (!matchedMuseum && !blank(requestedMuseum)) {
+            scope = "全部历史项目";
+            groups = jdbc.queryForList(aggregateSql.replace(where, ""), new Object[0]);
+        }
+        long maxSales = groups.stream().mapToLong(row -> asLong(row.get("sales"))).max().orElse(1L);
+        List<Map<String,Object>> opportunities = groups.stream().map(row -> buildOpportunity(row, maxSales)).toList();
+        String topSql = "SELECT product_name productName, project_name projectName, product_type productType, "
+                + "secondary_type secondaryType, sales_ytd sales, loss_ytd loss FROM historical_sales_fact WHERE sales_ytd>0"
+                + (matchedMuseum ? " AND project_name=?" : "") + " ORDER BY sales_ytd DESC LIMIT 6";
+        List<Map<String,Object>> topProducts = jdbc.queryForList(topSql, matchedMuseum ? new Object[]{requestedMuseum} : new Object[0]);
+        String summarySql = "SELECT COALESCE(SUM(sales_ytd),0) sales, COALESCE(SUM(loss_ytd),0) loss, "
+                + "COUNT(DISTINCT NULLIF(TRIM(project_name),'')) projects, COUNT(DISTINCT NULLIF(TRIM(product_code),'')) products "
+                + "FROM historical_sales_fact" + (matchedMuseum ? " WHERE project_name=?" : "");
+        Map<String,Object> summary = jdbc.queryForMap(summarySql, matchedMuseum ? new Object[]{requestedMuseum} : new Object[0]);
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("scope", scope);
+        out.put("requestedMuseum", requestedMuseum);
+        out.put("matchedMuseum", matchedMuseum);
+        out.put("period", "2026年1-7月历史项目样本");
+        out.put("summary", summary);
+        out.put("opportunities", opportunities);
+        out.put("topProducts", topProducts);
+        out.put("disclaimer", "历史项目销量样本仅用于创作方向参考，不代表销售承诺；实际合作、授权、定价和渠道以审核及协议为准。");
+        return out;
+    }
+
+    private Map<String,Object> buildOpportunity(Map<String,Object> row, long maxSales) {
+        String type = str(row.get("productType"));
+        String secondary = str(row.get("secondaryType"));
+        long sales = asLong(row.get("sales"));
+        long loss = asLong(row.get("loss"));
+        long samples = asLong(row.get("sampleCount"));
+        long projects = asLong(row.get("projectCount"));
+        double lossRate = sales + loss == 0 ? 0 : (double) loss / (sales + loss);
+        double recent = asLong(row.get("maySales")) + asLong(row.get("junSales")) + asLong(row.get("julSales"));
+        double earlier = asLong(row.get("janSales")) + asLong(row.get("febSales")) + asLong(row.get("marSales")) + asLong(row.get("aprSales"));
+        double trend = earlier <= 0 ? (recent > 0 ? 1 : 0) : ((recent / 3.0) / Math.max(1.0, earlier / 4.0)) - 1.0;
+        double volumeScore = Math.min(100, 100 * Math.log1p(sales) / Math.log1p(Math.max(1, maxSales)));
+        double replicationScore = Math.min(100, projects * 20.0);
+        double lowLossScore = Math.max(0, 100 - lossRate * 100);
+        double confidenceScore = Math.min(100, samples * 10.0);
+        int score = (int)Math.round(volumeScore * .45 + replicationScore * .25 + lowLossScore * .20 + confidenceScore * .10);
+        String level = score >= 78 ? "高潜力" : score >= 58 ? "可复制" : "待验证";
+        String key = opportunityProductKey(type, secondary);
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("id", key + "-" + secondary);
+        out.put("productType", type);
+        out.put("secondaryType", secondary);
+        out.put("productKey", key);
+        out.put("title", opportunityTitle(type, secondary));
+        out.put("score", score);
+        out.put("level", level);
+        out.put("sales", sales);
+        out.put("lossRate", Math.round(lossRate * 1000) / 10.0);
+        out.put("sampleCount", samples);
+        out.put("projectCount", projects);
+        out.put("trend", Math.round(trend * 1000) / 10.0);
+        out.put("reason", opportunityReason(type, secondary, projects, lossRate));
+        out.put("promptSuffix", opportunityPrompt(type, secondary));
+        return out;
+    }
+
+    private String opportunityProductKey(String type, String secondary) {
+        if (secondary.contains("冰淇淋")) return "icecream";
+        if (secondary.contains("棒棒糖")) return "candy";
+        if (secondary.contains("巧克力")) return "blindbox";
+        if (type.contains("冰箱贴")) return "magnet";
+        if (type.contains("文具")) return "giftbox";
+        return "magnet";
+    }
+
+    private String opportunityTitle(String type, String secondary) {
+        if (!"综合文创".equals(secondary)) return "文化符号 × " + secondary;
+        return "文化符号 × " + type;
+    }
+
+    private String opportunityReason(String type, String secondary, long projects, double lossRate) {
+        String projectHint = projects > 1 ? "已有 " + projects + " 个项目出现过该方向" : "当前样本较少，建议先小批量验证";
+        String lossHint = lossRate < .02 ? "历史耗损较低" : lossRate < .08 ? "耗损处于可控区间" : "耗损偏高，建议先做小批量试销";
+        return projectHint + "，" + lossHint + "。适合围绕具体馆藏符号做差异化设计。";
+    }
+
+    private String opportunityPrompt(String type, String secondary) {
+        if (secondary.contains("冰淇淋")) return "以博物馆或景区核心地标为视觉主角，开发适合游客即时消费和拍照分享的文创冰淇淋，包装与口味形成地域记忆点";
+        if (secondary.contains("棒棒糖") || secondary.contains("巧克力")) return "以馆藏文物或城市符号做年轻化图形转译，开发适合随手购买、送礼和社交分享的文创糖果礼品";
+        if (type.contains("冰箱贴")) return "把馆藏纹样或地标轮廓压缩成一眼可识别的轻量伴手礼，控制尺寸和成本，适合小批量快速试销";
+        return "围绕一个明确的馆藏符号做系列化文创产品，优先选择便携、易陈列、适合游客即时购买的产品形态";
+    }
+
+    private long asLong(Object value) {
+        if (value instanceof Number n) return n.longValue();
+        try { return blank(str(value)) ? 0L : Math.round(Double.parseDouble(str(value))); }
+        catch (Exception ignored) { return 0L; }
+    }
+
     @GetMapping("/consumer-production/my")
     public List<Map<String,Object>> myConsumerProductionRequests(@RequestParam(required=false) String type,
                                                                  @RequestParam(required=false,defaultValue="100") int size) {

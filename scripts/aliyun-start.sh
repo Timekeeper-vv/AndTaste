@@ -203,6 +203,10 @@ init_db(){
   # This migration is idempotent and must also run for existing deployments;
   # the application uses the extension tables on its first payment request.
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260803_01__wechat_jsapi_payment.sql"
+  # Historical project sales are analytics facts only; they never mutate orders
+  # or inventory and are safe to re-import by source batch/row.
+  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260804_01__historical_sales_insights.sql"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260804_01__historical_sales_data.sql"
   ok "数据库及业务账号已就绪：$DB_NAME / $DB_USER"
 }
 

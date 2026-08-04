@@ -27,6 +27,8 @@ const professionalSubmissionTitle = ref('')
 const professionalSubmissionNote = ref('')
 const professionalSubmissionBusy = ref(false)
 const professionalSubmissions = ref<any[]>([])
+const marketInsights = ref<any>({ opportunities: [], topProducts: [], summary: null, disclaimer: '' })
+const marketInsightsLoading = ref(false)
 const purposeGate = ref<HTMLElement | null>(null)
 const purposeStep = ref<'purpose' | 'museum'>('purpose')
 const selectedPurposeMuseum = ref<any | null>(null)
@@ -134,6 +136,9 @@ const materialOptions = [
   { label: 'PPC 高精硬塑', prompt: 'precision injection-molded PPC polymer, high-density satin engineering plastic, crisp parting lines, subtle micro orange-peel texture, clean tight seams, accurate small details, premium non-glossy polymer surface, 8k PBR material, no fabric, no fur, no metal' },
 ]
 const productCategories = [
+  { key: 'icecream', label: '文创冰淇淋', materials: ['纸质', 'PVC'], image: '以博物馆或景区核心地标为视觉主角的文创冰淇淋包装，地域记忆鲜明，适合游客即时消费与拍照分享', model: '文创冰淇淋纸质包装与杯套结构，比例合理，图形适合印刷，适合打样展示' },
+  { key: 'candy', label: '文创糖果', materials: ['纸质', 'PVC'], image: '馆藏文物或城市符号年轻化糖果礼品包装，轻巧、易携带、适合博物馆商店陈列', model: '文创糖果礼盒与单颗包装结构，图形清晰，适合游客伴手礼打样' },
+  { key: 'blindbox', label: '巧克力盲盒', materials: ['纸质', 'PPC'], image: '文物形象巧克力盲盒礼盒，收藏感与开箱惊喜兼具，适合年轻游客和节日送礼', model: '文创巧克力盲盒包装与内托结构，分区明确，适合量产打样' },
   { key: 'magnet', label: '冰箱贴', materials: ['PVC', '搪胶', '树脂', '金属'], image: '博物馆文创冰箱贴，背面预留平整磁铁位，图案清晰、边缘圆润，适合游客伴手礼', model: '文博主题冰箱贴，背面平整磁铁位，主体厚度适中，边缘圆角，浮雕不超过安全深度，适合量产打样' },
   { key: 'plush', label: '毛绒玩具', materials: ['全毛绒', '短毛绒', '超柔绒'], image: '原创文博守护兽毛绒玩具，短密绒毛，刺绣五官，拼色裁片清晰，温暖棚拍产品图', model: '原创文博守护兽全毛绒玩具，圆润填充体，短密绒毛，刺绣五官，独立布料裁片与可见缝线，适合打样', template: 'plush_toy', materialLabel: '全毛绒' },
   { key: 'pvc', label: 'PVC / 搪胶公仔', materials: ['PVC', '搪胶', '软胶'], image: '原创文博潮玩公仔，PVC 搪胶量产感，圆润安全，分件涂装清晰，商业产品渲染', model: '原创文博潮玩 PVC 搪胶公仔，合理分件，避免深倒扣，厚薄均匀，清楚分型线与喷涂区域，适合量产打样', template: 'collectible', materialLabel: '树脂潮玩' },
@@ -942,6 +947,49 @@ async function json(url: string) {
   return await r.json()
 }
 
+const fallbackMarketOpportunities = [
+  { id: 'fallback-icecream', productKey: 'icecream', title: '文化符号 × 冰淇淋', score: 86, level: '高潜力', sales: 0, projectCount: 0, lossRate: 0, reason: '地标视觉与即时消费场景结合，适合先做小批量测试。', promptSuffix: '以景区核心地标为视觉主角，开发适合游客即时消费和拍照分享的文创冰淇淋，包装与口味形成地域记忆点' },
+  { id: 'fallback-candy', productKey: 'candy', title: '文物符号 × 糖果礼品', score: 76, level: '可复制', sales: 0, projectCount: 0, lossRate: 0, reason: '轻巧易携带，适合年轻客群和低客单冲动消费。', promptSuffix: '以馆藏文物或城市符号做年轻化图形转译，开发适合随手购买、送礼和社交分享的文创糖果礼品' },
+  { id: 'fallback-magnet', productKey: 'magnet', title: '地标轮廓 × 冰箱贴', score: 71, level: '可复制', sales: 0, projectCount: 0, lossRate: 0, reason: '打样门槛低、便于陈列，适合小景区快速试爆款。', promptSuffix: '把馆藏纹样或地标轮廓压缩成一眼可识别的轻量伴手礼，控制尺寸和成本，适合小批量快速试销' },
+]
+
+const visibleMarketOpportunities = computed(() => Array.isArray(marketInsights.value?.opportunities) && marketInsights.value.opportunities.length
+  ? marketInsights.value.opportunities.slice(0, 3)
+  : fallbackMarketOpportunities)
+const marketOpportunityTitle = computed(() => selectedPurposeMuseum.value && marketInsights.value?.matchedMuseum !== false
+  ? `${selectedPurposeMuseum.value.name} 爆款机会`
+  : '爆款机会导航')
+
+async function loadMarketInsights(museumName = '') {
+  marketInsightsLoading.value = true
+  try {
+    const query = museumName ? `?museumName=${encodeURIComponent(museumName)}` : ''
+    const data = await json(`/api/creative/ai/consumer-insights/opportunities${query}`)
+    marketInsights.value = data && typeof data === 'object' ? data : { opportunities: [], topProducts: [], summary: null }
+  } catch (e) {
+    // 旧服务器尚未执行历史销量迁移时使用安全的创作方向兜底，不阻塞登录和创作。
+    marketInsights.value = { opportunities: [], topProducts: [], summary: null, error: true }
+  } finally {
+    marketInsightsLoading.value = false
+  }
+}
+
+function formatInsightNumber(value: any) {
+  const n = Number(value || 0)
+  return n >= 10000 ? `${(n / 10000).toFixed(n >= 100000 ? 0 : 1)}万` : n.toLocaleString('zh-CN')
+}
+
+function launchMarketOpportunity(opportunity: any) {
+  const profile = productCategories.find(item => item.key === opportunity?.productKey)
+  if (profile) selectProductCategory(profile.key)
+  const museum = selectedPurposeMuseum.value?.name ? `，以${selectedPurposeMuseum.value.name}的代表性文化符号为核心` : ''
+  const suffix = String(opportunity?.promptSuffix || '围绕一个明确的文化符号做便携、易陈列、适合游客即时购买的文创产品')
+  imageForm.rawPrompt = `${suffix}${museum}`
+  modelForm.rawPrompt = `${suffix}${museum}，产品结构合理、适合量产打样`
+  emit('alert', `已套用「${opportunity?.title || '爆款方向'}」，可继续修改后生成`, 'success')
+  switchTab('image')
+}
+
 async function load() {
   try {
     const [i, t, a, c, prs, ms] = await Promise.all([
@@ -961,6 +1009,7 @@ async function load() {
     productionRequests.value = Array.isArray(prs) ? prs : []
     museums.value = Array.isArray(ms) ? ms : []
     await loadRewards()
+    await loadMarketInsights()
   } catch (e: any) {
     emit('alert', '加载移动创作页失败：' + (e?.message || e), 'error')
   }
@@ -1308,6 +1357,7 @@ function selectMuseum(found: any) {
   purposeProvince.value = found.province || ''
   museumRegion.province = found.province || ''
   productionForm.museumDistribution = [{ museumId: found.id, museumName: found.name, quantity: Number(productionForm.quantity || 0) }]
+  void loadMarketInsights(found.name)
 }
 function changeMuseumProvince() {
   productionForm.museumDistribution = [{ museumId: '', museumName: '', quantity: Number(productionForm.quantity || 0) }]
@@ -1508,6 +1558,19 @@ function closeModelPreview() {
                 <small>{{ selectedMuseumRecommendation.disclaimer }}</small>
               </template>
               <template v-else><div class="recommendation-empty-mark">选</div><div class="museum-recommendation-head"><span>渠道策略卡片</span><b>等待选择</b></div><p>完成博物馆选择后，这里会汇总该渠道的客流、竞争、爆款潜力，以及适合切入的产品方向。</p><small>先选一处渠道，再决定第一款作品从哪里打开市场。</small></template>
+            </aside>
+            <aside class="market-opportunity-panel" aria-live="polite" aria-label="爆款机会推荐">
+              <div class="market-opportunity-head"><div><span>HISTORICAL SIGNALS · 历史样本</span><b>{{ marketOpportunityTitle }}</b><small>{{ selectedPurposeMuseum && marketInsights.matchedMuseum === false ? '该馆暂无历史样本，先参考全部项目的验证方向' : '根据历史项目销量、跨项目复用和耗损表现生成方向建议' }}</small></div><i v-if="marketInsightsLoading">正在分析</i><i v-else>创作参考</i></div>
+              <div class="market-opportunity-grid">
+                <article v-for="item in visibleMarketOpportunities" :key="item.id" class="market-opportunity-card">
+                  <div class="market-opportunity-card-top"><span>{{ item.level || '可复制' }}</span><strong>{{ item.score || 0 }}<small>潜力分</small></strong></div>
+                  <b>{{ item.title }}</b>
+                  <p>{{ item.reason }}</p>
+                  <div class="market-opportunity-meta"><span v-if="item.sales">历史销量 {{ formatInsightNumber(item.sales) }}</span><span v-if="item.projectCount">验证项目 {{ item.projectCount }} 个</span><span v-if="item.lossRate !== undefined">耗损 {{ item.lossRate }}%</span></div>
+                  <button type="button" @click="launchMarketOpportunity(item)">用这个方向创作 <em>→</em></button>
+                </article>
+              </div>
+              <small class="market-opportunity-note">{{ marketInsights.disclaimer || '历史销量样本只用于创作方向参考，不代表销售承诺；实际合作、授权和定价以审核及协议为准。' }}</small>
             </aside>
             <aside class="channel-leaderboard" aria-live="polite" aria-label="渠道热卖参考排行榜">
               <div class="channel-leaderboard-head">
@@ -1986,6 +2049,13 @@ function closeModelPreview() {
 
 <style scoped>
 .purpose-gate{position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(circle at 80% 10%,rgba(255,255,255,.24),transparent 180px),linear-gradient(160deg,#2a1c16,#7c3f2b 58%,#e0a35d);color:#fff}.purpose-card{width:min(420px,100%);padding:24px;border-radius:28px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);box-shadow:0 30px 80px rgba(37,22,14,.35);backdrop-filter:blur(18px)}.purpose-brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}.purpose-brand img{width:38px;height:38px;border-radius:10px;background:#fff}.purpose-brand span{font-size:12px;font-weight:900;letter-spacing:1.4px}.purpose-card h1{margin:0 0 10px;font-size:30px;letter-spacing:-.04em}.purpose-card p{margin:0 0 16px;color:rgba(255,255,255,.78);line-height:1.7}.purpose-options{display:flex;flex-direction:column;gap:10px}.purpose-options button{position:relative;text-align:left;padding:16px;border:1px solid rgba(255,255,255,.24);border-radius:18px;background:rgba(255,255,255,.92);color:#201a17;box-shadow:0 12px 30px rgba(32,26,23,.12)}.purpose-options i{display:inline-flex;margin-bottom:8px;padding:4px 8px;border-radius:999px;background:#fff7ed;color:#b4532a;font-style:normal;font-size:11px;font-weight:950}.purpose-options b,.purpose-options span{display:block}.purpose-options b{font-size:18px}.purpose-options span{margin-top:5px;color:#6e5547;font-size:13px;line-height:1.5}.purpose-change{position:relative;z-index:1;align-self:flex-start;margin-top:8px;height:30px;border:1px solid rgba(255,255,255,.3);border-radius:999px;background:rgba(255,255,255,.12);color:#fff;font-size:11px;font-weight:900}.purpose-in-form{margin:0 0 10px;padding:9px 10px;border-radius:12px;background:#fff7ed;color:#9a3412;font-size:12px;font-weight:900}.credit-modal{position:fixed;inset:0;z-index:260;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.credit-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden;color:#201a17}.credit-card header,.credit-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.credit-card footer{border-top:1px solid #eadfd4;border-bottom:0}.credit-card header b,.credit-card header span{display:block}.credit-card header span{margin-top:3px;color:#8a7161;font-size:12px}.credit-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.credit-card main{padding:14px;overflow:auto}.balance-card{position:relative;padding:18px;border-radius:20px;background:linear-gradient(135deg,#201a17,#7c3f2b);color:#fff}.balance-card span,.balance-card em{font-style:normal;color:rgba(255,255,255,.72);font-size:12px;font-weight:900}.balance-card b{display:inline-block;margin:8px 6px 0 0;font-size:42px}.rules-card{margin-top:10px;padding:14px;border-radius:18px;background:#fffaf4;border:1px solid #eadfd4}.rules-card b{display:block;margin-bottom:8px}.rules-card p{margin:5px 0;color:#6e5547;font-size:13px}.packages{display:grid;grid-template-columns:1fr;gap:9px;margin-top:10px}.packages button{text-align:left;padding:13px;border:1px solid #eadfd4;border-radius:16px;background:#fff;color:#201a17}.packages strong,.packages span,.packages em{display:block}.packages strong{font-size:20px}.packages span{margin-top:3px;font-weight:900}.packages em{margin-top:4px;color:#8a7161;font-size:12px;font-style:normal}.recharge-note{margin:12px 0 0;color:#8a7161;font-size:12px;line-height:1.6}.credit-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.credit-card footer .done{background:#b4532a}.hero-actions .recharge-hero{background:rgba(255,255,255,.92);color:#7c2d12;border-color:rgba(255,255,255,.92)}.consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.submitted-tip{display:inline-flex;height:30px;align-items:center;padding:0 10px;border-radius:999px;background:#fff7ed;color:#b45309;font-size:12px;font-weight:900}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{position:relative;overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.work-status{position:absolute;top:8px;right:8px;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.92);font-size:10px;font-weight:900}.work-status.draft{color:#64748b}.work-status.review{color:#b45309}.work-status.approved{color:#047857}.work-status.rejected{color:#dc2626}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.gallery .review-submit{background:#b4532a}.production-actions{display:flex;gap:6px;padding:0 9px 9px}.gallery .production-actions button{flex:1;margin:0;background:#0f766e}.gallery .production-actions .prod{background:#7c2d12}.production-list{margin-top:14px;display:flex;flex-direction:column;gap:8px}.production-list h3{margin:4px 0;font-size:15px}.production-list article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:10px;background:#fffaf4;border:1px solid #eadfd4}.production-list b,.production-list span{display:block}.production-list span{margin-top:3px;color:#8a7161;font-size:12px}.production-list em{font-style:normal;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:900}.production-list em.review{background:#fff7ed;color:#b45309}.production-list em.approved{background:#ecfdf5;color:#047857}.production-list em.rejected{background:#fef2f2;color:#dc2626}.production-modal{position:fixed;inset:0;z-index:220;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.production-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden}.production-card header,.production-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.production-card footer{border-top:1px solid #eadfd4;border-bottom:0}.production-card header b,.production-card header span{display:block}.production-card header span{margin-top:3px;color:#8a7161;font-size:12px}.production-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.production-card main{padding:14px;overflow:auto}.production-card input,.production-card select{width:100%;height:40px;box-sizing:border-box;border:1px solid #eadfd4;border-radius:10px;background:#fffaf4;padding:0 10px}.dist-head{display:flex;align-items:center;justify-content:space-between;margin-top:12px}.dist-head button,.production-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.dist-row{display:grid;grid-template-columns:1fr 74px 52px;gap:7px;margin-top:8px}.dist-row button{border:0;border-radius:10px;background:#fef2f2;color:#dc2626;font-weight:900}.alloc-tip{margin:8px 0 0;color:#047857;font-size:12px;font-weight:900}.alloc-tip.bad{color:#dc2626}.production-card footer .submit{background:#b4532a}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
+</style>
+
+<style scoped>
+/* Historical sales insight: evidence-led opportunity cards for the channel gate. */
+.consumer-shell.immersive-shell .market-opportunity-panel{grid-column:1/-1;min-width:0;padding:19px 20px;border:1px solid #d9e3da;border-radius:22px;background:linear-gradient(145deg,#f8fbf7,#edf3ed);box-shadow:0 13px 28px rgba(64,88,70,.065)}
+.market-opportunity-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.market-opportunity-head>div{display:grid;gap:4px;min-width:0}.market-opportunity-head span{color:#6d897a;font-size:9px;font-weight:950;letter-spacing:1.35px}.market-opportunity-head b{color:#3f5548;font-family:var(--song);font-size:21px;font-weight:650}.market-opportunity-head small{color:#849287;font-size:10px;line-height:1.45}.market-opportunity-head i{flex:none;padding:5px 8px;border:1px solid #d3e0d5;border-radius:999px;background:#fffdfa;color:#668575;font-size:9px;font-style:normal;font-weight:900}.market-opportunity-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}.market-opportunity-card{display:grid;align-content:start;gap:7px;min-width:0;padding:14px;border:1px solid #dce7de;border-radius:17px;background:rgba(255,255,255,.78);box-shadow:0 8px 18px rgba(57,82,65,.045)}.market-opportunity-card-top{display:flex;align-items:center;justify-content:space-between;gap:7px}.market-opportunity-card-top>span{padding:4px 7px;border-radius:999px;background:#e7f1e8;color:#5f7f6e;font-size:9px;font-weight:900}.market-opportunity-card-top>strong{display:flex;align-items:baseline;gap:3px;color:#b1674f;font-family:var(--song);font-size:25px;font-weight:700}.market-opportunity-card-top>strong small{color:#9a887c;font-family:inherit;font-size:8px;font-weight:800}.market-opportunity-card>b{overflow:hidden;color:#3d4e43;font-family:var(--song);font-size:16px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.market-opportunity-card>p{min-height:39px;margin:0;color:#75847a;font-size:10px;line-height:1.55}.market-opportunity-meta{display:flex;flex-wrap:wrap;gap:5px}.market-opportunity-meta span{padding:4px 6px;border-radius:7px;background:#f2f6f1;color:#718278;font-size:8px}.market-opportunity-card button{display:flex;align-items:center;justify-content:space-between;height:34px;margin-top:2px;padding:0 10px;border:1px solid #c7d9cb;border-radius:10px;background:#fffdfa;color:#527362;font:inherit;font-size:10px;font-weight:900;cursor:pointer}.market-opportunity-card button em{color:#b9664f;font-size:15px;font-style:normal}.market-opportunity-card button:hover{border-color:#89a995;background:#edf5ee}.market-opportunity-note{display:block;margin-top:12px;padding-top:10px;border-top:1px solid rgba(108,137,119,.18);color:#8c9a90;font-size:9px;line-height:1.5}
+@media(max-width:700px){.consumer-shell.immersive-shell .market-opportunity-panel{padding:16px;border-radius:18px}.market-opportunity-head b{font-size:18px}.market-opportunity-grid{grid-template-columns:1fr;gap:8px}.market-opportunity-card{padding:12px}.market-opportunity-card>p{min-height:0}.market-opportunity-card-top>strong{font-size:22px}}
 </style>
 
 <style scoped>
