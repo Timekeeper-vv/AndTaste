@@ -142,6 +142,11 @@ const channelLeaderboard = [
 const channelLeaderboardTitle = computed(() => selectedPurposeMuseum.value
   ? `${selectedPurposeMuseum.value.name} 同类热卖参考`
   : '渠道热卖参考榜')
+const designerLeaderboard = [
+  { rank: 1, name: '林叙白', studio: '山海灵感社', focus: '纹样冰箱贴系列', units: '累计 12,840 件', revenue: '¥71.6 万' },
+  { rank: 2, name: '陈初晴', studio: '在地角色研究所', focus: '亲子潮玩系列', units: '累计 9,426 件', revenue: '¥83.2 万' },
+  { rank: 3, name: '许南山', studio: '器物礼赠实验室', focus: '节日礼盒系列', units: '累计 7,918 件', revenue: '¥68.4 万' },
+]
 const successCases = [
   { title: '青铜纹样冰箱贴', creator: '设计师 · 乔木', note: '用简化纹样 + 低客单价完成首轮试销', metric: '测试转化 18%' },
   { title: '城市守护兽毛绒', creator: '设计师 · 初晴', note: '刺绣五官与短毛绒工艺，适合亲子客群', metric: '复购意向 72%' },
@@ -1284,6 +1289,21 @@ function closeModelPreview() {
               </ol>
               <small>虚拟参考数据，仅用于启发选品与创作方向，不代表真实交易、销量或收益承诺。</small>
             </aside>
+            <aside class="designer-leaderboard" aria-label="设计师累计销售参考排行榜">
+              <div class="designer-leaderboard-head">
+                <div><span>CREATOR MOMENTUM</span><b>设计师成长榜</b></div>
+                <i>累计销售</i>
+              </div>
+              <p>从第一款单品开始，稳定迭代也能积累自己的创作势能。</p>
+              <ol class="designer-leaderboard-list">
+                <li v-for="item in designerLeaderboard" :key="item.rank">
+                  <strong :class="`designer-rank-${item.rank}`">{{ item.rank }}</strong>
+                  <div class="designer-leaderboard-profile"><b>{{ item.name }}</b><span>{{ item.studio }} · {{ item.focus }}</span></div>
+                  <div class="designer-leaderboard-metrics"><b>{{ item.units }}</b><span>{{ item.revenue }}</span></div>
+                </li>
+              </ol>
+              <small>虚拟参考数据，仅用于展示创作成长路径，不代表真实设计师、交易或收益承诺。</small>
+            </aside>
           </div>
           <button type="button" class="purpose-confirm" :disabled="!selectedPurposeMuseum" @click="confirmMuseumPurpose">确认并进入创作</button>
         </template>
@@ -1646,11 +1666,14 @@ function closeModelPreview() {
 <style scoped>
 /* Channel-ranking sample: this remains explicitly fictional until it is backed by settlement data. */
 .consumer-shell.immersive-shell .purpose-card{width:min(1220px,100%)!important}
-.consumer-shell.immersive-shell .purpose-museum-layout{grid-template-columns:minmax(230px,.84fr) minmax(270px,1fr) minmax(285px,1.08fr);align-items:stretch}
+.consumer-shell.immersive-shell .purpose-museum-layout{grid-template-columns:minmax(280px,.84fr) minmax(410px,1.16fr);align-items:stretch}
 .consumer-shell.immersive-shell .channel-leaderboard{display:flex;flex-direction:column;min-height:164px;padding:19px 20px;border:1px solid #d7e3da;border-radius:21px;background:linear-gradient(145deg,#fbfdf9,#edf4ee);color:#35453c;box-shadow:0 18px 34px rgba(47,69,56,.09)}
 .channel-leaderboard-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.channel-leaderboard-head>div{display:grid;gap:3px;min-width:0}.channel-leaderboard-head span{color:#668175;font-size:9px;font-weight:950;letter-spacing:1.3px}.channel-leaderboard-head b{overflow:hidden;color:#35453c;font-family:var(--song);font-size:17px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.channel-leaderboard-head i{flex:none;padding:4px 7px;border:1px solid #d6e3da;border-radius:999px;background:#f7faf5;color:#688678;font-size:9px;font-style:normal;font-weight:900}.channel-leaderboard-intro{margin:9px 0 8px;color:#7b887e;font-size:10px;line-height:1.45}.channel-leaderboard-list{display:grid;gap:0;list-style:none;margin:0;padding:0}.channel-leaderboard-list li{display:grid;grid-template-columns:24px minmax(0,1fr) auto;align-items:center;gap:8px;padding:9px 0;border-top:1px solid rgba(110,136,121,.16)}.channel-leaderboard-list>li>strong{display:grid;place-items:center;width:21px;height:21px;border-radius:7px;background:#e7eee8;color:#607a6d;font-size:10px}.channel-leaderboard-list>li>strong.rank-1{background:#e8d5a9;color:#795d26}.channel-leaderboard-list>li>strong.rank-2{background:#e2e6e3;color:#5d6963}.channel-leaderboard-list>li>strong.rank-3{background:#eadfd5;color:#87644d}.channel-leaderboard-product{min-width:0}.channel-leaderboard-product b,.channel-leaderboard-product span,.channel-leaderboard-metrics b,.channel-leaderboard-metrics span{display:block}.channel-leaderboard-product b{overflow:hidden;color:#3c4d43;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.channel-leaderboard-product span{margin-top:3px;color:#829087;font-size:9px}.channel-leaderboard-metrics{text-align:right}.channel-leaderboard-metrics b{color:#486456;font-size:11px}.channel-leaderboard-metrics span{margin-top:3px;color:#a76652;font-size:9px;font-weight:900}.channel-leaderboard>small{margin-top:auto;padding-top:9px;border-top:1px solid rgba(110,136,121,.16);color:#8c968f;font-size:8px;line-height:1.45}
-@media(max-width:1100px) and (min-width:681px){.consumer-shell.immersive-shell .purpose-card{width:min(900px,100%)!important}.consumer-shell.immersive-shell .purpose-museum-layout{grid-template-columns:minmax(250px,.84fr) minmax(330px,1.16fr)}.consumer-shell.immersive-shell .channel-leaderboard{grid-column:1 / -1}.channel-leaderboard-list{grid-template-columns:repeat(3,1fr);gap:10px}.channel-leaderboard-list li{grid-template-columns:22px minmax(0,1fr);grid-template-rows:auto auto;padding:8px;border:1px solid rgba(110,136,121,.16);border-radius:11px}.channel-leaderboard-metrics{grid-column:2;text-align:left}.channel-leaderboard>small{margin-top:10px}}
+@media(max-width:1100px) and (min-width:681px){.consumer-shell.immersive-shell .purpose-card{width:min(900px,100%)!important}.consumer-shell.immersive-shell .purpose-museum-layout{grid-template-columns:minmax(250px,.84fr) minmax(330px,1.16fr)}.channel-leaderboard-list{grid-template-columns:repeat(3,1fr);gap:10px}.channel-leaderboard-list li{grid-template-columns:22px minmax(0,1fr);grid-template-rows:auto auto;padding:8px;border:1px solid rgba(110,136,121,.16);border-radius:11px}.channel-leaderboard-metrics{grid-column:2;text-align:left}.channel-leaderboard>small{margin-top:10px}}
 @media(max-width:680px){.consumer-shell.immersive-shell .purpose-card{width:min(460px,100%)!important}.consumer-shell.immersive-shell .channel-leaderboard{min-height:0;padding:16px;border-radius:18px}.channel-leaderboard-head b{font-size:16px}.channel-leaderboard-intro{font-size:10px}.channel-leaderboard-list li{padding:9px 0}}
+.consumer-shell.immersive-shell .designer-leaderboard{display:flex;flex-direction:column;min-height:164px;padding:19px 20px;border:1px solid #ead9cd;border-radius:21px;background:linear-gradient(145deg,#fffdf9,#f5ebe3);color:#4b372d;box-shadow:0 18px 34px rgba(83,52,35,.08)}
+.designer-leaderboard-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.designer-leaderboard-head>div{display:grid;gap:3px}.designer-leaderboard-head span{color:#a16853;font-size:9px;font-weight:950;letter-spacing:1.3px}.designer-leaderboard-head b{color:#4b372d;font-family:var(--song);font-size:17px;font-weight:650}.designer-leaderboard-head i{padding:4px 7px;border:1px solid #ead7c9;border-radius:999px;background:#fffaf5;color:#a16853;font-size:9px;font-style:normal;font-weight:900}.designer-leaderboard>p{margin:9px 0 8px;color:#937b6d;font-size:10px;line-height:1.45}.designer-leaderboard-list{display:grid;gap:0;list-style:none;margin:0;padding:0}.designer-leaderboard-list li{display:grid;grid-template-columns:24px minmax(0,1fr) auto;align-items:center;gap:8px;padding:9px 0;border-top:1px solid rgba(171,124,99,.17)}.designer-leaderboard-list>li>strong{display:grid;place-items:center;width:21px;height:21px;border-radius:7px;background:#f0e6dd;color:#9d715c;font-size:10px}.designer-leaderboard-list>li>strong.designer-rank-1{background:#ead5ab;color:#7c5c26}.designer-leaderboard-list>li>strong.designer-rank-2{background:#e3e4e2;color:#626a65}.designer-leaderboard-list>li>strong.designer-rank-3{background:#eadfd8;color:#8b6650}.designer-leaderboard-profile{min-width:0}.designer-leaderboard-profile b,.designer-leaderboard-profile span,.designer-leaderboard-metrics b,.designer-leaderboard-metrics span{display:block}.designer-leaderboard-profile b{overflow:hidden;color:#544037;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.designer-leaderboard-profile span{overflow:hidden;margin-top:3px;color:#9a8578;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.designer-leaderboard-metrics{text-align:right}.designer-leaderboard-metrics b{color:#6e5144;font-size:11px}.designer-leaderboard-metrics span{margin-top:3px;color:#b16b50;font-size:9px;font-weight:900}.designer-leaderboard>small{margin-top:auto;padding-top:9px;border-top:1px solid rgba(171,124,99,.17);color:#a09086;font-size:8px;line-height:1.45}
+@media(max-width:680px){.consumer-shell.immersive-shell .designer-leaderboard{min-height:0;padding:16px;border-radius:18px}.designer-leaderboard-head b{font-size:16px}.designer-leaderboard-list li{padding:9px 0}}
 </style>
 
 <style scoped>
