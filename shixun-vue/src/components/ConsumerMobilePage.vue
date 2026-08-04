@@ -114,13 +114,19 @@ const imageForm = reactive({
 })
 
 const materialOptions = [
+  { label: 'PVC 软胶', prompt: 'PVC / vinyl soft plastic, smooth slightly matte molded surface, rounded safe edges, clear paint separation and tight seams, no ceramic, no fabric, no wood' },
+  { label: '搪胶', prompt: 'soft vinyl / rotocast rubber toy material, velvety matte tactile surface, rounded safe edges, clean paint separation, no ceramic, no fabric, no hard transparent plastic' },
+  { label: 'ABS 硬塑', prompt: 'precision injection-molded ABS plastic, hard satin surface, clean seams, crisp molded edges and fine production detail, no fabric, no metal' },
   { label: '陶瓷釉面', prompt: 'glazed ceramic, smooth glossy glaze, subtle kiln texture' },
   { label: '金属质感', prompt: 'brushed metal, premium metallic luster, refined engraved details' },
   { label: '木质温润', prompt: 'natural wood, warm grain, matte handcrafted finish' },
   { label: '亚克力透明', prompt: 'transparent acrylic, polished edges, clear glossy surface' },
+  { label: '纸质包装', prompt: 'premium paperboard packaging, visible paper grain, clean folds, refined printing and restrained foil details, no plastic shell' },
   { label: '树脂潮玩', prompt: 'vinyl resin toy, soft matte finish, rounded premium surface' },
   { label: '织物布艺', prompt: 'woven textile, soft fabric texture, visible fine fibers' },
   { label: '全毛绒', prompt: 'soft premium plush toy fabric, dense short pile faux fur, fuzzy fibers, velvety surface, padded stuffed volume, subtle seams, embroidered details, no glossy plastic' },
+  { label: '短毛绒', prompt: 'short-pile plush fabric, dense soft fibers, padded stuffed volume, embroidered details and subtle sewn seams, no hard plastic surface' },
+  { label: '超柔绒', prompt: 'ultra-soft plush textile, smooth dense microfiber fibers, rounded padded volume, embroidered details and clean soft seams, no glossy plastic' },
   { label: 'PPC 高精硬塑', prompt: 'precision injection-molded PPC polymer, high-density satin engineering plastic, crisp parting lines, subtle micro orange-peel texture, clean tight seams, accurate small details, premium non-glossy polymer surface, 8k PBR material, no fabric, no fur, no metal' },
 ]
 const productCategories = [
@@ -134,6 +140,37 @@ const productCategories = [
 const selectedProductKey = ref('magnet')
 const selectedMaterial = ref('PVC')
 const productProfile = computed(() => productCategories.find(item => item.key === selectedProductKey.value) || productCategories[0])
+const materialGenerationDirections: Record<string, string> = {
+  PVC: 'PVC / vinyl soft plastic with a smooth slightly matte molded surface, rounded safe edges, clear printing, and tight production seams. Do not render ceramic, fabric, wood, or metal as the primary material.',
+  搪胶: 'soft vinyl / rotocast rubber toy material with a velvety matte tactile surface, rounded safe edges, and clean paint separation. Do not render ceramic, fabric, or hard transparent plastic as the primary material.',
+  软胶: 'soft vinyl rubber with a matte tactile finish, rounded molded details, and clean paint separation. Do not render ceramic, fabric, wood, or metal as the primary material.',
+  PPC: 'precision injection-molded PPC polymer with a high-density satin engineering-plastic surface, crisp parting lines, tight seams, and fine micro texture. Do not render fabric, fur, or metal as the primary material.',
+  ABS: 'precision injection-molded ABS plastic with a hard satin surface, clean production seams, crisp molded edges, and fine detail. Do not render fabric or metal as the primary material.',
+  树脂: 'premium resin with a dense fine-grain semi-matte surface, clean molded details, and subtle translucency only where appropriate.',
+  金属: 'brushed or cast metal with restrained metallic luster, crisp relief, refined engraved edges, and genuine metal light response. Do not render plastic as the primary material.',
+  亚克力: 'transparent polished acrylic with clear cut edges, controlled translucency, and subtle reflections. Do not render fabric, ceramic, or wood as the primary material.',
+  木质: 'natural wood with visible warm grain and a handcrafted matte finish. Do not render glossy plastic as the primary material.',
+  纸质: 'premium paperboard packaging with visible paper grain, clean folds, refined printing, and restrained foil details. Do not render plastic or metal as the primary material.',
+  全毛绒: 'soft premium plush fabric with dense short pile, padded volume, embroidered details, and visible soft seams. Do not render glossy plastic, ceramic, or metal as the primary material.',
+  短毛绒: 'short-pile plush fabric with dense soft fibers, padded volume, embroidered details, and subtle sewn seams. Do not render hard plastic as the primary material.',
+  超柔绒: 'ultra-soft plush textile with smooth dense microfiber fibers, rounded padded volume, embroidered details, and clean soft seams. Do not render glossy plastic as the primary material.',
+}
+const materialPromptSummary = computed(() => `${selectedMaterial.value} 的真实表面、光泽、纹理和生产形态已写入 AI 生成提示词。`)
+const selectedMaterialDirection = computed(() => materialGenerationDirections[selectedMaterial.value]
+  || `${selectedMaterial.value} material with authentic production-ready surface detail, tactile texture, edge treatment, and realistic light response.`)
+function withMaterialConstraint(prompt: string, includeModelSurface = false, maxLength = 1800) {
+  const clean = String(prompt || '')
+    .replace(/(?:[，,]\s*)?<<MATERIAL_LOCK>>[\s\S]*?<<\/MATERIAL_LOCK>>/g, '')
+    .replace(/[，,。；;\s]+$/, '')
+  const surface = includeModelSurface && modelForm.materialPrompt
+    ? ` 3D surface finish preference: ${modelForm.materialLabel} (${modelForm.materialPrompt}).`
+    : ''
+  const lock = `<<MATERIAL_LOCK>>Primary product material is ${selectedMaterial.value}. ${selectedMaterialDirection.value} This is mandatory: preserve this material in the final generated result and do not substitute another primary material.${surface}<</MATERIAL_LOCK>>`
+  // Provider limits may truncate long prompts. Keep the material directive first
+  // and reserve its complete text before retaining the rest of the user's idea.
+  const remaining = Math.max(0, maxLength - lock.length - (clean ? 1 : 0))
+  return `${lock}${clean ? `，${clean.slice(0, remaining)}` : ''}`
+}
 const productionAssessment = ref<any | null>(null)
 const rightsServiceOpen = ref(false)
 const rightsService = ref('')
@@ -336,10 +373,11 @@ function selectProductCategory(key: string) {
   modelForm.rawPrompt = profile.model
   if (profile.template) selectModelTemplate(profile.template)
   if (profile.materialLabel) chooseModelMaterial(profile.materialLabel)
+  selectProductMaterial(selectedMaterial.value)
 }
 function selectProductMaterial(material: string) {
   selectedMaterial.value = material
-  const mapping: Record<string, string> = { '全毛绒': '全毛绒', 'PPC': 'PPC 高精硬塑', '树脂': '树脂潮玩', '金属': '金属质感', '亚克力': '亚克力透明' }
+  const mapping: Record<string, string> = { PVC: 'PVC 软胶', 搪胶: '搪胶', 软胶: 'PVC 软胶', '全毛绒': '全毛绒', '短毛绒': '短毛绒', '超柔绒': '超柔绒', PPC: 'PPC 高精硬塑', ABS: 'ABS 硬塑', 树脂: '树脂潮玩', 金属: '金属质感', 亚克力: '亚克力透明', 木质: '木质温润', 纸质: '纸质包装' }
   if (mapping[material]) chooseModelMaterial(mapping[material])
 }
 async function refreshProductionAssessment() {
@@ -872,7 +910,7 @@ async function prepareAssetPreview(assetId: number, target: 'image' | 'upload') 
 }
 
 async function optimizeImagePrompt() {
-  const source = [imageForm.style, imageForm.rawPrompt].filter(Boolean).join('，')
+  const source = withMaterialConstraint([imageForm.style, imageForm.rawPrompt].filter(Boolean).join('，'))
   const r = await fetch('/api/creative/ai/prompt/tripo-optimize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -883,7 +921,7 @@ async function optimizeImagePrompt() {
     throw new Error(err?.message || `HTTP ${r.status}`)
   }
   const d = await r.json()
-  imageForm.prompt = d.prompt || source
+  imageForm.prompt = withMaterialConstraint(d.prompt || source)
   imageForm.usageGuide = d.usageGuide || ''
 }
 
@@ -891,7 +929,7 @@ async function generateDoubaoMultiView() {
   setStage('Doubao-Seedream-5.0-lite 正在生成正/左/后/右视图', 'generate')
   const r = await fetch('/api/creative/ai/volcengine/seedream/multiview', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: imageForm.rawPrompt, inputAssetId: doubaoReferenceAssetId.value, size: '2K', watermark: true }),
+    body: JSON.stringify({ prompt: withMaterialConstraint(imageForm.rawPrompt), inputAssetId: doubaoReferenceAssetId.value, productCategory: productProfile.value.label, material: selectedMaterial.value, size: '2K', watermark: true }),
   })
   if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }
   const data = await r.json()
@@ -926,7 +964,8 @@ async function generateImage() {
     if (imageForm.generationMode === 'single' && !imageConfig.value.configured) throw new Error('即梦AI签名鉴权未配置，请联系管理员配置火山AccessKeyId和SecretAccessKey')
     await optimizeImagePrompt(); setStage(imageForm.generationMode === 'image_to_image' ? '正在融合参考图与文字描述' : '正在生成图片', 'generate')
     const endpoint = imageForm.generationMode === 'image_to_image' ? '/api/creative/ai/image-to-image' : '/api/creative/ai/jimeng/text-to-image'
-    const payload = imageForm.generationMode === 'image_to_image' ? { title: `图文结合 · ${productProfile.value.label}`, prompt: imageForm.prompt, inputAssetId: imageForm.inputAssetId, productCategory: productProfile.value.label, material: selectedMaterial.value } : { provider: 'jimeng', rawPrompt: imageForm.rawPrompt, prompt: imageForm.prompt, productCategory: productProfile.value.label, material: selectedMaterial.value, imagenAspectRatio: imageForm.imagenAspectRatio, imagenImageSize: imageForm.imagenImageSize, imagenOutputFormat: imageForm.imagenOutputFormat }
+    const finalImagePrompt = withMaterialConstraint(imageForm.prompt || imageForm.rawPrompt)
+    const payload = imageForm.generationMode === 'image_to_image' ? { title: `图文结合 · ${productProfile.value.label}`, prompt: finalImagePrompt, inputAssetId: imageForm.inputAssetId, productCategory: productProfile.value.label, material: selectedMaterial.value } : { provider: 'jimeng', rawPrompt: withMaterialConstraint(imageForm.rawPrompt), prompt: finalImagePrompt, productCategory: productProfile.value.label, material: selectedMaterial.value, imagenAspectRatio: imageForm.imagenAspectRatio, imagenImageSize: imageForm.imagenImageSize, imagenOutputFormat: imageForm.imagenOutputFormat }
     const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }
     const d = await r.json(); if (d.creditAccount) creditAccount.value = d.creditAccount; imageResult.value = await secureAssetResult(d, 'image')
@@ -1009,14 +1048,14 @@ async function optimizeModelPrompt() {
   const r = await fetch('/api/creative/ai/prompt/tripo-3d-optimize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: `${modelForm.rawPrompt}；产品类别：${productProfile.value.label}；期望材质与表面质感：${modelForm.materialLabel}（${modelForm.materialPrompt}）`, promptTemplate: modelForm.promptTemplate, productCategory: productProfile.value.label, material: selectedMaterial.value }),
+    body: JSON.stringify({ prompt: withMaterialConstraint(`${modelForm.rawPrompt}；产品类别：${productProfile.value.label}`, true, 1024), promptTemplate: modelForm.promptTemplate, productCategory: productProfile.value.label, material: selectedMaterial.value }),
   })
   if (!r.ok) {
     const err = await r.json().catch(() => null)
     throw new Error(err?.message || `HTTP ${r.status}`)
   }
   const d = await r.json()
-  modelForm.prompt = d.prompt || modelForm.rawPrompt
+  modelForm.prompt = withMaterialConstraint(d.prompt || modelForm.rawPrompt, true, 1024)
 }
 
 async function generateModel() {
@@ -1042,11 +1081,12 @@ async function generateModel() {
       mode: modelForm.mode,
       modelVersion: CONSUMER_TRIPO_MODEL_VERSION,
       promptTemplate: isImageToModel ? '' : modelForm.promptTemplate,
-      rawPrompt: isImageToModel ? '' : modelForm.rawPrompt,
-      prompt: isImageToModel ? '' : (modelForm.prompt || modelForm.rawPrompt),
+      rawPrompt: isImageToModel ? '' : withMaterialConstraint(modelForm.rawPrompt, true, 1024),
+      prompt: isImageToModel ? '' : withMaterialConstraint(modelForm.prompt || modelForm.rawPrompt, true, 1024),
       negativePrompt: isImageToModel ? '' : 'low poly, blurry, flat texture, deformed, asymmetric, noisy mesh',
       materialLabel: modelForm.materialLabel,
       materialPrompt: modelForm.materialPrompt,
+      material: selectedMaterial.value,
       productCategory: productProfile.value.label,
       inputAssetId: isImageToModel ? modelForm.inputAssetId : null,
       multiviewAssetIds: isMultiviewToModel ? { ...modelForm.multiviewAssetIds } : { front: null, left: null, back: null, right: null },
@@ -1580,7 +1620,7 @@ function closeModelPreview() {
         <div><span>IMAGE LAB · 01</span><h2>用一句话，<strong>生成一张想被带走的产品图。</strong></h2><p>把文化、材质、图案和使用场景交给 AI，生成后自动进入你的作品库。</p></div>
         <aside><i>16</i><span>积分 / 次</span><small>生成成功才入库</small></aside>
       </header>
-      <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
+      <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small class="material-prompt-proof">已写入 AI 生成提示词 · {{ materialPromptSummary }}</small><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
       <div class="creation-workspace">
         <div class="prompt-studio">
           <div class="prompt-studio-head"><span>创作描述</span><small>{{ imageForm.rawPrompt.length }} / 800</small></div>
@@ -1591,7 +1631,7 @@ function closeModelPreview() {
         <aside class="creation-controls">
           <div class="control-block"><span>生成方式</span><div class="choice-grid three"><button type="button" :class="{active:imageForm.generationMode==='single'}" @click="imageForm.generationMode='single'">文字生图<br/><small>即梦 AI</small></button><button type="button" :class="{active:imageForm.generationMode==='image_to_image'}" @click="imageForm.generationMode='image_to_image'">图文结合<br/><small>参考图 + 文字控制</small></button><button type="button" :class="['doubao-choice',{active:imageForm.generationMode==='multiview'}]" @click="imageForm.generationMode='multiview'">多视图 3D<br/><small>Doubao · 正/左/后/右</small></button></div></div><div v-if="imageForm.generationMode==='image_to_image'" class="image-edit-upload"><div><span>STEP 01 · 上传参考图</span><b>保留主体特征，用文字指定改造方向</b><small>例如：把普通摆件改成馆藏风礼盒、改成毛绒玩具、替换配色和包装场景。</small></div><label :class="{ ready: imageForm.inputAssetId }"><input type="file" accept="image/png,image/jpeg,image/webp" @change="uploadImageEditReference" /><img v-if="imageEditPreviewUrl" :src="imageEditPreviewUrl" alt="图文结合参考图" /><template v-else><i>＋</i><b>上传产品 / 草图 / 参考图</b><small>PNG / JPG / WEBP</small></template><em v-if="imageForm.inputAssetId">已就绪</em></label></div><div v-if="imageForm.generationMode==='multiview'" class="doubao-reference-upload"><div><span>STEP 01 · 上传产品参考图</span><b>上传一张正面或 3/4 角度的清晰产品图</b><small>Doubao 将以该图为一致性基准，生成正 / 左 / 后 / 右四个建模视角。</small></div><label :class="{ ready: doubaoReferenceAssetId }"><input type="file" accept="image/png,image/jpeg,image/webp" @change="uploadDoubaoReference" /><img v-if="doubaoReferencePreviewUrl" :src="doubaoReferencePreviewUrl" alt="多视图参考图" /><template v-else><i>＋</i><b>上传参考图</b><small>PNG / JPG / WEBP</small></template><em v-if="doubaoReferenceAssetId">已就绪</em></label></div><div class="control-block"><span>视觉方向</span><div class="choice-grid three"><button type="button" :class="{active:imageForm.style==='官方文创'}" @click="imageForm.style='官方文创'">馆藏感</button><button type="button" :class="{active:imageForm.style==='国潮精致'}" @click="imageForm.style='国潮精致'">新国潮</button><button type="button" :class="{active:imageForm.style==='可爱潮玩'}" @click="imageForm.style='可爱潮玩'">潮玩感</button></div></div>
           <div class="control-block"><span>画面比例</span><div class="choice-grid"><button type="button" :class="{active:imageForm.imagenAspectRatio==='1:1'}" @click="imageForm.imagenAspectRatio='1:1'">1:1<br/><small>商品主图</small></button><button type="button" :class="{active:imageForm.imagenAspectRatio==='9:16'}" @click="imageForm.imagenAspectRatio='9:16'">9:16<br/><small>手机海报</small></button><button type="button" :class="{active:imageForm.imagenAspectRatio==='16:9'}" @click="imageForm.imagenAspectRatio='16:9'">16:9<br/><small>横版展示</small></button></div></div>
-          <div class="creation-tip"><i>✦</i><span>系统将自动优化提示词，并生成适合文创展示的视觉效果。</span></div>
+          <div class="creation-tip"><i>✦</i><span>系统会先锁定「{{ selectedMaterial }}」真实材质，再优化并提交图片提示词。</span></div>
         </aside>
       </div>
       <button type="button" class="creation-submit image-submit" :disabled="busy" @click="generateImage"><span>{{ imageForm.generationMode==='multiview' ? '◇' : '✦' }}</span><b>{{ busy && tab==='image' ? stage || '正在生成产品图' : imageForm.generationMode==='multiview' ? '生成多视图 3D 参考图' : imageForm.generationMode==='image_to_image' ? '生成图文结合产品图' : '生成产品图' }}</b><em>{{ imageForm.generationMode==='multiview' ? 'Doubao · 4视图' : imageForm.generationMode==='image_to_image' ? '参考图 + 文本' : `${imageCost} 点` }}</em></button>
@@ -1605,9 +1645,9 @@ function closeModelPreview() {
         <div><span>3D FORGE · 02</span><h2>从灵感到原型，<strong>让作品拥有立体形态。</strong></h2><p>上传产品图，或输入文字描述，生成可旋转预览、可继续打样的 3D 模型。</p></div>
         <aside class="green"><i>{{ modelCost }}</i><span>积分 / 次</span><small>支持图生 3D / 文生 3D</small></aside>
       </header>
-            <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
+            <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small class="material-prompt-proof">已写入 AI 生成提示词 · {{ materialPromptSummary }}</small><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
       <div class="model-mode-switch three-modes"><button type="button" :class="{active:modelForm.mode==='image_to_model'}" @click="modelForm.mode='image_to_model'"><b>图片生成 3D</b><span>上传产品图，快速建立立体原型</span></button><button type="button" :class="{active:modelForm.mode==='multiview_to_model'}" @click="modelForm.mode='multiview_to_model'"><b>多视图生成 3D</b><span>上传多个视角，模型更完整</span></button><button type="button" :class="{active:modelForm.mode==='text_to_model'}" @click="modelForm.mode='text_to_model'"><b>文字生成 3D</b><span>用描述直接构建产品模型</span></button></div>
-      <section class="material-picker"><div><span>表面材质偏好</span><b>选择模型的视觉材质与 PBR 表面质感</b><small>文本生成会写入 Tripo 提示词；图片 / 多视图生成会作为任务材质记录，最终实物仍需打样确认。</small></div><div class="material-chips"><button v-for="item in materialOptions" :key="item.label" type="button" :class="{ active: modelForm.materialLabel===item.label }" @click="chooseModelMaterial(item.label)">{{ item.label }}</button></div></section>
+      <section class="material-picker"><div><span>表面材质偏好</span><b>选择模型的视觉材质与 PBR 表面质感</b><small>产品具体材质与这里的表面质感都会写入实际 3D 提示词；图生 / 多视图以输入图为主，材质目标会同步提交给建模任务。</small></div><div class="material-chips"><button v-for="item in materialOptions" :key="item.label" type="button" :class="{ active: modelForm.materialLabel===item.label }" @click="chooseModelMaterial(item.label)">{{ item.label }}</button></div></section>
       <div class="model-workspace">
         <div v-if="modelForm.mode==='image_to_model'" class="model-upload-pane"><label class="upload-box redesign-upload"><input type="file" accept="image/*" @change="uploadReference" /><img v-if="uploadPreviewUrl" :src="uploadPreviewUrl" alt="3D参考图" /><span v-else><i>＋</i><b>上传一张产品参考图</b><small>PNG / JPG / WEBP，主体越清晰，3D 效果越好</small></span></label><div class="model-note"><b>图生 3D 的优势</b><span>保留产品的主体轮廓与视觉特征，适合已有图片的文创快速建模。</span></div></div>
         <div v-else-if="modelForm.mode==='multiview_to_model'" class="multiview-pane"><div class="multiview-head"><div><span>MULTI-VIEW CAPTURE</span><b>上传同一产品的多个视角</b></div><small>至少上传正面图 + 任意一个侧面图</small></div><div class="multiview-grid"><label v-for="view in ['front','left','back','right']" :key="view" class="multiview-slot" :class="{ ready: modelForm.multiviewAssetIds[view as 'front' | 'left' | 'back' | 'right'] }"><input type="file" accept="image/*" @change="uploadReference($event, view as 'front' | 'left' | 'back' | 'right')" /><img v-if="multiviewPreviewUrls[view as 'front' | 'left' | 'back' | 'right']" :src="multiviewPreviewUrls[view as 'front' | 'left' | 'back' | 'right']" :alt="`${view}视图`" /><template v-else><i>{{ ({ front: '正', left: '左', back: '后', right: '右' } as any)[view] }}</i><b>{{ ({ front: '正面图', left: '左侧图', back: '背面图', right: '右侧图' } as any)[view] }}</b><small>{{ view==='front' ? '必传' : '可选，建议上传' }}</small></template><em v-if="modelForm.multiviewAssetIds[view as 'front' | 'left' | 'back' | 'right']">已上传</em></label></div><div class="model-note multiview-note"><b>多视图建模优势</b><span>多个角度能让 AI 更准确识别厚度、侧面结构和背部细节，生成结果通常比单图更完整。</span></div></div>

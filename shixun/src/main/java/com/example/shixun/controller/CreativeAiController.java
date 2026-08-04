@@ -597,6 +597,7 @@ public class CreativeAiController {
     public Map<String,Object> optimizeTripoImagePrompt(@RequestBody GenerateImageRequest req) throws Exception {
         assertCompliantPrompt(req.prompt, req.productCategory);
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础创意描述");
+        String sourcePrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
         String provider = nullToEmpty(req.provider).toLowerCase(Locale.ROOT);
         String system = "You are a senior English prompt writer for premium AI image generation, specializing in cinematic commercial product photography, official brand visuals, cultural creative products, packaging concepts, and realistic lifestyle scenes. "
                 + "Rewrite the user's Chinese or rough idea into ONE polished English image-generation prompt. Output the final English prompt only: no title, no explanation, no negative prompt, no Markdown, no Chinese characters unless the user explicitly asks for visible Chinese text printed on the product. "
@@ -605,7 +606,7 @@ public class CreativeAiController {
                 + "Preserve the user's actual product, place, cultural theme, brand elements, materials, colors, label text, audience, and use case. If the user provides Chinese product/region names, translate them naturally into English unless they are meant to appear as printed text. "
                 + "For packaging or product concepts, describe the package shape, paper/plastic/metal/ceramic texture, typography, illustration style, net weight or label copy if supplied, countertop/tabletop/studio setting, lens, depth of field, and commercial product-shot quality. "
                 + "Keep it concise but rich, within 900 English words. Target provider: " + (blank(provider) ? "general" : provider) + ".";
-        String optimized=callChat(system,req.prompt.trim()).trim();
+        String optimized=callChat(system,sourcePrompt).trim();
         int maxPromptLength = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? 1800 : ("jimeng".equalsIgnoreCase(nullToEmpty(req.provider)) ? 760 : 1024);
         if(optimized.length()>maxPromptLength)optimized=optimized.substring(0,maxPromptLength);
         String usageGuide = buildProductUsageGuide(req, optimized);
@@ -636,7 +637,7 @@ public class CreativeAiController {
         Long ownerUserId = authenticatedUserId();
         assertCompliantPrompt(req.prompt, req.productCategory);
         Map<String, Object> style = style(req.styleId);
-        String finalPrompt = buildPrompt(req.prompt, style, req.scene, req.productType);
+        String finalPrompt = buildPrompt(enforceMaterialConstraint(req.prompt, req.productCategory, req.material), style, req.scene, req.productType);
         String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
         String jobNo = no("AIG");
         Long jobId = createJob(jobNo, "text_to_image", "siliconflow", imageModel, req.styleId, null, finalPrompt, negative, "running", null, null);
@@ -694,7 +695,7 @@ public class CreativeAiController {
         List<String> views = List.of("front", "left", "back", "right");
         Map<String,String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
         List<Map<String,Object>> images = new ArrayList<>();
-        String basePrompt = req.prompt.trim();
+        String basePrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
         String referenceImage = buildArkReferenceImage(req.inputAssetId);
         for (String view : views) {
             String viewPrompt = basePrompt + ". Use the supplied reference image as the single source of truth. Generate ONE consistent product turntable reference image, " + view + " view only. "
@@ -747,7 +748,7 @@ public class CreativeAiController {
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先选择一张参考图");
         requireAssetAccess(req.inputAssetId);
         Map<String, Object> style = style(req.styleId);
-        String finalPrompt = buildPrompt(req.prompt, style, req.scene, req.productType);
+        String finalPrompt = buildPrompt(enforceMaterialConstraint(req.prompt, req.productCategory, req.material), style, req.scene, req.productType);
         String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
         String jobNo = no("I2I");
         Long jobId = createJob(jobNo, "image_to_image", "siliconflow", imageEditModel, req.styleId, req.inputAssetId, finalPrompt, negative, "running", null, null);
@@ -830,7 +831,7 @@ public class CreativeAiController {
         assertCompliantPrompt(req.prompt, req.productCategory);
         if(blank(jimengAccessKeyId) || blank(jimengSecretAccessKey)) throw new IllegalStateException("即梦视觉接口需要火山引擎 AccessKeyId + SecretAccessKey 签名鉴权，不支持直接使用 Vx 开头的 API Key。请在 shixun/application-local.properties 配置 jimeng.access-key-id 和 jimeng.secret-access-key");
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
-        String prompt = req.prompt.trim();
+        String prompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
         if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
         String aspect = Set.of("1:1","16:9","9:16","4:3","3:4").contains(nullToEmpty(req.imagenAspectRatio)) ? req.imagenAspectRatio : "1:1";
         String size = Set.of("1K","2K").contains(nullToEmpty(req.imagenImageSize)) ? req.imagenImageSize : "1K";
@@ -1115,7 +1116,7 @@ public class CreativeAiController {
                 if(blank(req.prompt)) throw new IllegalArgumentException("文生3D模式必须填写模型描述");
                 if(req.prompt.trim().length() > 1024) throw new IllegalArgumentException("模型描述不能超过1024个字符");
                 if(!blank(req.negativePrompt) && req.negativePrompt.trim().length() > 255) throw new IllegalArgumentException("反向提示词不能超过255个字符");
-                String textPrompt = req.prompt.trim();
+                String textPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
                 if (!blank(req.materialPrompt)) textPrompt = textPrompt + ", material and surface finish: " + req.materialPrompt.trim();
                 taskBody.put("prompt", textPrompt);
                 if(!blank(req.negativePrompt)) taskBody.put("negative_prompt", req.negativePrompt.trim());
@@ -1985,6 +1986,17 @@ public class CreativeAiController {
         // 火山即梦 seedream 4.6 当前接口限制 prompt 不超过 800 字符。
         // 管理端和C端统一从后端兜底裁剪，避免前端优化提示词较长时任务提交后查询失败。
         return finalPrompt.length() > 800 ? finalPrompt.substring(0, 800) : finalPrompt;
+    }
+
+    // The API boundary enforces the chosen physical material too, so a future
+    // client cannot accidentally turn material selection back into display-only UI.
+    private String enforceMaterialConstraint(String prompt, String productCategory, String material) {
+        String base = nullToEmpty(prompt).trim();
+        if (blank(material) || base.contains("<<MATERIAL_LOCK>>")) return base;
+        String category = blank(productCategory) ? "cultural creative product" : productCategory.trim();
+        return base + "\n<<MATERIAL_LOCK>>Primary product material is " + material.trim()
+                + " for this " + category
+                + ". This is mandatory: render authentic material texture, surface finish, edge treatment, and realistic light response; do not substitute another primary material.<</MATERIAL_LOCK>>";
     }
 
     private int[] jimengDimensions(String aspect, String size) {
@@ -3307,6 +3319,8 @@ public class CreativeAiController {
     }
     public static class MultiViewImageRequest {
         public String prompt;
+        public String productCategory;
+        public String material;
         public Long inputAssetId;
         public String size;
         public Boolean watermark;
@@ -3322,6 +3336,7 @@ public class CreativeAiController {
         // 材质为“视觉/PBR 表面质感”偏好；文本建模会注入提示词，图/多视图建模会随任务记录保存。
         public String materialLabel;
         public String materialPrompt;
+        public String material;
         public String productCategory;
         public Long inputAssetId;
         public Map<String,Long> multiviewAssetIds;
