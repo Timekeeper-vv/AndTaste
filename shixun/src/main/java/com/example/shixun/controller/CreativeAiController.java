@@ -1732,17 +1732,19 @@ public class CreativeAiController {
                 Map.of("id","jx-museum","name","江西省博物馆","province","江西省","city","南昌市","district","红谷滩区","scene","省级文博文创店 / 展陈主题快闪"),
                 Map.of("id","jingdezhen-museum","name","景德镇中国陶瓷博物馆","province","江西省","city","景德镇市","district","珠山区","scene","陶瓷文创 / 艺术旅游渠道"),
                 Map.of("id","ganzhou-museum","name","赣州市博物馆","province","江西省","city","赣州市","district","章贡区","scene","客家文化 / 城市礼品渠道"),
-                Map.of("id","national-museum","name","中国国家博物馆","province","北京市","city","北京市","district","东城区","scene","国家级文创零售 / 礼品渠道"),
+                hotMuseum("palace-museum","故宫博物院","北京市","北京市","东城区","宫廷文化 / 高辨识度文创渠道",1,98,"/museum-logos/palace-museum.png","世界五大宫之首，明清宫廷史与中华文明集大成者","《清明上河图》、各种釉彩大瓶、金瓯永固杯"),
+                hotMuseum("national-museum","中国国家博物馆","北京市","北京市","东城区","国家级文创零售 / 礼品渠道",2,97,"/museum-logos/national-museum.jpeg","中华文明通史的重要载体，国礼级文物类型丰富","后母戊鼎、四羊方尊、玉龙"),
                 Map.of("id","capital-museum","name","首都博物馆","province","北京市","city","北京市","district","西城区","scene","北京城市文化 / 馆店文创"),
                 Map.of("id","shanghai-museum","name","上海博物馆","province","上海市","city","上海市","district","黄浦区","scene","艺术精品 / 城市文旅渠道"),
                 Map.of("id","china-art-museum","name","中华艺术宫","province","上海市","city","上海市","district","浦东新区","scene","艺术展陈 / 潮流文创渠道"),
-                Map.of("id","nanjing-museum","name","南京博物院","province","江苏省","city","南京市","district","玄武区","scene","综合博物馆文创空间 / 研学游客"),
+                hotMuseum("nanjing-museum","南京博物院","江苏省","南京市","玄武区","综合博物馆文创空间 / 研学游客",4,92,"/museum-logos/nanjing-museum.png","中国三大博物馆之一，民国馆沉浸式体验具有辨识度","金缕玉衣、竹林七贤砖画"),
                 Map.of("id","suzhou-museum","name","苏州博物馆","province","江苏省","city","苏州市","district","姑苏区","scene","江南美学 / 设计文创渠道"),
                 Map.of("id","zhejiang-museum","name","浙江省博物馆","province","浙江省","city","杭州市","district","西湖区","scene","宋韵文化 / 文旅礼品渠道"),
                 Map.of("id","ningbo-museum","name","宁波博物院","province","浙江省","city","宁波市","district","鄞州区","scene","海丝文化 / 亲子研学渠道"),
-                Map.of("id","shaanxi-history","name","陕西历史博物馆","province","陕西省","city","西安市","district","雁塔区","scene","历史文化主题文创 / 旅游客群"),
+                hotMuseum("shaanxi-history","陕西历史博物馆","陕西省","西安市","雁塔区","历史文化主题文创 / 旅游客群",3,94,"/museum-logos/shaanxi-history.png","华夏珍宝库，周秦汉唐文明巅峰的代表性窗口","镶金兽首玛瑙杯、鎏金舞马衔杯纹银壶"),
                 Map.of("id","qinshihuang-museum","name","秦始皇帝陵博物院","province","陕西省","city","西安市","district","临潼区","scene","秦文化 IP / 高客单文创渠道"),
                 Map.of("id","hunan-museum","name","湖南博物院","province","湖南省","city","长沙市","district","开福区","scene","马王堆文化 / 年轻客群渠道"),
+                hotMuseum("hubei-museum","湖北省博物馆","湖北省","武汉市","武昌区","楚文化 / 青铜器主题文创渠道",5,90,"/museum-logos/hubei-museum.jpeg","楚文化与青铜器圣地，编钟演奏具有独特体验","曾侯乙编钟、越王勾践剑"),
                 Map.of("id","guangdong-museum","name","广东省博物馆","province","广东省","city","广州市","district","天河区","scene","岭南文化 / 城市商圈渠道"),
                 Map.of("id","shenzhen-museum","name","深圳博物馆","province","广东省","city","深圳市","district","福田区","scene","科技城市文化 / 创意礼品渠道"),
                 Map.of("id","sichuan-museum","name","四川博物院","province","四川省","city","成都市","district","浣花溪","scene","巴蜀文化 / 旅游文创渠道"),
@@ -1755,6 +1757,17 @@ public class CreativeAiController {
     /**
      * 测试目录的选址策略标签：用于帮助创作者做渠道匹配，不代表实时客流、销量或官方合作承诺。
      */
+    private Map<String,Object> hotMuseum(String id, String name, String province, String city, String district,
+                                         String scene, int hotRank, int heatScore, String logoUrl,
+                                         String hotIntro, String representativeRelics) {
+        Map<String,Object> item = new LinkedHashMap<>();
+        item.put("id", id); item.put("name", name); item.put("province", province); item.put("city", city);
+        item.put("district", district); item.put("scene", scene); item.put("hotRank", hotRank);
+        item.put("heatScore", heatScore); item.put("logoUrl", logoUrl); item.put("hotIntro", hotIntro);
+        item.put("representativeRelics", representativeRelics);
+        return item;
+    }
+
     private Map<String,Object> withMuseumRecommendation(Map<String,Object> museum) {
         String id = String.valueOf(museum.get("id"));
         Map<String,Object> item = new LinkedHashMap<>(museum);
