@@ -1442,31 +1442,33 @@ function closeModelPreview() {
       </div>
     </section>
 
-    <section
-      v-if="creatorProfilePromptOpen"
-      class="creator-profile-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="creator-profile-title"
-    >
-      <div class="creator-profile-card">
-        <span class="creator-profile-kicker">WELCOME TO BETWEEN TASTE</span>
-        <h2 id="creator-profile-title">先选择你的创作身份</h2>
-        <p>这是进入创作台前的必选设置。选择后，平台会为你打开对应的创作路径和服务。</p>
-        <div class="creator-profile-options">
-          <button type="button" @click="chooseCreatorProfile('amateur')">
-            <i>闲</i><b>业余设计师</b>
-            <span>随心创作、收藏或送礼，保留现在的 AI 图片、3D 和作品库流程。</span>
-            <small>轻松体验</small>
-          </button>
-          <button type="button" class="featured" @click="chooseCreatorProfile('professional')">
-            <i>专</i><b>专业设计师</b>
-            <span>除了当前创作能力，还可提交 ZIP 作品包给平台审核与后续合作评估。</span>
-            <small>作品包审核</small>
-          </button>
+    <Teleport to="body">
+      <section
+        v-if="creatorProfilePromptOpen"
+        class="creator-profile-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="creator-profile-title"
+      >
+        <div class="creator-profile-card">
+          <span class="creator-profile-kicker">WELCOME TO BETWEEN TASTE</span>
+          <h2 id="creator-profile-title">先选择你的创作身份</h2>
+          <p>这是进入创作台前的必选设置。选择后，平台会为你打开对应的创作路径和服务。</p>
+          <div class="creator-profile-options">
+            <button type="button" @click="chooseCreatorProfile('amateur')">
+              <i>闲</i><b>业余设计师</b>
+              <span>随心创作、收藏或送礼，保留现在的 AI 图片、3D 和作品库流程。</span>
+              <small>轻松体验</small>
+            </button>
+            <button type="button" class="featured" @click="chooseCreatorProfile('professional')">
+              <i>专</i><b>专业设计师</b>
+              <span>除了当前创作能力，还可提交 ZIP 作品包给平台审核与后续合作评估。</span>
+              <small>作品包审核</small>
+            </button>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </Teleport>
 
     <section class="studio-home">
       <div class="studio-hero">
@@ -1840,7 +1842,7 @@ function closeModelPreview() {
 </style>
 
 <style scoped>
-.creator-profile-modal{position:fixed;inset:0;z-index:160;display:grid;place-items:center;padding:20px;background:rgba(47,43,37,.5);backdrop-filter:blur(9px)}.creator-profile-card{width:min(720px,100%);padding:31px;border:1px solid rgba(255,255,255,.7);border-radius:28px;background:linear-gradient(145deg,#fffdfa,#f4f0e9);box-shadow:0 30px 84px rgba(52,42,31,.28);color:#38322c}.creator-profile-kicker{display:block;color:#678071;font-size:10px;font-weight:950;letter-spacing:.16em}.creator-profile-card h2{margin:9px 0 7px;font-family:var(--song);font-size:31px;font-weight:650;line-height:1.2}.creator-profile-card>p{max-width:50ch;margin:0;color:#80776c;font-size:13px;line-height:1.65}.creator-profile-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin-top:23px}.creator-profile-options button{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:9px;padding:19px;border:1px solid #e1d9ce;border-radius:19px;background:#fffdfa;color:#423b34;text-align:left;transition:transform .2s ease,box-shadow .2s ease}.creator-profile-options button:hover{transform:translateY(-3px);box-shadow:0 13px 25px rgba(70,56,40,.1)}.creator-profile-options button i{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:#f3ece3;color:#99715b;font-family:var(--song);font-size:19px;font-style:normal}.creator-profile-options button b{font-family:var(--song);font-size:20px;font-weight:650}.creator-profile-options button span,.creator-profile-options button small{grid-column:1/-1;line-height:1.55}.creator-profile-options button span{min-height:40px;color:#81776c;font-size:12px}.creator-profile-options button small{color:#7d9182;font-size:10px;font-weight:900;letter-spacing:.08em}.creator-profile-options button.featured{border-color:#b9cbbd;background:linear-gradient(145deg,#f6faf4,#e4eee4)}.creator-profile-options button.featured i{background:#618071;color:#fff}.creator-profile-options button.featured small{color:#547263}
+.creator-profile-modal{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:rgba(42,38,33,.32);backdrop-filter:blur(5px)}.creator-profile-card{width:min(540px,calc(100vw - 48px));padding:25px;border:1px solid rgba(255,255,255,.82);border-radius:20px;background:#fffdfa;box-shadow:0 24px 64px rgba(42,34,27,.28);color:#38322c;animation:creatorProfileEnter .26s ease-out}.creator-profile-kicker{display:block;color:#678071;font-size:10px;font-weight:950;letter-spacing:.16em}.creator-profile-card h2{margin:8px 0 6px;font-family:var(--song);font-size:28px;font-weight:650;line-height:1.2}.creator-profile-card>p{max-width:44ch;margin:0;color:#80776c;font-size:13px;line-height:1.65}.creator-profile-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:19px}.creator-profile-options button{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px;padding:15px;border:1px solid #e1d9ce;border-radius:14px;background:#fffdfa;color:#423b34;text-align:left;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}.creator-profile-options button:hover{transform:translateY(-2px);border-color:#b8aa9d;box-shadow:0 10px 20px rgba(70,56,40,.1)}.creator-profile-options button i{display:grid;place-items:center;width:31px;height:31px;border-radius:9px;background:#f3ece3;color:#99715b;font-family:var(--song);font-size:17px;font-style:normal}.creator-profile-options button b{font-family:var(--song);font-size:18px;font-weight:650}.creator-profile-options button span,.creator-profile-options button small{grid-column:1/-1;line-height:1.55}.creator-profile-options button span{min-height:38px;color:#81776c;font-size:12px}.creator-profile-options button small{color:#7d9182;font-size:10px;font-weight:900;letter-spacing:.08em}.creator-profile-options button.featured{border-color:#b9cbbd;background:#f2f7f2}.creator-profile-options button.featured i{background:#618071;color:#fff}.creator-profile-options button.featured small{color:#547263}@keyframes creatorProfileEnter{from{opacity:0;transform:translateY(12px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
 .professional-submission-panel{display:grid;gap:16px;padding:21px;border:1px solid #d8e3d9;border-radius:23px;background:linear-gradient(145deg,#fcfdf9,#edf4ed);box-shadow:0 13px 31px rgba(66,85,66,.07)}.professional-submission-panel>header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.professional-submission-panel header>div{display:grid;gap:5px}.professional-submission-panel header span{color:#668174;font-size:9px;font-weight:950;letter-spacing:.15em}.professional-submission-panel header b{color:#3f5446;font-family:var(--song);font-size:22px;font-weight:650}.professional-submission-panel header p{max-width:600px;margin:0;color:#748076;font-size:12px;line-height:1.6}.professional-submission-panel header em{flex:none;padding:7px 9px;border:1px solid #cbdcce;border-radius:999px;background:#fffefa;color:#607969;font-size:10px;font-style:normal;font-weight:900}.professional-submission-form{display:grid;grid-template-columns:minmax(210px,.85fr) minmax(180px,.7fr) minmax(220px,1fr);gap:12px;align-items:stretch}.professional-submission-form label{display:grid;gap:7px;color:#655e56;font-size:11px;font-weight:900}.professional-submission-form input:not([type=file]),.professional-submission-form textarea{box-sizing:border-box;width:100%;border:1px solid #dfe3db;border-radius:13px;background:#fffefa;color:#433d36;font:inherit;outline:0}.professional-submission-form input:not([type=file]){height:44px;padding:0 11px}.professional-submission-form textarea{min-height:87px;padding:10px 11px;resize:vertical}.professional-submission-form input:focus,.professional-submission-form textarea:focus{border-color:#91a998;box-shadow:0 0 0 3px rgba(119,146,126,.12)}.professional-zip-drop{position:relative;align-content:center;min-height:104px;padding:13px;border:1.5px dashed #9aae9d!important;border-radius:16px;background:rgba(255,255,255,.64);text-align:center;cursor:pointer}.professional-zip-drop input{position:absolute;inset:0;width:100%;opacity:0;cursor:pointer}.professional-zip-drop b{overflow:hidden;color:#4f6657;text-overflow:ellipsis;white-space:nowrap}.professional-zip-drop small{color:#89948b;font-size:10px;line-height:1.45}.professional-submission-panel>footer{display:flex;align-items:center;justify-content:space-between;gap:13px;padding-top:14px;border-top:1px solid #dce6dc}.professional-submission-panel>footer small{max-width:58ch;color:#7f8a7f;font-size:10px;line-height:1.5}.professional-submission-panel>footer button{min-height:43px;flex:none;padding:0 16px;border:0;border-radius:13px;background:#476758;color:#fff;font-size:12px;font-weight:900;box-shadow:0 9px 18px rgba(67,98,79,.16)}.professional-submission-panel>footer button:disabled{opacity:.52}.professional-submission-history{display:grid;gap:9px;padding-top:4px}.professional-submission-history>b{color:#4d5e51;font-size:12px}.professional-submission-history article{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:11px 12px;border:1px solid #dfe7df;border-radius:13px;background:rgba(255,255,255,.72)}.professional-submission-history article>div{display:grid;gap:3px;min-width:0}.professional-submission-history strong{overflow:hidden;color:#474038;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.professional-submission-history span,.professional-submission-history article>small{color:#8b8379;font-size:10px}.professional-submission-history article>small{max-width:35%;color:#657d6c;line-height:1.45}
 @media(max-width:760px){.creator-profile-card{padding:23px 19px;border-radius:23px}.creator-profile-card h2{font-size:27px}.creator-profile-options{grid-template-columns:1fr}.creator-profile-options button span{min-height:0}.professional-submission-panel{padding:17px}.professional-submission-panel>header{display:grid;gap:10px}.professional-submission-panel header em{justify-self:start}.professional-submission-form{grid-template-columns:1fr}.professional-submission-panel>footer{display:grid;gap:11px}.professional-submission-panel>footer button{width:100%}.professional-submission-history article{align-items:flex-start;flex-direction:column}.professional-submission-history article>small{max-width:none}}
 </style>
