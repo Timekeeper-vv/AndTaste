@@ -242,6 +242,94 @@ public class PaymentController {
         }
     }
 
+    /**
+     * Create a payment order for an approved sample request. Sample fees are
+     * priced from the server-side catalog and never from browser input; unlike
+     * recharge orders, a successful sample payment must not add user credits.
+     */
+    @PostMapping("/sample-orders")
+    public Map<String, Object> createSampleOrder(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+            @RequestBody(required = false) Map<String, String> body) throws Exception {
+        Long userId = requireConsumer(principal);
+        String requestIdText = body == null ? "" : nullToEmpty(body.get("requestId"));
+        String channel = body == null ? "" : nullToEmpty(body.get("channel"));
+        long requestId;
+        try { requestId = Long.parseLong(requestIdText); } catch (Exception e) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "打样申请编号无效"); }
+        if (requestId <= 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "打样申请编号无效");
+        validateRequestedChannel(channel);
+
+        SampleOrderCreation creation = Objects.requireNonNull(transactions.execute(status -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT r.id,r.request_type,r.status,r.sample_product_name,r.sample_fee_yuan,r.sample_payment_status,r.sample_payment_order_no " +
+                            "FROM consumer_production_request r WHERE r.id=? AND r.user_id=? FOR UPDATE", requestId, userId);
+            if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "打样申请不存在");
+            Map<String, Object> request = rows.get(0);
+            if (!"sample".equals(String.valueOf(request.get("request_type")))) throw new IllegalStateException("当前申请不是打样申请");
+            if (!"approved".equals(String.valueOf(request.get("status")))) throw new IllegalStateException("管理员审核通过后才能支付打样费");
+            BigDecimal feeYuan = decimal(request.get("sample_fee_yuan"));
+            if (feeYuan.signum() <= 0) throw new IllegalStateException("打样费用尚未配置，请联系管理员");
+            String existingOrderNo = nullableText(request.get("sample_payment_order_no"));
+            if (!blank(existingOrderNo)) {
+                List<Map<String, Object>> existing = jdbc.queryForList("SELECT status,channel FROM payment_order WHERE order_no=? AND user_id=? FOR UPDATE", existingOrderNo, userId);
+                if (!existing.isEmpty()) {
+                    String existingStatus = String.valueOf(existing.get(0).get("status"));
+                    if (Set.of("pending", "manual_review", "paid").contains(existingStatus)) {
+                        return new SampleOrderCreation(existingOrderNo, true, feeYuan, String.valueOf(request.get("sample_product_name")), String.valueOf(existing.get(0).get("channel")));
+                    }
+                }
+            }
+            long amountFen = feeYuan.movePointRight(2).longValueExact();
+            CreditPackage pkg = new CreditPackage("sample_fee_" + requestId,
+                    "打样费 · " + nullableText(request.get("sample_product_name")),
+                    "审核通过后的作品打样费用", amountFen, BigDecimal.ZERO);
+            OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
+            jdbc.update("UPDATE consumer_production_request SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=? AND user_id=?",
+                    order.orderNo, requestId, userId);
+            return new SampleOrderCreation(order.orderNo, order.reused, feeYuan, nullableText(request.get("sample_product_name")), channel);
+        }));
+
+        String actualChannel = creation.channel;
+        if (creation.reused) return createdOrderView(creation.orderNo, userId, actualChannel, true);
+        if ("manual_wechat_qr".equals(actualChannel)) {
+            transactions.execute(status -> {
+                jdbc.update("UPDATE payment_order SET code_url=?,provider_response=? WHERE order_no=? AND user_id=?",
+                        manualWechatQrUrl.trim(), "manual receipt QR for sample fee", creation.orderNo, userId);
+                return null;
+            });
+            return createdOrderView(creation.orderNo, userId, actualChannel, false);
+        }
+
+        CreditPackage pkg = new CreditPackage("sample_fee_" + requestId,
+                "打样费 · " + creation.productName, "审核通过后的作品打样费用",
+                creation.feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
+        boolean providerSubmissionAttempted = false;
+        try {
+            if ("wechat_jsapi".equals(actualChannel)) {
+                String openId = boundOpenId(userId);
+                transactions.execute(status -> { prepareWechatOrderMetadata(creation.orderNo, openId); return null; });
+                providerSubmissionAttempted = true;
+                persistWechatPrepay(creation.orderNo, createWechatJsapiOrder(creation.orderNo, pkg, openId));
+            } else {
+                transactions.execute(status -> { prepareWechatOrderMetadata(creation.orderNo, null); return null; });
+                providerSubmissionAttempted = true;
+                persistWechatPrepay(creation.orderNo, createWechatNativeOrder(creation.orderNo, pkg));
+            }
+            return createdOrderView(creation.orderNo, userId, actualChannel, false);
+        } catch (Exception e) {
+            String nextStatus = providerSubmissionAttempted && providerResultUnknown(e) ? "payment_exception" : "failed";
+            transactions.execute(status -> {
+                jdbc.update("UPDATE payment_order SET status=?,provider_response=? WHERE order_no=? AND status='pending'", nextStatus, safeError(e), creation.orderNo);
+                if ("failed".equals(nextStatus)) {
+                    jdbc.update("UPDATE consumer_production_request SET sample_payment_status='unpaid',sample_payment_order_no=NULL WHERE sample_payment_order_no=? AND sample_payment_status='pending'", creation.orderNo);
+                }
+                return null;
+            });
+            throw userSafeWechatError(e, providerSubmissionAttempted && providerResultUnknown(e)
+                    ? "微信下单结果待核对，请勿重复付款或创建新订单" : "微信支付下单未成功，请稍后重试");
+        }
+    }
+
     @GetMapping("/orders/{orderNo}")
     public Map<String, Object> order(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
@@ -323,10 +411,16 @@ public class PaymentController {
         Long userId = requireConsumer(principal);
         return Objects.requireNonNull(transactions.execute(status -> {
             expireOverdueOrder(orderNo, userId);
+            List<Map<String, Object>> orderRows = jdbc.queryForList("SELECT product_code FROM payment_order WHERE order_no=? AND user_id=? FOR UPDATE", orderNo, userId);
+            if (orderRows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "支付订单不存在");
             int changed = jdbc.update("UPDATE payment_order SET status='manual_review' WHERE order_no=? AND user_id=? " +
                             "AND channel='manual_wechat_qr' AND status='pending' " +
                             "AND (expired_at IS NULL OR expired_at>CURRENT_TIMESTAMP)", orderNo, userId);
             if (changed == 0) throwUnavailableOrderState(orderNo, userId, "该订单当前无法提交核验");
+            String productCode = String.valueOf(orderRows.get(0).get("product_code"));
+            if (productCode.startsWith("sample_fee_")) {
+                jdbc.update("UPDATE consumer_production_request SET sample_payment_status='manual_review' WHERE sample_payment_order_no=? AND sample_payment_status='pending'", orderNo);
+            }
             return orderView(orderNo, userId);
         }));
     }
@@ -1715,13 +1809,24 @@ public class PaymentController {
     private void creditConfirmedOrder(Map<String, Object> order, String providerOrderNo, String remark) {
         String orderNo = String.valueOf(order.get("order_no"));
         Long userId = toLong(order.get("user_id"));
+        String productCode = String.valueOf(order.get("product_code"));
+        int changed = jdbc.update("UPDATE payment_order SET status='paid',provider_order_no=?,paid_at=NOW() WHERE order_no=? AND status IN ('pending','manual_review')", providerOrderNo, orderNo);
+        if (changed == 0) return;
+        if (productCode.startsWith("sample_fee_")) {
+            try {
+                long requestId = Long.parseLong(productCode.substring("sample_fee_".length()));
+                int linked = jdbc.update("UPDATE consumer_production_request SET sample_payment_status='paid',sample_paid_at=NOW(),status='processing' WHERE id=? AND sample_payment_order_no=? AND sample_payment_status IN ('pending','manual_review') AND status='approved'", requestId, orderNo);
+                if (linked != 1) throw new IllegalStateException("打样支付订单未关联到可生产申请");
+            } catch (NumberFormatException ignored) {
+                throw new IllegalStateException("打样支付订单关联申请无效");
+            }
+            return;
+        }
         BigDecimal credits = decimal(order.get("credit_amount"));
         ensureCreditAccount(userId);
         Map<String, Object> account = jdbc.queryForMap("SELECT balance FROM consumer_credit_account WHERE user_id=? FOR UPDATE", userId);
         BigDecimal before = decimal(account.get("balance"));
         BigDecimal after = before.add(credits);
-        int changed = jdbc.update("UPDATE payment_order SET status='paid',provider_order_no=?,paid_at=NOW() WHERE order_no=? AND status='pending'", providerOrderNo, orderNo);
-        if (changed == 0) return;
         jdbc.update("UPDATE consumer_credit_account SET balance=?,total_recharged=total_recharged+? WHERE user_id=?", after, credits, userId);
         jdbc.update("INSERT INTO consumer_credit_transaction(transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 "PAY-" + orderNo, userId, "payment_recharge", credits, "in", "success", before, after, remark, providerOrderNo);
@@ -1921,6 +2026,7 @@ public class PaymentController {
     }
 
     private record CreditPackage(String code, String name, String description, long amountFen, BigDecimal credits) { }
+    private record SampleOrderCreation(String orderNo, boolean reused, BigDecimal feeYuan, String productName, String channel) { }
     private record OrderCreation(String orderNo, boolean reused) { }
     private record RefundPreparation(String refundNo, String orderNo, Long userId, long amountFen, BigDecimal credits, String transactionId, String reason) { }
     private record DailyBillRetry(LocalDate billDate, String billType) { }

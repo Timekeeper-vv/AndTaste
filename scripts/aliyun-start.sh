@@ -207,6 +207,7 @@ init_db(){
   # or inventory and are safe to re-import by source batch/row.
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260804_01__historical_sales_insights.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260804_01__historical_sales_data.sql"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260805_01__consumer_sample_payment.sql"
   ok "数据库及业务账号已就绪：$DB_NAME / $DB_USER"
 }
 

@@ -11,6 +11,7 @@ export type PageName =
   | 'consumerWorksReview'
   | 'consumerAssetInventory'
   | 'consumerCreditManagement'
+  | 'paymentOperations'
   | 'consumerProductionReview'
   | 'aiAssistant'
   | 'customerService'

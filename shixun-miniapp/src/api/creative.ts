@@ -241,6 +241,9 @@ export interface ProductionSubmission {
 }
 
 export const getProductionRequests = () => request<any[]>('/api/creative/ai/consumer-production/my')
+export const createSamplePaymentOrder = (requestId: number | string, channel: PaymentChannel = 'wechat_jsapi') => request<PaymentOrder>('/api/payments/sample-orders', {
+  method: 'POST', data: { requestId: String(requestId), channel }, header: { 'content-type': 'application/json' },
+})
 export const submitProductionRequest = (body: ProductionSubmission) => request<any>('/api/creative/ai/consumer-production/submit', {
   method: 'POST', data: body, header: { 'content-type': 'application/json' },
 })

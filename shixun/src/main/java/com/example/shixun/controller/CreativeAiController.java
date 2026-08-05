@@ -179,7 +179,14 @@ public class CreativeAiController {
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_transaction (id BIGINT AUTO_INCREMENT PRIMARY KEY, transaction_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NULL, job_id BIGINT NULL, biz_type VARCHAR(50) NOT NULL, amount DECIMAL(12,2) NOT NULL, direction VARCHAR(20) NOT NULL, status VARCHAR(30) NOT NULL, balance_before DECIMAL(12,2) NOT NULL DEFAULT 0.00, balance_after DECIMAL(12,2) NOT NULL DEFAULT 0.00, remark VARCHAR(500), operator VARCHAR(80), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_credit_user(user_id), INDEX idx_credit_status(status), INDEX idx_credit_biz(biz_type)) COMMENT='C端用户额度流水'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_reward_mission_claim (id BIGINT AUTO_INCREMENT PRIMARY KEY, claim_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, mission_key VARCHAR(80) NOT NULL, asset_id BIGINT NULL, credit_transaction_id BIGINT NULL, status VARCHAR(30) NOT NULL DEFAULT 'claimed', claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_consumer_reward_mission (user_id, mission_key), INDEX idx_reward_mission_user(user_id)) COMMENT='C端一次性创作任务奖励领取记录'");
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_campaign_reward (id BIGINT AUTO_INCREMENT PRIMARY KEY, participation_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, campaign_key VARCHAR(80) NOT NULL, asset_id BIGINT NOT NULL, status VARCHAR(30) NOT NULL DEFAULT 'pending_review', reward_amount DECIMAL(12,2) NOT NULL, credit_transaction_id BIGINT NULL, reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uq_consumer_campaign_user (user_id, campaign_key), UNIQUE KEY uq_consumer_campaign_asset (asset_id), INDEX idx_campaign_reward_status(status), INDEX idx_campaign_reward_user(user_id)) COMMENT='C端主题活动投稿与奖励记录'");
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY, request_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NOT NULL, request_type VARCHAR(20) NOT NULL, title VARCHAR(200), quantity INT NOT NULL DEFAULT 1, self_ship_quantity INT NOT NULL DEFAULT 0, museum_distribution_json TEXT, recipient_name VARCHAR(80), recipient_phone VARCHAR(80), recipient_address VARCHAR(500), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cpr_user(user_id), INDEX idx_cpr_asset(asset_id), INDEX idx_cpr_type(request_type), INDEX idx_cpr_status(status)) COMMENT='C端作品打样与生产申请'");
+        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY, request_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NOT NULL, request_type VARCHAR(20) NOT NULL, title VARCHAR(200), quantity INT NOT NULL DEFAULT 1, self_ship_quantity INT NOT NULL DEFAULT 0, museum_distribution_json TEXT, recipient_name VARCHAR(80), recipient_phone VARCHAR(80), recipient_address VARCHAR(500), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, sample_product_name VARCHAR(120), sample_fee_yuan DECIMAL(10,2) NULL, sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required', sample_payment_order_no VARCHAR(64) NULL, sample_paid_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cpr_user(user_id), INDEX idx_cpr_asset(asset_id), INDEX idx_cpr_type(request_type), INDEX idx_cpr_status(status), INDEX idx_cpr_sample_payment(sample_payment_status)) COMMENT='C端作品打样与生产申请'");
+        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_product_name VARCHAR(120) NULL"); } catch (Exception ignored) {}
+        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_fee_yuan DECIMAL(10,2) NULL"); } catch (Exception ignored) {}
+        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required'"); } catch (Exception ignored) {}
+        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_payment_order_no VARCHAR(64) NULL"); } catch (Exception ignored) {}
+        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_paid_at DATETIME NULL"); } catch (Exception ignored) {}
+        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_sample_fee_catalog (id BIGINT AUTO_INCREMENT PRIMARY KEY, product_name VARCHAR(120) NOT NULL UNIQUE, fee_yuan DECIMAL(10,2) NOT NULL, source_file VARCHAR(255) NOT NULL DEFAULT '工作簿2.xlsx', source_sheet VARCHAR(120) NOT NULL DEFAULT 'Sheet1', active TINYINT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_sample_fee_active(active)) COMMENT='打样费用目录（服务端定价）'");
+        seedSampleFeeCatalog();
         this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_professional_submission (id BIGINT AUTO_INCREMENT PRIMARY KEY, submission_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, title VARCHAR(200) NOT NULL, original_name VARCHAR(260) NOT NULL, storage_name VARCHAR(260) NOT NULL, file_size BIGINT NOT NULL, purpose VARCHAR(30) NOT NULL DEFAULT 'personal', museum_id VARCHAR(80), museum_name VARCHAR(200), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cps_user(user_id), INDEX idx_cps_status(status)) COMMENT='C端专业设计师ZIP作品包审核'");
         try { this.jdbc.execute("ALTER TABLE digital_asset ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
         try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
@@ -1925,11 +1932,17 @@ public class CreativeAiController {
         catch (Exception ignored) { return 0L; }
     }
 
+    @GetMapping("/consumer-production/sample-fees")
+    public List<Map<String,Object>> consumerSampleFees() {
+        requireCurrentConsumerUser();
+        return jdbc.queryForList("SELECT id,product_name productName,fee_yuan feeYuan,source_file sourceFile FROM consumer_sample_fee_catalog WHERE active=1 ORDER BY id");
+    }
+
     @GetMapping("/consumer-production/my")
     public List<Map<String,Object>> myConsumerProductionRequests(@RequestParam(required=false) String type,
                                                                  @RequestParam(required=false,defaultValue="100") int size) {
         Long userId = requireCurrentConsumerUser();
-        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id WHERE r.user_id=?");
+        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id WHERE r.user_id=?");
         List<Object> args=new ArrayList<>();args.add(userId);
         if(!blank(type)&&Set.of("sample","bulk").contains(type)){sql.append(" AND r.request_type=?");args.add(type);}
         sql.append(" ORDER BY r.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,300)));
@@ -1949,6 +1962,14 @@ public class CreativeAiController {
         if(!"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
         if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
+        String sampleProductName = body==null || body.get("sampleProductName")==null ? "" : String.valueOf(body.get("sampleProductName")).trim();
+        BigDecimal sampleFeeYuan = null;
+        if ("sample".equals(requestType)) {
+            if (blank(sampleProductName)) throw new IllegalArgumentException("请选择打样产品");
+            List<BigDecimal> feeRows = jdbc.query("SELECT fee_yuan FROM consumer_sample_fee_catalog WHERE product_name=? AND active=1", (rs, rowNum) -> rs.getBigDecimal(1), sampleProductName);
+            if (feeRows.isEmpty()) throw new IllegalArgumentException("打样产品不存在或已下架，请刷新后重试");
+            sampleFeeYuan = feeRows.get(0);
+        }
         String purpose=body==null||body.get("purpose")==null?"personal":String.valueOf(body.get("purpose")).trim();
         if(blank(purpose)) purpose="personal";
         if(!Set.of("personal","museum_sale").contains(purpose)) throw new IllegalArgumentException("创作目的只能是个人收藏/送礼或博物馆售卖");
@@ -1973,14 +1994,14 @@ public class CreativeAiController {
         String requestNo=no("sample".equals(requestType)?"CYP":"CPR");
         KeyHolder kh=new GeneratedKeyHolder();
         Long finalUserId=userId; Long finalAssetId=assetId; String finalRequestType=requestType; int finalQuantity=quantity;
-        int finalSelfQty=selfQty; String finalTitle=title; String distributionJson=mapper.writeValueAsString(museumDistribution);
+        int finalSelfQty=selfQty; String finalTitle=title; String distributionJson=mapper.writeValueAsString(museumDistribution); BigDecimal finalSampleFeeYuan=sampleFeeYuan;
         String recipientName=body.get("recipientName")==null?"":String.valueOf(body.get("recipientName"));
         String recipientPhone=body.get("recipientPhone")==null?"":String.valueOf(body.get("recipientPhone"));
         String recipientAddress=body.get("recipientAddress")==null?"":String.valueOf(body.get("recipientAddress"));
         String note=body.get("note")==null?"":String.valueOf(body.get("note"));
         jdbc.update(con -> {
-            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'review')",Statement.RETURN_GENERATED_KEYS);
-            ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);ps.setString(4,finalRequestType);ps.setString(5,finalTitle);ps.setInt(6,finalQuantity);ps.setInt(7,finalSelfQty);ps.setString(8,distributionJson);ps.setString(9,recipientName);ps.setString(10,recipientPhone);ps.setString(11,recipientAddress);ps.setString(12,note);
+            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status,sample_product_name,sample_fee_yuan,sample_payment_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'review',?,?,?)",Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);ps.setString(4,finalRequestType);ps.setString(5,finalTitle);ps.setInt(6,finalQuantity);ps.setInt(7,finalSelfQty);ps.setString(8,distributionJson);ps.setString(9,recipientName);ps.setString(10,recipientPhone);ps.setString(11,recipientAddress);ps.setString(12,note);ps.setString(13,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(14, java.sql.Types.DECIMAL); else ps.setBigDecimal(14, finalSampleFeeYuan); ps.setString(15, "not_required");
             return ps;
         },kh);
         Long id=Objects.requireNonNull(kh.getKey()).longValue();
@@ -1993,7 +2014,7 @@ public class CreativeAiController {
                                                              @RequestParam(required=false) Long userId,
                                                              @RequestParam(required=false,defaultValue="200") int size) {
         requireCreativeAdmin();
-        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id WHERE 1=1");
+        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id WHERE 1=1");
         List<Object> args=new ArrayList<>();
         if(!blank(type)&&Set.of("sample","bulk").contains(type)){sql.append(" AND r.request_type=?");args.add(type);}
         if(!blank(status)&&Set.of("review","approved","rejected").contains(status)){sql.append(" AND r.status=?");args.add(status);}
@@ -2010,9 +2031,27 @@ public class CreativeAiController {
         if(!Set.of("approved","rejected","review").contains(status)) throw new IllegalArgumentException("审核状态只能是 approved / rejected / review");
         String comment=body==null?"":nullToEmpty(body.get("comment"));
         String operator = authenticatedPrincipal().username();
-        int n=jdbc.update("UPDATE consumer_production_request SET status=?,review_comment=?,reviewed_by=?,reviewed_at=? WHERE id=?",status,comment,blank(operator)?"admin":operator,"review".equals(status)?null:LocalDateTime.now(),id);
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT request_type,sample_payment_status FROM consumer_production_request WHERE id=? FOR UPDATE", id);
+        if (rows.isEmpty()) throw new IllegalArgumentException("生产申请不存在");
+        Map<String,Object> current = rows.get(0);
+        String requestType = String.valueOf(current.get("request_type"));
+        String paymentStatus = String.valueOf(current.get("sample_payment_status"));
+        if ("sample".equals(requestType) && "paid".equals(paymentStatus) && !"approved".equals(status)) {
+            throw new IllegalStateException("打样费已支付，不能驳回或退回该申请");
+        }
+        if ("sample".equals(requestType) && Set.of("pending", "manual_review").contains(paymentStatus) && !"approved".equals(status)) {
+            throw new IllegalStateException("打样费支付流程进行中，请先处理支付订单后再变更审核状态");
+        }
+        if ("sample".equals(requestType) && "approved".equals(status)) {
+            if ("paid".equals(paymentStatus)) status = "approved";
+            else if (!Set.of("pending", "manual_review").contains(paymentStatus)) paymentStatus = "unpaid";
+        } else if ("sample".equals(requestType) && !"paid".equals(paymentStatus)) {
+            paymentStatus = "not_required";
+        }
+        int n=jdbc.update("UPDATE consumer_production_request SET status=?,sample_payment_status=?,review_comment=?,reviewed_by=?,reviewed_at=? WHERE id=?",status,paymentStatus,comment,blank(operator)?"admin":operator,"review".equals(status)?null:LocalDateTime.now(),id);
         if(n==0) throw new IllegalArgumentException("生产申请不存在");
-        return Map.of("success",true,"id",id,"status",status,"message","approved".equals(status)?"生产申请已通过":"rejected".equals(status)?"生产申请已驳回":"已退回待审核");
+        boolean paymentRequired = "sample".equals(requestType) && "approved".equals(status) && Set.of("unpaid", "pending", "manual_review").contains(paymentStatus);
+        return Map.of("success",true,"id",id,"status",status,"samplePaymentStatus",paymentStatus,"paymentRequired",paymentRequired,"message","approved".equals(status)?(paymentRequired?"生产申请已通过，请通知用户支付打样费":"生产申请已通过"):"rejected".equals(status)?"生产申请已驳回":"已退回待审核");
     }
 
     @PostMapping("/reviews")
@@ -3039,6 +3078,33 @@ public class CreativeAiController {
         }
         addSignedAssetUrls(rows);
         return rows;
+    }
+
+    /**
+     * Keep the workbook-backed fee catalog available on first boot as well as
+     * through the deployment migration. Prices are never accepted from the
+     * browser; this catalog is the single source used to create sample orders.
+     */
+    private void seedSampleFeeCatalog() {
+        List<Object[]> fees = List.of(
+                new Object[]{"合金冰箱贴", 2000}, new Object[]{"胸针/徽章", 1300},
+                new Object[]{"慕斯蛋糕", 2500}, new Object[]{"亚克力冰箱贴", 1000},
+                new Object[]{"针织包", 1000}, new Object[]{"马卡龙", 2500},
+                new Object[]{"树脂冰箱贴", 2500}, new Object[]{"帆布包", 500},
+                new Object[]{"曲奇饼干", 2500}, new Object[]{"陶瓷冰箱贴", 2000},
+                new Object[]{"摇摇笔", 1200}, new Object[]{"毛绒", 2000},
+                new Object[]{"橡皮", 1000}, new Object[]{"搪胶脸毛绒", 5000},
+                new Object[]{"服饰", 800}, new Object[]{"毛绒挂件", 2000},
+                new Object[]{"保温杯", 1000}, new Object[]{"金属挂件", 2000},
+                new Object[]{"笔记本", 1000}, new Object[]{"树脂摆件", 3000},
+                new Object[]{"磁吸笔记本", 2500}, new Object[]{"亚克力摆件", 1000},
+                new Object[]{"冰淇淋", 2000}, new Object[]{"叶雕灯", 1000},
+                new Object[]{"棒棒糖", 2000}, new Object[]{"考古挖掘盲盒", 3500},
+                new Object[]{"巧克力", 2000}
+        );
+        for (Object[] fee : fees) {
+            jdbc.update("INSERT IGNORE INTO consumer_sample_fee_catalog(product_name,fee_yuan) VALUES (?,?)", fee[0], fee[1]);
+        }
     }
 
     private int parsePositiveInt(Object value,int fallback) {

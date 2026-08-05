@@ -174,6 +174,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      * list so a role=user JWT keeps access to its C-end experience.
      */
     private boolean requiresBackOfficeRole(String path, String method) {
+        // This is the consumer's own account operation. Authentication still
+        // runs above; only the broad /api/users management guard is bypassed.
+        if ("/api/users/me/cancellation".equals(path)
+                && "POST".equalsIgnoreCase(method)) {
+            return false;
+        }
         // The marketplace order resource has two deliberately different
         // audiences: consumers may create/read their own orders, while the
         // controller limits staff views to operational roles.  Let the

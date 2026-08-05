@@ -109,6 +109,7 @@ const allMenus: MenuGroup[] = [
   ]},
   { group: '系统', items: [
     { key: 'consumerCreditManagement', label: 'C端额度管理', roles: SUPER_ADMIN_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>` },
+    { key: 'paymentOperations', label: '支付运营', roles: SUPER_ADMIN_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/></svg>` },
     { key: 'users', label: '账号权限', roles: SUPER_ADMIN_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>` },
   ]},
 ]

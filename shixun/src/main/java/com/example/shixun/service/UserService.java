@@ -20,6 +20,16 @@ public class UserService {
         this.userMapper = userMapper;
     }
 
+    /** Used by the authenticated self-service account security flow. */
+    public boolean matchesPassword(String rawPassword, String encodedPassword) {
+        return rawPassword != null && encodedPassword != null && passwordEncoder.matches(rawPassword, encodedPassword);
+    }
+
+    /** Used only for replacing a retired account's login secret. */
+    public String hashPassword(String rawPassword) {
+        return passwordEncoder.encode(rawPassword);
+    }
+
     @Async
     public CompletableFuture<List<User>> findAll() {
         return CompletableFuture.completedFuture(userMapper.findAll());

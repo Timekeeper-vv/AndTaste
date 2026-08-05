@@ -35,6 +35,11 @@
         <view class="menu-copy"><text>积分充值</text><text>管理创作所需积分</text></view>
         <text class="arrow">›</text>
       </view>
+      <view class="menu-row" @tap="go('/pages/sample-payment/index')">
+        <view class="menu-icon">¥</view>
+        <view class="menu-copy"><text>打样费支付</text><text>审核通过后在这里完成支付</text></view>
+        <text class="menu-arrow">›</text>
+      </view>
       <view class="menu-row" @tap="go('/pages/purpose/index')">
         <view class="menu-icon purpose">向</view>
         <view class="menu-copy"><text>切换创作用途</text><text>个人收藏或景区、博物馆售卖</text></view>

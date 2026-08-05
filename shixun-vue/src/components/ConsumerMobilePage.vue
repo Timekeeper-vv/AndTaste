@@ -6,6 +6,7 @@ import QRCode from 'qrcode'
 import MaterialModelStudio from './MaterialModelStudio.vue'
 import CustomerSupportWidget from './CustomerSupportWidget.vue'
 import { requestAssetPreviewAccess, requestAssetPreviewUrl } from '../utils/assetAccess'
+import { isEmbeddedMiniapp, navigateToMiniappPage } from '../utils/miniappBridge'
 
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error']; logout: [] }>()
@@ -22,6 +23,10 @@ type CreatorProfile = '' | 'amateur' | 'professional'
 const creationPurpose = ref<CreationPurpose>('')
 const creatorProfile = ref<CreatorProfile>('')
 const creatorProfilePromptOpen = ref(false)
+const accountPanelOpen = ref(false)
+const cancellationPassword = ref('')
+const cancellationConfirmation = ref('')
+const cancellationBusy = ref(false)
 const professionalSubmissionFile = ref<File | null>(null)
 const professionalSubmissionTitle = ref('')
 const professionalSubmissionNote = ref('')
@@ -88,6 +93,15 @@ const paymentQrUrl = ref('')
 const paymentLoading = ref(false)
 const paymentError = ref('')
 const paymentTimer = ref<ReturnType<typeof setInterval> | null>(null)
+const sampleFeeCatalog = ref<any[]>([])
+const samplePaymentModalOpen = ref(false)
+const samplePaymentRequest = ref<any | null>(null)
+const samplePaymentOrder = ref<any | null>(null)
+const samplePaymentQrUrl = ref('')
+const samplePaymentChannel = ref('manual_wechat_qr')
+const samplePaymentLoading = ref(false)
+const samplePaymentError = ref('')
+const samplePaymentTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const submittedAssetIds = ref<Set<number>>(new Set())
 const submittingAssetIds = ref<Set<number>>(new Set())
 const productionRequests = ref<any[]>([])
@@ -103,6 +117,7 @@ const productionForm = reactive({
   recipientPhone: '',
   recipientAddress: '',
   note: '',
+  sampleProductName: '',
   museumDistribution: [] as Array<{ museumId: string; museumName: string; quantity: number }>,
 })
 const CONSUMER_TRIPO_MODEL_VERSION = 'v3.1-20260211'
@@ -587,10 +602,17 @@ function changeCreationPurpose() {
   nextTick(() => purposeGate.value?.focus())
 }
 
-function openCreditPanel() { creditPanelOpen.value = true }
+function openCreditPanel() {
+  if (isEmbeddedMiniapp() && navigateToMiniappPage('/pages/recharge/index')) return
+  creditPanelOpen.value = true
+}
 function stopPaymentPolling() {
   if (paymentTimer.value) clearInterval(paymentTimer.value)
   paymentTimer.value = null
+}
+function stopSamplePaymentPolling() {
+  if (samplePaymentTimer.value) clearInterval(samplePaymentTimer.value)
+  samplePaymentTimer.value = null
 }
 function closePaymentOrder() {
   stopPaymentPolling()
@@ -601,6 +623,58 @@ function closePaymentOrder() {
 function closeCreditPanel() {
   closePaymentOrder()
   creditPanelOpen.value = false
+}
+
+function closeSamplePayment() {
+  if (samplePaymentLoading.value) return
+  stopSamplePaymentPolling()
+  samplePaymentModalOpen.value = false
+  samplePaymentRequest.value = null
+  samplePaymentOrder.value = null
+  samplePaymentQrUrl.value = ''
+  samplePaymentError.value = ''
+  document.body.style.overflow = ''
+}
+
+function openAccountPanel() {
+  cancellationPassword.value = ''
+  cancellationConfirmation.value = ''
+  accountPanelOpen.value = true
+}
+
+function closeAccountPanel() {
+  if (cancellationBusy.value) return
+  accountPanelOpen.value = false
+  cancellationPassword.value = ''
+  cancellationConfirmation.value = ''
+}
+
+async function cancelAccount() {
+  if (cancellationConfirmation.value !== '注销账号') {
+    emit('alert', '请输入“注销账号”确认操作', 'error')
+    return
+  }
+  if (!cancellationPassword.value) {
+    emit('alert', '请输入当前登录密码', 'error')
+    return
+  }
+  cancellationBusy.value = true
+  try {
+    const response = await fetch('/api/users/me/cancellation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: cancellationPassword.value, confirmation: cancellationConfirmation.value }),
+    })
+    const data = await response.json().catch(() => null)
+    if (!response.ok) throw new Error(data?.message || `注销失败（HTTP ${response.status}）`)
+    accountPanelOpen.value = false
+    emit('alert', data?.message || '账号已注销', 'success')
+    window.setTimeout(() => emit('logout'), 450)
+  } catch (error: any) {
+    emit('alert', error?.message || '注销失败，请稍后重试', 'error')
+  } finally {
+    cancellationBusy.value = false
+  }
 }
 async function loadPaymentPackages() {
   try {
@@ -696,6 +770,98 @@ async function completeManualPayment() {
   }
 }
 
+function sampleFeeYuan(productName: string): string {
+  const fee = sampleFeeCatalog.value.find(item => String(item.productName) === String(productName))
+  return fee?.feeYuan == null ? '' : Number(fee.feeYuan).toFixed(2).replace(/\.00$/, '')
+}
+function samplePaymentStatusText(status?: string): string {
+  const map: Record<string, string> = { not_required: '', unpaid: '待支付打样费', pending: '等待支付', manual_review: '待人工核验', paid: '已支付，进入生产' }
+  return map[String(status || '')] || ''
+}
+async function refreshSamplePaymentOrder() {
+  if (!samplePaymentOrder.value?.orderNo) return
+  const r = await fetch(`/api/payments/orders/${encodeURIComponent(samplePaymentOrder.value.orderNo)}`, { cache: 'no-store' })
+  if (!r.ok) return
+  const latest = await r.json()
+  samplePaymentOrder.value = latest
+  if (latest.status === 'paid') {
+    stopSamplePaymentPolling()
+    await load()
+    emit('alert', '打样费已支付，申请已进入生产流程', 'success')
+  } else if (['closed', 'failed', 'expired'].includes(String(latest.status))) {
+    stopSamplePaymentPolling()
+  }
+}
+async function prepareSamplePaymentQr(data: any) {
+  const codeUrl = String(data?.codeUrl || '').trim()
+  const isManualQr = data?.channel === 'manual_wechat_qr'
+  const isImageUrl = /^(?:https?:\/\/|\/|data:image\/|blob:)/i.test(codeUrl)
+  if (isManualQr && isImageUrl) samplePaymentQrUrl.value = codeUrl
+  else if (isManualQr && codeUrl) samplePaymentQrUrl.value = `/${codeUrl.replace(/^\/+/, '')}`
+  else if (codeUrl) samplePaymentQrUrl.value = await QRCode.toDataURL(codeUrl, { width: 360, margin: 1, color: { dark: '#1f1713', light: '#ffffff' } })
+  else throw new Error('支付服务未返回收款码，请联系平台管理员')
+}
+function openSamplePayment(request: any) {
+  if (!request?.id || request.requestType !== 'sample' || request.samplePaymentStatus !== 'unpaid') return
+  if (isEmbeddedMiniapp() && navigateToMiniappPage('/pages/sample-payment/index')) return
+  samplePaymentRequest.value = request
+  samplePaymentOrder.value = null
+  samplePaymentQrUrl.value = ''
+  samplePaymentError.value = ''
+  samplePaymentChannel.value = wechatPaymentEnabled.value ? 'wechat' : 'manual_wechat_qr'
+  samplePaymentModalOpen.value = true
+  document.body.style.overflow = 'hidden'
+}
+async function createSamplePaymentOrder() {
+  if (!samplePaymentRequest.value?.id) return
+  if (samplePaymentChannel.value === 'wechat' && !wechatPaymentEnabled.value) {
+    samplePaymentError.value = '微信支付暂不可用，请选择收款码或联系管理员。'
+    return
+  }
+  if (samplePaymentChannel.value === 'manual_wechat_qr' && !manualPaymentEnabled.value) {
+    samplePaymentError.value = '收款码暂不可用，请联系管理员。'
+    return
+  }
+  samplePaymentLoading.value = true
+  samplePaymentError.value = ''
+  try {
+    const r = await fetch('/api/payments/sample-orders', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId: String(samplePaymentRequest.value.id), channel: samplePaymentChannel.value }),
+    })
+    const data = await r.json().catch(() => null)
+    if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
+    samplePaymentOrder.value = data
+    await prepareSamplePaymentQr(data)
+    stopSamplePaymentPolling()
+    if (data.channel === 'wechat') samplePaymentTimer.value = setInterval(refreshSamplePaymentOrder, 2000)
+    await refreshSamplePaymentOrder()
+  } catch (e: any) {
+    samplePaymentError.value = e?.message || '创建打样费订单失败'
+  } finally {
+    samplePaymentLoading.value = false
+  }
+}
+async function completeSampleManualPayment() {
+  if (!samplePaymentOrder.value?.orderNo) return
+  samplePaymentLoading.value = true
+  samplePaymentError.value = ''
+  try {
+    const r = await fetch(`/api/payments/orders/${encodeURIComponent(samplePaymentOrder.value.orderNo)}/manual-complete`, { method: 'POST' })
+    const data = await r.json().catch(() => null)
+    if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
+    samplePaymentOrder.value = data
+    await load()
+    stopSamplePaymentPolling()
+    samplePaymentTimer.value = setInterval(refreshSamplePaymentOrder, 3000)
+    emit('alert', '已提交打样费核验，管理员确认后将进入生产', 'success')
+  } catch (e: any) {
+    samplePaymentError.value = e?.message || '提交支付核验失败'
+  } finally {
+    samplePaymentLoading.value = false
+  }
+}
+
 async function downloadPreviewModel() {
   const url = previewDownloadUrl.value
   const format = previewDownloadFormat.value
@@ -771,8 +937,8 @@ function isSubmittingForReview(a: any): boolean { const id = assetIdOf(a); retur
 function isApprovedModel(a: any): boolean { return a?.assetType === 'model' && String(a?.assetStatus || a?.status || '') === 'approved' }
 function canSubmitProduction(a: any): boolean { return isApprovedModel(a) }
 function requestTypeText(v?: string) { return v === 'bulk' ? '批量生产' : '打样' }
-function productionStatusText(v?: string) { const map: Record<string,string> = { review:'待审核', approved:'已通过', rejected:'未通过' }; return map[String(v || 'review')] || String(v || '-') }
-function productionStatusClass(v?: string) { const st=String(v || 'review'); return st === 'approved' ? 'approved' : st === 'rejected' ? 'rejected' : 'review' }
+function productionStatusText(v?: string) { const map: Record<string,string> = { review:'待审核', approved:'已通过', processing:'生产中', rejected:'未通过' }; return map[String(v || 'review')] || String(v || '-') }
+function productionStatusClass(v?: string) { const st=String(v || 'review'); return st === 'approved' || st === 'processing' ? 'approved' : st === 'rejected' ? 'rejected' : 'review' }
 function isMuseumSalePurpose() { return creationPurpose.value === 'museum_sale' }
 
 function ensureSingleMuseumSelection() {
@@ -938,6 +1104,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (modelTimer.value) clearTimeout(modelTimer.value)
   stopPaymentPolling()
+  stopSamplePaymentPolling()
   if (imagePreviewUrl.value.startsWith('blob:')) URL.revokeObjectURL(imagePreviewUrl.value)
   if (imageEditPreviewUrl.value.startsWith('blob:')) URL.revokeObjectURL(imageEditPreviewUrl.value)
   if (uploadPreviewUrl.value.startsWith('blob:')) URL.revokeObjectURL(uploadPreviewUrl.value)
@@ -995,13 +1162,14 @@ function launchMarketOpportunity(opportunity: any) {
 
 async function load() {
   try {
-    const [i, t, a, c, prs, ms] = await Promise.all([
+    const [i, t, a, c, prs, ms, fees] = await Promise.all([
       json('/api/creative/ai/jimeng/config'),
       json('/api/creative/ai/tripo/config'),
       json('/api/creative/ai/assets'),
       json('/api/creative/ai/consumer-credits/account'),
       json('/api/creative/ai/consumer-production/my'),
       json('/api/creative/ai/consumer-production/museums'),
+      json('/api/creative/ai/consumer-production/sample-fees'),
     ])
     await loadPaymentPackages()
     imageConfig.value = i
@@ -1011,6 +1179,7 @@ async function load() {
     creditRules.value = c?.rules || {}
     productionRequests.value = Array.isArray(prs) ? prs : []
     museums.value = Array.isArray(ms) ? ms : []
+    sampleFeeCatalog.value = Array.isArray(fees) ? fees : []
     await loadRewards()
     await loadMarketInsights()
   } catch (e: any) {
@@ -1340,6 +1509,7 @@ function openProductionRequest(a: any, type: 'sample' | 'bulk') {
   productionForm.recipientName = props.currentUser.username
   productionForm.recipientPhone = ''
   productionForm.recipientAddress = ''
+  productionForm.sampleProductName = type === 'sample' ? String(sampleFeeCatalog.value[0]?.productName || '') : ''
   productionForm.note = type === 'sample' ? `创作目的：${selectedPurposeFullText.value}。希望先打样确认材质、尺寸和包装效果` : `创作目的：${selectedPurposeFullText.value}。计划按所选用途执行，不做个人/博物馆拆分`
   productionForm.museumDistribution = []
   if (isMuseumSalePurpose()) {
@@ -1381,6 +1551,10 @@ async function submitProductionRequest() {
     emit('alert', '申请数量必须大于0', 'error')
     return
   }
+  if (productionForm.requestType === 'sample' && !sampleFeeCatalog.value.some(item => String(item.productName) === String(productionForm.sampleProductName))) {
+    emit('alert', '请选择有效的打样产品和费用档位', 'error')
+    return
+  }
   const museumRows = currentMuseumDistribution()
   if (isMuseumSalePurpose() && !museumRows.length) {
     emit('alert', '请选择一个博物馆，全部数量将进入该售卖去向，不支持拆分', 'error')
@@ -1400,6 +1574,7 @@ async function submitProductionRequest() {
         recipientName: productionForm.recipientName,
         recipientPhone: productionForm.recipientPhone,
         recipientAddress: productionForm.recipientAddress,
+        sampleProductName: productionForm.requestType === 'sample' ? productionForm.sampleProductName : undefined,
         note: `创作目的：${selectedPurposeFullText.value}。${productionForm.note || ''}`,
         museumDistribution: museumRows,
       }),
@@ -1495,9 +1670,14 @@ function closeModelPreview() {
           <span>文创灵感工坊</span>
         </div>
       </div>
-      <button type="button" class="icon-btn" title="退出登录" @click="emit('logout')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
-      </button>
+      <div class="consumer-account-actions">
+        <button type="button" class="icon-btn" title="账号安全与注销" @click="openAccountPanel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3"/><path d="M5 20c.7-3.2 3.1-5 7-5s6.3 1.8 7 5"/><path d="M19 4v4m-2-2h4"/></svg>
+        </button>
+        <button type="button" class="icon-btn" title="退出登录" @click="emit('logout')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+        </button>
+      </div>
     </header>
 
     <section v-if="!creationPurpose && !creatorProfilePromptOpen" ref="purposeGate" class="purpose-gate" role="dialog" aria-modal="true" aria-labelledby="purpose-gate-title" tabindex="-1" @keydown.esc.prevent>
@@ -1931,8 +2111,8 @@ function closeModelPreview() {
       <div v-if="recentProductionRequests.length" class="production-list">
         <h3>我的生产申请</h3>
         <article v-for="r in recentProductionRequests" :key="r.id">
-          <div><b>{{ requestTypeText(r.requestType) }} · {{ r.quantity }}个</b><span>{{ r.assetTitle || r.title }}</span></div>
-          <em :class="productionStatusClass(r.status)">{{ productionStatusText(r.status) }}</em>
+          <div><b>{{ requestTypeText(r.requestType) }} · {{ r.quantity }}个</b><span>{{ r.assetTitle || r.title }}</span><small v-if="r.requestType === 'sample' && r.sampleProductName">{{ r.sampleProductName }} · ¥{{ r.sampleFeeYuan }}</small></div>
+          <div class="production-list-status"><em :class="productionStatusClass(r.status)">{{ productionStatusText(r.status) }}</em><span v-if="r.requestType === 'sample' && samplePaymentStatusText(r.samplePaymentStatus)" :class="productionStatusClass(r.samplePaymentStatus)">{{ samplePaymentStatusText(r.samplePaymentStatus) }}</span><button v-if="r.requestType === 'sample' && r.status === 'approved' && r.samplePaymentStatus === 'unpaid'" type="button" class="pay-sample-button" @click="openSamplePayment(r)">支付打样费</button></div>
         </article>
       </div>
     </section>
@@ -1994,6 +2174,10 @@ function closeModelPreview() {
           <main>
             <p class="purpose-in-form">创作目的：{{ selectedPurposeFullText }}</p>
             <label><span>总数量</span><input v-model.number="productionForm.quantity" type="number" min="1" /></label>
+            <template v-if="productionForm.requestType === 'sample'">
+              <label><span>打样产品</span><select v-model="productionForm.sampleProductName"><option value="" disabled>请选择产品和对应打样费用</option><option v-for="fee in sampleFeeCatalog" :key="fee.id" :value="fee.productName">{{ fee.productName }} · ¥{{ fee.feeYuan }}</option></select></label>
+              <p v-if="productionForm.sampleProductName" class="sample-fee-tip">审核通过后需支付打样费：<b>¥{{ sampleFeeYuan(productionForm.sampleProductName) }}</b>。费用由服务端目录确定，支付成功后才进入生产。</p>
+            </template>
             <div v-if="creationPurpose === 'personal'" class="single-route">
               <b>个人收藏 / 送礼路径</b>
               <span>全部数量将按个人/送礼用途执行，不进入售卖渠道，不支持拆分到博物馆。</span>
@@ -2027,6 +2211,19 @@ function closeModelPreview() {
         </div>
       </section>
 
+      <section v-if="samplePaymentModalOpen" class="sample-payment-modal" @click.self="closeSamplePayment">
+        <div class="sample-payment-card">
+          <header><div><b>支付打样费</b><span>{{ samplePaymentRequest?.sampleProductName }} · {{ samplePaymentRequest?.assetTitle || samplePaymentRequest?.title }}</span></div><button type="button" @click="closeSamplePayment">×</button></header>
+          <main>
+            <div class="sample-payment-summary"><span>应付打样费</span><strong>¥{{ samplePaymentRequest?.sampleFeeYuan }}</strong><small>申请审核已通过，支付后进入生产排期</small></div>
+            <div v-if="!samplePaymentOrder" class="sample-payment-options"><b>选择支付方式</b><label v-if="wechatPaymentEnabled"><input v-model="samplePaymentChannel" type="radio" value="wechat" /> 微信支付（自动确认）</label><label v-if="manualPaymentEnabled"><input v-model="samplePaymentChannel" type="radio" value="manual_wechat_qr" /> 微信收款码（管理员核验）</label><p v-if="!wechatPaymentEnabled && !manualPaymentEnabled" class="payment-error">当前暂无可用支付方式，请联系管理员。</p><button type="button" class="submit" :disabled="samplePaymentLoading || (!wechatPaymentEnabled && !manualPaymentEnabled)" @click="createSamplePaymentOrder">{{ samplePaymentLoading ? '创建订单中…' : '生成支付订单' }}</button></div>
+            <div v-else class="sample-payment-order"><div class="payment-order-head"><span>{{ samplePaymentOrder.channel === 'wechat' ? '微信支付' : '微信收款码' }}</span><b>{{ samplePaymentOrder.status === 'paid' ? '支付成功，申请已进入生产' : samplePaymentOrder.channel === 'wechat' ? '完成支付后系统会自动确认' : '扫码付款后点击提交核验，管理员确认后进入生产' }}</b></div><img v-if="samplePaymentQrUrl" :src="samplePaymentQrUrl" alt="打样费收款码" class="payment-qr" /><strong>¥{{ samplePaymentOrder.amountYuan }}</strong><small>订单 {{ samplePaymentOrder.orderNo }} · {{ samplePaymentOrder.status === 'paid' ? '已支付' : samplePaymentOrder.status === 'manual_review' ? '待人工核验' : '待支付' }}</small><button v-if="samplePaymentOrder.status === 'pending' && samplePaymentOrder.channel === 'manual_wechat_qr'" type="button" class="manual-complete" :disabled="samplePaymentLoading" @click="completeSampleManualPayment">{{ samplePaymentLoading ? '提交中…' : '我已完成支付，提交核验' }}</button></div>
+            <p v-if="samplePaymentError" class="payment-error">{{ samplePaymentError }}</p>
+          </main>
+          <footer><button type="button" @click="closeSamplePayment">关闭</button></footer>
+        </div>
+      </section>
+
       <section v-if="rightsServiceOpen" class="rights-modal" @click.self="rightsServiceOpen=false"><div><button class="rights-close" @click="rightsServiceOpen=false">×</button><span>RIGHTS & COMPLIANCE</span><h3>为作品提前做好确权准备</h3><p>作品著作权归设计师所有；平台商业运营权以双方后续协议授权范围为准。此处为咨询登记，不等同于已完成登记、专利申请或法律意见。</p><label v-for="item in ['暂不申请，仅保存创作证据','著作权登记咨询','外观设计专利咨询','商标 / IP 运营咨询']" :key="item"><input v-model="rightsService" type="radio" :value="item" /> {{ item }}</label><button class="rights-submit" @click="submitRightsService()">提交咨询登记</button><small>涉及明星、人物肖像、品牌商标或第三方 IP 的内容，请先取得有效授权；上传真人照片需获得当事人授权。</small></div></section>
       <section v-if="previewAsset" class="model-preview-modal" @click.self="closeModelPreview">
         <div class="model-preview-top">
@@ -2057,6 +2254,28 @@ function closeModelPreview() {
           <button type="button" class="download-action" :disabled="previewDownloading" @click="downloadPreviewModel">{{ previewDownloading ? '处理中' : `下载${previewDownloadFormat}${previewDownloadFormat==='GLB'?'':` · ${convertCost}点`}` }}</button>
         </div>
       </section>
+
+      <section v-if="accountPanelOpen" class="account-modal" role="dialog" aria-modal="true" aria-labelledby="account-panel-title" @click.self="closeAccountPanel">
+        <div class="account-card">
+          <header>
+            <div><span>ACCOUNT & PRIVACY</span><b id="account-panel-title">账号安全</b><small>{{ props.currentUser.username }} · 个人账号管理</small></div>
+            <button type="button" aria-label="关闭" @click="closeAccountPanel">×</button>
+          </header>
+          <main>
+            <div class="account-security-note"><i>盾</i><div><b>登录安全</b><p>当前账号使用密码和登录令牌保护。退出登录只会结束本次会话，注销账号则是不可逆操作。</p></div></div>
+            <div class="account-danger-zone">
+              <span>不可逆操作</span>
+              <h3>注销账号</h3>
+              <p>确认后，登录身份、个人资料、地址、收藏、购物车、个人作品和专业作品包会被清理或匿名化，之后无法恢复。</p>
+              <p>进行中的订单、退款、生产申请或账户余额需要先处理完成。订单、支付和财务流水会以匿名标识保留，用于履约、售后和法定审计。</p>
+              <label><span>当前登录密码</span><input v-model="cancellationPassword" type="password" autocomplete="current-password" placeholder="输入当前密码" :disabled="cancellationBusy" /></label>
+              <label><span>输入“注销账号”确认</span><input v-model="cancellationConfirmation" type="text" autocomplete="off" placeholder="注销账号" :disabled="cancellationBusy" /></label>
+              <button type="button" class="account-cancel-action" :disabled="cancellationBusy" @click="cancelAccount">{{ cancellationBusy ? '正在处理…' : '确认注销账号' }}</button>
+            </div>
+          </main>
+          <footer><button type="button" @click="closeAccountPanel">返回创作台</button></footer>
+        </div>
+      </section>
     </Teleport>
       <CustomerSupportWidget :current-user="props.currentUser" @alert="(msg, type) => emit('alert', msg, type)" />
   </main>
@@ -2064,6 +2283,42 @@ function closeModelPreview() {
 
 <style scoped>
 .purpose-gate{position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(circle at 80% 10%,rgba(255,255,255,.24),transparent 180px),linear-gradient(160deg,#2a1c16,#7c3f2b 58%,#e0a35d);color:#fff}.purpose-card{width:min(420px,100%);padding:24px;border-radius:28px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);box-shadow:0 30px 80px rgba(37,22,14,.35);backdrop-filter:blur(18px)}.purpose-brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}.purpose-brand img{width:38px;height:38px;border-radius:10px;background:#fff}.purpose-brand span{font-size:12px;font-weight:900;letter-spacing:1.4px}.purpose-card h1{margin:0 0 10px;font-size:30px;letter-spacing:-.04em}.purpose-card p{margin:0 0 16px;color:rgba(255,255,255,.78);line-height:1.7}.purpose-options{display:flex;flex-direction:column;gap:10px}.purpose-options button{position:relative;text-align:left;padding:16px;border:1px solid rgba(255,255,255,.24);border-radius:18px;background:rgba(255,255,255,.92);color:#201a17;box-shadow:0 12px 30px rgba(32,26,23,.12)}.purpose-options i{display:inline-flex;margin-bottom:8px;padding:4px 8px;border-radius:999px;background:#fff7ed;color:#b4532a;font-style:normal;font-size:11px;font-weight:950}.purpose-options b,.purpose-options span{display:block}.purpose-options b{font-size:18px}.purpose-options span{margin-top:5px;color:#6e5547;font-size:13px;line-height:1.5}.purpose-change{position:relative;z-index:1;align-self:flex-start;margin-top:8px;height:30px;border:1px solid rgba(255,255,255,.3);border-radius:999px;background:rgba(255,255,255,.12);color:#fff;font-size:11px;font-weight:900}.purpose-in-form{margin:0 0 10px;padding:9px 10px;border-radius:12px;background:#fff7ed;color:#9a3412;font-size:12px;font-weight:900}.credit-modal{position:fixed;inset:0;z-index:260;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.credit-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden;color:#201a17}.credit-card header,.credit-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.credit-card footer{border-top:1px solid #eadfd4;border-bottom:0}.credit-card header b,.credit-card header span{display:block}.credit-card header span{margin-top:3px;color:#8a7161;font-size:12px}.credit-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.credit-card main{padding:14px;overflow:auto}.balance-card{position:relative;padding:18px;border-radius:20px;background:linear-gradient(135deg,#201a17,#7c3f2b);color:#fff}.balance-card span,.balance-card em{font-style:normal;color:rgba(255,255,255,.72);font-size:12px;font-weight:900}.balance-card b{display:inline-block;margin:8px 6px 0 0;font-size:42px}.rules-card{margin-top:10px;padding:14px;border-radius:18px;background:#fffaf4;border:1px solid #eadfd4}.rules-card b{display:block;margin-bottom:8px}.rules-card p{margin:5px 0;color:#6e5547;font-size:13px}.packages{display:grid;grid-template-columns:1fr;gap:9px;margin-top:10px}.packages button{text-align:left;padding:13px;border:1px solid #eadfd4;border-radius:16px;background:#fff;color:#201a17}.packages strong,.packages span,.packages em{display:block}.packages strong{font-size:20px}.packages span{margin-top:3px;font-weight:900}.packages em{margin-top:4px;color:#8a7161;font-size:12px;font-style:normal}.recharge-note{margin:12px 0 0;color:#8a7161;font-size:12px;line-height:1.6}.credit-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.credit-card footer .done{background:#b4532a}.hero-actions .recharge-hero{background:rgba(255,255,255,.92);color:#7c2d12;border-color:rgba(255,255,255,.92)}.consumer-shell{min-height:100vh;background:#f6f2ea;color:#201a17;padding:14px 14px 96px;font-family:Inter,"PingFang SC",system-ui,sans-serif}.consumer-top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;margin:-14px -14px 10px;padding:12px 14px;background:rgba(246,242,234,.86);backdrop-filter:blur(18px);border-bottom:1px solid rgba(120,92,64,.12)}.brand{display:flex;align-items:center;gap:9px}.brand img{width:34px;height:34px;border-radius:8px;object-fit:cover}.brand b,.brand span{display:block}.brand b{font-size:15px}.brand span{font-size:11px;color:#8a7161}.icon-btn{width:38px;height:38px;border:0;border-radius:8px;background:#fff;color:#4b3327;box-shadow:0 6px 18px rgba(69,45,26,.08)}.icon-btn svg,.primary svg,.quick-tabs svg,.upload-box svg{width:18px;height:18px}.hero{position:relative;min-height:172px;padding:24px 18px;border-radius:8px;background:radial-gradient(circle at 84% 16%,rgba(255,255,255,.2),transparent 24%),linear-gradient(135deg,#2a1c16,#8e402b 62%,#c27643);color:#fff;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 18px 42px rgba(90,54,31,.22);overflow:hidden}.hero:after{content:"";position:absolute;right:18px;top:16px;width:92px;height:92px;border-radius:50%;background:rgba(255,255,255,.12);box-shadow:-26px 46px 0 rgba(255,255,255,.08)}.hero>*{position:relative;z-index:1}.hero span{width:max-content;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.16);font-size:11px}.hero h1{margin:12px 0 15px;font-size:28px;line-height:1.08;letter-spacing:0}.hero-actions{display:flex;gap:9px}.hero-actions button{height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.34);border-radius:8px;background:rgba(255,255,255,.14);color:#fff;font-weight:800}.quick-tabs{position:fixed;left:14px;right:14px;bottom:14px;z-index:20;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:7px;border:1px solid rgba(120,92,64,.14);border-radius:8px;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);box-shadow:0 18px 50px rgba(57,38,26,.16)}.quick-tabs button{height:48px;border:0;border-radius:8px;background:transparent;color:#8a7161;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:800}.quick-tabs button.active{background:#201a17;color:#fff}.panel{margin-top:12px;padding:15px;border-radius:8px;background:#fff;box-shadow:0 12px 32px rgba(77,51,31,.08);border:1px solid rgba(120,92,64,.1)}.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:13px}.section-head span{font-size:10px;font-weight:900;letter-spacing:1.6px;color:#b4532a}.section-head b{font-size:18px}label{display:block;margin-top:12px}label>span{display:block;margin-bottom:7px;font-size:13px;font-weight:800;color:#4a3429}textarea{width:100%;box-sizing:border-box;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;padding:12px;color:#241a16;font-size:15px;line-height:1.55;resize:vertical;outline:none}textarea:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}.chips.compact{grid-template-columns:repeat(3,1fr)}.chips button,.mode-switch button{min-height:38px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4;color:#6e5547;font-weight:800}.chips button.active,.mode-switch button.active{border-color:#201a17;background:#201a17;color:#fff}.primary{width:100%;height:52px;margin-top:14px;border:0;border-radius:8px;background:#b4532a;color:#fff;font-size:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 12px 26px rgba(180,83,42,.24)}.primary.green{background:#0f766e;box-shadow:0 12px 26px rgba(15,118,110,.2)}.primary:disabled{opacity:.55}.result-card{overflow:hidden;margin-top:14px;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.result-card>img{display:block;width:100%;max-height:480px;object-fit:contain;background:#211814}.result-info{padding:12px}.result-info b{display:block;margin-bottom:5px}.result-info p{margin:0 0 10px;white-space:pre-wrap;color:#6e5547;font-size:13px;line-height:1.6}.result-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.result-info a,.result-info button{display:inline-flex;height:34px;align-items:center;padding:0 12px;border:0;border-radius:8px;background:#201a17;color:#fff;text-decoration:none;font-weight:800}.submitted-tip{display:inline-flex;height:30px;align-items:center;padding:0 10px;border-radius:999px;background:#fff7ed;color:#b45309;font-size:12px;font-weight:900}.mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px}.upload-box{position:relative;min-height:170px;border:1px dashed #c7a995;border-radius:8px;background:#fffaf4;display:flex;align-items:center;justify-content:center;overflow:hidden}.upload-box input{position:absolute;inset:0;opacity:0}.upload-box img{width:100%;height:220px;object-fit:cover}.upload-box span{display:flex;align-items:center;gap:8px;color:#8a7161;font-weight:900}.progress{height:8px;margin-top:12px;border-radius:999px;background:#e9ded2;overflow:hidden}.progress span{display:block;height:100%;border-radius:999px;background:#0f766e;transition:width .25s ease}.gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px}.gallery article{position:relative;overflow:hidden;border:1px solid #eadfd4;border-radius:8px;background:#fffaf4}.gallery img,.model-tile{width:100%;aspect-ratio:1/1;object-fit:cover;background:#201a17;color:#fff}.model-tile{display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:950}.work-status{position:absolute;top:8px;right:8px;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.92);font-size:10px;font-weight:900}.work-status.draft{color:#64748b}.work-status.review{color:#b45309}.work-status.approved{color:#047857}.work-status.rejected{color:#dc2626}.gallery b{display:block;padding:9px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gallery button{margin:0 9px 9px;height:30px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}.gallery .review-submit{background:#b4532a}.production-actions{display:flex;gap:6px;padding:0 9px 9px}.gallery .production-actions button{flex:1;margin:0;background:#0f766e}.gallery .production-actions .prod{background:#7c2d12}.production-list{margin-top:14px;display:flex;flex-direction:column;gap:8px}.production-list h3{margin:4px 0;font-size:15px}.production-list article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:10px;background:#fffaf4;border:1px solid #eadfd4}.production-list b,.production-list span{display:block}.production-list span{margin-top:3px;color:#8a7161;font-size:12px}.production-list em{font-style:normal;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:900}.production-list em.review{background:#fff7ed;color:#b45309}.production-list em.approved{background:#ecfdf5;color:#047857}.production-list em.rejected{background:#fef2f2;color:#dc2626}.production-modal{position:fixed;inset:0;z-index:220;background:rgba(32,26,23,.58);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}.production-card{width:min(460px,100vw);max-height:88vh;display:flex;flex-direction:column;border-radius:24px 24px 0 0;background:#fff;overflow:hidden}.production-card header,.production-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid #eadfd4}.production-card footer{border-top:1px solid #eadfd4;border-bottom:0}.production-card header b,.production-card header span{display:block}.production-card header span{margin-top:3px;color:#8a7161;font-size:12px}.production-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;font-size:22px}.production-card main{padding:14px;overflow:auto}.production-card input,.production-card select{width:100%;height:40px;box-sizing:border-box;border:1px solid #eadfd4;border-radius:10px;background:#fffaf4;padding:0 10px}.dist-head{display:flex;align-items:center;justify-content:space-between;margin-top:12px}.dist-head button,.production-card footer button{height:38px;border:0;border-radius:10px;background:#201a17;color:#fff;padding:0 12px;font-weight:900}.dist-row{display:grid;grid-template-columns:1fr 74px 52px;gap:7px;margin-top:8px}.dist-row button{border:0;border-radius:10px;background:#fef2f2;color:#dc2626;font-weight:900}.alloc-tip{margin:8px 0 0;color:#047857;font-size:12px;font-weight:900}.alloc-tip.bad{color:#dc2626}.production-card footer .submit{background:#b4532a}.empty{padding:40px 0;text-align:center;color:#8a7161}@media(min-width:720px){.consumer-shell{display:block;max-width:460px;margin:0 auto;box-shadow:0 0 0 1px rgba(120,92,64,.08),0 24px 80px rgba(40,28,22,.15)}.quick-tabs{left:50%;right:auto;width:432px;transform:translateX(-50%)}}
+</style>
+
+<style scoped>
+.production-list-status{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:7px}
+.production-list article small{display:block;margin-top:4px;color:#9a8b7b;font-size:10px}
+.production-list-status>span{padding:3px 7px;border-radius:999px;background:#f2eee7;color:#80766b;font-size:10px}
+.production-list-status>span.approved{background:#eaf3ec;color:#557766}
+.pay-sample-button{padding:6px 9px;border:0;border-radius:9px;background:#b9664f;color:#fff;font-size:10px;font-weight:800;cursor:pointer}
+.sample-fee-tip{margin:-3px 0 12px;padding:9px 11px;border:1px solid #eadfd3;border-radius:11px;background:#fbf7f0;color:#806c5d;font-size:10px;line-height:1.55}
+.sample-fee-tip b{color:#b35f48}
+.sample-payment-modal{position:fixed;z-index:320;inset:0;display:grid;place-items:center;padding:20px;background:rgba(36,29,24,.48);backdrop-filter:blur(8px)}
+.sample-payment-card{width:min(440px,100%);max-height:min(720px,calc(100vh - 32px));overflow:auto;border:1px solid #e3d9ce;border-radius:22px;background:#fffdfa;box-shadow:0 25px 70px rgba(31,23,17,.2);color:#3c342d}
+.sample-payment-card header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:19px 20px 14px;border-bottom:1px solid #eee6dc}
+.sample-payment-card header div{display:grid;gap:5px}.sample-payment-card header b{font-family:var(--song);font-size:20px}.sample-payment-card header span{color:#918276;font-size:10px;line-height:1.4}.sample-payment-card header button{border:0;background:transparent;color:#8e7d6d;font-size:24px;cursor:pointer}
+.sample-payment-card main{display:grid;gap:13px;padding:18px 20px}.sample-payment-summary{display:grid;gap:4px;padding:14px 15px;border:1px solid #eaded2;border-radius:15px;background:linear-gradient(145deg,#fff8ef,#f5eee7)}.sample-payment-summary span{color:#977866;font-size:10px}.sample-payment-summary strong{color:#b35f48;font-size:28px}.sample-payment-summary small{color:#8f7e70;font-size:10px}.sample-payment-options{display:grid;gap:9px}.sample-payment-options>b{font-size:12px}.sample-payment-options label{display:flex;align-items:center;gap:8px;padding:10px 11px;border:1px solid #e7ddd1;border-radius:11px;background:#fff;color:#655a50;font-size:11px}.sample-payment-options .submit{margin-top:4px;height:42px;border:0;border-radius:12px;background:#b9664f;color:#fff;font-weight:800;cursor:pointer}.sample-payment-order{display:grid;justify-items:center;gap:9px}.sample-payment-order .payment-order-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%;font-size:11px}.sample-payment-order .payment-order-head b{max-width:240px;color:#8c7768;font-size:10px;font-weight:500;text-align:right;line-height:1.45}.sample-payment-order .payment-qr{width:220px;height:220px;object-fit:contain;border:1px solid #ece2d8;border-radius:12px;background:#fff}.sample-payment-order>strong{color:#b35f48;font-size:24px}.sample-payment-order>small{color:#928479;font-size:10px}.sample-payment-order .manual-complete{width:100%;height:40px;border:0;border-radius:11px;background:#5c7e70;color:#fff;font-weight:800;cursor:pointer}.sample-payment-card footer{display:flex;justify-content:flex-end;padding:0 20px 18px}.sample-payment-card footer button{padding:8px 15px;border:1px solid #e3d8cc;border-radius:10px;background:#fff;color:#76695d;cursor:pointer}
+</style>
+
+<style scoped>
+.consumer-account-actions{display:flex;align-items:center;gap:7px}
+.account-modal{position:fixed;inset:0;z-index:360;display:flex;align-items:flex-end;justify-content:center;background:rgba(32,26,23,.58);backdrop-filter:blur(9px)}
+.account-card{width:min(460px,100vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;border-radius:24px 24px 0 0;background:#fffdfa;color:#2d2823;box-shadow:0 -12px 50px rgba(44,29,18,.18)}
+.account-card header,.account-card footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px;border-bottom:1px solid #eadfd4}
+.account-card footer{justify-content:flex-end;border-top:1px solid #eadfd4;border-bottom:0}
+.account-card header span{display:block;color:#9b715e;font-size:9px;font-weight:950;letter-spacing:1.3px}
+.account-card header b{display:block;margin-top:4px;font-family:var(--song);font-size:21px;font-weight:650}
+.account-card header small{display:block;margin-top:4px;color:#8a7161;font-size:11px}
+.account-card header button{width:34px;height:34px;border:0;border-radius:10px;background:#f6f2ea;color:#5c4739;font-size:22px}
+.account-card main{padding:15px;overflow:auto}
+.account-security-note{display:flex;gap:10px;padding:13px;border:1px solid #dbe8dd;border-radius:15px;background:#f3f8f3}
+.account-security-note i{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:#dcebdd;color:#527362;font-style:normal;font-weight:900}
+.account-security-note b{display:block;color:#476252;font-size:13px}.account-security-note p{margin:4px 0 0;color:#708078;font-size:11px;line-height:1.55}
+.account-danger-zone{margin-top:13px;padding:15px;border:1px solid #efd2c8;border-radius:16px;background:#fff8f5}
+.account-danger-zone>span{color:#b6533e;font-size:9px;font-weight:950;letter-spacing:1.3px}.account-danger-zone h3{margin:6px 0 7px;color:#7d3025;font-family:var(--song);font-size:20px;font-weight:650}.account-danger-zone p{margin:6px 0;color:#8f6d62;font-size:11px;line-height:1.6}
+.account-danger-zone label{display:block;margin-top:12px}.account-danger-zone label>span{display:block;margin-bottom:6px;color:#62483e;font-size:11px;font-weight:850}.account-danger-zone input{width:100%;height:42px;box-sizing:border-box;border:1px solid #ead7d0;border-radius:10px;background:#fff;padding:0 11px;color:#342820;outline:none}.account-danger-zone input:focus{border-color:#c46c58;box-shadow:0 0 0 3px rgba(196,108,88,.12)}
+.account-cancel-action{width:100%;height:44px;margin-top:14px;border:0;border-radius:11px;background:#a84332;color:#fff;font-size:13px;font-weight:900;box-shadow:0 10px 20px rgba(168,67,50,.18)}.account-cancel-action:disabled{opacity:.55;box-shadow:none}.account-card footer button{height:38px;padding:0 14px;border:0;border-radius:10px;background:#2d2823;color:#fff;font-weight:850}
+@media(min-width:720px){.account-modal{align-items:center;padding:20px}.account-card{border-radius:22px;box-shadow:0 28px 80px rgba(44,29,18,.22)}}
 </style>
 
 <style scoped>
