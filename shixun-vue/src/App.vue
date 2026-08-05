@@ -34,6 +34,7 @@ import ConsumerWorksReview from './components/ConsumerWorksReview.vue'
 import ConsumerAssetInventory from './components/ConsumerAssetInventory.vue'
 import ConsumerCreditManagement from './components/ConsumerCreditManagement.vue'
 import PaymentOperations from './components/PaymentOperations.vue'
+import HistoricalSalesManagement from './components/HistoricalSalesManagement.vue'
 import ConsumerProductionReview from './components/ConsumerProductionReview.vue'
 import { isEmbeddedMiniapp, notifyMiniapp } from './utils/miniappBridge'
 
@@ -58,6 +59,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   consumerAssetInventory:SUPER_ADMIN_ROLES,
   consumerCreditManagement:SUPER_ADMIN_ROLES,
   paymentOperations:SUPER_ADMIN_ROLES,
+  historicalSales:SUPER_ADMIN_ROLES,
   consumerProductionReview:SUPER_ADMIN_ROLES,
   aiAssistant:  ALL_ROLES,
   customerService: ALL_ROLES,
@@ -234,6 +236,7 @@ const pageLabels: Record<string, string> = {
   consumerAssetInventory:'C端用户端库存',
   consumerCreditManagement:'C端额度管理',
   paymentOperations:'支付运营',
+  historicalSales:'历史销售数据',
   consumerProductionReview:'C端用户作品生产审核',
   aiAssistant:  '之间味道AI助手',
   customerService:'C端客服会话',
@@ -361,6 +364,7 @@ const pageLabels: Record<string, string> = {
         <ConsumerAssetInventory v-if="currentPage === 'consumerAssetInventory'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerCreditManagement v-if="currentPage === 'consumerCreditManagement'" :current-user="currentUser" @alert="showAlert" />
         <PaymentOperations v-if="currentPage === 'paymentOperations'" :current-user="currentUser" @alert="showAlert" />
+        <HistoricalSalesManagement v-if="currentPage === 'historicalSales'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerProductionReview v-if="currentPage === 'consumerProductionReview'" :current-user="currentUser" @alert="showAlert" />
         <AiAssistantPage v-if="currentPage === 'aiAssistant'" :current-user="currentUser" />
         <CustomerServiceDesk v-if="currentPage === 'customerService'" :current-user="currentUser" @alert="showAlert" />

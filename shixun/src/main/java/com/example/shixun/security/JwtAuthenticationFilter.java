@@ -204,6 +204,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 || path.startsWith("/api/creative/orders")
                 || path.startsWith("/api/customer-service/admin/")
                 || path.startsWith("/api/payments/admin/")
+                || path.startsWith("/api/analytics/historical-sales")
                 || path.startsWith("/api/creative/ai/consumer-credits/admin/")
                 || path.startsWith("/api/creative/ai/consumer-production/admin/")
                 || path.startsWith("/api/creative/ai/consumer-assets/review")
