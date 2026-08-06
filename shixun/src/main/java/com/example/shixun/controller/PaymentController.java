@@ -199,7 +199,15 @@ public class PaymentController {
         CreditPackage pkg = packageFor(packageCode);
         validateRequestedChannel(channel);
 
-        OrderCreation creation = Objects.requireNonNull(transactions.execute(status -> createOrReusePendingOrder(userId, pkg, channel)));
+        OrderCreation creation;
+        try {
+            creation = Objects.requireNonNull(transactions.execute(status -> createOrReusePendingOrder(userId, pkg, channel)));
+        } catch (IllegalStateException e) {
+            // An unresolved financial order is a deliberate business lock, not
+            // a server failure. Returning 409 prevents the client from hiding
+            // the reason behind a misleading 500 error.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
         if (creation.reused) return createdOrderView(creation.orderNo, userId, channel, true);
         if ("manual_wechat_qr".equals(channel)) {
             transactions.execute(status -> {
@@ -261,8 +269,10 @@ public class PaymentController {
         if (requestId <= 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "打样申请编号无效");
         validateRequestedChannel(channel);
 
-        SampleOrderCreation creation = Objects.requireNonNull(transactions.execute(status -> {
-            List<Map<String, Object>> rows = jdbc.queryForList(
+        SampleOrderCreation creation;
+        try {
+            creation = Objects.requireNonNull(transactions.execute(status -> {
+                List<Map<String, Object>> rows = jdbc.queryForList(
                     "SELECT r.id,r.request_type,r.status,r.sample_product_name,r.sample_fee_yuan,r.sample_payment_status,r.sample_payment_order_no " +
                             "FROM consumer_production_request r WHERE r.id=? AND r.user_id=? FOR UPDATE", requestId, userId);
             if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "打样申请不存在");
@@ -288,8 +298,11 @@ public class PaymentController {
             OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
             jdbc.update("UPDATE consumer_production_request SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=? AND user_id=?",
                     order.orderNo, requestId, userId);
-            return new SampleOrderCreation(order.orderNo, order.reused, feeYuan, nullableText(request.get("sample_product_name")), channel);
-        }));
+                return new SampleOrderCreation(order.orderNo, order.reused, feeYuan, nullableText(request.get("sample_product_name")), channel);
+            }));
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
 
         String actualChannel = creation.channel;
         if (creation.reused) return createdOrderView(creation.orderNo, userId, actualChannel, true);
@@ -2077,6 +2090,12 @@ public class PaymentController {
     private Map<String, String> success(String message) { return Map.of("code", "SUCCESS", "message", message); }
     private ResponseStatusException userSafeWechatError(Exception error, String fallback) {
         if (error instanceof ResponseStatusException response) return response;
+        if (error instanceof WechatApiException apiError
+                && apiError.statusCode == 403
+                && "NO_AUTH".equals(apiError.providerCode)) {
+            return new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "当前微信支付商户尚未开通该支付产品，请在微信支付商户平台开通对应权限后重试");
+        }
         return new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, fallback);
     }
 
@@ -2099,7 +2118,12 @@ public class PaymentController {
         final int statusCode;
         final String providerCode;
         WechatApiException(int statusCode, String providerCode, String message) { super(message); this.statusCode = statusCode; this.providerCode = providerCode == null ? "" : providerCode; }
-        boolean resourceNotExists() { return statusCode == 404 && "RESOURCE_NOT_EXISTS".equals(providerCode); }
+        boolean resourceNotExists() {
+            // Payment order queries use ORDER_NOT_EXIST, while some other
+            // WeChat Pay v3 resources use RESOURCE_NOT_EXISTS. Both mean the
+            // authenticated merchant conclusively has no provider-side trade.
+            return statusCode == 404 && Set.of("RESOURCE_NOT_EXISTS", "ORDER_NOT_EXIST").contains(providerCode);
+        }
         boolean definitivelyRejected() {
             // A generic 4xx/409 can mean the idempotent request was accepted
             // before the response was lost. Release a reservation only for a
