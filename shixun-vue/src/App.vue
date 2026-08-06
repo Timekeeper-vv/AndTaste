@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watchEffect } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watchEffect } from 'vue'
 import type { User, PageName, AlertType, Role, AuthSession } from './types'
 import LoginPage from './components/LoginPage.vue'
 import Sidebar from './components/Sidebar.vue'
@@ -137,11 +137,59 @@ function firstAllowedPage(role: Role): PageName {
 
 const currentUser = ref<User | null>(null)
 const currentPage = ref<PageName>('dashboard')
+type ConsumerDevice = 'mobile' | 'desktop'
+const CONSUMER_DEVICE_STORAGE_KEY = 'smart_pig_consumer_device'
+const consumerDevice = ref<ConsumerDevice | null>(null)
+const consumerDevicePickerOpen = ref(false)
 const sidebarCollapsed = ref<boolean>(false)
 const alertMsg = ref<string>('')
 const alertType = ref<AlertType>('success')
 const alertVisible = ref<boolean>(false)
 let alertTimer: ReturnType<typeof setTimeout> | null = null
+
+const shouldChooseConsumerDevice = computed(() =>
+  Boolean(currentUser.value?.role === 'user' && consumerDevicePickerOpen.value),
+)
+
+function getSavedConsumerDevice(): ConsumerDevice | null {
+  try {
+    const value = localStorage.getItem(CONSUMER_DEVICE_STORAGE_KEY)
+    return value === 'mobile' || value === 'desktop' ? value : null
+  } catch {
+    return null
+  }
+}
+
+function prepareConsumerDeviceSelection(user: User, options: { askAgain: boolean }): void {
+  if (user.role !== 'user') {
+    consumerDevice.value = null
+    consumerDevicePickerOpen.value = false
+    return
+  }
+
+  // A mini-program web-view is always a touch-first surface.  It must never
+  // restore a desktop preference left by the same account in a browser.
+  if (isEmbeddedMiniapp()) {
+    consumerDevice.value = 'mobile'
+    consumerDevicePickerOpen.value = false
+    return
+  }
+
+  const savedDevice = options.askAgain ? null : getSavedConsumerDevice()
+  consumerDevice.value = savedDevice
+  consumerDevicePickerOpen.value = !savedDevice
+}
+
+function chooseConsumerDevice(device: ConsumerDevice): void {
+  consumerDevice.value = device
+  consumerDevicePickerOpen.value = false
+  try {
+    localStorage.setItem(CONSUMER_DEVICE_STORAGE_KEY, device)
+  } catch {
+    // Storage can be disabled by a browser privacy setting; the selected
+    // layout still applies to the current session.
+  }
+}
 
 async function restoreSession(): Promise<void> {
   const token = sessionStorage.getItem('accessToken')
@@ -164,6 +212,7 @@ async function restoreSession(): Promise<void> {
     currentUser.value = data.user as User
     sessionStorage.setItem('currentUser', JSON.stringify(data.user))
     currentPage.value = firstAllowedPage(data.user.role || 'admin')
+    prepareConsumerDeviceSelection(data.user as User, { askAgain: false })
   } catch {
     sessionStorage.removeItem('accessToken')
     sessionStorage.removeItem('currentUser')
@@ -213,6 +262,7 @@ function onLogin(session: AuthSession): void {
     localStorage.setItem('currentUser', JSON.stringify(session.user))
   }
   currentPage.value = firstAllowedPage(session.user.role || 'admin')
+  prepareConsumerDeviceSelection(session.user, { askAgain: true })
 }
 
 function onLogout(): void {
@@ -222,6 +272,8 @@ function onLogout(): void {
   // token the next time the web-view is opened.
   notifyMiniapp('AUTH_LOGOUT')
   currentUser.value = null
+  consumerDevice.value = null
+  consumerDevicePickerOpen.value = false
   sessionStorage.removeItem('accessToken')
   sessionStorage.removeItem('currentUser')
   localStorage.removeItem('accessToken')
@@ -308,8 +360,32 @@ const pageLabels: Record<string, string> = {
 <template>
   <LoginPage v-if="!currentUser" @login="onLogin" />
 
+  <section v-else-if="shouldChooseConsumerDevice" class="consumer-device-picker" role="dialog" aria-modal="true" aria-labelledby="consumer-device-picker-title">
+    <div class="consumer-device-picker-card">
+      <span class="consumer-device-picker-kicker">WELCOME TO BETWEEN TASTE</span>
+      <h1 id="consumer-device-picker-title">这次，想在哪个设备上创作？</h1>
+      <p>选择适合当前设备的工作方式。手机端为触控与单列阅读优化，电脑端保留完整的大屏创作工作台。</p>
+      <div class="consumer-device-options">
+        <button type="button" class="consumer-device-option mobile" @click="chooseConsumerDevice('mobile')">
+          <span class="consumer-device-icon" aria-hidden="true">⌁</span>
+          <strong>手机端</strong>
+          <small>适合随时记录灵感、触控创作和单手浏览。</small>
+          <em>移动优先 <b>→</b></em>
+        </button>
+        <button type="button" class="consumer-device-option desktop" @click="chooseConsumerDevice('desktop')">
+          <span class="consumer-device-icon" aria-hidden="true">▣</span>
+          <strong>电脑端</strong>
+          <small>适合大屏查看作品、精细编辑和键鼠操作。</small>
+          <em>完整工作台 <b>→</b></em>
+        </button>
+      </div>
+      <small class="consumer-device-picker-note">下次登录会再次询问；刷新页面会保留本次选择。</small>
+    </div>
+  </section>
+
   <ConsumerMobilePage
-    v-else-if="currentUser.role === 'user'"
+    v-else-if="currentUser.role === 'user' && consumerDevice"
+    :class="`consumer-device-${consumerDevice}`"
     :current-user="currentUser"
     @alert="showAlert"
     @logout="onLogout"
@@ -439,6 +515,155 @@ const pageLabels: Record<string, string> = {
 </template>
 
 <style>
+/* Consumer device choice stays outside the component so it can be shown before
+   the consumer workspace is mounted. */
+.consumer-device-picker {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 13% 10%, rgba(154, 185, 167, .34), transparent 28%),
+    radial-gradient(circle at 88% 88%, rgba(190, 105, 76, .22), transparent 29%),
+    linear-gradient(145deg, #f5f0e8, #e7ddd1);
+}
+
+.consumer-device-picker-card {
+  width: min(700px, 100%);
+  padding: clamp(24px, 5vw, 42px);
+  border: 1px solid rgba(255, 255, 255, .85);
+  border-radius: 30px;
+  background: rgba(255, 253, 249, .88);
+  box-shadow: 0 28px 76px rgba(61, 45, 34, .16);
+  color: #3c352e;
+  backdrop-filter: blur(18px);
+}
+
+.consumer-device-picker-kicker {
+  display: block;
+  color: #638071;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .16em;
+}
+
+.consumer-device-picker h1 {
+  max-width: 14ch;
+  margin: 10px 0 9px;
+  font-family: "Songti SC", STSong, serif;
+  font-size: clamp(27px, 4vw, 40px);
+  line-height: 1.2;
+  letter-spacing: -.045em;
+}
+
+.consumer-device-picker-card > p {
+  max-width: 53ch;
+  margin: 0;
+  color: #81766b;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.consumer-device-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.consumer-device-option {
+  display: grid;
+  min-height: 226px;
+  padding: 21px;
+  border: 1px solid #e5ddd2;
+  border-radius: 21px;
+  background: #fffdfa;
+  color: #443c34;
+  cursor: pointer;
+  text-align: left;
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+
+.consumer-device-option:hover {
+  transform: translateY(-4px);
+  border-color: #a8beaf;
+  box-shadow: 0 18px 30px rgba(62, 78, 66, .12);
+}
+
+.consumer-device-option.desktop {
+  border-color: #ded4c8;
+  background: linear-gradient(145deg, #fffcf7, #f5ebe1);
+}
+
+.consumer-device-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: #eaf2eb;
+  color: #597665;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.consumer-device-option.desktop .consumer-device-icon {
+  background: #f4e8dd;
+  color: #9c604a;
+}
+
+.consumer-device-option strong {
+  margin-top: 20px;
+  font-family: "Songti SC", STSong, serif;
+  font-size: 24px;
+  font-weight: 650;
+}
+
+.consumer-device-option small {
+  margin-top: 8px;
+  color: #867a6d;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.consumer-device-option em {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  padding-top: 18px;
+  color: #587261;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.consumer-device-option.desktop em { color: #9c604a; }
+.consumer-device-option em b { font-size: 18px; font-weight: 500; }
+
+.consumer-device-picker-note {
+  display: block;
+  margin-top: 17px;
+  color: #9a8d80;
+  font-size: 11px;
+}
+
+@media (max-width: 640px) {
+  .consumer-device-picker { align-items: end; padding: 12px; }
+  .consumer-device-picker-card { padding: 25px 20px calc(25px + env(safe-area-inset-bottom, 0px)); border-radius: 26px; }
+  .consumer-device-picker h1 { max-width: 12ch; font-size: 29px; }
+  .consumer-device-picker-card > p { font-size: 13px; }
+  .consumer-device-options { grid-template-columns: 1fr; gap: 10px; margin-top: 19px; }
+  .consumer-device-option { grid-template-columns: 42px 1fr; column-gap: 13px; min-height: 0; padding: 15px; }
+  .consumer-device-option strong { align-self: center; margin: 0; font-size: 21px; }
+  .consumer-device-option small, .consumer-device-option em { grid-column: 1 / -1; }
+  .consumer-device-option small { margin-top: 8px; }
+  .consumer-device-option em { margin-top: 0; padding-top: 8px; }
+}
+
 /* Layout shell */
 .app-shell {
   display: flex;
