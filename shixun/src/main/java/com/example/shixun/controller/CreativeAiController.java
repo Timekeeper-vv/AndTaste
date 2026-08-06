@@ -1102,10 +1102,10 @@ public class CreativeAiController {
         result.put("provider", "Tripo");
         result.put("apiVersion", "v3");
         result.put("modelVersion", tripoModelVersion);
-        result.put("qualityPreset", "ultra");
-        result.put("geometryQuality", "detailed");
-        result.put("textureQuality", "extreme");
-        result.put("maxFaceLimit", 2_000_000);
+        result.put("qualityPreset", "fast-preview");
+        result.put("geometryQuality", "standard");
+        result.put("textureQuality", "standard");
+        result.put("maxFaceLimit", 20_000);
         result.put("modelOptions", List.of(
                 Map.of("value","P1-20260311","label","P1.0 · P系列低面数旗舰","series","P"),
                 Map.of("value","v3.1-20260211","label","H3.1 · 最新高精度","series","H"),
@@ -1194,7 +1194,11 @@ public class CreativeAiController {
             throw new IllegalArgumentException("不支持的Tripo生成模式：" + mode);
 
         boolean consumerRequest = consumerUserId != null;
-        String selectedModel=consumerRequest ? "v3.1-20260211" : (blank(req.modelVersion)?tripoModelVersion:req.modelVersion.trim());
+        String requestedModel = blank(req.modelVersion) ? tripoModelVersion : req.modelVersion.trim();
+        // Consumer users may choose the light P1 preview model or the H3.1
+        // production model. Older clients keep the server default safely.
+        String selectedModel = consumerRequest && !Set.of("P1-20260311", "v3.1-20260211").contains(requestedModel)
+                ? tripoModelVersion : requestedModel;
         Set<String> supportedModels=Set.of("P1-20260311","tripo-p1","tripo-v3.1","v3.1-20260211","tripo-v3.0","v3.0-20250812","tripo-v2.5","v2.5-20250123");
         if(!supportedModels.contains(selectedModel))throw new IllegalArgumentException("不支持的Tripo 3D模型："+selectedModel);
         Map<String,Object> taskBody = new LinkedHashMap<>();
@@ -1261,7 +1265,7 @@ public class CreativeAiController {
             Map<String,Object> response = new LinkedHashMap<>();
             response.put("jobId", jobId); response.put("jobNo", jobNo); response.put("taskId", taskId);
             response.put("status", "running"); response.put("progress", 0); response.put("provider", "tripo");
-            response.put("modelVersion", selectedModel); response.put("qualityPreset", isPSeriesModel(selectedModel)?"p-series":"standard");
+            response.put("modelVersion", selectedModel); response.put("qualityPreset", isPSeriesModel(selectedModel)?"fast-preview":"production");
             if(consumerUserId != null) response.put("creditAccount", creditAccountMap(consumerUserId));
             response.put("message", "Tripo "+selectedModel+"任务已提交");
             return response;
@@ -1291,7 +1295,7 @@ public class CreativeAiController {
         body.put("texture",texture); body.put("pbr",pbr); body.put("export_uv",req.exportUv==null||req.exportUv);
         if(!legacy25) {
             body.put("auto_size",req.autoSize==null||req.autoSize);
-            String textureQuality = consumerRequest || blank(req.textureQuality) ? "extreme" : req.textureQuality.trim();
+            String textureQuality = blank(req.textureQuality) ? "extreme" : req.textureQuality.trim();
             if(texture)body.put("texture_quality",Set.of("standard","detailed","extreme").contains(textureQuality)?textureQuality:"extreme");
             if(Boolean.TRUE.equals(req.compress))body.put("compress","geometry");
         }

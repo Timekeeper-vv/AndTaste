@@ -35,6 +35,7 @@ const presets: MaterialPreset[] = [
 const host = ref<HTMLElement | null>(null)
 const status = ref<'loading' | 'ready' | 'error'>('loading')
 const selected = ref<PresetKey>('original')
+const loadError = ref('')
 const exporting = ref(false)
 const saving = ref(false)
 const plushColor = ref('#e9ad83')
@@ -194,13 +195,13 @@ function setup() {
   resize(); window.addEventListener('resize', resize); render()
 }
 async function loadModel() {
-  status.value = 'loading'; selected.value = 'original'; materialMessage.value = '选中材质即可在模型表面实时预览，支持导出和保存到作品库。'; originalMaterials.clear(); disposeGenerated()
+  status.value = 'loading'; loadError.value = ''; selected.value = 'original'; materialMessage.value = '选中材质即可在模型表面实时预览，支持导出和保存到作品库。'; originalMaterials.clear(); disposeGenerated()
   try {
     if (!host.value) await nextTick(); setup()
     const gltf = await new GLTFLoader().loadAsync(props.modelUrl)
     root = gltf.scene; root.traverse(child => { if ((child as THREE.Mesh).isMesh) { const mesh = child as THREE.Mesh; originalMaterials.set(mesh, mesh.material); mesh.castShadow = true; mesh.receiveShadow = true } })
     scene?.add(root); fitCamera(root); status.value = 'ready'; emit('loaded')
-  } catch (error: any) { status.value = 'error'; emit('error', error?.message || '模型加载失败') }
+  } catch (error: any) { loadError.value = error?.message || '模型加载失败'; status.value = 'error'; emit('error', loadError.value) }
 }
 async function applyPreset(key: PresetKey) {
   if (!root) return
@@ -298,7 +299,7 @@ onBeforeUnmount(cleanup)
   <section class="material-studio">
     <div ref="host" class="material-canvas"></div>
     <div v-if="status==='loading'" class="studio-state"><i></i><span>正在载入 3D 模型</span></div>
-    <div v-else-if="status==='error'" class="studio-state error"><b>模型暂时无法载入</b><span>请稍后重试或下载原始模型。</span></div>
+    <div v-else-if="status==='error'" class="studio-state error"><b>模型暂时无法载入</b><span>{{ loadError ? `加载原因：${loadError}` : '请稍后重试或下载原始模型。' }}</span></div>
     <aside v-if="status==='ready'" class="material-panel">
       <div class="material-panel-title"><span>MATERIAL LAB</span><b>为模型换一套材质</b><small>实时预览 · 可导出 GLB</small></div>
       <div class="material-preset-list"><button v-for="preset in presets" :key="preset.key" type="button" :class="['material-preset', preset.key, { active:selected===preset.key }]" @click="applyPreset(preset.key)"><i></i><span><b>{{ preset.label }}</b><small>{{ preset.hint }}</small></span></button></div>

@@ -81,6 +81,7 @@ const previewAsset = ref<any | null>(null)
 const previewReady = ref(false)
 const previewLoadFailed = ref(false)
 const modelViewerLoaded = ref(false)
+const previewMode = ref<'viewer' | 'material'>('viewer')
 const previewDownloadFormat = ref<'GLB' | 'OBJ' | 'STL'>('GLB')
 const previewDownloading = ref(false)
 const creditPanelOpen = ref(false)
@@ -120,7 +121,13 @@ const productionForm = reactive({
   sampleProductName: '',
   museumDistribution: [] as Array<{ museumId: string; museumName: string; quantity: number }>,
 })
-const CONSUMER_TRIPO_MODEL_VERSION = 'v3.1-20260211'
+type ModelQuality = 'fast' | 'production'
+const modelQuality = ref<ModelQuality>('fast')
+const modelQualityOptions: Array<{ key: ModelQuality; title: string; desc: string; modelVersion: string; textureQuality: 'standard' | 'extreme'; geometryQuality: 'standard' | 'detailed'; faceLimit: number; compress: boolean }> = [
+  { key: 'fast', title: '快速预览', desc: '默认 · 轻量模型，更适合手机查看、旋转和反复修改', modelVersion: 'P1-20260311', textureQuality: 'standard', geometryQuality: 'standard', faceLimit: 20_000, compress: true },
+  { key: 'production', title: '打样高精', desc: '确认方案后使用 · 极致纹理和高面数，等待时间更长', modelVersion: 'v3.1-20260211', textureQuality: 'extreme', geometryQuality: 'detailed', faceLimit: 2_000_000, compress: false },
+]
+const selectedModelQuality = computed(() => modelQualityOptions.find(item => item.key === modelQuality.value) || modelQualityOptions[0])
 
 const imageForm = reactive({
   rawPrompt: '一款适合年轻游客的城市味道文创礼盒，温暖、精致、有官方文创质感',
@@ -1428,9 +1435,10 @@ async function generateModel() {
     setStage('正在生成3D模型', 'generate')
     const isImageToModel = modelForm.mode === 'image_to_model'
     const isMultiviewToModel = modelForm.mode === 'multiview_to_model'
+    const quality = selectedModelQuality.value
     const body = {
       mode: modelForm.mode,
-      modelVersion: CONSUMER_TRIPO_MODEL_VERSION,
+      modelVersion: quality.modelVersion,
       promptTemplate: isImageToModel ? '' : modelForm.promptTemplate,
       rawPrompt: isImageToModel ? '' : with3dCraftConstraint(modelForm.rawPrompt, 1024),
       prompt: isImageToModel ? '' : with3dCraftConstraint(modelForm.prompt || modelForm.rawPrompt, 1024),
@@ -1444,18 +1452,18 @@ async function generateModel() {
       exportFormats: 'GLB',
       texture: true,
       pbr: true,
-      textureQuality: 'extreme',
-      geometryQuality: 'detailed',
+      textureQuality: quality.textureQuality,
+      geometryQuality: quality.geometryQuality,
       textureAlignment: 'original_image',
       orientation: 'align_image',
       autoSize: true,
       imageAutofix: true,
       quad: false,
-      smartLowPoly: false,
+      smartLowPoly: quality.key === 'fast',
       generateParts: false,
       exportUv: true,
-      compress: false,
-      faceLimit: 2000000,
+      compress: quality.compress,
+      faceLimit: quality.faceLimit,
     }
     const r = await fetch('/api/creative/ai/tripo/generate', {
       method: 'POST',
@@ -1630,6 +1638,12 @@ async function openModelPreview(a?: any) {
     emit('alert', '模型文件暂不可预览', 'error')
     return
   }
+  try {
+    await ensureModelViewer()
+  } catch (e: any) {
+    emit('alert', `手机 3D 预览组件加载失败：${e?.message || e}`, 'error')
+    return
+  }
   previewAsset.value = {
     ...asset,
     id: asset.id || asset.assetId,
@@ -1638,6 +1652,7 @@ async function openModelPreview(a?: any) {
   previewModelUrl.value = ''
   previewReady.value = false
   previewLoadFailed.value = false
+  previewMode.value = 'viewer'
   previewDownloadFormat.value = 'GLB'
   document.body.style.overflow = 'hidden'
   try {
@@ -1646,6 +1661,23 @@ async function openModelPreview(a?: any) {
     closeModelPreview()
     emit('alert', `模型预览失败：${e?.message || e}`, 'error')
   }
+}
+
+function openMaterialEditor() {
+  if (!previewReady.value || previewLoadFailed.value || !previewModelUrl.value) {
+    emit('alert', '请等待模型预览成功载入后，再进入换材质工作台', 'error')
+    return
+  }
+  previewMode.value = 'material'
+}
+
+function returnToModelViewer() {
+  previewMode.value = 'viewer'
+}
+
+function handleModelViewerError() {
+  previewLoadFailed.value = true
+  emit('alert', '该 GLB 暂时无法在当前设备载入。可下载原始模型后重试；高精模型建议使用电脑或先生成快速预览版。', 'error')
 }
 
 async function saveMaterialVariant(payload: { blob: Blob; materialLabel: string }) {
@@ -1673,6 +1705,7 @@ function closeModelPreview() {
   previewModelUrl.value = ''
   previewReady.value = false
   previewLoadFailed.value = false
+  previewMode.value = 'viewer'
   document.body.style.overflow = ''
 }
 </script>
@@ -2079,6 +2112,7 @@ function closeModelPreview() {
             <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small class="material-prompt-proof">已写入 AI 生成提示词 · {{ materialPromptSummary }}</small><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
       <div class="model-mode-switch three-modes"><button type="button" :class="{active:modelForm.mode==='image_to_model'}" @click="modelForm.mode='image_to_model'"><b>图片生成 3D</b><span>上传产品图，快速建立立体原型</span></button><button type="button" :class="{active:modelForm.mode==='multiview_to_model'}" @click="modelForm.mode='multiview_to_model'"><b>多视图生成 3D</b><span>上传多个视角，模型更完整</span></button><button type="button" :class="{active:modelForm.mode==='text_to_model'}" @click="modelForm.mode='text_to_model'"><b>文字生成 3D</b><span>用描述直接构建产品模型</span></button></div>
       <section class="material-picker"><div><span>表面材质偏好</span><b>选择模型的视觉材质与 PBR 表面质感</b><small>产品具体材质与这里的表面质感都会写入实际 3D 提示词；图生 / 多视图以输入图为主，材质目标会同步提交给建模任务。</small><small class="material-prompt-proof">3D 图案工艺约束已启用：扁平色块、矢量图案、粗描边、无渐变、贴纸化图案与正交参考视图；真实材质反光会保留。</small></div><div class="material-chips"><button v-for="item in materialOptions" :key="item.label" type="button" :class="{ active: modelForm.materialLabel===item.label }" @click="chooseModelMaterial(item.label)">{{ item.label }}</button></div></section>
+      <section class="model-quality-picker" aria-label="3D 生成质量"><div><span>生成档位</span><b>先用轻量版确认造型，再按需生成打样高精版</b><small>快速预览更适合手机打开和换材质；打样高精版适合确认后审核、生产和留档。</small></div><div class="model-quality-options"><button v-for="item in modelQualityOptions" :key="item.key" type="button" :class="{ active: modelQuality===item.key }" @click="modelQuality=item.key"><b>{{ item.title }}</b><small>{{ item.desc }}</small></button></div></section>
       <div class="model-workspace">
         <div v-if="modelForm.mode==='image_to_model'" class="model-upload-pane"><label class="upload-box redesign-upload"><input type="file" accept="image/*" @change="uploadReference" /><img v-if="uploadPreviewUrl" :src="uploadPreviewUrl" alt="3D参考图" /><span v-else><i>＋</i><b>上传一张产品参考图</b><small>PNG / JPG / WEBP，主体越清晰，3D 效果越好</small></span></label><div class="model-note"><b>图生 3D 的优势</b><span>保留产品的主体轮廓与视觉特征，适合已有图片的文创快速建模。</span></div></div>
         <div v-else-if="modelForm.mode==='multiview_to_model'" class="multiview-pane"><div class="multiview-head"><div><span>MULTI-VIEW CAPTURE</span><b>上传同一产品的多个视角</b></div><small>至少上传正面图 + 任意一个侧面图</small></div><div class="multiview-grid"><label v-for="view in ['front','left','back','right']" :key="view" class="multiview-slot" :class="{ ready: modelForm.multiviewAssetIds[view as 'front' | 'left' | 'back' | 'right'] }"><input type="file" accept="image/*" @change="uploadReference($event, view as 'front' | 'left' | 'back' | 'right')" /><img v-if="multiviewPreviewUrls[view as 'front' | 'left' | 'back' | 'right']" :src="multiviewPreviewUrls[view as 'front' | 'left' | 'back' | 'right']" :alt="`${view}视图`" /><template v-else><i>{{ ({ front: '正', left: '左', back: '后', right: '右' } as any)[view] }}</i><b>{{ ({ front: '正面图', left: '左侧图', back: '背面图', right: '右侧图' } as any)[view] }}</b><small>{{ view==='front' ? '必传' : '可选，建议上传' }}</small></template><em v-if="modelForm.multiviewAssetIds[view as 'front' | 'left' | 'back' | 'right']">已上传</em></label></div><div class="model-note multiview-note"><b>多视图建模优势</b><span>多个角度能让 AI 更准确识别厚度、侧面结构和背部细节，生成结果通常比单图更完整。</span></div></div>
@@ -2086,7 +2120,7 @@ function closeModelPreview() {
         <aside class="model-guidance"><span>MODEL QUALITY</span><b>高质量建模建议</b><ul><li>描述清楚主体、材质和结构</li><li>优先选择轮廓完整、背景干净的图片</li><li>先打样确认，再进入批量生产</li></ul><div><i>3D</i><p>生成完成后可旋转预览，并提交审核。</p></div></aside>
       </div>
       <section v-if="productionAssessment" class="feasibility-card"><div><span>AI 生产可行性初筛</span><b>{{ productionAssessment.level }}</b><em>{{ productionAssessment.score }} 分</em></div><p>{{ productionAssessment.issues?.[0] }}</p><small v-for="tip in productionAssessment.suggestions" :key="tip">✦ {{ tip }}</small><button type="button" @click="refreshProductionAssessment">重新评估</button><i>{{ productionAssessment.disclaimer }}</i></section>
-      <button type="button" class="creation-submit model-submit" :disabled="busy || !canGenerateModel" @click="generateModel"><span>◇</span><b>{{ busy && tab==='model' ? stage || '正在构建立体原型' : '生成 3D 模型' }}</b><em>{{ modelCost }} 点</em></button>
+      <button type="button" class="creation-submit model-submit" :disabled="busy || !canGenerateModel" @click="generateModel"><span>◇</span><b>{{ busy && tab==='model' ? stage || '正在构建立体原型' : `生成${selectedModelQuality.title} 3D 模型` }}</b><em>{{ modelCost }} 点</em></button>
       <div v-if="busy && tab==='model'" class="generation-stage model-stage"><div class="stage-orbit"><i></i><i></i><i></i></div><div><b>{{ stage || '正在构建立体原型' }}</b><span>3D 生成时间稍长，完成后会自动保存并可旋转预览。</span></div><div class="model-progress-line"><span :style="{ width: `${Math.max(12, modelProgress)}%` }"></span></div></div>
       <article v-if="modelResult" ref="modelAnchor" class="result-card redesigned-result"><div class="result-image-wrap model-result"><img v-if="modelResult.previewUrl" :src="modelResult.previewUrl" alt="3D模型预览" /><span>3D READY</span></div><div class="result-info"><span>立体原型已完成</span><b>3D 模型已保存到作品库</b><p>现在可以旋转预览、提交审核，并在通过后申请打样或批量生产。</p><div class="result-actions"><button type="button" @click="openModelPreview(modelResult)">材质编辑</button><button v-if="canSubmitReview(modelResult)" type="button" @click.stop="submitAssetForReview(modelResult)">{{ reviewSubmitText }}</button><span v-else-if="isSubmittingForReview(modelResult)" class="submitted-tip">提交中...</span><span v-else-if="isSubmittedForReview(modelResult) || modelResult.status === 'review'" class="submitted-tip">{{ reviewSubmittedText }}</span></div></div></article>
     </section>
@@ -2250,17 +2284,20 @@ function closeModelPreview() {
             返回
           </button>
           <div>
-            <b>3D 材质工作台</b>
-            <span>实时换材质 · 保存版本 · 导出 GLB</span>
+            <b>{{ previewMode === 'material' ? '3D 材质工作台' : '3D 模型预览' }}</b>
+            <span>{{ previewMode === 'material' ? '实时换材质 · 保存版本 · 导出 GLB' : '轻量预览 · 手势旋转缩放 · 成功后可换材质' }}</span>
           </div>
         </div>
 
         <div class="model-viewer-wrap material-viewer-wrap">
-          <MaterialModelStudio :model-url="previewModelUrl" :model-name="previewAsset.title || 'and-taste-model'" @loaded="previewReady = true" @save-variant="saveMaterialVariant" @error="(message) => { previewLoadFailed = true; emit('alert', message, 'error') }" />
+          <div v-if="!previewModelUrl" class="model-viewer-state">正在获取模型预览权限…</div>
+          <model-viewer v-else-if="previewMode === 'viewer'" class="mobile-model-viewer" :src="previewModelUrl" :alt="previewAsset.title || '3D 模型'" camera-controls auto-rotate interaction-prompt="auto" loading="eager" exposure="1" shadow-intensity="1" @load="previewReady = true" @error="handleModelViewerError"></model-viewer>
+          <MaterialModelStudio v-else :model-url="previewModelUrl" :model-name="previewAsset.title || 'and-taste-model'" @loaded="previewReady = true" @save-variant="saveMaterialVariant" @error="(message) => { previewLoadFailed = true; emit('alert', `材质工作台无法载入：${message}`, 'error') }" />
+          <div v-if="previewMode === 'viewer' && previewLoadFailed" class="model-viewer-state error"><b>模型暂时无法载入</b><span>请下载原始 GLB 后重试；高精模型建议在电脑端打开。</span></div>
         </div>
 
         <div class="model-preview-bottom">
-          <button type="button" @click="closeModelPreview">完成</button>
+          <button type="button" :disabled="previewMode === 'viewer' && !previewReady" @click="previewMode === 'material' ? returnToModelViewer() : openMaterialEditor()">{{ previewMode === 'material' ? '返回预览' : previewReady ? '换材质' : '模型加载中' }}</button>
           <label class="format-select">
             <span>下载格式</span>
             <select v-model="previewDownloadFormat">
@@ -3456,6 +3493,7 @@ function closeModelPreview() {
   --poster-color:transparent;
   background:transparent !important;
 }
+.mobile-model-viewer{display:block;width:100%;height:100%;min-height:420px;background:radial-gradient(circle at 50% 36%,#3c2b22,#17100d 68%)}.model-viewer-state{display:grid;place-items:center;gap:7px;min-height:420px;padding:20px;text-align:center;color:rgba(255,255,255,.72);font-size:13px;line-height:1.55}.model-viewer-state.error b{color:#ffc49c}.model-viewer-state.error span{max-width:18em}.model-quality-picker{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.9fr);gap:18px;margin:18px 36px 0;padding:17px 18px;border:1px solid #cfe4da;border-radius:18px;background:linear-gradient(135deg,#f7fffa,#edf8f2)}.model-quality-picker span{display:block;color:#24765b;font-size:10px;font-weight:950;letter-spacing:1.2px}.model-quality-picker b{display:block;margin-top:6px;color:#24463a;font-size:15px}.model-quality-picker small{display:block;margin-top:5px;color:#668477;font-size:11px;line-height:1.55}.model-quality-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}.model-quality-options button{padding:12px;border:1px solid #cfe4da;border-radius:14px;background:#fff;color:#42685b;text-align:left}.model-quality-options button b{margin:0;font-size:13px}.model-quality-options button small{margin-top:4px;font-size:10px}.model-quality-options button.active{border-color:#1d7c5d;background:#1d7458;color:#fff;box-shadow:0 8px 16px rgba(23,110,79,.18)}.model-quality-options button.active small{color:rgba(255,255,255,.76)}@media(max-width:760px){.mobile-model-viewer,.model-viewer-state{min-height:360px}.model-quality-picker{grid-template-columns:1fr;margin:14px 14px 0;padding:14px}}
 .model-loading,
 .model-error{
   position:absolute !important;
