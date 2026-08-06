@@ -3,7 +3,7 @@
     <view class="head">
       <view>
         <text class="title">充值积分</text>
-        <text class="sub">微信支付由官方回调自动确认到账；人工收款码订单需提交核验。</text>
+        <text class="sub">官方微信支付，支付成功后由服务端自动确认到账。</text>
       </view>
       <button class="refresh" size="mini" :loading="loading" @tap="loadData(true)">刷新</button>
     </view>
@@ -20,8 +20,7 @@
 
     <button class="pay" :disabled="!selected || !paymentEnabled" :loading="creatingOrder || requestingPayment" @tap="startPayment">{{ paymentButtonText }}</button>
     <text v-if="!paymentEnabled" class="payment-unavailable">当前暂无可用支付方式，请稍后重试或联系平台管理员。</text>
-    <text v-else-if="wechatJsapiEnabled" class="payment-note">将在微信内完成安全支付，积分以微信官方回调结果为准。</text>
-    <text v-else class="payment-note">将生成微信人工收款码，付款后需提交收款核验。</text>
+    <text v-else class="payment-note">将在微信内完成安全支付，积分以微信官方回调结果为准。</text>
 
     <view class="section history">
       <view class="history-head"><text class="label">充值订单</text><text>{{ orders.length }} 笔</text></view>
@@ -35,25 +34,19 @@
 
     <view v-if="paymentOrder" class="modal">
       <view class="sheet">
-        <text class="sheet-title">{{ isWechatJsapiOrder ? '微信支付' : '请使用微信扫码付款' }}</text>
+        <text class="sheet-title">微信支付</text>
 
-        <view v-if="isWechatJsapiOrder" class="jsapi-state" :class="paymentIntent">
+        <view class="jsapi-state" :class="paymentIntent">
           <text class="state-icon">{{ paymentStateIcon }}</text>
           <text class="state-title">{{ paymentStateTitle }}</text>
           <text class="state-hint">{{ paymentHint }}</text>
         </view>
-        <image v-else-if="qrUrl" :src="qrUrl" class="qr" mode="aspectFit" />
-        <text v-else class="qr-unavailable">当前收款码不可用，请稍后重试或联系平台管理员。</text>
 
         <text class="order">订单号：{{ paymentOrder.orderNo }}</text>
         <text class="order">金额：¥{{ orderAmount(paymentOrder) }} · {{ paymentOrder.credits }} 积分</text>
-        <text v-if="isWechatJsapiOrder" class="order">当前状态：{{ paymentStatusText(paymentOrder.status) }}。支付是否到账以微信支付回调为准。</text>
-        <text v-else-if="paymentOrder.status === 'pending'" class="order">支付后请点击下方按钮提交人工核验。</text>
-        <text v-else class="order">当前状态：{{ paymentStatusText(paymentOrder.status) }}</text>
+        <text class="order">当前状态：{{ paymentStatusText(paymentOrder.status) }}。支付是否到账以微信官方回调为准。</text>
 
-        <button v-if="paymentOrder.status === 'pending' && !isWechatJsapiOrder" class="done" :loading="completing" @tap="complete">我已完成支付</button>
-        <button v-if="paymentOrder.status === 'pending' && isWechatJsapiOrder" class="query" :loading="paymentPolling" @tap="refreshPaymentStatus(true)">查询支付结果</button>
-        <button v-if="showManualFallback" class="fallback" :disabled="creatingOrder" @tap="switchToManualPayment">改用人工收款码</button>
+        <button v-if="paymentOrder.status === 'pending'" class="query" :loading="paymentPolling" @tap="refreshPaymentStatus(true)">查询支付结果</button>
         <text class="close" @tap="closePaymentOrder">关闭</text>
       </view>
     </view>
@@ -65,17 +58,15 @@ import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow, onUnload } from '@dcloudio/uni-app'
 import {
   bindWechatMiniapp,
-  closePaymentOrderOnServer,
   createPaymentOrder,
   getCredits,
   getPackages,
   getPaymentOrder,
   getPaymentOrders,
-  manualComplete,
   type PaymentOrder,
   type WechatJsapiPaymentParams,
 } from '../../api/creative'
-import { imageUrl, moneyText, statusText } from '../../utils/format'
+import { moneyText, statusText } from '../../utils/format'
 import { requireSession } from '../../utils/session'
 
 type PaymentIntent = 'idle' | 'launching' | 'awaiting_callback' | 'cancelled' | 'failed' | 'paid' | 'closed' | 'exception'
@@ -90,12 +81,9 @@ const orders = ref<any[]>([])
 const loading = ref(false)
 const creatingOrder = ref(false)
 const requestingPayment = ref(false)
-const completing = ref(false)
 const paymentPolling = ref(false)
 const paymentOrder = ref<PaymentOrder | null>(null)
-const qrUrl = ref('')
 const wechatJsapiEnabled = ref(false)
-const manualPaymentEnabled = ref(false)
 const paymentIntent = ref<PaymentIntent>('idle')
 const paymentHint = ref('')
 const paymentPollAttempts = ref(0)
@@ -104,18 +92,12 @@ let paymentPollInFlight = false
 let paymentPollingGeneration = 0
 let paidNoticeShown = false
 
-const paymentEnabled = computed(() => wechatJsapiEnabled.value || manualPaymentEnabled.value)
+const paymentEnabled = computed(() => wechatJsapiEnabled.value)
 const isWechatJsapiOrder = computed(() => paymentOrder.value?.channel === 'wechat_jsapi')
-const showManualFallback = computed(() => (
-  isWechatJsapiOrder.value
-  && manualPaymentEnabled.value
-  && ['pending', 'failed', 'closed', 'expired', 'cancelled'].includes(paymentOrder.value?.status || '')
-  && ['cancelled', 'failed', 'closed'].includes(paymentIntent.value)
-))
 const paymentButtonText = computed(() => {
   if (!paymentEnabled.value) return '支付暂不可用'
   if (!selected.value) return '请选择套餐'
-  return wechatJsapiEnabled.value ? `微信支付 ¥${packageAmount(selected.value)}` : `生成 ${selected.value.name} 收款码`
+  return `微信支付 ¥${packageAmount(selected.value)}`
 })
 const paymentStateIcon = computed(() => ({
   idle: '⌛',
@@ -176,7 +158,6 @@ function stopPaymentPolling() {
 function closePaymentOrder() {
   stopPaymentPolling()
   paymentOrder.value = null
-  qrUrl.value = ''
   paymentHint.value = ''
   paymentIntent.value = 'idle'
   paymentPollAttempts.value = 0
@@ -190,13 +171,11 @@ async function loadData(notify = false) {
     packages.value = rows(packageData)
     const channels = Array.isArray(packageData?.channels) ? packageData.channels : []
     wechatJsapiEnabled.value = channels.some((channel: any) => channel.code === 'wechat_jsapi' && channel.enabled)
-    manualPaymentEnabled.value = channels.some((channel: any) => channel.code === 'manual_wechat_qr' && channel.enabled)
     balance.value = Number(creditData?.balance) || 0
     orders.value = rows(orderData)
     if (notify) uni.showToast({ title: '订单已刷新', icon: 'success' })
   } catch (error: any) {
     wechatJsapiEnabled.value = false
-    manualPaymentEnabled.value = false
     uni.showToast({ title: error.message || '加载充值信息失败', icon: 'none' })
   } finally {
     loading.value = false
@@ -347,24 +326,6 @@ async function refreshPaymentStatus(showLoading = false, generation = paymentPol
   }
 }
 
-async function createManualPaymentOrder() {
-  if (!selected.value) return
-  creatingOrder.value = true
-  try {
-    const order = await createPaymentOrder(selected.value.code, 'manual_wechat_qr')
-    paymentOrder.value = order
-    qrUrl.value = imageUrl(order.codeUrl || '/payment-collection-qr.jpg')
-    paymentIntent.value = 'idle'
-    paymentHint.value = ''
-    await loadData(false)
-  } catch (error: any) {
-    paymentOrder.value = null
-    uni.showToast({ title: error.message || '创建订单失败', icon: 'none' })
-  } finally {
-    creatingOrder.value = false
-  }
-}
-
 async function createWechatPaymentOrder() {
   if (!selected.value) return
   creatingOrder.value = true
@@ -379,7 +340,6 @@ async function createWechatPaymentOrder() {
     newlyCreatedOrder = order
     paymentOrder.value = order
     const params = requirePaymentParams(order)
-    qrUrl.value = ''
     paymentIntent.value = 'launching'
     paymentHint.value = '请在微信支付页面完成付款。'
 
@@ -393,8 +353,8 @@ async function createWechatPaymentOrder() {
     } catch (error: any) {
       paymentIntent.value = paymentWasCancelled(error) ? 'cancelled' : 'failed'
       paymentHint.value = paymentIntent.value === 'cancelled'
-        ? '本次支付已取消，未提交人工核验。若微信账单显示已扣款，请等待回调后再刷新订单。'
-        : '未能调起或完成微信支付。若未发生扣款，可改用人工收款码。'
+        ? '本次支付已取消。若微信账单显示已扣款，请等待回调后再刷新订单。'
+        : '未能调起或完成微信支付。若未发生扣款，可稍后重新发起支付。'
       // A callback can race with the client result, so check the server briefly either way.
       startPaymentPolling()
     } finally {
@@ -404,7 +364,7 @@ async function createWechatPaymentOrder() {
     if (newlyCreatedOrder) {
       paymentOrder.value = newlyCreatedOrder
       paymentIntent.value = 'failed'
-      paymentHint.value = '支付订单已创建，但未能获取有效支付凭证。请不要重复支付，可稍后查询订单或改用人工收款码。'
+      paymentHint.value = '支付订单已创建，但未能获取有效支付凭证。请不要重复支付，可稍后查询订单。'
       await loadData(false)
     } else if (!(await recoverUncertainWechatOrder())) {
       paymentOrder.value = null
@@ -417,59 +377,7 @@ async function createWechatPaymentOrder() {
 
 async function startPayment() {
   if (!selected.value || !paymentEnabled.value || !requireSession()) return
-  if (wechatJsapiEnabled.value) await createWechatPaymentOrder()
-  else await createManualPaymentOrder()
-}
-
-async function complete() {
-  if (!paymentOrder.value?.orderNo) return
-  completing.value = true
-  try {
-    paymentOrder.value = await manualComplete(paymentOrder.value.orderNo)
-    await loadData(false)
-    uni.showModal({
-      title: '已提交核验',
-      content: '管理员确认收款后，积分将自动发放到你的账户。',
-      showCancel: false,
-      success: () => { closePaymentOrder() },
-    })
-  } catch (error: any) {
-    uni.showToast({ title: error.message || '提交失败', icon: 'none' })
-  } finally {
-    completing.value = false
-  }
-}
-
-function confirmManualFallback(): Promise<boolean> {
-  return new Promise((resolve) => {
-    uni.showModal({
-      title: '改用人工收款码？',
-      content: '仅当上一笔微信支付没有扣款时使用。若已扣款，请等待回调或查询订单，避免重复支付。',
-      confirmText: '继续使用',
-      success: (result) => resolve(result.confirm),
-      fail: () => resolve(false),
-    })
-  })
-}
-
-async function switchToManualPayment() {
-  if (!manualPaymentEnabled.value || !(await confirmManualFallback())) return
-  const sourceOrder = paymentOrder.value
-  if (sourceOrder?.status === 'pending') {
-    creatingOrder.value = true
-    try {
-      // The server permits one open recharge order per user. Closing a known-unpaid
-      // JSAPI order also prevents the manual fallback from being rejected as duplicate.
-      await closePaymentOrderOnServer(sourceOrder.orderNo)
-    } catch (error: any) {
-      uni.showToast({ title: error.message || '订单状态已变化，请先查询支付结果', icon: 'none' })
-      return
-    } finally {
-      creatingOrder.value = false
-    }
-  }
-  closePaymentOrder()
-  await createManualPaymentOrder()
+  await createWechatPaymentOrder()
 }
 
 onShow(() => {

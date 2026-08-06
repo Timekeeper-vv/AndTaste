@@ -39,6 +39,7 @@ import java.security.Signature;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -87,6 +88,7 @@ public class PaymentController {
     @Value("${payment.wechat.reconcile-enabled:true}") private boolean wechatReconcileEnabled;
     @Value("${payment.wechat.reconcile-limit:40}") private int wechatReconcileLimit;
     @Value("${payment.manual-qr-url:/payment-collection-qr.jpg}") private String manualWechatQrUrl;
+    @Value("${payment.manual-qr-enabled:false}") private boolean manualWechatQrEnabled;
 
     private static final List<CreditPackage> PACKAGES = List.of(
             new CreditPackage("credit_100", "体验包", "适合少量图片生成和一次3D尝试", 990, new BigDecimal("100")),
@@ -556,6 +558,46 @@ public class PaymentController {
         return jdbc.queryForList("SELECT p.order_no orderNo,u.username,p.product_name packageName,p.amount_fen amountFen,p.credit_amount credits,p.channel,p.status," +
                 "p.provider_order_no providerOrderNo,p.created_at createdAt,p.paid_at paidAt,p.expired_at expiredAt,r.refund_no refundNo,r.status refundStatus " +
                 "FROM payment_order p LEFT JOIN user u ON u.id=p.user_id LEFT JOIN payment_refund r ON r.order_no=p.order_no ORDER BY p.id DESC LIMIT 300");
+    }
+
+    /**
+     * Safe operational readiness check. It intentionally exposes only booleans
+     * and missing configuration labels, never credentials, certificate data or
+     * payment provider responses.
+     */
+    @GetMapping("/admin/configuration")
+    public Map<String, Object> adminPaymentConfiguration(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireAdmin(principal);
+        List<String> missing = new ArrayList<>();
+        if (!wechatEnabled) missing.add("PAYMENT_WECHAT_ENABLED=true");
+        if (blank(wechatAppId)) missing.add("小程序 AppID");
+        if (blank(wechatMiniAppSecret)) missing.add("小程序 AppSecret");
+        if (blank(wechatMchId)) missing.add("微信支付商户号");
+        if (blank(wechatSerialNo)) missing.add("商户 API 证书序列号");
+        if (blank(wechatPrivateKeyPath)) missing.add("商户私钥路径");
+        else if (!readableFile(wechatPrivateKeyPath)) missing.add("可读取的商户私钥文件");
+        else if (!validMerchantPrivateKey()) missing.add("有效的商户私钥文件");
+        if (wechatApiV3Key == null || wechatApiV3Key.getBytes(StandardCharsets.UTF_8).length != 32) missing.add("32 字节 API v3 密钥");
+        if (blank(wechatNotifyUrl) || !wechatNotifyUrl.startsWith("https://")) missing.add("HTTPS 支付回调地址");
+        if (blank(wechatRefundNotifyUrl) || !wechatRefundNotifyUrl.startsWith("https://")) missing.add("HTTPS 退款回调地址");
+        if (blank(wechatPlatformPublicKeyPath)) missing.add("微信支付公钥路径");
+        else if (!readableFile(wechatPlatformPublicKeyPath)) missing.add("可读取的微信支付公钥文件");
+        else if (!validWechatPlatformPublicKey()) missing.add("有效的微信支付公钥文件");
+        if (blank(wechatPlatformSerialNo)) missing.add("微信支付公钥 ID");
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("officialPaymentReady", wechatPaymentReady());
+        result.put("miniappPaymentReady", wechatJsapiReady());
+        result.put("manualQrEnabled", manualWechatQrReady());
+        result.put("privateKeyReadable", !blank(wechatPrivateKeyPath) && readableFile(wechatPrivateKeyPath));
+        result.put("privateKeyValid", validMerchantPrivateKey());
+        result.put("platformPublicKeyReadable", !blank(wechatPlatformPublicKeyPath) && readableFile(wechatPlatformPublicKeyPath));
+        result.put("platformPublicKeyValid", validWechatPlatformPublicKey());
+        result.put("notifyUrlConfigured", !blank(wechatNotifyUrl) && wechatNotifyUrl.startsWith("https://"));
+        result.put("refundNotifyUrlConfigured", !blank(wechatRefundNotifyUrl) && wechatRefundNotifyUrl.startsWith("https://"));
+        result.put("missing", missing);
+        return result;
     }
 
     @PostMapping("/orders/{orderNo}/close")
@@ -1772,10 +1814,29 @@ public class PaymentController {
     }
 
     private PublicKey wechatPlatformPublicKey() throws Exception {
+        String pem = Files.readString(Path.of(wechatPlatformPublicKeyPath), StandardCharsets.UTF_8);
+        // WeChat Pay now issues a standalone platform public key (pub_key.pem)
+        // in addition to the older platform certificate format. Accept both
+        // formats so callback/API response verification does not silently fail
+        // after a merchant switches to the public-key mode.
+        if (pem.contains("-----BEGIN PUBLIC KEY-----")) {
+            String encoded = pem.replaceAll("-----BEGIN [A-Z ]+-----|-----END [A-Z ]+-----|\\s", "");
+            return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(encoded)));
+        }
         try (var input = Files.newInputStream(Path.of(wechatPlatformPublicKeyPath))) {
             X509Certificate certificate = (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(input);
             return certificate.getPublicKey();
         }
+    }
+
+    private boolean validMerchantPrivateKey() {
+        if (blank(wechatPrivateKeyPath) || !readableFile(wechatPrivateKeyPath)) return false;
+        try { merchantPrivateKey(); return true; } catch (Exception ignored) { return false; }
+    }
+
+    private boolean validWechatPlatformPublicKey() {
+        if (blank(wechatPlatformPublicKeyPath) || !readableFile(wechatPlatformPublicKeyPath)) return false;
+        try { wechatPlatformPublicKey(); return true; } catch (Exception ignored) { return false; }
     }
 
     private String sign(String message, PrivateKey privateKey) throws Exception {
@@ -1940,7 +2001,7 @@ public class PaymentController {
 
     private boolean wechatPaymentReady() {
         return wechatMerchantReady() && !blank(wechatPlatformPublicKeyPath) && !blank(wechatPlatformSerialNo)
-                && readableFile(wechatPrivateKeyPath) && readableFile(wechatPlatformPublicKeyPath)
+                && validMerchantPrivateKey() && validWechatPlatformPublicKey()
                 && wechatApiV3Key != null && wechatApiV3Key.getBytes(StandardCharsets.UTF_8).length == 32;
     }
 
@@ -1965,6 +2026,7 @@ public class PaymentController {
     }
 
     private boolean manualWechatQrReady() {
+        if (!manualWechatQrEnabled) return false;
         if (blank(manualWechatQrUrl)) return false;
         String value = manualWechatQrUrl.trim();
         if (value.startsWith("https://")) return true;

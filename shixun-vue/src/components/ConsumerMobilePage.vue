@@ -88,7 +88,6 @@ const creditPanelOpen = ref(false)
 const rechargePackages = ref<any[]>([])
 const paymentChannelEnabled = ref(false)
 const wechatPaymentEnabled = ref(false)
-const manualPaymentEnabled = ref(false)
 const paymentOrder = ref<any | null>(null)
 const paymentQrUrl = ref('')
 const paymentLoading = ref(false)
@@ -99,7 +98,7 @@ const samplePaymentModalOpen = ref(false)
 const samplePaymentRequest = ref<any | null>(null)
 const samplePaymentOrder = ref<any | null>(null)
 const samplePaymentQrUrl = ref('')
-const samplePaymentChannel = ref('manual_wechat_qr')
+const samplePaymentChannel = 'wechat'
 const samplePaymentLoading = ref(false)
 const samplePaymentError = ref('')
 const samplePaymentTimer = ref<ReturnType<typeof setInterval> | null>(null)
@@ -625,10 +624,10 @@ function changeCreationPurpose() {
 }
 
 function openCreditPanel() {
-  // Keep the recharge journey in the canonical H5 user interface, including
-  // when it is displayed inside a mini-program web-view.  Jumping straight to
-  // the legacy native recharge page loses the H5 session hand-off and sends a
-  // signed-in user to the old native login screen again.
+  // Use the native mini-program page inside a web-view so wx.requestPayment can
+  // open the official WeChat cashier. The H5 page remains the desktop/browser
+  // fallback and never exposes a personal collection QR code.
+  if (isEmbeddedMiniapp() && navigateToMiniappPage('/pages/recharge/index')) return
   creditPanelOpen.value = true
 }
 function stopPaymentPolling() {
@@ -707,13 +706,13 @@ async function loadPaymentPackages() {
     rechargePackages.value = Array.isArray(data?.items) ? data.items : []
     const channels = Array.isArray(data?.channels) ? data.channels : []
     wechatPaymentEnabled.value = !!channels.find((x: any) => x.code === 'wechat' && x.enabled)
-    manualPaymentEnabled.value = !!channels.find((x: any) => x.code === 'manual_wechat_qr' && x.enabled)
-    paymentChannelEnabled.value = wechatPaymentEnabled.value || manualPaymentEnabled.value
+    // New orders must use the official WeChat channel. Manual collection QR
+    // remains available only for historical orders in the admin console.
+    paymentChannelEnabled.value = wechatPaymentEnabled.value
   } catch {
     rechargePackages.value = []
     paymentChannelEnabled.value = false
     wechatPaymentEnabled.value = false
-    manualPaymentEnabled.value = false
   }
 }
 async function refreshPaymentOrder() {
@@ -739,7 +738,7 @@ async function createPaymentOrder(pkg: any) {
   }
   paymentLoading.value = true
   try {
-    const channel = wechatPaymentEnabled.value ? 'wechat' : 'manual_wechat_qr'
+    const channel = 'wechat'
     const r = await fetch('/api/payments/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -748,59 +747,26 @@ async function createPaymentOrder(pkg: any) {
     const data = await r.json().catch(() => null)
     if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
     paymentOrder.value = data
-    // 人工收款码本身就是一张图片：直接展示图片地址，不能再把图片
-    // 地址编码成另一张二维码，否则扫码后只会打开图片而不会完成收款。
-    // 微信 Native 返回的 weixin:// 链接则仍需在页面上生成二维码。
     const codeUrl = String(data?.codeUrl || '').trim()
-    const isManualQr = data?.channel === 'manual_wechat_qr'
-    const isImageUrl = /^(?:https?:\/\/|\/|data:image\/|blob:)/i.test(codeUrl)
-    if (isManualQr && isImageUrl) {
-      paymentQrUrl.value = codeUrl
-    } else if (isManualQr && codeUrl) {
-      // 兼容管理员填写 `payment-collection-qr.jpg` 这类相对路径。
-      paymentQrUrl.value = `/${codeUrl.replace(/^\/+/, '')}`
-    } else if (codeUrl) {
+    if (codeUrl) {
       paymentQrUrl.value = await QRCode.toDataURL(codeUrl, { width: 360, margin: 1, color: { dark: '#1f1713', light: '#ffffff' } })
     } else {
-      throw new Error('支付服务未返回收款码，请联系平台管理员')
+      throw new Error('微信支付未返回支付凭证，请检查商户配置')
     }
     stopPaymentPolling()
-    if (data.channel === 'wechat') paymentTimer.value = setInterval(refreshPaymentOrder, 2000)
+    paymentTimer.value = setInterval(refreshPaymentOrder, 2000)
   } catch (e: any) {
     paymentError.value = e?.message || '创建支付订单失败'
   } finally {
     paymentLoading.value = false
   }
 }
-async function copyPaymentCode() {
-  if (!paymentOrder.value?.codeUrl) return
-  await navigator.clipboard?.writeText(paymentOrder.value.codeUrl).catch(() => {})
-  emit('alert', '支付链接已复制，可在微信中打开', 'success')
-}
-async function completeManualPayment() {
-  if (!paymentOrder.value?.orderNo) return
-  paymentLoading.value = true
-  try {
-    const r = await fetch(`/api/payments/orders/${encodeURIComponent(paymentOrder.value.orderNo)}/manual-complete`, {
-      method: 'POST',
-    })
-    const data = await r.json().catch(() => null)
-    if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
-    paymentOrder.value = data
-    emit('alert', '已提交收款核验，管理员确认后额度自动到账', 'success')
-  } catch (e: any) {
-    paymentError.value = e?.message || '提交支付完成状态失败'
-  } finally {
-    paymentLoading.value = false
-  }
-}
-
 function sampleFeeYuan(productName: string): string {
   const fee = sampleFeeCatalog.value.find(item => String(item.productName) === String(productName))
   return fee?.feeYuan == null ? '' : Number(fee.feeYuan).toFixed(2).replace(/\.00$/, '')
 }
 function samplePaymentStatusText(status?: string): string {
-  const map: Record<string, string> = { not_required: '', unpaid: '待支付打样费', pending: '等待支付', manual_review: '待人工核验', paid: '已支付，进入生产' }
+  const map: Record<string, string> = { not_required: '', unpaid: '待支付打样费', pending: '等待官方支付确认', manual_review: '历史人工订单待核验', paid: '已支付，进入生产' }
   return map[String(status || '')] || ''
 }
 async function refreshSamplePaymentOrder() {
@@ -819,12 +785,8 @@ async function refreshSamplePaymentOrder() {
 }
 async function prepareSamplePaymentQr(data: any) {
   const codeUrl = String(data?.codeUrl || '').trim()
-  const isManualQr = data?.channel === 'manual_wechat_qr'
-  const isImageUrl = /^(?:https?:\/\/|\/|data:image\/|blob:)/i.test(codeUrl)
-  if (isManualQr && isImageUrl) samplePaymentQrUrl.value = codeUrl
-  else if (isManualQr && codeUrl) samplePaymentQrUrl.value = `/${codeUrl.replace(/^\/+/, '')}`
-  else if (codeUrl) samplePaymentQrUrl.value = await QRCode.toDataURL(codeUrl, { width: 360, margin: 1, color: { dark: '#1f1713', light: '#ffffff' } })
-  else throw new Error('支付服务未返回收款码，请联系平台管理员')
+  if (codeUrl) samplePaymentQrUrl.value = await QRCode.toDataURL(codeUrl, { width: 360, margin: 1, color: { dark: '#1f1713', light: '#ffffff' } })
+  else throw new Error('微信支付未返回支付凭证，请检查商户配置')
 }
 function openSamplePayment(request: any) {
   if (!request?.id || request.requestType !== 'sample' || request.samplePaymentStatus !== 'unpaid') return
@@ -833,18 +795,13 @@ function openSamplePayment(request: any) {
   samplePaymentOrder.value = null
   samplePaymentQrUrl.value = ''
   samplePaymentError.value = ''
-  samplePaymentChannel.value = wechatPaymentEnabled.value ? 'wechat' : 'manual_wechat_qr'
   samplePaymentModalOpen.value = true
   document.body.style.overflow = 'hidden'
 }
 async function createSamplePaymentOrder() {
   if (!samplePaymentRequest.value?.id) return
-  if (samplePaymentChannel.value === 'wechat' && !wechatPaymentEnabled.value) {
-    samplePaymentError.value = '微信支付暂不可用，请选择收款码或联系管理员。'
-    return
-  }
-  if (samplePaymentChannel.value === 'manual_wechat_qr' && !manualPaymentEnabled.value) {
-    samplePaymentError.value = '收款码暂不可用，请联系管理员。'
+  if (!wechatPaymentEnabled.value) {
+    samplePaymentError.value = '官方微信支付暂不可用，请联系管理员完成商户配置。'
     return
   }
   samplePaymentLoading.value = true
@@ -852,14 +809,14 @@ async function createSamplePaymentOrder() {
   try {
     const r = await fetch('/api/payments/sample-orders', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requestId: String(samplePaymentRequest.value.id), channel: samplePaymentChannel.value }),
+      body: JSON.stringify({ requestId: String(samplePaymentRequest.value.id), channel: samplePaymentChannel }),
     })
     const data = await r.json().catch(() => null)
     if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
     samplePaymentOrder.value = data
     await prepareSamplePaymentQr(data)
     stopSamplePaymentPolling()
-    if (data.channel === 'wechat') samplePaymentTimer.value = setInterval(refreshSamplePaymentOrder, 2000)
+    samplePaymentTimer.value = setInterval(refreshSamplePaymentOrder, 2000)
     await refreshSamplePaymentOrder()
   } catch (e: any) {
     samplePaymentError.value = e?.message || '创建打样费订单失败'
@@ -867,26 +824,6 @@ async function createSamplePaymentOrder() {
     samplePaymentLoading.value = false
   }
 }
-async function completeSampleManualPayment() {
-  if (!samplePaymentOrder.value?.orderNo) return
-  samplePaymentLoading.value = true
-  samplePaymentError.value = ''
-  try {
-    const r = await fetch(`/api/payments/orders/${encodeURIComponent(samplePaymentOrder.value.orderNo)}/manual-complete`, { method: 'POST' })
-    const data = await r.json().catch(() => null)
-    if (!r.ok) throw new Error(data?.message || `HTTP ${r.status}`)
-    samplePaymentOrder.value = data
-    await load()
-    stopSamplePaymentPolling()
-    samplePaymentTimer.value = setInterval(refreshSamplePaymentOrder, 3000)
-    emit('alert', '已提交打样费核验，管理员确认后将进入生产', 'success')
-  } catch (e: any) {
-    samplePaymentError.value = e?.message || '提交支付核验失败'
-  } finally {
-    samplePaymentLoading.value = false
-  }
-}
-
 async function downloadPreviewModel() {
   const url = previewDownloadUrl.value
   const format = previewDownloadFormat.value
@@ -2191,12 +2128,11 @@ function closeModelPreview() {
               <p>OBJ/STL转换下载：{{ convertCost }}点 / 次</p>
             </div>
             <div v-if="paymentOrder" class="payment-order-card">
-              <div class="payment-order-head"><span>{{ paymentOrder.channel === 'wechat' ? '微信支付' : '微信收款码' }}</span><b>{{ paymentOrder.channel === 'wechat' ? '支付成功后系统会自动到账，无需人工审批' : '扫码付款后点击“提交核验”，管理员确认后额度到账' }}</b></div>
-              <img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信收款二维码" class="payment-qr" />
+              <div class="payment-order-head"><span>微信支付</span><b>官方微信支付订单，支付成功后系统自动验签到账</b></div>
+              <img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" class="payment-qr" />
               <strong>¥ {{ paymentOrder.amountYuan }} · {{ paymentOrder.credits }} 点</strong>
-              <small>订单 {{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功，积分已到账' : paymentOrder.status === 'failed' ? '支付失败' : paymentOrder.channel === 'wechat' ? '等待微信支付结果回调，系统自动确认' : '扫码付款后请点击提交核验' }}</small>
-              <button v-if="paymentOrder.status === 'pending' && paymentOrder.channel === 'manual_wechat_qr'" type="button" class="manual-complete" :disabled="paymentLoading" @click="completeManualPayment">{{ paymentLoading ? '提交中…' : '我已完成支付，提交核验' }}</button>
-              <button v-else-if="paymentOrder.status === 'pending'" type="button" class="copy-payment" disabled>等待微信支付结果回调</button>
+              <small>订单 {{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功，积分已到账' : paymentOrder.status === 'failed' ? '支付失败' : '等待微信支付结果回调，系统自动确认' }}</small>
+              <button v-if="paymentOrder.status === 'pending'" type="button" class="copy-payment" disabled>等待微信支付结果回调</button>
             </div>
             <div v-else class="packages">
               <button v-for="pkg in rechargePackages" :key="pkg.code" type="button" :disabled="paymentLoading || !paymentChannelEnabled" @click="createPaymentOrder(pkg)">
@@ -2204,10 +2140,10 @@ function closeModelPreview() {
                 <span>{{ pkg.name }} · ¥{{ pkg.amountYuan }}</span>
                 <em>{{ pkg.description }}</em>
               </button>
-              <p v-if="!rechargePackages.length" class="recharge-note">充值套餐加载中，请稍后重试。</p><p v-else-if="!paymentChannelEnabled" class="recharge-note">当前暂无可用支付方式，请管理员配置真实微信支付或有效收款码后重试。</p>
+              <p v-if="!rechargePackages.length" class="recharge-note">充值套餐加载中，请稍后重试。</p><p v-else-if="!paymentChannelEnabled" class="recharge-note">官方微信支付暂不可用，请管理员完成商户配置后重试。</p>
             </div>
             <p v-if="paymentError" class="payment-error">{{ paymentError }}</p>
-            <p class="recharge-note">{{ paymentOrder?.channel === 'wechat' ? '请使用微信完成付款。微信支付成功后由官方回调自动验签，系统会自动为账户增加积分，不需要人工审批。' : '请扫描收款码完成付款。付款后点击“提交核验”，管理员确认后额度到账。' }}</p>
+            <p class="recharge-note">请使用官方微信支付完成付款。支付成功后由微信回调自动验签，系统会自动为账户增加积分，不需要人工审批。</p>
           </main>
           <footer>
             <button v-if="paymentOrder" type="button" @click="closePaymentOrder">返回套餐</button>
@@ -2268,8 +2204,8 @@ function closeModelPreview() {
           <header><div><b>支付打样费</b><span>{{ samplePaymentRequest?.sampleProductName }} · {{ samplePaymentRequest?.assetTitle || samplePaymentRequest?.title }}</span></div><button type="button" @click="closeSamplePayment">×</button></header>
           <main>
             <div class="sample-payment-summary"><span>应付打样费</span><strong>¥{{ samplePaymentRequest?.sampleFeeYuan }}</strong><small>申请审核已通过，支付后进入生产排期</small></div>
-            <div v-if="!samplePaymentOrder" class="sample-payment-options"><b>选择支付方式</b><label v-if="wechatPaymentEnabled"><input v-model="samplePaymentChannel" type="radio" value="wechat" /> 微信支付（自动确认）</label><label v-if="manualPaymentEnabled"><input v-model="samplePaymentChannel" type="radio" value="manual_wechat_qr" /> 微信收款码（管理员核验）</label><p v-if="!wechatPaymentEnabled && !manualPaymentEnabled" class="payment-error">当前暂无可用支付方式，请联系管理员。</p><button type="button" class="submit" :disabled="samplePaymentLoading || (!wechatPaymentEnabled && !manualPaymentEnabled)" @click="createSamplePaymentOrder">{{ samplePaymentLoading ? '创建订单中…' : '生成支付订单' }}</button></div>
-            <div v-else class="sample-payment-order"><div class="payment-order-head"><span>{{ samplePaymentOrder.channel === 'wechat' ? '微信支付' : '微信收款码' }}</span><b>{{ samplePaymentOrder.status === 'paid' ? '支付成功，申请已进入生产' : samplePaymentOrder.channel === 'wechat' ? '完成支付后系统会自动确认' : '扫码付款后点击提交核验，管理员确认后进入生产' }}</b></div><img v-if="samplePaymentQrUrl" :src="samplePaymentQrUrl" alt="打样费收款码" class="payment-qr" /><strong>¥{{ samplePaymentOrder.amountYuan }}</strong><small>订单 {{ samplePaymentOrder.orderNo }} · {{ samplePaymentOrder.status === 'paid' ? '已支付' : samplePaymentOrder.status === 'manual_review' ? '待人工核验' : '待支付' }}</small><button v-if="samplePaymentOrder.status === 'pending' && samplePaymentOrder.channel === 'manual_wechat_qr'" type="button" class="manual-complete" :disabled="samplePaymentLoading" @click="completeSampleManualPayment">{{ samplePaymentLoading ? '提交中…' : '我已完成支付，提交核验' }}</button></div>
+            <div v-if="!samplePaymentOrder" class="sample-payment-options"><b>官方微信支付</b><p v-if="!wechatPaymentEnabled" class="payment-error">官方微信支付暂不可用，请联系管理员完成商户配置。</p><button type="button" class="submit" :disabled="samplePaymentLoading || !wechatPaymentEnabled" @click="createSamplePaymentOrder">{{ samplePaymentLoading ? '创建订单中…' : '创建微信支付订单' }}</button></div>
+            <div v-else class="sample-payment-order"><div class="payment-order-head"><span>微信支付</span><b>{{ samplePaymentOrder.status === 'paid' ? '支付成功，申请已进入生产' : '完成官方微信支付后系统会自动确认' }}</b></div><img v-if="samplePaymentQrUrl" :src="samplePaymentQrUrl" alt="微信支付二维码" class="payment-qr" /><strong>¥{{ samplePaymentOrder.amountYuan }}</strong><small>订单 {{ samplePaymentOrder.orderNo }} · {{ samplePaymentOrder.status === 'paid' ? '已支付' : '等待官方支付确认' }}</small></div>
             <p v-if="samplePaymentError" class="payment-error">{{ samplePaymentError }}</p>
           </main>
           <footer><button type="button" @click="closeSamplePayment">关闭</button></footer>

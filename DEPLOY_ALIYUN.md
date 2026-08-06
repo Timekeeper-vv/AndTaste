@@ -252,7 +252,7 @@ curl -s http://127.0.0.1:8080/api/creative/ai/imagen/config
    - `https://你的域名/api/payments/wechat/notify`
    - `https://你的域名/api/payments/wechat/refund-notify`
 
-3. 将商户私钥、微信支付平台证书放在服务器受限目录（例如 `/opt/smart_pig/secrets`），权限设为仅运行用户可读；平台证书 serial 必须与 `.env` 中的值一致。
+3. 将商户私钥、微信支付公钥放在服务器受限目录（例如 `/opt/smart_pig/secrets`），权限设为仅运行用户可读；微信支付公钥 ID 必须与 `.env` 中的值一致。
 4. 在 `.env` 填写并检查以下配置（真实密钥不要提交 Git）：
 
    ```dotenv
@@ -265,8 +265,8 @@ curl -s http://127.0.0.1:8080/api/creative/ai/imagen/config
    PAYMENT_WECHAT_API_V3_KEY=32位APIv3Key
    PAYMENT_WECHAT_NOTIFY_URL=https://你的域名/api/payments/wechat/notify
    PAYMENT_WECHAT_REFUND_NOTIFY_URL=https://你的域名/api/payments/wechat/refund-notify
-   PAYMENT_WECHAT_PLATFORM_PUBLIC_KEY_PATH=/opt/smart_pig/secrets/wechatpay_platform_cert.pem
-   PAYMENT_WECHAT_PLATFORM_SERIAL_NO=平台证书序列号
+   PAYMENT_WECHAT_PLATFORM_PUBLIC_KEY_PATH=/opt/smart_pig/secrets/wechatpay_public_key.pem
+   PAYMENT_WECHAT_PLATFORM_SERIAL_NO=微信支付公钥ID
    PAYMENT_WECHAT_RECONCILE_ENABLED=true
    ```
 
