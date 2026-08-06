@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.core.io.ClassPathResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 
 import javax.annotation.PostConstruct;
 import javax.crypto.Cipher;
@@ -48,6 +49,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.zip.GZIPInputStream;
 
 /**
@@ -65,13 +67,24 @@ public class PaymentController {
     private static final int CALLBACK_BODY_MAX_BYTES = 64 * 1024;
     private static final int MAX_BILL_DOWNLOAD_BYTES = 100 * 1024 * 1024;
     private static final int MAX_BILL_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
+    private static final int REFERENCE_INSERT_ATTEMPTS = 5;
+    private static final Duration WECHAT_CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration WECHAT_SESSION_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration WECHAT_TRANSACTION_TIMEOUT = Duration.ofSeconds(15);
+    private static final Duration WECHAT_BILL_TIMEOUT = Duration.ofSeconds(60);
     private static final Set<String> WECHAT_CHANNELS = Set.of("wechat", "wechat_jsapi");
     private static final Set<String> WECHAT_BILL_DOWNLOAD_HOSTS = Set.of("api.mch.weixin.qq.com", "apihk.mch.weixin.qq.com");
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final TransactionTemplate transactions;
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).build();
+    // One thread-safe client is shared by all payment requests so TCP/TLS and
+    // HTTP/2 connections are reused under concurrent checkout traffic.
+    private final HttpClient http = HttpClient.newBuilder()
+            .connectTimeout(WECHAT_CONNECT_TIMEOUT)
+            .version(HttpClient.Version.HTTP_2)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
 
     @Value("${payment.wechat.enabled:false}") private boolean wechatEnabled;
     @Value("${payment.wechat.app-id:}") private String wechatAppId;
@@ -734,11 +747,21 @@ public class PaymentController {
             }
             throw new IllegalStateException("已有待支付订单 " + activeOrderNo + "，请先完成支付或关闭该订单");
         }
-        String orderNo = newOrderNo();
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
-        jdbc.update("INSERT INTO payment_order(order_no,user_id,product_code,product_name,amount_fen,credit_amount,channel,status,expired_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                orderNo, userId, pkg.code, pkg.name, pkg.amountFen, pkg.credits, channel, "pending", expiresAt);
-        return new OrderCreation(orderNo, false);
+        for (int attempt = 1; attempt <= REFERENCE_INSERT_ATTEMPTS; attempt++) {
+            String orderNo = newOrderNo();
+            try {
+                jdbc.update("INSERT INTO payment_order(order_no,user_id,product_code,product_name,amount_fen,credit_amount,channel,status,expired_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        orderNo, userId, pkg.code, pkg.name, pkg.amountFen, pkg.credits, channel, "pending", expiresAt);
+                return new OrderCreation(orderNo, false);
+            } catch (DuplicateKeyException collision) {
+                if (attempt == REFERENCE_INSERT_ATTEMPTS) {
+                    throw new IllegalStateException("支付订单创建繁忙，请稍后重试", collision);
+                }
+                log.warn("支付订单号冲突，正在重试 attempt={}", attempt);
+            }
+        }
+        throw new IllegalStateException("支付订单创建繁忙，请稍后重试");
     }
 
     private Map<String, Object> createdOrderView(String orderNo, Long userId, String channel, boolean reused) throws Exception {
@@ -775,7 +798,7 @@ public class PaymentController {
     private String exchangeMiniProgramCode(String code) throws Exception {
         String url = "https://api.weixin.qq.com/sns/jscode2session?appid=" + encode(wechatAppId)
                 + "&secret=" + encode(wechatMiniAppSecret) + "&js_code=" + encode(code) + "&grant_type=authorization_code";
-        HttpResponse<String> response = http.send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = http.send(httpRequest(URI.create(url), WECHAT_SESSION_TIMEOUT).GET().build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() != 200) throw new IllegalStateException("微信登录凭证校验服务不可用");
         JsonNode root = mapper.readTree(response.body());
         if (root.path("errcode").asInt(0) != 0 || blank(root.path("openid").asText())) {
@@ -972,11 +995,10 @@ public class PaymentController {
         if (consumedAfterPayment != null && consumedAfterPayment > 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "充值后已有创作额度消费或预留，不能自动退款；请人工处理售后");
         }
-        String refundNo = newRefundNo();
         BigDecimal after = balance.subtract(credits);
+        String refundNo = insertRefundRequest(orderNo, userId, toLong(order.get("amount_fen")), credits,
+                blank(reason) ? null : reason, adminUserId);
         jdbc.update("UPDATE consumer_credit_account SET balance=?,frozen_balance=frozen_balance+? WHERE user_id=?", after, credits, userId);
-        jdbc.update("INSERT INTO payment_refund(refund_no,order_no,user_id,amount_fen,credit_amount,status,reason,requested_by) VALUES (?,?,?,?,?,?,?,?)",
-                refundNo, orderNo, userId, toLong(order.get("amount_fen")), credits, "refund_requested", blank(reason) ? null : reason, adminUserId);
         jdbc.update("INSERT INTO consumer_credit_transaction(transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 "RFD-" + refundNo, userId, "payment_refund", credits, "out", "pending", balance, after,
                 "微信退款额度冻结 " + orderNo, String.valueOf(adminUserId));
@@ -1006,14 +1028,35 @@ public class PaymentController {
         }
         Integer existing = jdbc.queryForObject("SELECT COUNT(*) FROM payment_refund WHERE order_no=?", Integer.class, orderNo);
         if (existing != null && existing > 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "该订单已有退款记录，不能重复发起");
-        String refundNo = newRefundNo();
         Long userId = toLong(order.get("user_id"));
-        jdbc.update("INSERT INTO payment_refund(refund_no,order_no,user_id,amount_fen,credit_amount,status,reason,requested_by) VALUES (?,?,?,?,?,?,?,?)",
-                refundNo, orderNo, userId, toLong(order.get("amount_fen")), BigDecimal.ZERO, "refund_requested",
+        String refundNo = insertRefundRequest(orderNo, userId, toLong(order.get("amount_fen")), BigDecimal.ZERO,
                 blank(reason) ? "未入账支付异常退款" : reason, adminUserId);
         jdbc.update("UPDATE payment_order SET status='refund_requested' WHERE order_no=? AND status='payment_exception'", orderNo);
         return new RefundPreparation(refundNo, orderNo, userId, toLong(order.get("amount_fen")), BigDecimal.ZERO,
                 nullableText(metaRows.get(0).get("transaction_id")), reason);
+    }
+
+    /**
+     * The order row is locked by the caller, so concurrent refunds for the
+     * same payment remain serialized. This retry only covers the extremely
+     * unlikely global refund-number collision between different orders.
+     */
+    private String insertRefundRequest(String orderNo, Long userId, long amountFen, BigDecimal credits,
+                                       String reason, Long adminUserId) {
+        for (int attempt = 1; attempt <= REFERENCE_INSERT_ATTEMPTS; attempt++) {
+            String refundNo = newRefundNo();
+            try {
+                jdbc.update("INSERT INTO payment_refund(refund_no,order_no,user_id,amount_fen,credit_amount,status,reason,requested_by) VALUES (?,?,?,?,?,?,?,?)",
+                        refundNo, orderNo, userId, amountFen, credits, "refund_requested", reason, adminUserId);
+                return refundNo;
+            } catch (DuplicateKeyException collision) {
+                if (attempt == REFERENCE_INSERT_ATTEMPTS) {
+                    throw new IllegalStateException("退款单创建繁忙，请稍后重试", collision);
+                }
+                log.warn("退款单号冲突，正在重试 attempt={}", attempt);
+            }
+        }
+        throw new IllegalStateException("退款单创建繁忙，请稍后重试");
     }
 
     private Map<String, Object> submitRefund(RefundPreparation preparation) {
@@ -1388,7 +1431,7 @@ public class PaymentController {
         String timestamp = String.valueOf(Instant.now().getEpochSecond());
         String message = "GET\n" + rawPath + "\n" + timestamp + "\n" + nonce + "\n\n";
         String authorization = "WECHATPAY2-SHA256-RSA2048 mchid=\"" + wechatMchId + "\",nonce_str=\"" + nonce + "\",timestamp=\"" + timestamp + "\",serial_no=\"" + wechatSerialNo + "\",signature=\"" + sign(message, merchantPrivateKey()) + "\"";
-        HttpRequest request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(60))
+        HttpRequest request = httpRequest(uri, WECHAT_BILL_TIMEOUT)
                 .header("Accept", "text/csv,application/octet-stream").header("Authorization", authorization).GET().build();
         HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
         if (response.statusCode() < 200 || response.statusCode() >= 300 || response.body().length == 0) throw new IllegalStateException("微信账单下载失败");
@@ -1740,7 +1783,7 @@ public class PaymentController {
         String safeBody = body == null ? "" : body;
         String message = method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + safeBody + "\n";
         String authorization = "WECHATPAY2-SHA256-RSA2048 mchid=\"" + wechatMchId + "\",nonce_str=\"" + nonce + "\",timestamp=\"" + timestamp + "\",serial_no=\"" + wechatSerialNo + "\",signature=\"" + sign(message, merchantPrivateKey()) + "\"";
-        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create("https://api.mch.weixin.qq.com" + path)).timeout(Duration.ofSeconds(15))
+        HttpRequest.Builder builder = httpRequest(URI.create("https://api.mch.weixin.qq.com" + path), WECHAT_TRANSACTION_TIMEOUT)
                 .header("Accept", "application/json")
                 .header("Authorization", authorization);
         if ("GET".equals(method)) builder.GET();
@@ -2060,8 +2103,19 @@ public class PaymentController {
     private String nullableText(Object value) { return value == null ? "" : String.valueOf(value).trim(); }
     private long toLong(Object value) { try { return new BigDecimal(String.valueOf(value)).longValueExact(); } catch (Exception e) { throw new IllegalArgumentException("金额字段无效"); } }
     private BigDecimal decimal(Object value) { try { return value instanceof BigDecimal ? (BigDecimal) value : new BigDecimal(String.valueOf(value)); } catch (Exception e) { throw new IllegalArgumentException("金额字段无效"); } }
-    private String newOrderNo() { return "PAY" + DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS").format(LocalDateTime.now()) + String.format("%04d", new Random().nextInt(10000)); }
-    private String newRefundNo() { return "RFD" + DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS").format(LocalDateTime.now()) + String.format("%04d", new Random().nextInt(10000)); }
+    private HttpRequest.Builder httpRequest(URI uri, Duration timeout) {
+        return HttpRequest.newBuilder(uri).timeout(timeout);
+    }
+    private String newOrderNo() { return newPaymentReference("PAY"); }
+    private String newRefundNo() { return newPaymentReference("RFD"); }
+    private String newPaymentReference(String prefix) {
+        // 3-char prefix + base36 millisecond time + unsigned 64-bit random
+        // suffix stays below WeChat's 32-character out_trade_no limit while
+        // providing process-safe, cross-node collision resistance.
+        String time = Long.toString(System.currentTimeMillis(), 36).toUpperCase(Locale.ROOT);
+        String random = Long.toUnsignedString(ThreadLocalRandom.current().nextLong(), 36).toUpperCase(Locale.ROOT);
+        return prefix + time + random;
+    }
     private String randomNonce() { return UUID.randomUUID().toString().replace("-", ""); }
     private String wechatTimeExpire(String orderNo) {
         List<LocalDateTime> rows = jdbc.query("SELECT expired_at FROM payment_order WHERE order_no=?", (rs, rowNum) -> {
