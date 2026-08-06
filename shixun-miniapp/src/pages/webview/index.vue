@@ -37,26 +37,25 @@ function consumerWebUrl(): string {
   const configured = String(import.meta.env.VITE_CONSUMER_WEB_URL || DEFAULT_CONSUMER_WEB_URL).trim()
   if (!configured) return ''
 
-  try {
-    const url = new URL(configured)
-    // WeChat web-view only accepts HTTPS business domains in release builds.
-    // Rejecting accidental localhost/http values here gives users a useful
-    // fallback page instead of an opaque WeChat network error.
-    if (url.protocol !== 'https:' || !url.hostname) return ''
-    // Keep the client marker in the query (it is not a secret), while the
-    // bearer token is put in the fragment below.  Fragments are not sent to
-    // the H5 server and are removed by the H5 bootstrap bridge immediately.
-    url.searchParams.set('client', 'wechat-miniapp')
-    const session = uni.getStorageSync('smart_pig_auth') as { token?: string } | null
-    const token = String(session?.token || '').trim()
-    nativeTokenPending.value = !!token
-    url.hash = token
-      ? `#miniapp=1&access_token=${encodeURIComponent(token)}`
-      : '#miniapp=1'
-    return url.toString()
-  } catch {
-    return ''
-  }
+  // Do not use the browser URL constructor here. It is not guaranteed to be
+  // available in every WeChat Mini Program runtime; an unavailable global
+  // would make this page fall back before <web-view> is even created.
+  const baseUrl = configured.split('#', 1)[0]
+  if (!/^https:\/\/[a-z0-9.-]+(?::\d+)?(?:[/?]|$)/i.test(baseUrl)) return ''
+
+  // Keep the client marker in the query (it is not a secret), while the
+  // bearer token is put in the fragment below. Fragments are not sent to the
+  // H5 server and are removed by the H5 bootstrap bridge immediately.
+  const hasClientMarker = /(?:[?&])client=wechat-miniapp(?:[&#]|$)/.test(baseUrl)
+  const pageUrl = hasClientMarker
+    ? baseUrl
+    : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}client=wechat-miniapp`
+  const session = uni.getStorageSync('smart_pig_auth') as { token?: string } | null
+  const token = String(session?.token || '').trim()
+  nativeTokenPending.value = !!token
+  return token
+    ? `${pageUrl}#miniapp=1&access_token=${encodeURIComponent(token)}`
+    : `${pageUrl}#miniapp=1`
 }
 
 function loadConsumerPage() {
@@ -78,7 +77,10 @@ function handleLoad() {
   nativeTokenPending.value = false
 }
 
-function handleError() {
+function handleError(event: any) {
+  // Keep the detailed reason in the developer-tool console without exposing
+  // implementation details to end users on the fallback screen.
+  console.error('[Smart Pig] web-view failed to load', event?.detail || event)
   failed.value = true
 }
 
