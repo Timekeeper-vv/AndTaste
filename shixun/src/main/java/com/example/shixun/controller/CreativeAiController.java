@@ -609,12 +609,12 @@ public class CreativeAiController {
                 + "The prompt value must be English only; translate all Chinese product names, place names, materials, patterns and style words into natural English. Do not include Chinese characters in prompt unless the user explicitly requests visible Chinese label text on the model. "
                 + "The usageTips value must be Chinese, short and practical for the operator. "
                 + "The prompt must preserve the user's subject and practical use, avoid abstract adjectives alone, and describe concrete geometry, silhouette, materials, surface details, topology and production-ready 3D asset qualities. "
-                + "Always include clean topology, watertight mesh, no floating parts, ultra-detailed 3D asset, sharp geometry, 8k PBR textures, professional product visualization. "
-                + "Negative prompt should include low poly, blurry, flat texture, deformed, asymmetric, noisy mesh, broken topology, floating parts. "
+                + "Always include clean topology, watertight mesh, no floating parts, ultra-detailed 3D asset, sharp geometry, 8k PBR textures, professional product visualization. Preserve every <<3D_CRAFT_LOCK>> instruction from the user exactly in meaning: flat color, vector-style decorative artwork, simple shapes, thick outlines, no graphic gradients, sticker/decal-ready artwork and orthographic reference view. These rules apply to artwork, not to natural PBR reflections of the chosen material. "
+                + "Negative prompt should include low poly, blurry, untextured blank surface, deformed, asymmetric, noisy mesh, broken topology, floating parts. "
                 + "Selected template: " + tripo3dTemplateName(template) + ". Template rules: " + tripo3dTemplateInstruction(template);
         String content = callChat(system, req.prompt.trim()).trim();
         String optimized;
-        String negative = "low poly, blurry, flat texture, deformed, asymmetric, noisy mesh, broken topology, floating parts, melted details, plastic look";
+        String negative = "low poly, blurry, untextured blank surface, deformed, asymmetric, noisy mesh, broken topology, floating parts, melted details, plastic look";
         String usageTips = tripo3dTemplateTips(template);
         try {
             String json = content;
@@ -628,6 +628,7 @@ public class CreativeAiController {
             optimized = content.replaceAll("(?is)^```[a-z]*", "").replaceAll("(?is)```$", "").trim();
         }
         if(blank(optimized)) throw new IllegalStateException("Qwen3未返回有效3D提示词");
+        optimized = enforce3dCraftConstraint(optimized);
         if(optimized.length()>1024) optimized=optimized.substring(0,1024);
         if(negative.length()>255) negative=negative.substring(0,255);
         if(usageTips.length()>500) usageTips=usageTips.substring(0,500);
@@ -1199,6 +1200,7 @@ public class CreativeAiController {
         Map<String,Object> taskBody = new LinkedHashMap<>();
         taskBody.put("model", selectedModel);
         Long primaryInputAssetId = req.inputAssetId;
+        String finalTextPrompt = null;
         Long creditTxId = consumerRequest ? reserveConsumerCredit(consumerUserId,"text_to_model".equals(mode)?"text_to_3d":"image_to_3d",consumerCreditCost("text_to_model".equals(mode)?"text_to_3d":"image_to_3d"),"C端3D生成预扣") : null;
 
         try {
@@ -1206,8 +1208,10 @@ public class CreativeAiController {
                 if(blank(req.prompt)) throw new IllegalArgumentException("文生3D模式必须填写模型描述");
                 if(req.prompt.trim().length() > 1024) throw new IllegalArgumentException("模型描述不能超过1024个字符");
                 if(!blank(req.negativePrompt) && req.negativePrompt.trim().length() > 255) throw new IllegalArgumentException("反向提示词不能超过255个字符");
-                String textPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+                String textPrompt = enforce3dCraftConstraint(enforceMaterialConstraint(req.prompt, req.productCategory, req.material));
                 if (!blank(req.materialPrompt)) textPrompt = textPrompt + ", material and surface finish: " + req.materialPrompt.trim();
+                if(textPrompt.length() > 1024) textPrompt = textPrompt.substring(0, 1024);
+                finalTextPrompt = textPrompt;
                 taskBody.put("prompt", textPrompt);
                 if(!blank(req.negativePrompt)) taskBody.put("negative_prompt", req.negativePrompt.trim());
             } else if("multiview_to_model".equals(mode)) {
@@ -1245,7 +1249,7 @@ public class CreativeAiController {
 
             String jobNo = no("T3D");
             String materialNote = blank(req.materialLabel) ? "" : "期望材质/表面质感：" + req.materialLabel;
-            String storedPrompt = "text_to_model".equals(mode) ? req.prompt : materialNote;
+            String storedPrompt = "text_to_model".equals(mode) ? finalTextPrompt : materialNote;
             if ("text_to_model".equals(mode) && !blank(materialNote)) storedPrompt = (storedPrompt == null ? "" : storedPrompt) + "；" + materialNote;
             String storedNegativePrompt = "text_to_model".equals(mode) ? req.negativePrompt : "";
             Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
@@ -2259,6 +2263,16 @@ public class CreativeAiController {
         return base + "\n<<MATERIAL_LOCK>>Primary product material is " + material.trim()
                 + " for this " + category
                 + ". This is mandatory: render authentic material texture, surface finish, edge treatment, and realistic light response; do not substitute another primary material.<</MATERIAL_LOCK>>";
+    }
+
+    // The design constraint is kept at the API boundary as well as in the UI. This
+    // prevents a direct client call from silently dropping the production-art rules.
+    private String enforce3dCraftConstraint(String prompt) {
+        String base = nullToEmpty(prompt).trim();
+        if (base.contains("<<3D_CRAFT_LOCK>>")) return base;
+        String lock = "<<3D_CRAFT_LOCK>>Artwork only: flat color, vector art style, simple shapes, thick outlines, no gradient, sticker design, orthographic front view. Preserve the selected physical material and PBR reflections. Use watertight production geometry with no floating parts.<</3D_CRAFT_LOCK>>";
+        int remaining = Math.max(0, 1024 - lock.length() - (blank(base) ? 0 : 1));
+        return lock + (blank(base) ? "" : "\n" + base.substring(0, Math.min(base.length(), remaining)));
     }
 
     private int[] jimengDimensions(String aspect, String size) {

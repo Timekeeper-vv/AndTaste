@@ -195,6 +195,21 @@ function withMaterialConstraint(prompt: string, includeModelSurface = false, max
   const remaining = Math.max(0, maxLength - lock.length - (clean ? 1 : 0))
   return `${lock}${clean ? `，${clean.slice(0, remaining)}` : ''}`
 }
+
+// This is deliberately a graphic-art constraint, rather than a material constraint:
+// flat colour and no gradients describe the decorative artwork, while the selected
+// physical material is still allowed to retain its natural PBR light response.
+const MODEL_CRAFT_LOCK = '<<3D_CRAFT_LOCK>>Artwork only: flat color, vector art style, simple shapes, thick outlines, no gradient, sticker design, orthographic front view. Preserve the selected physical material and PBR reflections. Use watertight production geometry with no floating parts.<</3D_CRAFT_LOCK>>'
+function with3dCraftConstraint(prompt: string, maxLength = 1024) {
+  const clean = String(prompt || '')
+    .replace(/(?:[，,]\s*)?<<3D_CRAFT_LOCK>>[\s\S]*?<<\/3D_CRAFT_LOCK>>/g, '')
+    .replace(/(?:[，,]\s*)?<<MATERIAL_LOCK>>[\s\S]*?<<\/MATERIAL_LOCK>>/g, '')
+    .replace(/[，,。；;\s]+$/, '')
+  // Reserve space for the craft lock before applying the material lock, so both
+  // instructions reach Tripo even when a user writes a long description.
+  const materialLocked = withMaterialConstraint(clean, true, Math.max(1, maxLength - MODEL_CRAFT_LOCK.length - 1))
+  return `${MODEL_CRAFT_LOCK}\n${materialLocked}`.slice(0, maxLength)
+}
 const productionAssessment = ref<any | null>(null)
 const rightsServiceOpen = ref(false)
 const rightsService = ref('')
@@ -1384,14 +1399,14 @@ async function optimizeModelPrompt() {
   const r = await fetch('/api/creative/ai/prompt/tripo-3d-optimize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: withMaterialConstraint(`${modelForm.rawPrompt}；产品类别：${productProfile.value.label}`, true, 1024), promptTemplate: modelForm.promptTemplate, productCategory: productProfile.value.label, material: selectedMaterial.value }),
+    body: JSON.stringify({ prompt: with3dCraftConstraint(`${modelForm.rawPrompt}；产品类别：${productProfile.value.label}`, 1024), promptTemplate: modelForm.promptTemplate, productCategory: productProfile.value.label, material: selectedMaterial.value }),
   })
   if (!r.ok) {
     const err = await r.json().catch(() => null)
     throw new Error(err?.message || `HTTP ${r.status}`)
   }
   const d = await r.json()
-  modelForm.prompt = withMaterialConstraint(d.prompt || modelForm.rawPrompt, true, 1024)
+  modelForm.prompt = with3dCraftConstraint(d.prompt || modelForm.rawPrompt, 1024)
 }
 
 async function generateModel() {
@@ -1417,9 +1432,9 @@ async function generateModel() {
       mode: modelForm.mode,
       modelVersion: CONSUMER_TRIPO_MODEL_VERSION,
       promptTemplate: isImageToModel ? '' : modelForm.promptTemplate,
-      rawPrompt: isImageToModel ? '' : withMaterialConstraint(modelForm.rawPrompt, true, 1024),
-      prompt: isImageToModel ? '' : withMaterialConstraint(modelForm.prompt || modelForm.rawPrompt, true, 1024),
-      negativePrompt: isImageToModel ? '' : 'low poly, blurry, flat texture, deformed, asymmetric, noisy mesh',
+      rawPrompt: isImageToModel ? '' : with3dCraftConstraint(modelForm.rawPrompt, 1024),
+      prompt: isImageToModel ? '' : with3dCraftConstraint(modelForm.prompt || modelForm.rawPrompt, 1024),
+      negativePrompt: isImageToModel ? '' : 'low poly, blurry, untextured blank surface, deformed, asymmetric, noisy mesh',
       materialLabel: modelForm.materialLabel,
       materialPrompt: modelForm.materialPrompt,
       material: selectedMaterial.value,
@@ -2063,7 +2078,7 @@ function closeModelPreview() {
       </header>
             <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small class="material-prompt-proof">已写入 AI 生成提示词 · {{ materialPromptSummary }}</small><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
       <div class="model-mode-switch three-modes"><button type="button" :class="{active:modelForm.mode==='image_to_model'}" @click="modelForm.mode='image_to_model'"><b>图片生成 3D</b><span>上传产品图，快速建立立体原型</span></button><button type="button" :class="{active:modelForm.mode==='multiview_to_model'}" @click="modelForm.mode='multiview_to_model'"><b>多视图生成 3D</b><span>上传多个视角，模型更完整</span></button><button type="button" :class="{active:modelForm.mode==='text_to_model'}" @click="modelForm.mode='text_to_model'"><b>文字生成 3D</b><span>用描述直接构建产品模型</span></button></div>
-      <section class="material-picker"><div><span>表面材质偏好</span><b>选择模型的视觉材质与 PBR 表面质感</b><small>产品具体材质与这里的表面质感都会写入实际 3D 提示词；图生 / 多视图以输入图为主，材质目标会同步提交给建模任务。</small></div><div class="material-chips"><button v-for="item in materialOptions" :key="item.label" type="button" :class="{ active: modelForm.materialLabel===item.label }" @click="chooseModelMaterial(item.label)">{{ item.label }}</button></div></section>
+      <section class="material-picker"><div><span>表面材质偏好</span><b>选择模型的视觉材质与 PBR 表面质感</b><small>产品具体材质与这里的表面质感都会写入实际 3D 提示词；图生 / 多视图以输入图为主，材质目标会同步提交给建模任务。</small><small class="material-prompt-proof">3D 图案工艺约束已启用：扁平色块、矢量图案、粗描边、无渐变、贴纸化图案与正交参考视图；真实材质反光会保留。</small></div><div class="material-chips"><button v-for="item in materialOptions" :key="item.label" type="button" :class="{ active: modelForm.materialLabel===item.label }" @click="chooseModelMaterial(item.label)">{{ item.label }}</button></div></section>
       <div class="model-workspace">
         <div v-if="modelForm.mode==='image_to_model'" class="model-upload-pane"><label class="upload-box redesign-upload"><input type="file" accept="image/*" @change="uploadReference" /><img v-if="uploadPreviewUrl" :src="uploadPreviewUrl" alt="3D参考图" /><span v-else><i>＋</i><b>上传一张产品参考图</b><small>PNG / JPG / WEBP，主体越清晰，3D 效果越好</small></span></label><div class="model-note"><b>图生 3D 的优势</b><span>保留产品的主体轮廓与视觉特征，适合已有图片的文创快速建模。</span></div></div>
         <div v-else-if="modelForm.mode==='multiview_to_model'" class="multiview-pane"><div class="multiview-head"><div><span>MULTI-VIEW CAPTURE</span><b>上传同一产品的多个视角</b></div><small>至少上传正面图 + 任意一个侧面图</small></div><div class="multiview-grid"><label v-for="view in ['front','left','back','right']" :key="view" class="multiview-slot" :class="{ ready: modelForm.multiviewAssetIds[view as 'front' | 'left' | 'back' | 'right'] }"><input type="file" accept="image/*" @change="uploadReference($event, view as 'front' | 'left' | 'back' | 'right')" /><img v-if="multiviewPreviewUrls[view as 'front' | 'left' | 'back' | 'right']" :src="multiviewPreviewUrls[view as 'front' | 'left' | 'back' | 'right']" :alt="`${view}视图`" /><template v-else><i>{{ ({ front: '正', left: '左', back: '后', right: '右' } as any)[view] }}</i><b>{{ ({ front: '正面图', left: '左侧图', back: '背面图', right: '右侧图' } as any)[view] }}</b><small>{{ view==='front' ? '必传' : '可选，建议上传' }}</small></template><em v-if="modelForm.multiviewAssetIds[view as 'front' | 'left' | 'back' | 'right']">已上传</em></label></div><div class="model-note multiview-note"><b>多视图建模优势</b><span>多个角度能让 AI 更准确识别厚度、侧面结构和背部细节，生成结果通常比单图更完整。</span></div></div>
