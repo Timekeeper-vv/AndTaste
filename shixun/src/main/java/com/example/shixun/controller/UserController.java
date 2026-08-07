@@ -464,6 +464,30 @@ public class UserController {
         return result;
     }
 
+    /**
+     * Completes first-time mini-program login with WeChat's official phone
+     * authorization code. The phone number is never accepted from the client.
+     */
+    @PostMapping("/wechat-phone-login")
+    @Operation(summary = "微信授权手机号登录")
+    public ResponseEntity<Map<String, Object>> wechatPhoneLogin(@RequestBody(required = false) Map<String, Object> body) throws Exception {
+        String loginCode = text(body == null ? null : body.get("loginCode"));
+        String phoneCode = text(body == null ? null : body.get("phoneCode"));
+        if (!validWechatCode(loginCode) || !validWechatCode(phoneCode)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信授权凭证无效，请重新授权手机号");
+        }
+        WechatIdentity identity = exchangeWechatCode(loginCode);
+        String phone = exchangeWechatPhoneCode(phoneCode);
+        ResponseEntity<Map<String, Object>> result = completeWechatPhoneLogin(identity, phone, body);
+        if (result.getStatusCode().is2xxSuccessful()) {
+            String miniWebLoginSession = text(body == null ? null : body.get("miniWebLoginSession"));
+            if (miniWebLoginSession != null) {
+                authorizeMiniWebLoginSession(miniWebLoginSession, (User) result.getBody().get("user"));
+            }
+        }
+        return result;
+    }
+
     private boolean hasWechatProfile(Map<String, Object> body) {
         return body != null
                 && !blank(text(body.get("username")))
@@ -530,6 +554,60 @@ public class UserController {
         });
     }
 
+    private ResponseEntity<Map<String, Object>> completeWechatPhoneLogin(
+            WechatIdentity identity, String phone, Map<String, Object> body) {
+        ensureWechatBindingTable();
+        WechatLoginOutcome outcome;
+        try {
+            outcome = loginWithWechatPhoneIdentity(identity, phone, body);
+        } catch (DuplicateKeyException collision) {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role "
+                            + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
+                            + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
+                    identity.appId(), identity.openId());
+            if (rows.isEmpty()) throw collision;
+            outcome = new WechatLoginOutcome(userFromRow(rows.get(0)), false);
+        }
+        return loginResponse(outcome.user());
+    }
+
+    private WechatLoginOutcome loginWithWechatPhoneIdentity(
+            WechatIdentity identity, String phone, Map<String, Object> body) {
+        return transactions.execute(status -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role "
+                            + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
+                            + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
+                    identity.appId(), identity.openId());
+            if (!rows.isEmpty()) {
+                User existing = userFromRow(rows.get(0));
+                if (!"user".equals(existing.getRole())) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, "该微信账号不能登录用户端");
+                }
+                jdbc.update("UPDATE user SET phone=? WHERE id=?", phone, existing.getId());
+                existing.setPhone(phone);
+                return new WechatLoginOutcome(existing, false);
+            }
+
+            if (!yes(body == null ? null : body.get("agreeTerms"))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先同意用户服务与隐私说明");
+            }
+            User created = createWechatPhoneUser(identity, phone);
+            userService.createSocialUser(created);
+            recordComplianceConsent(created.getId(), Map.of(
+                    "agreeDisclaimer", true,
+                    "agreeConfidentiality", true,
+                    "agreeContentPolicy", true,
+                    "realNameAcknowledged", true,
+                    "complianceSignature", "微信手机号授权"));
+            jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
+                    created.getId(), identity.appId(), identity.openId());
+            synchronizePlatformIdentity(created);
+            return new WechatLoginOutcome(created, false);
+        });
+    }
+
     private ResponseEntity<Map<String, Object>> loginResponse(User user) {
         return ResponseEntity.ok(Map.of(
                 "token", jwtService.issue(user),
@@ -554,6 +632,19 @@ public class UserController {
                 || !yes(body.get("agreeContentPolicy")) || !yes(body.get("realNameAcknowledged"))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成全部使用确认");
         }
+        return user;
+    }
+
+    private User createWechatPhoneUser(WechatIdentity identity, String phone) {
+        String suffix = Integer.toUnsignedString(identity.openId().hashCode(), 36);
+        User user = new User();
+        user.setUsername("wx_" + suffix);
+        user.setPhone(phone);
+        user.setEmail("wx-" + suffix + "@users.zhijiansk.com");
+        user.setAge(18);
+        user.setRole("user");
+        user.setPassword(UUID.randomUUID() + UUID.randomUUID().toString());
+        validateUser(user);
         return user;
     }
 
@@ -640,6 +731,42 @@ public class UserController {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "微信网站登录响应无效");
         }
         return new WechatIdentity(wechatWebAppId, openId);
+    }
+
+    private String exchangeWechatPhoneCode(String code) throws Exception {
+        String accessToken = miniProgramAccessToken();
+        String body = mapper.writeValueAsString(Map.of("code", code));
+        HttpResponse<String> response;
+        try {
+            response = wechatHttp.send(HttpRequest.newBuilder(URI.create(
+                    "https://api.weixin.qq.com/wxa/business/getuserphonenumber?access_token=" + encode(accessToken)))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (Exception error) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信手机号服务暂时不可用，请稍后重试");
+        }
+        if (response.statusCode() != 200) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信手机号服务暂时不可用，请稍后重试");
+        }
+        JsonNode root = mapper.readTree(response.body());
+        int errorCode = root.path("errcode").asInt(0);
+        if (errorCode != 0) {
+            log.warn("微信手机号授权换取失败 errcode={}", errorCode);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信手机号授权已失效，请重新点击授权");
+        }
+        JsonNode phoneInfo = root.path("phone_info");
+        String phone = phoneInfo.path("purePhoneNumber").asText("").trim();
+        if (phone.isEmpty()) phone = phoneInfo.path("phoneNumber").asText("").trim();
+        if (!phone.matches("^[0-9+()\\-\\s]{6,30}$")) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "微信未返回有效手机号，请重新授权");
+        }
+        return phone;
+    }
+
+    private boolean validWechatCode(String code) {
+        return code != null && code.length() >= 6 && code.length() <= 512 && !code.contains(" ");
     }
 
     private String createMiniProgramLoginCode(String sessionId) throws Exception {
