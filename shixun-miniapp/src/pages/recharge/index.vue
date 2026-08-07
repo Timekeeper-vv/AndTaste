@@ -63,6 +63,7 @@ import {
   getPackages,
   getPaymentOrder,
   getPaymentOrders,
+  getWechatPaymentParams,
   type PaymentOrder,
   type WechatJsapiPaymentParams,
 } from '../../api/creative'
@@ -97,6 +98,8 @@ const isWechatJsapiOrder = computed(() => paymentOrder.value?.channel === 'wecha
 const paymentButtonText = computed(() => {
   if (!paymentEnabled.value) return '支付暂不可用'
   if (!selected.value) return '请选择套餐'
+  const pending = pendingJsapiOrder()
+  if (pending) return `继续支付 ¥${orderAmount(pending)}`
   return `微信支付 ¥${packageAmount(selected.value)}`
 })
 const paymentStateIcon = computed(() => ({
@@ -123,6 +126,9 @@ const paymentStateTitle = computed(() => ({
 const rows = (payload: any) => Array.isArray(payload) ? payload : (Array.isArray(payload?.items) ? payload.items : [])
 const packageAmount = (pkg: any) => moneyText(pkg?.amountYuan, pkg?.amountFen)
 const orderAmount = (order: any) => moneyText(order?.amountYuan, order?.amountFen)
+const pendingJsapiOrder = () => orders.value.find((item: PaymentOrder) => (
+  item.channel === 'wechat_jsapi' && item.status === 'pending'
+)) as PaymentOrder | undefined
 const paymentStatusText = (status?: string) => ({
   pending: '待支付',
   manual_review: '待人工核验',
@@ -197,15 +203,55 @@ async function recoverUncertainWechatOrder() {
       && ['pending', 'payment_exception'].includes(item.status || '')
     )) as PaymentOrder | undefined
     if (!latest) return false
-    paymentOrder.value = latest
-    paymentIntent.value = latest.status === 'payment_exception' ? 'exception' : 'awaiting_callback'
-    paymentHint.value = latest.status === 'payment_exception'
-      ? '支付请求结果正在由服务器与微信核对。请勿重复付款、改用人工收款码或创建新订单。'
-      : '已恢复待确认订单，正在向服务器查询微信支付结果，请勿重复付款。'
-    if (latest.status === 'pending') startPaymentPolling()
+    if (latest.status === 'payment_exception') {
+      paymentOrder.value = latest
+      paymentIntent.value = 'exception'
+      paymentHint.value = '支付结果正在由服务器核对，请勿重复付款。'
+      return true
+    }
+    const resumable = await getWechatPaymentParams(latest.orderNo)
+    if (resumable.status !== 'pending') return false
+    await launchWechatPayment(resumable, true)
     return true
   } catch {
     return false
+  }
+}
+
+function confirmResumePendingPayment(order: PaymentOrder): Promise<boolean> {
+  if (!selected.value || order.packageCode === selected.value.code) return Promise.resolve(true)
+  return new Promise(resolve => {
+    uni.showModal({
+      title: '存在待支付订单',
+      content: `当前有一笔 ¥${orderAmount(order)} 的待支付订单。为避免重复扣款，本次将继续支付该订单。`,
+      confirmText: '继续支付',
+      cancelText: '暂不支付',
+      success: result => resolve(result.confirm),
+      fail: () => resolve(false),
+    })
+  })
+}
+
+async function resumePendingWechatPayment() {
+  const pending = pendingJsapiOrder()
+  if (!pending) return false
+  if (!(await confirmResumePendingPayment(pending))) return true
+
+  creatingOrder.value = true
+  try {
+    const latest = await getWechatPaymentParams(pending.orderNo)
+    if (latest.status !== 'pending') {
+      await loadData(false)
+      uni.showToast({ title: '待支付订单状态已更新，请重新选择套餐', icon: 'none' })
+      return false
+    }
+    await launchWechatPayment(latest, true)
+    return true
+  } catch (error: any) {
+    uni.showToast({ title: error.message || '无法恢复待支付订单，请刷新后重试', icon: 'none' })
+    return true
+  } finally {
+    creatingOrder.value = false
   }
 }
 
@@ -250,6 +296,29 @@ function requestWechatPayment(params: WechatJsapiPaymentParams): Promise<void> {
     reject(new Error('请在微信小程序内完成微信支付'))
     // #endif
   })
+}
+
+async function launchWechatPayment(order: PaymentOrder, resuming = false) {
+  paymentOrder.value = order
+  paymentIntent.value = 'launching'
+  paymentHint.value = resuming ? '正在重新唤起支付...' : '请在微信支付页面完成付款。'
+  requestingPayment.value = true
+  try {
+    await requestWechatPayment(requirePaymentParams(order))
+    // The client callback is not an accounting signal. Only the signed server
+    // callback can mark credits as paid.
+    paymentIntent.value = 'awaiting_callback'
+    paymentHint.value = '支付已受理，正在等待结果确认，请勿重复支付。'
+  } catch (error: any) {
+    paymentIntent.value = paymentWasCancelled(error) ? 'cancelled' : 'failed'
+    paymentHint.value = paymentIntent.value === 'cancelled'
+      ? '本次支付已取消。可再次点击支付按钮继续完成当前订单。'
+      : '未能调起或完成支付。若未发生扣款，可再次点击支付按钮继续当前订单。'
+  } finally {
+    requestingPayment.value = false
+    // A callback may race with either a completed or cancelled client action.
+    startPaymentPolling()
+  }
 }
 
 function paymentWasCancelled(error: any) {
@@ -338,28 +407,7 @@ async function createWechatPaymentOrder() {
 
     const order = await createPaymentOrder(selected.value.code, 'wechat_jsapi')
     newlyCreatedOrder = order
-    paymentOrder.value = order
-    const params = requirePaymentParams(order)
-    paymentIntent.value = 'launching'
-    paymentHint.value = '请在微信支付页面完成付款。'
-
-    requestingPayment.value = true
-    try {
-      await requestWechatPayment(params)
-      // Do not mark the order paid here. Only the server-side WeChat callback is authoritative.
-      paymentIntent.value = 'awaiting_callback'
-      paymentHint.value = '微信已受理支付，正在等待官方支付结果确认，请勿重复支付。'
-      startPaymentPolling()
-    } catch (error: any) {
-      paymentIntent.value = paymentWasCancelled(error) ? 'cancelled' : 'failed'
-      paymentHint.value = paymentIntent.value === 'cancelled'
-        ? '本次支付已取消。若微信账单显示已扣款，请等待回调后再刷新订单。'
-        : '未能调起或完成微信支付。若未发生扣款，可稍后重新发起支付。'
-      // A callback can race with the client result, so check the server briefly either way.
-      startPaymentPolling()
-    } finally {
-      requestingPayment.value = false
-    }
+    await launchWechatPayment(order)
   } catch (error: any) {
     if (newlyCreatedOrder) {
       paymentOrder.value = newlyCreatedOrder
@@ -377,6 +425,7 @@ async function createWechatPaymentOrder() {
 
 async function startPayment() {
   if (!selected.value || !paymentEnabled.value || !requireSession()) return
+  if (await resumePendingWechatPayment()) return
   await createWechatPaymentOrder()
 }
 

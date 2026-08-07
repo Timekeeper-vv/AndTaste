@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -364,6 +365,39 @@ public class PaymentController {
             @PathVariable String orderNo) {
         Long userId = requireConsumer(principal);
         return orderView(orderNo, userId);
+    }
+
+    @PostMapping("/orders/{orderNo}/payment-params")
+    public Map<String, Object> paymentParams(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+            @PathVariable String orderNo) throws Exception {
+        Long userId = requireConsumer(principal);
+        Map<String, Object> result = orderView(orderNo, userId);
+        // A pending JSAPI order may be resumed after the user cancels or the
+        // client is interrupted. Generate a fresh client signature only for
+        // the authenticated owner; never create a second provider trade.
+        if (!"wechat_jsapi".equals(String.valueOf(result.get("channel")))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该订单不支持小程序支付");
+        }
+        if (!"pending".equals(String.valueOf(result.get("status")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "该订单当前不可继续支付");
+        }
+        addJsapiPaymentParams(result, orderNo, userId);
+        return result;
+    }
+
+    /**
+     * Spring Boot normally serializes a {@link ResponseStatusException} as a
+     * generic HTTP label such as "Conflict". Payment actions need the safe,
+     * actionable reason so the mini program can guide the user to resume the
+     * existing order instead of creating another one.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, String>> paymentRequestError(ResponseStatusException error) {
+        String message = blank(error.getReason()) ? "支付请求暂时无法完成，请刷新订单后重试" : error.getReason();
+        return ResponseEntity.status(error.getStatus()).body(Map.of(
+                "code", "PAYMENT_REQUEST_REJECTED",
+                "message", message));
     }
 
     /** 当前登录用户的充值订单历史。 */
