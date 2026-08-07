@@ -392,6 +392,16 @@ public class UserController {
         }
     }
 
+    /** Creates a mini-program entry QR code for visitors choosing the mobile experience. */
+    @PostMapping("/wechat-mini-entry/start")
+    @Operation(summary = "小程序端入口二维码")
+    public Map<String, String> startMiniProgramEntry() throws Exception {
+        if (blank(wechatAppId) || blank(wechatMiniAppSecret)) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信小程序登录配置尚未完成");
+        }
+        return Map.of("qrCodeDataUrl", createMiniProgramEntryCode());
+    }
+
     /** Browser polls this opaque, short-lived session after the user scans the mini-program code. */
     @GetMapping("/wechat-mini-web/status")
     @Operation(summary = "查询小程序扫码网页登录状态")
@@ -656,6 +666,34 @@ public class UserController {
             JsonNode error = mapper.readTree(response.body());
             log.warn("生成小程序网页登录码失败 errcode={}", error.path("errcode").asInt());
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "生成小程序登录码失败，请检查小程序配置");
+        }
+        return "data:image/png;base64," + Base64.getEncoder().encodeToString(response.body());
+    }
+
+    private String createMiniProgramEntryCode() throws Exception {
+        String accessToken = miniProgramAccessToken();
+        String body = mapper.writeValueAsString(Map.of(
+                "scene", "mobile-entry",
+                "page", "pages/login/index",
+                "check_path", false));
+        HttpResponse<byte[]> response;
+        try {
+            response = wechatHttp.send(HttpRequest.newBuilder(URI.create(
+                    "https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token=" + encode(accessToken)))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                    .build(), HttpResponse.BodyHandlers.ofByteArray());
+        } catch (Exception failure) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "生成小程序入口码失败，请稍后重试");
+        }
+        if (response.statusCode() != 200 || response.body().length == 0) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "生成小程序入口码失败，请稍后重试");
+        }
+        if (response.body()[0] == '{') {
+            JsonNode error = mapper.readTree(response.body());
+            log.warn("生成小程序入口码失败 errcode={}", error.path("errcode").asInt());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "生成小程序入口码失败，请检查小程序配置");
         }
         return "data:image/png;base64," + Base64.getEncoder().encodeToString(response.body());
     }
