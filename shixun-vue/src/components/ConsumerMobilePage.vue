@@ -1057,9 +1057,8 @@ function setStage(text: string, nextPhase: Phase) {
 }
 
 onMounted(() => {
-  // Every login starts with a mandatory creator-mode choice before the destination gate.
-  creatorProfilePromptOpen.value = true
-  document.body.style.overflow = 'hidden'
+  // Start with the destination gate. The creator-mode choice opens once after
+  // the user selects that destination, avoiding two consecutive prompts.
   load()
 })
 onBeforeUnmount(() => {
