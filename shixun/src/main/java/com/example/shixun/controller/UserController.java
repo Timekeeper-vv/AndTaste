@@ -223,6 +223,9 @@ public class UserController {
         user.setRole("user");
         validateEmailRegistration(user);
         validatePassword(user.getPassword());
+        if (userService.isEmailRegistered(email)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "邮箱已注册，请直接登录");
+        }
         // Consume the code only after all other registration fields pass validation.
         emailVerificationService.consumeRegistrationCode(email, text(body == null ? null : body.get("emailCode")));
         try {
@@ -337,7 +340,7 @@ public class UserController {
     }
 
     @PostMapping("/login")
-    @Operation(summary = "用户登录", description = "使用用户名和密码登录，返回用户信息")
+    @Operation(summary = "用户登录", description = "使用用户名或邮箱和密码登录，返回用户信息")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "登录成功"),
         @ApiResponse(responseCode = "400", description = "参数缺失"),
@@ -345,13 +348,13 @@ public class UserController {
     })
     @io.swagger.v3.oas.annotations.parameters.RequestBody(
         description = "登录凭证",
-        content = @Content(schema = @Schema(example = "{\"username\":\"张三\",\"password\":\"correct-horse-battery-staple\"}"))
+        content = @Content(schema = @Schema(example = "{\"username\":\"user@example.com\",\"password\":\"correct-horse-battery-staple\"}"))
     )
     public CompletableFuture<ResponseEntity<Map<String, Object>>> login(@RequestBody Map<String, String> body) {
         return userService.login(body.get("username"), body.get("password"))
             .thenApply(user -> {
                 if (user == null) {
-                    throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
+                    throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名、邮箱或密码错误");
                 }
                 userService.touchLastLogin(user.getId());
                 recordLoginAudit(user.getId(), "password", "success", null);

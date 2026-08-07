@@ -66,6 +66,10 @@ public class UserService {
         return user;
     }
 
+    public boolean isEmailRegistered(String email) {
+        return email != null && !email.isBlank() && !userMapper.findByEmail(email.trim()).isEmpty();
+    }
+
     @Async
     public CompletableFuture<User> update(Long id, User user) {
         User existing = userMapper.findById(id);
@@ -108,14 +112,19 @@ public class UserService {
     }
 
     @Async
-    public CompletableFuture<User> login(String username, String password) {
-        if (username == null || username.isBlank()) {
+    public CompletableFuture<User> login(String usernameOrEmail, String password) {
+        if (usernameOrEmail == null || usernameOrEmail.isBlank()) {
             throw new IllegalArgumentException("用户名不能为空");
         }
         if (password == null || password.isEmpty()) {
             throw new IllegalArgumentException("密码不能为空");
         }
-        User user = userMapper.findByUsername(username);
+        User user = userMapper.findByUsername(usernameOrEmail.trim());
+        if (user == null) {
+            List<User> emailMatches = userMapper.findByEmail(usernameOrEmail.trim());
+            // Do not choose an arbitrary account if legacy data has duplicate emails.
+            user = emailMatches.size() == 1 ? emailMatches.get(0) : null;
+        }
         if (user == null || !"active".equalsIgnoreCase(user.getStatus()) || !passwordEncoder.matches(password, user.getPassword())) {
             return CompletableFuture.completedFuture(null);
         }

@@ -9,10 +9,11 @@
     </view>
 
     <view class="form-card">
-      <view class="form-head"><text>基础信息</text><text>用于账号识别和必要服务联系</text></view>
+      <view class="form-head"><text>基础信息</text><text>邮箱验证码用于确认账号归属</text></view>
       <input v-model.trim="form.username" class="field" maxlength="40" placeholder="用户名" placeholder-class="placeholder" />
-      <view class="field-row"><input v-model.trim="form.phone" class="field" maxlength="30" type="number" placeholder="手机号" placeholder-class="placeholder" /><input v-model.trim="form.age" class="field age" maxlength="3" type="number" placeholder="年龄" placeholder-class="placeholder" /></view>
+      <view class="field-row"><input v-model.trim="form.phone" class="field" maxlength="30" type="number" placeholder="手机号（可选）" placeholder-class="placeholder" /><input v-model.trim="form.age" class="field age" maxlength="3" type="number" placeholder="年龄" placeholder-class="placeholder" /></view>
       <input v-model.trim="form.email" class="field" maxlength="100" type="text" placeholder="邮箱" placeholder-class="placeholder" />
+      <view class="code-row"><input v-model.trim="emailCode" class="field" maxlength="6" type="number" placeholder="邮箱验证码" placeholder-class="placeholder" /><button class="code-button" :disabled="sendingCode || codeCountdown > 0" @tap="sendEmailCode">{{ sendingCode ? '发送中' : codeCountdown > 0 ? `${codeCountdown}s` : '获取验证码' }}</button></view>
       <input v-model="form.password" class="field" maxlength="100" password placeholder="设置密码（至少 12 位）" placeholder-class="placeholder" />
       <input v-model="passwordAgain" class="field" maxlength="100" password placeholder="再次确认密码" placeholder-class="placeholder" />
 
@@ -41,8 +42,9 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onUnmounted, reactive, ref } from 'vue'
 import { request } from '../../api/client'
+import { saveSession } from '../../utils/session'
 
 type ConsentKey = 'agreeDisclaimer' | 'agreeConfidentiality' | 'agreeContentPolicy'
 
@@ -60,6 +62,10 @@ const form = reactive({
 })
 const passwordAgain = ref('')
 const submitting = ref(false)
+const emailCode = ref('')
+const sendingCode = ref(false)
+const codeCountdown = ref(0)
+let codeTimer: ReturnType<typeof setInterval> | null = null
 const consents: Array<{ key: ConsentKey; title: string; summary: string; content: string }> = [
   {
     key: 'agreeDisclaimer', title: '用户服务与隐私说明', summary: '了解账户、作品和必要服务信息的使用边界。',
@@ -84,14 +90,39 @@ function showAgreement(title: string, content: string) {
 function validEmail(value: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) }
 function validPhone(value: string) { return /^[0-9+()\-\s]{6,30}$/.test(value) }
 
+async function sendEmailCode() {
+  if (sendingCode.value || codeCountdown.value > 0) return
+  if (!validEmail(form.email)) { uni.showToast({ title: '请先填写正确邮箱', icon: 'none' }); return }
+  sendingCode.value = true
+  try {
+    await request('/api/users/email-verification', {
+      method: 'POST',
+      data: { email: form.email.trim().toLowerCase() },
+      header: { 'content-type': 'application/json', Authorization: '' },
+    })
+    codeCountdown.value = 60
+    codeTimer = setInterval(() => {
+      codeCountdown.value -= 1
+      if (codeCountdown.value <= 0 && codeTimer) {
+        clearInterval(codeTimer)
+        codeTimer = null
+      }
+    }, 1000)
+    uni.showToast({ title: '验证码已发送', icon: 'success' })
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '验证码发送失败', icon: 'none' })
+  } finally { sendingCode.value = false }
+}
+
 async function register() {
-  if (!form.username || !form.phone || !form.age || !form.email || !form.password || !form.signature) {
+  if (!form.username || !form.age || !form.email || !emailCode.value || !form.password || !form.signature) {
     uni.showToast({ title: '请完整填写注册信息与签署名', icon: 'none' }); return
   }
   const age = Number(form.age)
   if (!Number.isInteger(age) || age <= 0 || age > 120) { uni.showToast({ title: '请填写有效年龄', icon: 'none' }); return }
-  if (!validPhone(form.phone)) { uni.showToast({ title: '手机号格式不正确', icon: 'none' }); return }
+  if (form.phone && !validPhone(form.phone)) { uni.showToast({ title: '手机号格式不正确', icon: 'none' }); return }
   if (!validEmail(form.email)) { uni.showToast({ title: '邮箱格式不正确', icon: 'none' }); return }
+  if (!/^\d{6}$/.test(emailCode.value)) { uni.showToast({ title: '请输入6位邮箱验证码', icon: 'none' }); return }
   if (form.password.length < 12) { uni.showToast({ title: '密码至少需要 12 位', icon: 'none' }); return }
   if (form.password !== passwordAgain.value) { uni.showToast({ title: '两次输入的密码不一致', icon: 'none' }); return }
   if (!form.agreeDisclaimer || !form.agreeConfidentiality || !form.agreeContentPolicy || !form.realNameAcknowledged) {
@@ -99,10 +130,10 @@ async function register() {
   }
   submitting.value = true
   try {
-    await request('/api/users', {
+    const session = await request<any>('/api/users/email-register', {
       method: 'POST',
       data: {
-        username: form.username, phone: form.phone, age, email: form.email, password: form.password,
+        username: form.username, phone: form.phone || undefined, age, email: form.email, emailCode: emailCode.value, password: form.password,
         agreeDisclaimer: form.agreeDisclaimer, agreeConfidentiality: form.agreeConfidentiality,
         agreeContentPolicy: form.agreeContentPolicy, realNameAcknowledged: form.realNameAcknowledged,
         complianceSignature: form.signature,
@@ -110,9 +141,11 @@ async function register() {
       // 注册只允许匿名 C 端用户调用；不能意外携带设备上的旧 JWT。
       header: { 'content-type': 'application/json', Authorization: '' },
     })
+    if (!session?.token || !session?.user || session.user.role !== 'user') throw new Error('注册响应异常，请重新登录')
+    saveSession(session)
     uni.showModal({
-      title: '账号创建成功', content: '你的合规确认已记录。请使用刚设置的用户名和密码登录。', showCancel: false, confirmText: '去登录',
-      success: () => uni.redirectTo({ url: '/pages/login/index' }),
+      title: '账号创建成功', content: '邮箱已验证，合规确认已记录。', showCancel: false, confirmText: '开始创作',
+      success: () => uni.reLaunch({ url: '/pages/purpose/index' }),
     })
   } catch (error: any) {
     uni.showToast({ title: error?.message || '注册失败，请稍后重试', icon: 'none' })
@@ -122,8 +155,11 @@ async function register() {
 }
 
 function goLogin() { uni.redirectTo({ url: '/pages/login/index' }) }
+
+onUnmounted(() => { if (codeTimer) clearInterval(codeTimer) })
 </script>
 
 <style scoped lang="scss">
 .page{position:relative;min-height:100vh;box-sizing:border-box;overflow:hidden;padding:73rpx 32rpx calc(65rpx + env(safe-area-inset-bottom));background:linear-gradient(150deg,#fbfaf6,#f0ece4)}.ink{position:absolute;pointer-events:none;border-radius:50%;filter:blur(2rpx)}.ink-one{top:-145rpx;right:-160rpx;width:470rpx;height:440rpx;background:radial-gradient(ellipse,rgba(105,144,123,.19),transparent 67%)}.ink-two{bottom:120rpx;left:-220rpx;width:450rpx;height:340rpx;background:radial-gradient(ellipse,rgba(188,108,81,.1),transparent 70%)}.hero,.form-card,.login-link{position:relative;z-index:1}.hero{display:flex;flex-direction:column;padding:0 8rpx 35rpx}.eyebrow{color:#6a897b;font-size:18rpx;font-weight:900;letter-spacing:2.6rpx}.title{margin-top:13rpx;color:#31352f;font-family:"Songti SC","STSong",serif;font-size:49rpx;font-weight:800}.sub{margin-top:13rpx;color:#7e8179;font-size:22rpx;line-height:1.65}.form-card{padding:26rpx;border:1rpx solid rgba(119,108,91,.14);border-radius:27rpx;background:rgba(255,254,250,.9);box-shadow:0 17rpx 36rpx rgba(64,54,42,.065)}.form-head{display:flex;flex-direction:column;gap:5rpx;margin-bottom:16rpx}.form-head text:first-child{color:#474a44;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.form-head text:last-child{color:#988f84;font-size:18rpx}.field{box-sizing:border-box;width:100%;height:83rpx;margin-top:12rpx;padding:0 19rpx;border:1rpx solid #e5ddd3;border-radius:14rpx;color:#3f403a;background:#fcfbf7;font-size:23rpx}.field-row{display:grid;grid-template-columns:minmax(0,1fr) 134rpx;gap:11rpx}.field-row .field{min-width:0}.placeholder{color:#b4aaa0}.sign-block{display:flex;flex-direction:column;gap:10rpx;margin-top:24rpx;padding:17rpx;border-radius:17rpx;background:#f1f5ef}.sign-block view{display:flex;flex-direction:column;gap:4rpx}.sign-block view text:first-child{color:#527264;font-size:23rpx;font-weight:850}.sign-block view text:last-child{color:#859087;font-size:18rpx}.sign-input{box-sizing:border-box;width:100%;height:72rpx;padding:0 15rpx;border:1rpx solid #d7e2d7;border-radius:12rpx;color:#42443e;background:#fffefa;font-size:22rpx}.consent-title{display:flex;align-items:baseline;justify-content:space-between;gap:8rpx;margin:26rpx 3rpx 11rpx}.consent-title text:first-child{color:#494b44;font-family:"Songti SC","STSong",serif;font-size:27rpx;font-weight:800}.consent-title text:last-child{color:#a0968b;font-size:16rpx;text-align:right}.consent-row{display:grid;grid-template-columns:31rpx minmax(0,1fr) auto;gap:10rpx;align-items:start;margin-top:11rpx;padding:13rpx;border:1rpx solid #ebe4da;border-radius:15rpx;background:#fcfbf8}.consent-row.checked{border-color:#aac2ae;background:#f1f7ef}.check{display:grid;place-items:center;width:27rpx;height:27rpx;border:1rpx solid #cfc8bd;border-radius:8rpx;color:#fff;background:#fff;font-size:19rpx;font-weight:900}.checked .check{border-color:#6f927d;background:#6f927d}.consent-row>view{display:flex;min-width:0;flex-direction:column;gap:4rpx}.consent-row>view text:first-child{color:#5a584f;font-size:19rpx;font-weight:750;line-height:1.45}.consent-row>view text:last-child{color:#9c9186;font-size:16rpx;line-height:1.45}.read{padding:5rpx 1rpx;color:#678474;font-size:18rpx;font-weight:850}.real-name{grid-template-columns:31rpx minmax(0,1fr)}.primary{height:91rpx;line-height:91rpx;margin-top:24rpx;border-radius:18rpx;color:#fff;background:linear-gradient(135deg,#3f3934,#617f72);font-size:26rpx;font-weight:850}.privacy-note{display:block;margin:15rpx 8rpx 0;color:#999188;font-size:16rpx;line-height:1.65;text-align:center}.login-link{display:flex;justify-content:center;gap:9rpx;margin-top:28rpx;color:#968c81;font-size:21rpx}.login-link text:last-child{color:#567768;font-weight:850}
+.code-row{display:grid;grid-template-columns:minmax(0,1fr) 170rpx;gap:11rpx;align-items:end}.code-row .field{min-width:0}.code-button{height:83rpx;line-height:83rpx;margin:12rpx 0 0;border:1rpx solid #b9d6bf;border-radius:14rpx;background:#eff7ef;color:#537b5d;font-size:21rpx;font-weight:850}.code-button[disabled]{opacity:.58}
 </style>

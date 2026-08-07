@@ -4,7 +4,7 @@
     <view class="card">
       <text class="card-title">欢迎回来</text>
       <text class="card-desc">登录后即可开始 AI 文创创作</text>
-      <input v-model.trim="username" class="input" placeholder="用户名" placeholder-class="placeholder" />
+      <input v-model.trim="username" class="input" placeholder="用户名或邮箱" placeholder-class="placeholder" />
       <input v-model="password" class="input" password placeholder="密码" placeholder-class="placeholder" />
       <button class="primary" :loading="loading" @tap="login">登录并开始创作</button>
       <button class="wechat-button" :loading="wechatLoading" :disabled="wechatLoading || wechatPhoneRequired" @tap="wechatLogin">微信登录</button>
@@ -18,7 +18,7 @@
         <button class="phone-auth-button" open-type="getPhoneNumber|agreePrivacyAuthorization" phone-number-no-quota-toast="false" :loading="wechatLoading" :disabled="wechatLoading || !wechatTermsAccepted" @getphonenumber="authorizeWechatPhone" @agreeprivacyauthorization="handleOfficialPrivacyAuthorization">授权微信手机号并登录</button>
       </view>
       <view class="register-row"><text>还没有账号？</text><text @tap="goRegister">创建创作账号 ›</text></view>
-      <text class="hint">支持平台账号登录。微信登录首次使用时需要补充必要资料并完成合规确认。</text>
+      <text class="hint">支持用户名或邮箱登录。微信登录首次使用时需要补充必要资料并完成合规确认。</text>
     </view>
   </view>
 </template>
@@ -62,7 +62,7 @@ function finishLogin(session: any) {
 }
 
 async function login() {
-  if (!username.value || !password.value) return uni.showToast({ title: '请输入用户名和密码', icon: 'none' })
+  if (!username.value || !password.value) return uni.showToast({ title: '请输入用户名或邮箱和密码', icon: 'none' })
   loading.value = true
   try {
     const session = await request<any>('/api/users/login', { method: 'POST', data: { username: username.value, password: password.value }, header: { 'content-type': 'application/json' } })

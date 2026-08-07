@@ -15,6 +15,10 @@
         SELECT * FROM user WHERE username = #{username}
     </select>
 
+    <select id="findByEmail" resultType="com.example.shixun.model.User">
+        SELECT * FROM user WHERE LOWER(email) = LOWER(#{email}) ORDER BY id
+    </select>
+
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO user (username, age, email, phone, password, role, status)
         VALUES (#{username}, #{age}, #{email}, #{phone}, #{password}, #{role}, COALESCE(#{status}, 'active'))
