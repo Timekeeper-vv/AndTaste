@@ -95,13 +95,15 @@ async function wechatLogin() {
 async function authorizeWechatPhone(event: any) {
   const phoneCode = String(event?.detail?.code || '').trim()
   const errorMessage = String(event?.detail?.errMsg || '').trim()
+  const errorNumber = event?.detail?.errno == null ? '' : String(event.detail.errno)
   if (!phoneCode) {
     const isDevtools = /devtools|simulator|mock/i.test(errorMessage)
+    const diagnostic = [errorMessage, errorNumber ? `errno=${errorNumber}` : ''].filter(Boolean).join('；')
     uni.showModal({
       title: isDevtools ? '请使用真机授权' : '手机号授权未完成',
       content: isDevtools
         ? '微信开发者工具模拟器不支持真实手机号授权。请点击工具栏“预览”，用真实微信扫码打开小程序后再授权。'
-        : '请在微信官方弹窗中选择“允许”。如果没有弹窗，请退出小程序后重新进入再试。',
+        : `请在微信官方弹窗中选择“允许”。如果没有弹窗，请确认小程序已认证并在隐私指引中声明手机号后再试。${diagnostic ? `\n\n微信返回：${diagnostic}` : ''}`,
       showCancel: false,
     })
     return
