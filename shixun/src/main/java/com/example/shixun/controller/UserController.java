@@ -643,6 +643,21 @@ public class UserController {
                     identity.appId(), identity.openId());
             if (rows.isEmpty()) throw collision;
             outcome = new WechatLoginOutcome(userFromRow(rows.get(0)), false);
+        } catch (IllegalArgumentException collision) {
+            // A concurrent first-login request can create the user before its
+            // binding transaction commits. Reuse the binding if it is now
+            // visible; otherwise report a safe, actionable conflict instead
+            // of leaking an internal 500 response.
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role,u.status "
+                            + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
+                            + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
+                    identity.appId(), identity.openId());
+            if (rows.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "账号初始化存在冲突，请稍后重新授权手机号");
+            }
+            outcome = new WechatLoginOutcome(userFromRow(rows.get(0)), false);
         }
         return loginResponse(outcome.user());
     }
@@ -669,6 +684,8 @@ public class UserController {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先同意用户服务与隐私说明");
             }
             User created = createWechatPhoneUser(identity, phone);
+            User interruptedRegistration = recoverInterruptedWechatPhoneRegistration(created, identity, phone);
+            if (interruptedRegistration != null) return new WechatLoginOutcome(interruptedRegistration, false);
             userService.createSocialUser(created);
             recordComplianceConsent(created.getId(), Map.of(
                     "agreeDisclaimer", true,
@@ -681,6 +698,40 @@ public class UserController {
             synchronizePlatformIdentity(created);
             return new WechatLoginOutcome(created, false);
         });
+    }
+
+    /**
+     * A process restart or an older release could leave a generated social
+     * username in {@code user} before its OpenID binding was persisted. The
+     * username is a 96-bit hash of the OpenID, but we still require the same
+     * officially authorized phone number before recovering that row.
+     */
+    private User recoverInterruptedWechatPhoneRegistration(User candidate, WechatIdentity identity, String phone) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT id,username,age,email,phone,role,status FROM user WHERE username=? FOR UPDATE",
+                candidate.getUsername());
+        if (rows.isEmpty()) return null;
+        User existing = userFromRow(rows.get(0));
+        if (!phone.equals(existing.getPhone())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "该手机号对应的账号初始化记录异常，请联系平台客服处理");
+        }
+        if (!"user".equals(existing.getRole())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "该账号不能登录用户端");
+        }
+        if (existing.getStatus() != null && !"active".equalsIgnoreCase(existing.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已停用，请联系客服");
+        }
+        recordComplianceConsent(existing.getId(), Map.of(
+                "agreeDisclaimer", true,
+                "agreeConfidentiality", true,
+                "agreeContentPolicy", true,
+                "realNameAcknowledged", true,
+                "complianceSignature", "微信手机号授权"));
+        jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
+                existing.getId(), identity.appId(), identity.openId());
+        synchronizePlatformIdentity(existing);
+        return existing;
     }
 
     private ResponseEntity<Map<String, Object>> loginResponse(User user) {
