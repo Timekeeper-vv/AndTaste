@@ -259,6 +259,9 @@ const embeddedMiniapp = isEmbeddedMiniapp()
 const wechatWebLoading = ref(false)
 const wechatWebTicket = ref('')
 const wechatWebProfileRequired = ref(false)
+const miniWebLoginLoading = ref(false)
+const miniWebLoginSessionId = ref('')
+const miniWebLoginQrCode = ref('')
 const wechatWebForm = reactive({
   username: '', phone: '', age: '', email: '', signature: '',
   agreeDisclaimer: false, agreeConfidentiality: false, agreeContentPolicy: false,
@@ -295,6 +298,9 @@ function openModal(m: 'login' | 'register') {
 }
 
 function closeModal() {
+  stopMiniWebLoginPolling()
+  miniWebLoginQrCode.value = ''
+  miniWebLoginSessionId.value = ''
   modal.value = 'none'
   document.body.style.overflow = ''
 }
@@ -413,6 +419,65 @@ function toggleWebWechatConsent(key: 'agreeDisclaimer' | 'agreeConfidentiality' 
   wechatWebForm[key] = !wechatWebForm[key]
 }
 
+let miniWebLoginPollTimer: number | null = null
+
+function stopMiniWebLoginPolling() {
+  if (miniWebLoginPollTimer !== null) window.clearInterval(miniWebLoginPollTimer)
+  miniWebLoginPollTimer = null
+}
+
+async function pollMiniWebLogin() {
+  if (!miniWebLoginSessionId.value) return
+  try {
+    const res = await fetch(`/api/users/wechat-mini-web/status?sessionId=${encodeURIComponent(miniWebLoginSessionId.value)}`, {
+      cache: 'no-store',
+    })
+    const payload = await res.json().catch(() => ({}))
+    if (payload?.status === 'pending') return
+    if (!res.ok || payload?.status !== 'authorized' || !payload?.token || !payload?.user) {
+      stopMiniWebLoginPolling()
+      miniWebLoginQrCode.value = ''
+      miniWebLoginSessionId.value = ''
+      loginMsg.value = payload?.message || '登录码已失效，请重新扫码'
+      return
+    }
+    stopMiniWebLoginPolling()
+    miniWebLoginQrCode.value = ''
+    miniWebLoginSessionId.value = ''
+    document.body.style.overflow = ''
+    emit('login', payload as AuthSession)
+  } catch {
+    // Keep polling through a transient network error while the short-lived
+    // server-side login session remains valid.
+  }
+}
+
+async function openWechatMiniWebLogin() {
+  if (miniWebLoginLoading.value) return
+  miniWebLoginLoading.value = true
+  loginMsg.value = ''
+  stopMiniWebLoginPolling()
+  try {
+    const res = await fetch('/api/users/wechat-mini-web/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+    })
+    const payload = await res.json().catch(() => ({}))
+    if (!res.ok || !payload?.sessionId || !payload?.qrCodeDataUrl) {
+      throw new Error(payload?.message || '生成微信登录码失败')
+    }
+    miniWebLoginSessionId.value = payload.sessionId
+    miniWebLoginQrCode.value = payload.qrCodeDataUrl
+    await pollMiniWebLogin()
+    if (miniWebLoginSessionId.value) miniWebLoginPollTimer = window.setInterval(() => void pollMiniWebLogin(), 2000)
+  } catch (error: any) {
+    loginMsg.value = error?.message || '微信登录暂不可用'
+  } finally {
+    miniWebLoginLoading.value = false
+  }
+}
+
 function openWechatLogin() {
   if (!navigateToMiniappPage('/pages/login/index?from=webview')) {
     loginMsg.value = lang.value === 'zh' ? '请在微信小程序中使用微信登录' : '微信登录只能在小程序中使用'
@@ -504,6 +569,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  stopMiniWebLoginPolling()
   scrollObserver?.disconnect()
   document.body.style.overflow = ''
 })
@@ -1022,10 +1088,15 @@ onUnmounted(() => {
                 {{ loginLoading ? t.submittingLogin : t.submitLogin }}
               </button>
               <button v-if="embeddedMiniapp" type="button" class="modal-wechat-login" @click="openWechatLogin">微信小程序登录</button>
-              <button v-else type="button" class="modal-wechat-login" :disabled="wechatWebLoading" @click="wechatWebProfileRequired ? exchangeWechatWebLogin() : openWechatWebLogin()">
-                <span v-if="wechatWebLoading" class="spinner spinner-dark"></span>
-                {{ wechatWebProfileRequired ? '完成微信登录' : '微信扫码登录' }}
+              <button v-else type="button" class="modal-wechat-login" :disabled="miniWebLoginLoading" @click="openWechatMiniWebLogin">
+                <span v-if="miniWebLoginLoading" class="spinner spinner-dark"></span>
+                微信扫码登录
               </button>
+              <div v-if="miniWebLoginQrCode" class="mini-web-login-code">
+                <img :src="miniWebLoginQrCode" alt="微信小程序登录码" />
+                <span>请使用“之间智造”小程序扫码确认</span>
+                <button type="button" @click="openWechatMiniWebLogin">刷新登录码</button>
+              </div>
               <p class="modal-switch">{{ t.switchToReg }} <a @click="switchModal('register')">{{ t.switchToRegLink }}</a></p>
             </form>
 
@@ -2207,6 +2278,9 @@ onUnmounted(() => {
 .modal-wechat-login:hover { background: #e8f5eb; }
 .modal-wechat-login:disabled { opacity: .55; cursor: wait; }
 .spinner-dark { border-color: rgba(52,112,77,.25); border-top-color: #34704d; }
+.mini-web-login-code { display: grid; justify-items: center; gap: 7px; margin-top: 4px; padding: 12px; border: 1px solid #d9e8dd; border-radius: 10px; background: #f7fbf8; color: #5f7164; font-size: 12px; text-align: center; }
+.mini-web-login-code img { width: 168px; height: 168px; background: #fff; object-fit: contain; }
+.mini-web-login-code button { border: 0; background: transparent; color: #34704d; font: inherit; font-weight: 700; cursor: pointer; }
 .wechat-web-profile { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid #d9e8dd; border-radius: 10px; background: #f7fbf8; }
 .wechat-web-profile strong { color: #34704d; font-size: 13px; }
 .wechat-web-profile input { height: 36px; padding: 0 11px; border: 1px solid #dce8df; border-radius: 8px; color: #0f172a; background: #fff; font: inherit; box-sizing: border-box; }

@@ -281,6 +281,8 @@ curl -s http://127.0.0.1:8080/api/creative/ai/imagen/config
 
    开放平台网站应用的授权回调域名填写 `你的域名`，不能把小程序 AppID/AppSecret 直接当作网站应用凭据使用。
 
+   不配置以上 `PAYMENT_WECHAT_WEB_*` 也不影响网页端的默认微信登录：用户可扫描网页生成的“之间智造”小程序码并在小程序确认。该方案只复用已有的小程序 AppID/AppSecret，但必须重新构建、上传并发布小程序，确保包含 `pages/web-login/index` 页面。
+
 5. 历史数据库先备份，再执行支付扩展表迁移，然后重新部署：
 
    ```bash

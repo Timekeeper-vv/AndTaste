@@ -38,6 +38,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
@@ -65,6 +66,8 @@ public class UserController {
             .build();
     private final ConcurrentMap<String, Long> wechatWebStates = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, WebLoginTicket> wechatWebTickets = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, MiniWebLoginSession> miniWebLoginSessions = new ConcurrentHashMap<>();
+    private volatile MiniProgramAccessToken miniProgramAccessToken;
 
     @Value("${payment.wechat.app-id:}")
     private String wechatAppId;
@@ -87,6 +90,7 @@ public class UserController {
     private static final String WEB_STATE_COOKIE = "smart_pig_wechat_web_state";
     private static final Duration WEB_STATE_TTL = Duration.ofMinutes(5);
     private static final Duration WEB_TICKET_TTL = Duration.ofMinutes(2);
+    private static final Duration MINI_WEB_LOGIN_TTL = Duration.ofMinutes(3);
 
     public UserController(UserService userService, JwtService jwtService, JdbcTemplate jdbc,
                           ObjectMapper mapper, PlatformTransactionManager transactionManager) {
@@ -368,6 +372,60 @@ public class UserController {
         return loginResponse(outcome.user());
     }
 
+    /** Creates a mini-program QR code for a browser login without a website-app OAuth credential. */
+    @PostMapping("/wechat-mini-web/start")
+    @Operation(summary = "小程序扫码网页登录开始")
+    public Map<String, String> startMiniProgramWebLogin() throws Exception {
+        if (blank(wechatAppId) || blank(wechatMiniAppSecret)) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信小程序登录配置尚未完成");
+        }
+        purgeMiniWebLoginSessions();
+        // getwxacodeunlimit limits scene to 32 visible characters.
+        String sessionId = UUID.randomUUID().toString().replace("-", "");
+        miniWebLoginSessions.put(sessionId, new MiniWebLoginSession(null,
+                System.currentTimeMillis() + MINI_WEB_LOGIN_TTL.toMillis()));
+        try {
+            return Map.of("sessionId", sessionId, "qrCodeDataUrl", createMiniProgramLoginCode(sessionId));
+        } catch (Exception failure) {
+            miniWebLoginSessions.remove(sessionId);
+            throw failure;
+        }
+    }
+
+    /** Browser polls this opaque, short-lived session after the user scans the mini-program code. */
+    @GetMapping("/wechat-mini-web/status")
+    @Operation(summary = "查询小程序扫码网页登录状态")
+    public ResponseEntity<Map<String, Object>> miniProgramWebLoginStatus(@RequestParam("sessionId") String sessionId) {
+        MiniWebLoginSession session = requiredMiniWebLoginSession(sessionId);
+        if (session.user() == null) return ResponseEntity.ok(Map.of("status", "pending"));
+        if (!miniWebLoginSessions.remove(sessionId, session)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "网页登录会话已被使用，请重新扫码");
+        }
+        Map<String, Object> response = new LinkedHashMap<>(loginResponse(session.user()).getBody());
+        response.put("status", "authorized");
+        return ResponseEntity.ok(response);
+    }
+
+    /** Called only by the scanned mini-program page after a fresh uni.login code exchange. */
+    @PostMapping("/wechat-mini-web/confirm")
+    @Operation(summary = "确认小程序扫码网页登录")
+    public ResponseEntity<Map<String, Object>> confirmMiniProgramWebLogin(@RequestBody(required = false) Map<String, Object> body) throws Exception {
+        String sessionId = text(body == null ? null : body.get("sessionId"));
+        requiredMiniWebLoginSession(sessionId);
+        String code = text(body == null ? null : body.get("code"));
+        if (code == null || code.length() < 6 || code.length() > 512 || code.contains(" ")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信登录凭证无效，请重新扫码");
+        }
+        ResponseEntity<Map<String, Object>> result = completeWechatIdentityLogin(wechatAppId, exchangeWechatCode(code), null);
+        if (!result.getStatusCode().is2xxSuccessful()) return result;
+        User user = (User) result.getBody().get("user");
+        authorizeMiniWebLoginSession(sessionId, user);
+        Map<String, Object> response = new LinkedHashMap<>(loginResponse(user).getBody());
+        response.put("status", "authorized");
+        response.put("message", "网页已登录");
+        return ResponseEntity.ok(response);
+    }
+
     /**
      * Logs a mini-program user in with a one-time uni.login code. The code is
      * exchanged server-side; neither the AppSecret, session_key, nor OpenID
@@ -386,7 +444,14 @@ public class UserController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信登录凭证无效，请重新点击微信登录");
         }
         WechatIdentity identity = exchangeWechatCode(code);
-        return completeWechatIdentityLogin(wechatAppId, identity, body);
+        ResponseEntity<Map<String, Object>> result = completeWechatIdentityLogin(wechatAppId, identity, body);
+        if (result.getStatusCode().is2xxSuccessful()) {
+            String miniWebLoginSession = text(body == null ? null : body.get("miniWebLoginSession"));
+            if (miniWebLoginSession != null) {
+                authorizeMiniWebLoginSession(miniWebLoginSession, (User) result.getBody().get("user"));
+            }
+        }
+        return result;
     }
 
     private boolean hasWechatProfile(Map<String, Object> body) {
@@ -567,6 +632,88 @@ public class UserController {
         return new WechatIdentity(wechatWebAppId, openId);
     }
 
+    private String createMiniProgramLoginCode(String sessionId) throws Exception {
+        String accessToken = miniProgramAccessToken();
+        String body = mapper.writeValueAsString(Map.of(
+                "scene", sessionId,
+                "page", "pages/web-login/index",
+                "check_path", false));
+        HttpResponse<byte[]> response;
+        try {
+            response = wechatHttp.send(HttpRequest.newBuilder(URI.create(
+                    "https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token=" + encode(accessToken)))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                    .build(), HttpResponse.BodyHandlers.ofByteArray());
+        } catch (Exception failure) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "生成小程序登录码失败，请稍后重试");
+        }
+        if (response.statusCode() != 200 || response.body().length == 0) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "生成小程序登录码失败，请稍后重试");
+        }
+        if (response.body()[0] == '{') {
+            JsonNode error = mapper.readTree(response.body());
+            log.warn("生成小程序网页登录码失败 errcode={}", error.path("errcode").asInt());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "生成小程序登录码失败，请检查小程序配置");
+        }
+        return "data:image/png;base64," + Base64.getEncoder().encodeToString(response.body());
+    }
+
+    private String miniProgramAccessToken() throws Exception {
+        MiniProgramAccessToken cached = miniProgramAccessToken;
+        long now = System.currentTimeMillis();
+        if (cached != null && cached.expiresAt() > now + Duration.ofMinutes(1).toMillis()) return cached.value();
+        synchronized (this) {
+            cached = miniProgramAccessToken;
+            if (cached != null && cached.expiresAt() > now + Duration.ofMinutes(1).toMillis()) return cached.value();
+            String url = "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid="
+                    + encode(wechatAppId) + "&secret=" + encode(wechatMiniAppSecret);
+            HttpResponse<String> response;
+            try {
+                response = wechatHttp.send(HttpRequest.newBuilder(URI.create(url))
+                        .timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            } catch (Exception failure) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信小程序服务暂时不可用");
+            }
+            if (response.statusCode() != 200) {
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信小程序服务暂时不可用");
+            }
+            JsonNode root = mapper.readTree(response.body());
+            String value = root.path("access_token").asText("").trim();
+            int expiresIn = root.path("expires_in").asInt(0);
+            if (value.isEmpty() || expiresIn <= 60) {
+                log.warn("获取小程序全局访问令牌失败 errcode={}", root.path("errcode").asInt());
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信小程序配置校验失败");
+            }
+            miniProgramAccessToken = new MiniProgramAccessToken(value, now + Duration.ofSeconds(expiresIn).toMillis());
+            return value;
+        }
+    }
+
+    private MiniWebLoginSession requiredMiniWebLoginSession(String sessionId) {
+        if (blank(sessionId) || sessionId.length() != 32) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "网页登录会话无效，请重新扫码");
+        }
+        MiniWebLoginSession session = miniWebLoginSessions.get(sessionId);
+        if (session == null || session.expiresAt() < System.currentTimeMillis()) {
+            if (session != null) miniWebLoginSessions.remove(sessionId, session);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "网页登录会话已失效，请重新扫码");
+        }
+        return session;
+    }
+
+    private void authorizeMiniWebLoginSession(String sessionId, User user) {
+        if (user == null || user.getId() == null) return;
+        miniWebLoginSessions.computeIfPresent(sessionId, (ignored, current) ->
+                current.expiresAt() < System.currentTimeMillis() ? null : new MiniWebLoginSession(user, current.expiresAt()));
+    }
+
+    private void purgeMiniWebLoginSessions() {
+        long now = System.currentTimeMillis();
+        miniWebLoginSessions.entrySet().removeIf(entry -> entry.getValue().expiresAt() < now);
+    }
+
     private void requireWechatWebConfiguration() {
         if (blank(wechatWebAppId) || blank(wechatWebAppSecret) || blank(wechatWebRedirectUri)
                 || !wechatWebRedirectUri.startsWith("https://")) {
@@ -616,6 +763,8 @@ public class UserController {
     private boolean blank(String value) { return value == null || value.trim().isEmpty(); }
     private record WechatIdentity(String appId, String openId) { }
     private record WebLoginTicket(WechatIdentity identity, long expiresAt) { }
+    private record MiniProgramAccessToken(String value, long expiresAt) { }
+    private record MiniWebLoginSession(User user, long expiresAt) { }
     private record WechatLoginOutcome(User user, boolean profileRequired) { }
 
     private void validateUser(User user) {

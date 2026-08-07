@@ -40,7 +40,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) return true;
         if ("/api/users/login".equals(path)
                 || "/api/users/wechat-login".equals(path)
-                || path.startsWith("/api/users/wechat-web/")) return true;
+                || path.startsWith("/api/users/wechat-web/")
+                || path.startsWith("/api/users/wechat-mini-web/")) return true;
         // An unauthenticated POST is the public registration flow. If a Bearer
         // token is supplied, it must be verified and the controller decides from
         // the server-side claims whether the caller may create a staff account.

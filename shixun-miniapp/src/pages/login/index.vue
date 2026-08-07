@@ -37,6 +37,7 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 const fromWebview = ref(false)
+const miniWebLoginSession = ref('')
 const wechatLoading = ref(false)
 const wechatProfileRequired = ref(false)
 const wechatForm = reactive({
@@ -54,7 +55,10 @@ function finishLogin(session: any) {
   if (!session?.token || !session?.user) throw new Error('登录响应缺少令牌')
   if (session.user.role !== 'user') throw new Error('该账号是管理端账号，请使用网页管理端登录')
   saveSession(session)
-  if (fromWebview.value) {
+  if (miniWebLoginSession.value) {
+    uni.showToast({ title: '网页已登录', icon: 'success' })
+    setTimeout(() => uni.reLaunch({ url: '/pages/webview/index' }), 700)
+  } else if (fromWebview.value) {
     uni.setStorageSync('smart_pig_auth_updated', String(Date.now()))
     uni.navigateBack()
   } else {
@@ -101,6 +105,7 @@ async function wechatLogin() {
   try {
     const code = await miniProgramLoginCode()
     const data: Record<string, any> = { code }
+    if (miniWebLoginSession.value) data.miniWebLoginSession = miniWebLoginSession.value
     if (wechatProfileRequired.value) {
       const age = validateWechatProfile()
       Object.assign(data, wechatForm, { age })
@@ -121,6 +126,7 @@ function goRegister() { uni.navigateTo({ url: '/pages/register/index' }) }
 
 onLoad((query: Record<string, string> = {}) => {
   fromWebview.value = query.from === 'webview'
+  miniWebLoginSession.value = query.miniWebLoginSession || ''
 })
 </script>
 
