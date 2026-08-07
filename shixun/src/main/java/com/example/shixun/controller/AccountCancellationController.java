@@ -54,9 +54,6 @@ public class AccountCancellationController {
         }
         String password = body == null ? null : body.get("password");
         String confirmation = body == null ? null : body.get("confirmation");
-        if (password == null || password.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请输入当前登录密码");
-        }
         if (!CONFIRMATION.equals(confirmation)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请输入“注销账号”确认操作");
         }
@@ -66,8 +63,15 @@ public class AccountCancellationController {
         if (user == null || !"user".equalsIgnoreCase(String.valueOf(user.get("role")))) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录身份已失效，请重新登录");
         }
-        if (!userService.matchesPassword(password, String.valueOf(user.get("password")))) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "当前密码不正确");
+        boolean socialAccount = tableExists("wechat_user_binding")
+                && count("SELECT COUNT(*) FROM wechat_user_binding WHERE user_id=?", userId) > 0;
+        if (!socialAccount) {
+            if (password == null || password.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请输入当前登录密码");
+            }
+            if (!userService.matchesPassword(password, String.valueOf(user.get("password")))) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "当前密码不正确");
+            }
         }
 
         Long platformUserId = platformUserId(userId);
@@ -111,7 +115,7 @@ public class AccountCancellationController {
             jdbc.update("UPDATE platform_user SET username=?,password=?,display_name='已注销用户',email=NULL,phone=NULL,avatar_url=NULL,status='deleted' WHERE id=?", anonymousName(userId), userService.hashPassword(UUID.randomUUID().toString()), platformUserId);
         }
         if (tableExists("user_platform_identity")) jdbc.update("DELETE FROM user_platform_identity WHERE user_id=?", userId);
-        jdbc.update("UPDATE user SET username=?,age=NULL,email=NULL,phone=NULL,password=?,role='user' WHERE id=?", anonymousName(userId), userService.hashPassword(UUID.randomUUID().toString()), userId);
+        jdbc.update("UPDATE user SET username=?,age=NULL,email=NULL,phone=NULL,password=?,role='user',status='deleted' WHERE id=?", anonymousName(userId), userService.hashPassword(UUID.randomUUID().toString()), userId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", true);

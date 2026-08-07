@@ -16,8 +16,8 @@
     </select>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO user (username, age, email, phone, password, role)
-        VALUES (#{username}, #{age}, #{email}, #{phone}, #{password}, #{role})
+        INSERT INTO user (username, age, email, phone, password, role, status)
+        VALUES (#{username}, #{age}, #{email}, #{phone}, #{password}, #{role}, COALESCE(#{status}, 'active'))
     </insert>
 
     <update id="update">
@@ -27,6 +27,9 @@
         </if>
         <if test="role != null and role != ''">
             , role=#{role}
+        </if>
+        <if test="status != null and status != ''">
+            , status=#{status}
         </if>
         WHERE id = #{id}
     </update>
@@ -58,5 +61,9 @@
             </if>
         </where>
     </select>
+
+    <update id="touchLastLogin">
+        UPDATE user SET last_login_at=CURRENT_TIMESTAMP WHERE id=#{id} AND status='active'
+    </update>
 
 </mapper>

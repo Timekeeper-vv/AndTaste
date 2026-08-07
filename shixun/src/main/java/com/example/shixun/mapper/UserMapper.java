@@ -15,4 +15,5 @@ public interface UserMapper {
     int deleteById(Long id);
     List<User> findPage(@Param("search") String search, @Param("offset") int offset, @Param("size") int size);
     long countSearch(@Param("search") String search);
+    int touchLastLogin(@Param("id") Long id);
 }

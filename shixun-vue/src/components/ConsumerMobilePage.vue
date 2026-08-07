@@ -678,16 +678,15 @@ async function cancelAccount() {
     emit('alert', '请输入“注销账号”确认操作', 'error')
     return
   }
-  if (!cancellationPassword.value) {
-    emit('alert', '请输入当前登录密码', 'error')
-    return
-  }
   cancellationBusy.value = true
   try {
     const response = await fetch('/api/users/me/cancellation', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: cancellationPassword.value, confirmation: cancellationConfirmation.value }),
+      body: JSON.stringify({
+        ...(cancellationPassword.value ? { password: cancellationPassword.value } : {}),
+        confirmation: cancellationConfirmation.value,
+      }),
     })
     const data = await response.json().catch(() => null)
     if (!response.ok) throw new Error(data?.message || `注销失败（HTTP ${response.status}）`)
@@ -2259,7 +2258,7 @@ function closeModelPreview() {
               <h3>注销账号</h3>
               <p>确认后，登录身份、个人资料、地址、收藏、购物车、个人作品和专业作品包会被清理或匿名化，之后无法恢复。</p>
               <p>进行中的订单、退款、生产申请或账户余额需要先处理完成。订单、支付和财务流水会以匿名标识保留，用于履约、售后和法定审计。</p>
-              <label><span>当前登录密码</span><input v-model="cancellationPassword" type="password" autocomplete="current-password" placeholder="输入当前密码" :disabled="cancellationBusy" /></label>
+              <label><span>当前登录密码（密码注册账号填写，微信账号可留空）</span><input v-model="cancellationPassword" type="password" autocomplete="current-password" placeholder="微信登录账号可留空" :disabled="cancellationBusy" /></label>
               <label><span>输入“注销账号”确认</span><input v-model="cancellationConfirmation" type="text" autocomplete="off" placeholder="注销账号" :disabled="cancellationBusy" /></label>
               <button type="button" class="account-cancel-action" :disabled="cancellationBusy" @click="cancelAccount">{{ cancellationBusy ? '正在处理…' : '确认注销账号' }}</button>
             </div>

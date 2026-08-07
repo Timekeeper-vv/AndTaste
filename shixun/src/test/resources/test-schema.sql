@@ -7,5 +7,8 @@ CREATE TABLE user (
     password VARCHAR(255) NOT NULL,
     -- Mapper-level unit tests intentionally omit role; production registration
     -- always supplies it and the production schema keeps it NOT NULL.
-    role VARCHAR(20) DEFAULT 'user'
+    role VARCHAR(20) DEFAULT 'user',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login_at TIMESTAMP NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'active'
 );

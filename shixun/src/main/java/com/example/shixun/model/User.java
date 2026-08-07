@@ -2,6 +2,7 @@ package com.example.shixun.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.time.LocalDateTime;
 
 @Schema(description = "用户实体")
 public class User {
@@ -27,6 +28,15 @@ public class User {
 
     @Schema(description = "角色：admin 超级管理员 / technician 审批主管 / feeder 员工", example = "admin")
     private String role;
+
+    @Schema(description = "账号创建时间", accessMode = Schema.AccessMode.READ_ONLY)
+    private LocalDateTime createdAt;
+
+    @Schema(description = "最近成功登录时间", accessMode = Schema.AccessMode.READ_ONLY)
+    private LocalDateTime lastLoginAt;
+
+    @Schema(description = "账号状态", accessMode = Schema.AccessMode.READ_ONLY)
+    private String status;
 
     public User() {
     }
@@ -94,4 +104,11 @@ public Long getId() {
     public void setRole(String role) {
         this.role = role;
     }
+
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getLastLoginAt() { return lastLoginAt; }
+    public void setLastLoginAt(LocalDateTime lastLoginAt) { this.lastLoginAt = lastLoginAt; }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
 }

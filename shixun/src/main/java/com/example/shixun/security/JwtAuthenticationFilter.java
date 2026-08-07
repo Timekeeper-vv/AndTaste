@@ -114,11 +114,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (claims == null || claims.userId() == null || claims.username() == null || claims.role() == null) return false;
         try {
             List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT username, role FROM user WHERE id=? LIMIT 1", claims.userId());
+                    "SELECT username, role, status FROM user WHERE id=? LIMIT 1", claims.userId());
             if (rows.isEmpty()) return false;
             Map<String, Object> row = rows.get(0);
             return claims.username().equals(String.valueOf(row.get("username")))
-                    && claims.role().equals(String.valueOf(row.get("role")));
+                    && claims.role().equals(String.valueOf(row.get("role")))
+                    && (row.get("status") == null || "active".equalsIgnoreCase(String.valueOf(row.get("status"))));
         } catch (RuntimeException ignored) {
             return false;
         }

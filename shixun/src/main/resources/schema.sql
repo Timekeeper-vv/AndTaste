@@ -8,7 +8,10 @@ CREATE TABLE IF NOT EXISTS user (
     email VARCHAR(200),
     phone VARCHAR(20),
     password VARCHAR(255) NOT NULL,
-    role VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT 'admin=超级管理员, technician=审批主管, feeder=员工, designer=设计师, user=C端用户'
+    role VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT 'admin=超级管理员, technician=审批主管, feeder=员工, designer=设计师, user=C端用户',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login_at DATETIME NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'active'
 );
 -- No production users or passwords are seeded here. Bootstrap the first
 -- administrator explicitly through BOOTSTRAP_ADMIN_* deployment variables.
@@ -131,6 +134,20 @@ CREATE TABLE IF NOT EXISTS user_compliance_consent (
     policy_version VARCHAR(50) NOT NULL,
     accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS user_login_audit (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NULL,
+    provider VARCHAR(30) NOT NULL,
+    result VARCHAR(20) NOT NULL,
+    failure_code VARCHAR(80) NULL,
+    ip_hash CHAR(64) NULL,
+    user_agent_hash CHAR(64) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_login_audit_user_time (user_id, created_at),
+    INDEX idx_login_audit_created (created_at),
+    INDEX idx_login_audit_result (result, created_at)
+) COMMENT='账号登录安全审计，不保存原始IP或User-Agent';
 
 
 -- C端客服会话：AI首响，后台人工可接管。

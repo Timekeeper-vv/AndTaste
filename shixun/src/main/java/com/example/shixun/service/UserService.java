@@ -116,10 +116,14 @@ public class UserService {
             throw new IllegalArgumentException("密码不能为空");
         }
         User user = userMapper.findByUsername(username);
-        if (user == null || !passwordEncoder.matches(password, user.getPassword())) {
+        if (user == null || !"active".equalsIgnoreCase(user.getStatus()) || !passwordEncoder.matches(password, user.getPassword())) {
             return CompletableFuture.completedFuture(null);
         }
         user.setPassword(null);
         return CompletableFuture.completedFuture(user);
+    }
+
+    public void touchLastLogin(Long userId) {
+        if (userId != null) userMapper.touchLastLogin(userId);
     }
 }

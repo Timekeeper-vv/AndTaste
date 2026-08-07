@@ -46,6 +46,9 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
 
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 @RestController
 @RequestMapping("/api/users")
@@ -285,6 +288,8 @@ public class UserController {
                 if (user == null) {
                     throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
                 }
+                userService.touchLastLogin(user.getId());
+                recordLoginAudit(user.getId(), "password", "success", null);
                 synchronizePlatformIdentity(user);
                 String token = jwtService.issue(user);
                 return ResponseEntity.ok(Map.of("token", token, "tokenType", "Bearer", "expiresIn", jwtService.expiresSeconds(), "user", user));
@@ -514,7 +519,7 @@ public class UserController {
             // this request was creating the account. Reuse that binding instead
             // of creating a second platform user.
             List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role "
+                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role,u.status "
                             + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
                             + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
                     appId, identity.openId());
@@ -533,7 +538,7 @@ public class UserController {
             String appId, WechatIdentity identity, Map<String, Object> body) {
         return transactions.execute(status -> {
             List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role "
+                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role,u.status "
                             + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
                             + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
                     appId, identity.openId());
@@ -564,7 +569,7 @@ public class UserController {
             outcome = loginWithWechatPhoneIdentity(identity, phone, body);
         } catch (DuplicateKeyException collision) {
             List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role "
+                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role,u.status "
                             + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
                             + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
                     identity.appId(), identity.openId());
@@ -578,7 +583,7 @@ public class UserController {
             WechatIdentity identity, String phone, Map<String, Object> body) {
         return transactions.execute(status -> {
             List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role "
+                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role,u.status "
                             + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
                             + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
                     identity.appId(), identity.openId());
@@ -611,11 +616,43 @@ public class UserController {
     }
 
     private ResponseEntity<Map<String, Object>> loginResponse(User user) {
+        if (user == null || (user.getStatus() != null && !"active".equalsIgnoreCase(user.getStatus()))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已停用，请联系客服");
+        }
+        userService.touchLastLogin(user.getId());
+        user.setLastLoginAt(java.time.LocalDateTime.now());
+        recordLoginAudit(user.getId(), "wechat", "success", null);
         return ResponseEntity.ok(Map.of(
                 "token", jwtService.issue(user),
                 "tokenType", "Bearer",
                 "expiresIn", jwtService.expiresSeconds(),
                 "user", user));
+    }
+
+    private void recordLoginAudit(Long userId, String provider, String result, String failureCode) {
+        try {
+            ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            HttpServletRequest request = attributes == null ? null : attributes.getRequest();
+            jdbc.update("INSERT INTO user_login_audit(user_id,provider,result,failure_code,ip_hash,user_agent_hash) VALUES (?,?,?,?,?,?)",
+                    userId, provider, result, failureCode,
+                    auditHash(request == null ? null : request.getRemoteAddr()),
+                    auditHash(request == null ? null : request.getHeader("User-Agent")));
+        } catch (RuntimeException ex) {
+            log.warn("Unable to record login audit for user {}", userId, ex);
+        }
+    }
+
+    private String auditHash(String value) {
+        if (blank(value)) return null;
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.trim().getBytes(StandardCharsets.UTF_8));
+            StringBuilder encoded = new StringBuilder(64);
+            for (byte b : digest) encoded.append(String.format("%02x", b));
+            return encoded.toString();
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("服务器缺少 SHA-256 实现", impossible);
+        }
     }
 
     private User createWechatUser(Map<String, Object> body) {
@@ -625,6 +662,7 @@ public class UserController {
         user.setEmail(text(body.get("email")));
         user.setAge(number(body.get("age")));
         user.setRole("user");
+        user.setStatus("active");
         // Social accounts do not expose or use this password. A random value
         // keeps the password column non-null and prevents password guessing.
         user.setPassword(UUID.randomUUID() + UUID.randomUUID().toString());
@@ -642,11 +680,14 @@ public class UserController {
         User user = new User();
         user.setUsername("wx_" + suffix);
         user.setPhone(phone);
-        user.setEmail("wx-" + suffix + "@users.zhijiansk.com");
-        user.setAge(18);
+        // Age and email are optional account profile fields. Do not invent
+        // personal data merely to satisfy the legacy password-registration form.
+        user.setEmail(null);
+        user.setAge(null);
         user.setRole("user");
+        user.setStatus("active");
         user.setPassword(UUID.randomUUID() + UUID.randomUUID().toString());
-        validateUser(user);
+        validateWechatPhoneUser(user);
         return user;
     }
 
@@ -666,6 +707,16 @@ public class UserController {
         return value != null && value.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
     }
 
+    private void validateWechatPhoneUser(User user) {
+        if (user.getUsername() == null || user.getUsername().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信账号标识无效");
+        }
+        if (user.getPhone() == null || !user.getPhone().matches("^[0-9+()\\-\\s]{6,30}$")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信手机号无效");
+        }
+        validateRole(user.getRole());
+    }
+
     private User userFromRow(Map<String, Object> row) {
         User user = new User();
         user.setId(((Number) row.get("id")).longValue());
@@ -674,6 +725,7 @@ public class UserController {
         user.setEmail(text(row.get("email")));
         user.setPhone(text(row.get("phone")));
         user.setRole(text(row.get("role")));
+        user.setStatus(text(row.get("status")));
         return user;
     }
 
