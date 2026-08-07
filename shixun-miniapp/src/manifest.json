@@ -7,6 +7,7 @@
   "mp-weixin": {
     "appid": "wxd1ba9e6e01d0e3db",
     "setting": { "urlCheck": true, "es6": true, "minified": true },
-    "__usePrivacyCheck__": true
+    "__usePrivacyCheck__": true,
+    "requiredPrivateInfos": ["getPhoneNumber"]
   }
 }
