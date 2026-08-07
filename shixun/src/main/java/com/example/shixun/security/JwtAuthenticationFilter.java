@@ -41,6 +41,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if ("/api/users/login".equals(path)
                 || "/api/users/wechat-login".equals(path)
                 || "/api/users/wechat-phone-login".equals(path)
+                || "/api/users/email-verification".equals(path)
+                || "/api/users/email-register".equals(path)
                 || path.startsWith("/api/users/wechat-web/")
                 || path.startsWith("/api/users/wechat-mini-web/")
                 || path.startsWith("/api/users/wechat-mini-entry/")) return true;

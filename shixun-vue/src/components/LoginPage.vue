@@ -277,6 +277,7 @@ const wechatWebConsents = [
 const regUsername = ref('')
 const regAge = ref('')
 const regEmail = ref('')
+const regEmailCode = ref('')
 const regPhone = ref('')
 const regPassword = ref('')
 const regConfirm = ref('')
@@ -289,6 +290,9 @@ const agreeContentPolicy = ref(false)
 const realNameAcknowledged = ref(false)
 const complianceConfirmed = ref(false)
 const complianceSignature = ref('')
+const emailCodeSending = ref(false)
+const emailCodeCountdown = ref(0)
+let emailCodeTimer: number | null = null
 
 function openModal(m: 'login' | 'register') {
   modal.value = m
@@ -525,6 +529,39 @@ function syncComplianceConfirmation() {
   realNameAcknowledged.value = complianceConfirmed.value
 }
 
+async function sendEmailCode() {
+  if (emailCodeSending.value || emailCodeCountdown.value > 0) return
+  const email = regEmail.value.trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    regMsg.value = '请先填写正确的邮箱地址'
+    return
+  }
+  emailCodeSending.value = true
+  regMsg.value = ''
+  try {
+    const response = await fetch('/api/users/email-verification', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data?.message || '验证码发送失败')
+    regMsg.value = '验证码已发送，请检查邮箱（5分钟内有效）'
+    emailCodeCountdown.value = 60
+    emailCodeTimer = window.setInterval(() => {
+      emailCodeCountdown.value -= 1
+      if (emailCodeCountdown.value <= 0 && emailCodeTimer !== null) {
+        window.clearInterval(emailCodeTimer)
+        emailCodeTimer = null
+      }
+    }, 1000)
+  } catch (error: any) {
+    regMsg.value = error?.message || '验证码发送失败，请稍后重试'
+  } finally {
+    emailCodeSending.value = false
+  }
+}
+
 async function register() {
   if (regLoading.value) return
   regMsg.value = ''
@@ -532,20 +569,22 @@ async function register() {
   if (regPassword.value !== regConfirm.value) { regMsg.value = 'Passwords do not match'; return }
   if (regPassword.value.length < 12 || regPassword.value !== regPassword.value.trim()) { regMsg.value = lang.value === 'zh' ? '密码至少需要 12 个字符，且首尾不能包含空格' : 'Password must be at least 12 characters and cannot start or end with spaces'; return }
   if (regAge.value && (isNaN(Number(regAge.value)) || Number(regAge.value) <= 0)) { regMsg.value = 'Please enter a valid age'; return }
-  if (!regPhone.value.trim()) { regMsg.value = '请填写手机号，用于实名认证与合作服务联系'; return }
-  if (!/^[0-9+()\-\s]{6,30}$/.test(regPhone.value.trim())) { regMsg.value = '手机号格式不正确'; return }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail.value.trim())) { regMsg.value = '邮箱格式不正确'; return }
+  if (!/^\d{6}$/.test(regEmailCode.value.trim())) { regMsg.value = '请输入6位邮箱验证码'; return }
+  if (regPhone.value.trim() && !/^[0-9+()\-\s]{6,30}$/.test(regPhone.value.trim())) { regMsg.value = '手机号格式不正确'; return }
   if (!complianceConfirmed.value) { regMsg.value = '请勾选电子签署确认后再创建账号'; return }
   if (!complianceSignature.value.trim()) { regMsg.value = '请填写电子签署名称'; return }
   syncComplianceConfirmation()
   regLoading.value = true
   try {
-    const res = await fetch('/api/users', {
+    const res = await fetch('/api/users/email-register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: regUsername.value,
         age: Number(regAge.value),
         email: regEmail.value,
+        emailCode: regEmailCode.value.trim(),
         phone: regPhone.value || undefined,
         password: regPassword.value,
         agreeDisclaimer: agreeDisclaimer.value,
@@ -604,6 +643,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   stopMiniWebLoginPolling()
+  if (emailCodeTimer !== null) window.clearInterval(emailCodeTimer)
   scrollObserver?.disconnect()
   document.body.style.overflow = ''
 })
@@ -1149,7 +1189,7 @@ onUnmounted(() => {
 
             <!-- Register form -->
             <form v-else @submit.prevent="register" class="modal-form registration-form">
-              <div class="registration-intro"><span>CREATE YOUR CREATOR ID</span><b>创建创作者账号</b><small>手机号用于实名认证、作品合作与版权服务联系。</small></div>
+              <div class="registration-intro"><span>CREATE YOUR CREATOR ID</span><b>创建创作者账号</b><small>邮箱验证码用于确认账号归属；手机号可在后续实名认证或合作时补充。</small></div>
               <div class="registration-section-label"><i>01</i><span>身份与联系方式</span></div>
               <div class="mfield-row registration-name-row">
                 <div class="mfield">
@@ -1163,12 +1203,19 @@ onUnmounted(() => {
               </div>
               <div class="mfield-row registration-contact-row">
                 <div class="mfield">
-                  <label>{{ t.fieldPhone }} <span class="req">*</span></label>
-                  <input v-model="regPhone" :placeholder="t.fieldPhonePh" required inputmode="tel" autocomplete="tel" />
+                  <label>{{ t.fieldPhone }} <span class="optional">（可选）</span></label>
+                  <input v-model="regPhone" :placeholder="t.fieldPhonePh + '（可选）'" inputmode="tel" autocomplete="tel" />
                 </div>
                 <div class="mfield">
                   <label>{{ t.fieldEmail }} <span class="req">*</span></label>
                   <input v-model="regEmail" type="email" :placeholder="t.fieldEmailPh" required autocomplete="email" />
+                </div>
+              </div>
+              <div class="mfield email-code-field">
+                <label>邮箱验证码 <span class="req">*</span></label>
+                <div class="verification-input">
+                  <input v-model="regEmailCode" inputmode="numeric" maxlength="6" placeholder="输入6位验证码" autocomplete="one-time-code" required />
+                  <button type="button" @click="sendEmailCode" :disabled="emailCodeSending || emailCodeCountdown > 0">{{ emailCodeSending ? '发送中…' : emailCodeCountdown > 0 ? `${emailCodeCountdown}s后重发` : '获取验证码' }}</button>
                 </div>
               </div>
               <div class="registration-section-label"><i>02</i><span>设置登录密码</span></div>
@@ -2814,4 +2861,11 @@ onUnmounted(() => {
 
 @media(max-width:980px){.destination-mark-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.small-destination-panel{grid-template-columns:1fr;gap:26px}.small-destination-steps{grid-template-columns:repeat(3,minmax(0,1fr))}.discovery-heading{align-items:flex-start;flex-direction:column}.case-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.case-image-wrap{height:170px}.case-copy h3{font-size:16px}.case-copy p{min-height:82px}}
 @media(max-width:680px){.destination-discovery,.proof-section{padding:64px 16px}.discovery-heading h2,.proof-heading h2{font-size:32px}.discovery-heading p,.proof-heading p{font-size:14px}.destination-mark-grid{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:28px}.destination-mark-card{min-height:96px}.small-destination-panel{margin-top:34px;padding:24px}.small-destination-steps{grid-template-columns:1fr}.small-destination-steps article{padding:14px}.small-destination-steps b{margin-top:11px}.proof-heading{gap:14px;flex-direction:column}.case-grid{grid-template-columns:1fr}.case-image-wrap{height:210px}.case-copy h3,.case-copy p{min-height:0}.ranking-panel{margin-top:32px;padding:22px 16px}.ranking-heading{align-items:flex-start;flex-direction:column;gap:14px}.ranking-heading h3{font-size:25px}.ranking-list li{grid-template-columns:28px 8px minmax(0,1fr) 48px;gap:8px}.ranking-list strong{display:none}.ranking-item-copy b{font-size:13px}.ranking-item-copy small{font-size:10px}.ranking-list em{font-size:11px}.discovery-cta{width:100%;justify-content:center}}
+ .optional{color:#94a3b8;font-size:10px;font-weight:500}
+ .email-code-field{margin-top:0}
+ .verification-input{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:8px}
+ .verification-input input{min-width:0}
+ .verification-input button{height:38px;border:1px solid #b7dcd4;border-radius:9px;background:#effcf8;color:#0f766e;font-size:11px;font-weight:800}
+ .verification-input button:disabled{opacity:.55;cursor:not-allowed}
+ @media(max-width:768px){.verification-input{grid-template-columns:minmax(0,1fr) 108px}}
 </style>

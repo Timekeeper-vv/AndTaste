@@ -168,6 +168,17 @@ payment.wechat.reconcile-delay-ms=$PAYMENT_WECHAT_RECONCILE_DELAY_MS
 payment.wechat.reconcile-limit=$PAYMENT_WECHAT_RECONCILE_LIMIT
 payment.wechat.daily-reconcile-cron=$PAYMENT_WECHAT_DAILY_RECONCILE_CRON
 payment.wechat.daily-reconcile-retry-cron=$PAYMENT_WECHAT_DAILY_RECONCILE_RETRY_CRON
+spring.mail.host=$EMAIL_SMTP_HOST
+spring.mail.port=${EMAIL_SMTP_PORT:-465}
+spring.mail.username=$EMAIL_SMTP_USERNAME
+spring.mail.password=$EMAIL_SMTP_PASSWORD
+spring.mail.protocol=${EMAIL_SMTP_PROTOCOL:-smtps}
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.ssl.enable=${EMAIL_SMTP_SSL:-true}
+spring.mail.properties.mail.smtp.starttls.enable=${EMAIL_SMTP_STARTTLS:-false}
+app.email.verification-enabled=${EMAIL_VERIFICATION_ENABLED:-false}
+app.email.from=${EMAIL_FROM:-$EMAIL_SMTP_USERNAME}
+app.email.verification-secret=$EMAIL_VERIFICATION_SECRET
 CFG
   chmod 600 "$BACKEND_DIR/application-local.properties" "$ENV_FILE" 2>/dev/null || true
   ok "生产配置已生成"
@@ -232,6 +243,7 @@ init_db(){
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260804_01__historical_sales_data.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260805_01__consumer_sample_payment.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260807_01__consumer_account_security.sql"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260807_02__email_registration_verification.sql"
   ok "数据库及业务账号已就绪：$DB_NAME / $DB_USER"
 }
 

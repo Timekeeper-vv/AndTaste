@@ -149,6 +149,20 @@ CREATE TABLE IF NOT EXISTS user_login_audit (
     INDEX idx_login_audit_result (result, created_at)
 ) COMMENT='账号登录安全审计，不保存原始IP或User-Agent';
 
+CREATE TABLE IF NOT EXISTS user_email_verification (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(254) NOT NULL,
+    purpose VARCHAR(30) NOT NULL,
+    code_hash CHAR(64) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    used_at DATETIME NULL,
+    requested_ip_hash CHAR(64) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_email_verification_lookup (email, purpose, used_at, expires_at),
+    INDEX idx_email_verification_created (created_at)
+) COMMENT='邮箱验证码，仅保存不可逆摘要';
+
 
 -- C端客服会话：AI首响，后台人工可接管。
 CREATE TABLE IF NOT EXISTS customer_service_conversation (

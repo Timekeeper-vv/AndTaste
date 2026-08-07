@@ -2,6 +2,7 @@ package com.example.shixun.controller;
 
 import com.example.shixun.model.User;
 import com.example.shixun.service.UserService;
+import com.example.shixun.service.EmailVerificationService;
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -62,6 +63,7 @@ public class UserController {
     private static final int MIN_PASSWORD_LENGTH = 12;
 
     private final UserService userService;
+    private final EmailVerificationService emailVerificationService;
     private final JwtService jwtService;
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -97,9 +99,10 @@ public class UserController {
     private static final Duration WEB_TICKET_TTL = Duration.ofMinutes(2);
     private static final Duration MINI_WEB_LOGIN_TTL = Duration.ofMinutes(3);
 
-    public UserController(UserService userService, JwtService jwtService, JdbcTemplate jdbc,
+    public UserController(UserService userService, EmailVerificationService emailVerificationService, JwtService jwtService, JdbcTemplate jdbc,
                           ObjectMapper mapper, PlatformTransactionManager transactionManager) {
         this.userService = userService;
+        this.emailVerificationService = emailVerificationService;
         this.jwtService = jwtService;
         this.jdbc = jdbc;
         this.mapper = mapper;
@@ -186,6 +189,68 @@ public class UserController {
         jdbc.execute("CREATE TABLE IF NOT EXISTS user_compliance_consent (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, disclaimer_accepted TINYINT NOT NULL, confidentiality_accepted TINYINT NOT NULL, content_policy_accepted TINYINT NOT NULL, real_name_acknowledged TINYINT NOT NULL DEFAULT 0, signature_name VARCHAR(100), policy_version VARCHAR(50) NOT NULL, accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         try { jdbc.execute("ALTER TABLE user_compliance_consent ADD COLUMN signature_name VARCHAR(100)"); } catch (Exception ignored) { }
         jdbc.update("INSERT INTO user_compliance_consent (user_id,disclaimer_accepted,confidentiality_accepted,content_policy_accepted,real_name_acknowledged,signature_name,policy_version) VALUES (?,?,?,?,?,?,?)", userId, 1, 1, 1, yes(body.get("realNameAcknowledged")) ? 1 : 0, text(body.get("complianceSignature")), "2026-07-30");
+    }
+
+    @PostMapping("/email-verification")
+    @Operation(summary = "发送邮箱注册验证码")
+    public Map<String, Object> sendEmailRegistrationCode(
+            @RequestBody Map<String, Object> body,
+            HttpServletRequest request) {
+        emailVerificationService.sendRegistrationCode(
+                text(body == null ? null : body.get("email")),
+                request == null ? null : request.getRemoteAddr());
+        return Map.of("success", true, "message", "验证码已发送，请检查邮箱");
+    }
+
+    @PostMapping("/email-register")
+    @Operation(summary = "使用邮箱验证码注册 C 端账号")
+    public ResponseEntity<Map<String, Object>> emailRegister(@RequestBody Map<String, Object> body) {
+        String email = emailVerificationService.normalizeEmail(text(body == null ? null : body.get("email")));
+        requireConsent(body, "agreeDisclaimer", "请先阅读并同意免责声明");
+        requireConsent(body, "agreeConfidentiality", "请先阅读并同意保密协议");
+        requireConsent(body, "agreeContentPolicy", "请先阅读并同意内容创作规范");
+        requireConsent(body, "realNameAcknowledged", "请确认后续作品合作须完成实名认证");
+        if (blank(text(body == null ? null : body.get("complianceSignature")))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请完成合规电子签署");
+        }
+
+        User user = new User();
+        user.setUsername(text(body == null ? null : body.get("username")));
+        user.setAge(number(body == null ? null : body.get("age")));
+        user.setEmail(email);
+        user.setPhone(text(body == null ? null : body.get("phone")));
+        user.setPassword(text(body == null ? null : body.get("password")));
+        user.setRole("user");
+        validateEmailRegistration(user);
+        validatePassword(user.getPassword());
+        // Consume the code only after all other registration fields pass validation.
+        emailVerificationService.consumeRegistrationCode(email, text(body == null ? null : body.get("emailCode")));
+        try {
+            User created = userService.createSocialUser(user);
+            recordComplianceConsent(created.getId(), body);
+            synchronizePlatformIdentity(created);
+            userService.touchLastLogin(created.getId());
+            recordLoginAudit(created.getId(), "email_registration", "success", null);
+            return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
+                    "token", jwtService.issue(created),
+                    "tokenType", "Bearer",
+                    "expiresIn", jwtService.expiresSeconds(),
+                    "user", created));
+        } catch (IllegalArgumentException error) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, error.getMessage());
+        }
+    }
+
+    private void validateEmailRegistration(User user) {
+        if (blank(user.getUsername())) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "用户名不能为空");
+        if (user.getAge() == null || user.getAge() <= 0 || user.getAge() > 150) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "年龄格式不正确");
+        }
+        if (user.getPhone() != null && !user.getPhone().isBlank()
+                && !user.getPhone().matches("^[0-9+()\\-\\s]{6,30}$")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "手机号格式不正确");
+        }
+        validateRole(user.getRole());
     }
 
     private void requireConsent(Map<String, Object> body, String key, String message) {
