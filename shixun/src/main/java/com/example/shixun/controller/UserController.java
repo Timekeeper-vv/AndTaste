@@ -39,6 +39,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
@@ -636,7 +638,7 @@ public class UserController {
     }
 
     private User createWechatPhoneUser(WechatIdentity identity, String phone) {
-        String suffix = Integer.toUnsignedString(identity.openId().hashCode(), 36);
+        String suffix = socialIdentitySuffix(identity.openId());
         User user = new User();
         user.setUsername("wx_" + suffix);
         user.setPhone(phone);
@@ -646,6 +648,18 @@ public class UserController {
         user.setPassword(UUID.randomUUID() + UUID.randomUUID().toString());
         validateUser(user);
         return user;
+    }
+
+    private String socialIdentitySuffix(String openId) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(openId.getBytes(StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder(24);
+            for (int i = 0; i < 12; i++) result.append(String.format("%02x", digest[i]));
+            return result.toString();
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("服务器缺少 SHA-256 实现", impossible);
+        }
     }
 
     private boolean validEmail(String value) {
