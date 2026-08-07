@@ -65,7 +65,8 @@ onLaunch(() => {
   restoreSession()
     .then(() => {
       const target = sessionStartRoute()
-      // 用户端统一由网页端承载；本地令牌只用于 web-view 启动时的一次性引导。
+      // 登录后的正式用户端由原生页面承载；web-view 仅用于网页扫码交接
+      // 及模型预览、材质编辑等必须使用 H5 的受限工具。
       setTimeout(() => uni.reLaunch({ url: target }), 0)
     })
     .catch(() => undefined)

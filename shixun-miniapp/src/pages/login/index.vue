@@ -32,7 +32,6 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 const fromWebview = ref(false)
-const fromMiniapp = ref(false)
 const miniWebLoginSession = ref('')
 const wechatLoading = ref(false)
 const wechatPhoneRequired = ref(false)
@@ -54,8 +53,6 @@ function finishLogin(session: any) {
   } else if (fromWebview.value) {
     uni.setStorageSync('smart_pig_auth_updated', String(Date.now()))
     uni.navigateBack()
-  } else if (fromMiniapp.value) {
-    uni.reLaunch({ url: '/pages/webview/index' })
   } else {
     uni.reLaunch({ url: '/pages/purpose/index' })
   }
@@ -145,11 +142,10 @@ function goRegister() { uni.navigateTo({ url: '/pages/register/index' }) }
 
 onLoad((query: Record<string, string> = {}) => {
   fromWebview.value = query.from === 'webview'
-  fromMiniapp.value = query.from === 'miniapp'
   miniWebLoginSession.value = query.miniWebLoginSession || ''
   // The web-view login button already represents an explicit user action.
   // Continue that action automatically after the native page is ready.
-  if (fromWebview.value || fromMiniapp.value || miniWebLoginSession.value) setTimeout(() => void wechatLogin(), 80)
+  if (fromWebview.value || miniWebLoginSession.value) setTimeout(() => void wechatLogin(), 80)
 })
 </script>
 

@@ -12,8 +12,8 @@
     <view v-if="failed" class="fallback" role="alert">
       <view class="fallback-mark">之</view>
       <text class="fallback-title">暂时无法打开创作空间</text>
-      <text class="fallback-copy">创作空间与网站用户端使用同一套页面和功能。请确认小程序业务域名已配置为当前 HTTPS 域名后重试。</text>
-      <button class="fallback-action" @tap="reload">重新打开</button>
+      <text class="fallback-copy">网页工具暂时无法打开。日常创作、作品、订单和服务请使用小程序原生页面；请确认 3D 工具所需的 HTTPS 业务域名已配置。</text>
+      <button class="fallback-action" @tap="reload">重新打开网页工具</button>
     </view>
   </view>
 </template>

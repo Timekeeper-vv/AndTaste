@@ -64,7 +64,7 @@
       </view>
       <view class="menu-row" @tap="go('/pages/orders/index')">
         <view class="menu-icon orders">单</view>
-        <view class="menu-copy"><text>我的商城订单</text><text>查看待支付订单；支付能力即将接入</text></view>
+        <view class="menu-copy"><text>我的商城订单</text><text>查看已创建订单和当前处理状态</text></view>
         <text class="arrow">›</text>
       </view>
     </view>
@@ -88,6 +88,12 @@
     </view>
 
     <button class="logout" @tap="logout">退出当前账号</button>
+    <view class="bottom-nav">
+      <view @tap="goHome"><text>⌂</text><text>首页</text></view>
+      <view @tap="go('/pages/create/index?mode=image')"><text>✦</text><text>创作</text></view>
+      <view @tap="go('/pages/works/index')"><text>▣</text><text>作品</text></view>
+      <view class="active"><text>◉</text><text>我的</text></view>
+    </view>
   </view>
 </template>
 
@@ -98,6 +104,7 @@ import { clearSession, getSession } from '../../utils/session'
 const user = ref(getSession()?.user)
 const displayName = computed(() => user.value?.username || '创作用户')
 const go = (url: string) => uni.navigateTo({ url })
+const goHome = () => uni.reLaunch({ url: '/pages/home/index' })
 
 function logout() {
   uni.showModal({
@@ -118,7 +125,7 @@ function logout() {
   min-height: 100vh;
   box-sizing: border-box;
   overflow: hidden;
-  padding: 58rpx 32rpx calc(68rpx + env(safe-area-inset-bottom));
+  padding: 58rpx 32rpx calc(156rpx + env(safe-area-inset-bottom));
   background:
     linear-gradient(145deg, rgba(255, 255, 255, .8), rgba(245, 240, 230, .92)),
     #f7f3ed;
@@ -155,4 +162,9 @@ function logout() {
 .arrow { margin-left: 14rpx; color: #8ba094; font-size: 42rpx; font-weight: 300; line-height: 1; }
 .service-badge { margin-left: 10rpx; padding: 4rpx 10rpx; border-radius: 99rpx; color: #4a8370; background: #e5f5ed; font-size: 18rpx; font-weight: 800; }
 .logout { width: 100%; height: 91rpx; margin-top: 49rpx; border: 1rpx solid #ecdcd1; border-radius: 22rpx; color: #a3654d; background: rgba(250, 242, 236, .9); font-size: 27rpx; }
+.bottom-nav { position: fixed; z-index: 5; right: 24rpx; bottom: calc(20rpx + env(safe-area-inset-bottom)); left: 24rpx; display: grid; grid-template-columns: repeat(4, 1fr); overflow: hidden; min-height: 96rpx; border: 1rpx solid rgba(116, 103, 83, .15); border-radius: 22rpx; background: rgba(255, 253, 249, .96); box-shadow: 0 13rpx 34rpx rgba(63, 50, 34, .16); }
+.bottom-nav view { display: flex; align-items: center; justify-content: center; gap: 5rpx; min-width: 0; flex-direction: column; color: #8c877e; font-size: 18rpx; }
+.bottom-nav view text:first-child { color: #849489; font-size: 27rpx; line-height: 1; }
+.bottom-nav .active { color: #4f7563; background: #edf4ed; font-weight: 800; }
+.bottom-nav .active text:first-child { color: #547b69; }
 </style>
