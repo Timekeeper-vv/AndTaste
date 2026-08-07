@@ -109,6 +109,16 @@ public class UserController {
         this.transactions = new TransactionTemplate(transactionManager);
     }
 
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> userRequestError(ResponseStatusException error) {
+        String message = blank(error.getReason())
+                ? error.getStatus().getReasonPhrase()
+                : error.getReason();
+        return ResponseEntity.status(error.getStatus()).body(Map.of(
+                "code", "USER_REQUEST_ERROR",
+                "message", message));
+    }
+
     @GetMapping
     @Operation(summary = "获取用户（传page参数则返回分页结果）")
     @ApiResponse(responseCode = "200", description = "查询成功")
