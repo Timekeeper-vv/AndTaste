@@ -2,8 +2,8 @@
   <view v-if="privacyVisible" class="privacy-mask">
     <view class="privacy-dialog">
       <text class="privacy-title">请先阅读隐私保护指引</text>
-      <text class="privacy-copy">为了完成微信登录、账号安全和订单服务，我们会在你同意后处理必要的登录凭证和你主动授权的手机号。SessionKey 只在服务端使用，不会返回给小程序。</text>
-      <text class="privacy-link" @tap="openPrivacyContract">查看微信官方隐私协议</text>
+      <text class="privacy-copy">为了完成手机号快捷登录、账号安全和订单服务，我们会在你同意后处理必要的登录凭证和你主动授权的手机号。SessionKey 只在服务端使用，不会返回给小程序。</text>
+      <text class="privacy-link" @tap="openPrivacyContract">查看隐私保护指引</text>
       <view class="privacy-actions">
         <button class="privacy-secondary" @tap="rejectPrivacy">暂不使用</button>
         <button class="privacy-primary" @tap="agreePrivacy">同意并继续</button>
@@ -26,7 +26,7 @@ function openPrivacyContract() {
     wxApi.openPrivacyContract({ fail: () => uni.showToast({ title: '隐私协议暂时无法打开', icon: 'none' }) })
     return
   }
-  uni.showToast({ title: '请在微信小程序中查看', icon: 'none' })
+  uni.showToast({ title: '请在小程序中查看', icon: 'none' })
 }
 
 function agreePrivacy() {
@@ -41,7 +41,7 @@ function rejectPrivacy() {
   const resolve = privacyResolver.value
   privacyResolver.value = null
   resolve?.({ event: 'disagree' })
-  uni.showToast({ title: '同意隐私指引后才能使用微信登录', icon: 'none' })
+  uni.showToast({ title: '同意隐私指引后才能使用手机号快捷登录', icon: 'none' })
 }
 
 onLaunch(() => {

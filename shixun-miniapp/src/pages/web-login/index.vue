@@ -1,10 +1,10 @@
 <template>
   <view class="page">
     <view class="panel">
-      <text class="eyebrow">WECHAT WEB LOGIN</text>
+      <text class="eyebrow">SECURE WEB LOGIN</text>
       <text class="title">确认登录网页端</text>
       <text class="copy">确认后，当前网页会自动进入你的创作空间。</text>
-      <button class="confirm" :loading="loading" @tap="confirmLogin">确认微信登录</button>
+      <button class="confirm" :loading="loading" @tap="confirmLogin">确认登录</button>
       <text v-if="message" class="message">{{ message }}</text>
     </view>
   </view>
@@ -24,8 +24,8 @@ function loginCode(): Promise<string> {
   return new Promise((resolve, reject) => {
     uni.login({
       provider: 'weixin',
-      success: result => result.code ? resolve(result.code) : reject(new Error('微信登录凭证获取失败')),
-      fail: () => reject(new Error('微信登录失败，请检查网络后重试')),
+      success: result => result.code ? resolve(result.code) : reject(new Error('登录凭证获取失败')),
+      fail: () => reject(new Error('登录失败，请检查网络后重试')),
     })
   })
 }
