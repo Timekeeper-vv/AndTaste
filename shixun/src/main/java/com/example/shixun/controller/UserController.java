@@ -683,21 +683,54 @@ public class UserController {
             if (!yes(body == null ? null : body.get("agreeTerms"))) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先同意用户服务与隐私说明");
             }
+            User existingPhoneUser = linkExistingUserByAuthorizedPhone(identity, phone);
+            if (existingPhoneUser != null) return new WechatLoginOutcome(existingPhoneUser, false);
             User created = createWechatPhoneUser(identity, phone);
             User interruptedRegistration = recoverInterruptedWechatPhoneRegistration(created, identity, phone);
             if (interruptedRegistration != null) return new WechatLoginOutcome(interruptedRegistration, false);
             userService.createSocialUser(created);
-            recordComplianceConsent(created.getId(), Map.of(
-                    "agreeDisclaimer", true,
-                    "agreeConfidentiality", true,
-                    "agreeContentPolicy", true,
-                    "realNameAcknowledged", true,
-                    "complianceSignature", "微信手机号授权"));
+            recordComplianceConsent(created.getId(), phoneLoginConsent());
             jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
                     created.getId(), identity.appId(), identity.openId());
             synchronizePlatformIdentity(created);
             return new WechatLoginOutcome(created, false);
         });
+    }
+
+    /**
+     * An existing C-end account can opt into phone quick login by authorizing
+     * the same phone number. The phone comes only from the provider API, never
+     * from client input, and is required to identify exactly one account.
+     */
+    private User linkExistingUserByAuthorizedPhone(WechatIdentity identity, String phone) {
+        List<Map<String, Object>> matches = jdbc.queryForList(
+                "SELECT id,username,age,email,phone,role,status FROM user WHERE phone=? FOR UPDATE", phone);
+        if (matches.isEmpty()) return null;
+        if (matches.size() != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "该手机号关联了多个账号，请使用用户名或邮箱登录后联系平台处理");
+        }
+        User existing = userFromRow(matches.get(0));
+        if (!"user".equals(existing.getRole())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "该账号不能登录用户端");
+        }
+        if (existing.getStatus() != null && !"active".equalsIgnoreCase(existing.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已停用，请联系客服");
+        }
+        List<String> boundOpenIds = jdbc.query(
+                "SELECT openid FROM wechat_user_binding WHERE user_id=? AND app_id=? FOR UPDATE",
+                (rs, rowNum) -> rs.getString(1), existing.getId(), identity.appId());
+        if (!boundOpenIds.isEmpty() && !identity.openId().equals(boundOpenIds.get(0))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "该账号已绑定其他小程序身份，请使用原登录方式或联系客服处理");
+        }
+        if (boundOpenIds.isEmpty()) {
+            jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
+                    existing.getId(), identity.appId(), identity.openId());
+            recordComplianceConsent(existing.getId(), phoneLoginConsent());
+        }
+        synchronizePlatformIdentity(existing);
+        return existing;
     }
 
     /**
@@ -722,16 +755,20 @@ public class UserController {
         if (existing.getStatus() != null && !"active".equalsIgnoreCase(existing.getStatus())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已停用，请联系客服");
         }
-        recordComplianceConsent(existing.getId(), Map.of(
-                "agreeDisclaimer", true,
-                "agreeConfidentiality", true,
-                "agreeContentPolicy", true,
-                "realNameAcknowledged", true,
-                "complianceSignature", "微信手机号授权"));
+        recordComplianceConsent(existing.getId(), phoneLoginConsent());
         jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
                 existing.getId(), identity.appId(), identity.openId());
         synchronizePlatformIdentity(existing);
         return existing;
+    }
+
+    private Map<String, Object> phoneLoginConsent() {
+        return Map.of(
+                "agreeDisclaimer", true,
+                "agreeConfidentiality", true,
+                "agreeContentPolicy", true,
+                "realNameAcknowledged", true,
+                "complianceSignature", "微信手机号授权");
     }
 
     private ResponseEntity<Map<String, Object>> loginResponse(User user) {
