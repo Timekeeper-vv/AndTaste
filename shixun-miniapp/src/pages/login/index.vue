@@ -15,7 +15,7 @@
         <view class="consent-row" @tap="wechatTermsAccepted = !wechatTermsAccepted">
           <text class="check">{{ wechatTermsAccepted ? '✓' : '' }}</text><text>我已阅读并同意用户服务、隐私说明与内容规范，并确认后续合作按要求完成实名认证</text>
         </view>
-        <button class="phone-auth-button" open-type="getPhoneNumber" :loading="wechatLoading" :disabled="wechatLoading || !wechatTermsAccepted" @getphonenumber="authorizeWechatPhone">授权微信手机号并登录</button>
+        <button class="phone-auth-button" open-type="getPhoneNumber|agreePrivacyAuthorization" phone-number-no-quota-toast="false" :loading="wechatLoading" :disabled="wechatLoading || !wechatTermsAccepted" @getphonenumber="authorizeWechatPhone" @agreeprivacyauthorization="handleOfficialPrivacyAuthorization">授权微信手机号并登录</button>
       </view>
       <view class="register-row"><text>还没有账号？</text><text @tap="goRegister">创建创作账号 ›</text></view>
       <text class="hint">支持平台账号登录。微信登录首次使用时需要补充必要资料并完成合规确认。</text>
@@ -37,6 +37,12 @@ const miniWebLoginSession = ref('')
 const wechatLoading = ref(false)
 const wechatPhoneRequired = ref(false)
 const wechatTermsAccepted = ref(false)
+
+function handleOfficialPrivacyAuthorization() {
+  // The coupled WeChat button has already synchronized the official privacy
+  // consent. The phone callback below remains the only place that accepts the
+  // one-time phone code.
+}
 
 function finishLogin(session: any) {
   if (!session?.token || !session?.user) throw new Error('登录响应缺少令牌')
@@ -98,11 +104,14 @@ async function authorizeWechatPhone(event: any) {
   const errorNumber = event?.detail?.errno == null ? '' : String(event.detail.errno)
   if (!phoneCode) {
     const isDevtools = /devtools|simulator|mock/i.test(errorMessage)
+    const isOutOfQuota = errorNumber === '1400001'
     const diagnostic = [errorMessage, errorNumber ? `errno=${errorNumber}` : ''].filter(Boolean).join('；')
     uni.showModal({
-      title: isDevtools ? '请使用真机授权' : '手机号授权未完成',
+      title: isDevtools ? '请使用真机授权' : isOutOfQuota ? '手机号验证额度不足' : '手机号授权未完成',
       content: isDevtools
         ? '微信开发者工具模拟器不支持真实手机号授权。请点击工具栏“预览”，用真实微信扫码打开小程序后再授权。'
+        : isOutOfQuota
+          ? '本小程序的手机号验证体验额度已用完，请在微信公众平台购买“手机号快速验证组件”用量后再试。'
         : `请在微信官方弹窗中选择“允许”。如果没有弹窗，请确认小程序已认证并在隐私指引中声明手机号后再试。${diagnostic ? `\n\n微信返回：${diagnostic}` : ''}`,
       showCancel: false,
     })
