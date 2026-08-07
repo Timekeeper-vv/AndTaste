@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { AuthSession } from '../types'
 import andTasteLogo from '../assets/and_taste.png'
+import { isEmbeddedMiniapp, navigateToMiniappPage } from '../utils/miniappBridge'
 
 const emit = defineEmits<{ login: [session: AuthSession] }>()
 
@@ -254,6 +255,7 @@ const username = ref('')
 const password = ref('')
 const loginMsg = ref('')
 const loginLoading = ref(false)
+const embeddedMiniapp = isEmbeddedMiniapp()
 
 const regUsername = ref('')
 const regAge = ref('')
@@ -316,6 +318,12 @@ async function login() {
     loginMsg.value = 'Network error, please try again'
   } finally {
     loginLoading.value = false
+  }
+}
+
+function openWechatLogin() {
+  if (!navigateToMiniappPage('/pages/login/index?from=webview')) {
+    loginMsg.value = lang.value === 'zh' ? '请在微信小程序中使用微信登录' : '微信登录只能在小程序中使用'
   }
 }
 
@@ -892,6 +900,7 @@ onUnmounted(() => {
                 <span v-if="loginLoading" class="spinner"></span>
                 {{ loginLoading ? t.submittingLogin : t.submitLogin }}
               </button>
+              <button v-if="embeddedMiniapp" type="button" class="modal-wechat-login" @click="openWechatLogin">微信小程序登录</button>
               <p class="modal-switch">{{ t.switchToReg }} <a @click="switchModal('register')">{{ t.switchToRegLink }}</a></p>
             </form>
 
@@ -2069,6 +2078,8 @@ onUnmounted(() => {
 }
 .modal-submit:hover:not(:disabled) { opacity: .9; transform: translateY(-1px); }
 .modal-submit:disabled { opacity: .5; cursor: not-allowed; }
+.modal-wechat-login { width: 100%; min-height: 42px; margin-top: 10px; border: 1px solid #86b49a; border-radius: 10px; background: #f2faf4; color: #34704d; font-weight: 700; cursor: pointer; }
+.modal-wechat-login:hover { background: #e8f5eb; }
 
 .modal-switch {
   text-align: center; font-size: 13px; color: #64748b; margin: 0;

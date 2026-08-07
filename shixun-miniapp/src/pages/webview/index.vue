@@ -31,6 +31,7 @@ const DEFAULT_CONSUMER_WEB_URL = 'https://zhijiansk.com/'
 const source = ref('')
 const failed = ref(false)
 const nativeTokenPending = ref(false)
+const lastAuthUpdate = ref('')
 let requested = false
 
 function consumerWebUrl(): string {
@@ -111,6 +112,13 @@ onLoad(() => {
 })
 
 onShow(() => {
+  const authUpdate = String(uni.getStorageSync('smart_pig_auth_updated') || '')
+  if (authUpdate && authUpdate !== lastAuthUpdate.value) {
+    lastAuthUpdate.value = authUpdate
+    uni.removeStorageSync('smart_pig_auth_updated')
+    loadConsumerPage()
+    return
+  }
   // If WeChat has recreated the page after a failed navigation, try once more
   // when it becomes visible. Do not reload a healthy web-view on every show.
   if (!source.value && !failed.value) loadConsumerPage()

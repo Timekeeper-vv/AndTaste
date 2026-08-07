@@ -4,6 +4,8 @@ import com.example.shixun.model.User;
 import com.example.shixun.service.UserService;
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -13,7 +15,11 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.slf4j.Logger;
@@ -25,6 +31,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/users")
@@ -40,11 +53,25 @@ public class UserController {
     private final UserService userService;
     private final JwtService jwtService;
     private final JdbcTemplate jdbc;
+    private final ObjectMapper mapper;
+    private final TransactionTemplate transactions;
+    private final HttpClient wechatHttp = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .build();
 
-    public UserController(UserService userService, JwtService jwtService, JdbcTemplate jdbc) {
+    @Value("${payment.wechat.app-id:}")
+    private String wechatAppId;
+
+    @Value("${payment.wechat.mini-app-secret:}")
+    private String wechatMiniAppSecret;
+
+    public UserController(UserService userService, JwtService jwtService, JdbcTemplate jdbc,
+                          ObjectMapper mapper, PlatformTransactionManager transactionManager) {
         this.userService = userService;
         this.jwtService = jwtService;
         this.jdbc = jdbc;
+        this.mapper = mapper;
+        this.transactions = new TransactionTemplate(transactionManager);
     }
 
     @GetMapping
@@ -242,6 +269,174 @@ public class UserController {
                 throw new RuntimeException(cause);
             });
     }
+
+    /**
+     * Logs a mini-program user in with a one-time uni.login code. The code is
+     * exchanged server-side; neither the AppSecret, session_key, nor OpenID
+     * ever reaches the mini-program.
+     *
+     * <p>An existing OpenID binding logs in immediately. A first-time user
+     * receives a conflict response asking the client for the required account
+     * profile and consent fields, then submits a fresh login code to create the
+     * account and binding atomically.</p>
+     */
+    @PostMapping("/wechat-login")
+    @Operation(summary = "微信小程序登录", description = "使用小程序 uni.login 临时凭证登录或创建 C 端账号")
+    public ResponseEntity<Map<String, Object>> wechatLogin(@RequestBody(required = false) Map<String, Object> body) throws Exception {
+        String code = text(body == null ? null : body.get("code"));
+        if (code == null || code.length() < 6 || code.length() > 512 || code.contains(" ")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信登录凭证无效，请重新点击微信登录");
+        }
+        WechatIdentity identity = exchangeWechatCode(code);
+        ensureWechatBindingTable();
+
+        WechatLoginOutcome outcome;
+        try {
+            outcome = transactions.execute(status -> {
+                List<Map<String, Object>> rows = jdbc.queryForList(
+                        "SELECT u.id,u.username,u.age,u.email,u.phone,u.role "
+                                + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
+                                + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
+                        wechatAppId, identity.openId());
+                if (!rows.isEmpty()) {
+                    User existing = userFromRow(rows.get(0));
+                    if (!"user".equals(existing.getRole())) {
+                        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "该微信账号不能登录小程序用户端");
+                    }
+                    return new WechatLoginOutcome(existing, false);
+                }
+
+                if (!hasWechatProfile(body)) return new WechatLoginOutcome(null, true);
+                User created = createWechatUser(body);
+                userService.createSocialUser(created);
+                recordComplianceConsent(created.getId(), body);
+                jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
+                        created.getId(), wechatAppId, identity.openId());
+                synchronizePlatformIdentity(created);
+                return new WechatLoginOutcome(created, false);
+            });
+        } catch (DuplicateKeyException collision) {
+            // Another request may have completed the same OpenID binding while
+            // this request was creating the account. Never create a second
+            // platform user; return the now-existing binding instead.
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT u.id,u.username,u.age,u.email,u.phone,u.role "
+                            + "FROM wechat_user_binding b JOIN user u ON u.id=b.user_id "
+                            + "WHERE b.app_id=? AND b.openid=? LIMIT 1",
+                    wechatAppId, identity.openId());
+            if (rows.isEmpty()) throw collision;
+            outcome = new WechatLoginOutcome(userFromRow(rows.get(0)), false);
+        }
+
+        if (outcome.profileRequired()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "code", "WECHAT_PROFILE_REQUIRED",
+                    "message", "首次微信登录请补充账号资料并完成合规确认"));
+        }
+        User user = outcome.user();
+        return ResponseEntity.ok(Map.of(
+                "token", jwtService.issue(user),
+                "tokenType", "Bearer",
+                "expiresIn", jwtService.expiresSeconds(),
+                "user", user));
+    }
+
+    private boolean hasWechatProfile(Map<String, Object> body) {
+        return body != null
+                && !blank(text(body.get("username")))
+                && !blank(text(body.get("phone")))
+                && !blank(text(body.get("email")))
+                && body.get("age") != null
+                && !blank(text(body.get("signature")))
+                && yes(body.get("agreeDisclaimer"))
+                && yes(body.get("agreeConfidentiality"))
+                && yes(body.get("agreeContentPolicy"))
+                && yes(body.get("realNameAcknowledged"));
+    }
+
+    private User createWechatUser(Map<String, Object> body) {
+        User user = new User();
+        user.setUsername(text(body.get("username")));
+        user.setPhone(text(body.get("phone")));
+        user.setEmail(text(body.get("email")));
+        user.setAge(number(body.get("age")));
+        user.setRole("user");
+        // Social accounts do not expose or use this password. A random value
+        // keeps the password column non-null and prevents password guessing.
+        user.setPassword(UUID.randomUUID() + UUID.randomUUID().toString());
+        validateUser(user);
+        if (!validEmail(user.getEmail())) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "邮箱格式不正确");
+        if (!yes(body.get("agreeDisclaimer")) || !yes(body.get("agreeConfidentiality"))
+                || !yes(body.get("agreeContentPolicy")) || !yes(body.get("realNameAcknowledged"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成全部使用确认");
+        }
+        return user;
+    }
+
+    private boolean validEmail(String value) {
+        return value != null && value.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+    }
+
+    private User userFromRow(Map<String, Object> row) {
+        User user = new User();
+        user.setId(((Number) row.get("id")).longValue());
+        user.setUsername(text(row.get("username")));
+        user.setAge(number(row.get("age")));
+        user.setEmail(text(row.get("email")));
+        user.setPhone(text(row.get("phone")));
+        user.setRole(text(row.get("role")));
+        return user;
+    }
+
+    private void ensureWechatBindingTable() {
+        jdbc.execute("CREATE TABLE IF NOT EXISTS wechat_user_binding ("
+                + "id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, app_id VARCHAR(64) NOT NULL, "
+                + "openid VARCHAR(128) NOT NULL, bound_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                + "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, "
+                + "UNIQUE KEY uk_wechat_user_app(user_id, app_id), UNIQUE KEY uk_wechat_app_openid(app_id, openid), "
+                + "INDEX idx_wechat_binding_user(user_id))");
+    }
+
+    private WechatIdentity exchangeWechatCode(String code) throws Exception {
+        if (blank(wechatAppId) || blank(wechatMiniAppSecret)) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信小程序登录配置尚未完成");
+        }
+        String url = "https://api.weixin.qq.com/sns/jscode2session?appid=" + encode(wechatAppId)
+                + "&secret=" + encode(wechatMiniAppSecret) + "&js_code=" + encode(code)
+                + "&grant_type=authorization_code";
+        HttpResponse<String> response;
+        try {
+            response = wechatHttp.send(HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (Exception error) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信登录服务暂时不可用，请稍后重试");
+        }
+        if (response.statusCode() != 200) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信登录服务暂时不可用，请稍后重试");
+        }
+        JsonNode root = mapper.readTree(response.body());
+        int errorCode = root.path("errcode").asInt(0);
+        if (errorCode != 0) {
+            if (errorCode == 40029 || errorCode == 40163) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信登录凭证已失效，请重新点击微信登录");
+            }
+            log.warn("微信小程序登录换取会话失败 errcode={}", errorCode);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信登录校验失败，请稍后重试");
+        }
+        String openId = root.path("openid").asText("").trim();
+        if (openId.isEmpty() || openId.length() > 128) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "微信登录响应无效，请稍后重试");
+        }
+        return new WechatIdentity(openId);
+    }
+
+    private String encode(String value) {
+        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private boolean blank(String value) { return value == null || value.trim().isEmpty(); }
+    private record WechatIdentity(String openId) { }
+    private record WechatLoginOutcome(User user, boolean profileRequired) { }
 
     private void validateUser(User user) {
         if (user.getUsername() == null || user.getUsername().trim().isEmpty()) {

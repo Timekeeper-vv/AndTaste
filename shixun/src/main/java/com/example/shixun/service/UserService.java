@@ -51,6 +51,21 @@ public class UserService {
         return CompletableFuture.completedFuture(user);
     }
 
+    /**
+     * Creates a user for a server-side identity provider flow. This method is
+     * synchronous so the caller can bind the provider identity in the same
+     * database transaction as the canonical user row.
+     */
+    public User createSocialUser(User user) {
+        if (userMapper.findByUsername(user.getUsername()) != null) {
+            throw new IllegalArgumentException("用户名已存在，请更换后重试");
+        }
+        user.setPassword(passwordEncoder.encode(user.getPassword()));
+        userMapper.insert(user);
+        user.setPassword(null);
+        return user;
+    }
+
     @Async
     public CompletableFuture<User> update(Long id, User user) {
         User existing = userMapper.findById(id);

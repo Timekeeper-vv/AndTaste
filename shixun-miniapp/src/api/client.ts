@@ -18,6 +18,18 @@ function parsePayload(data: any) {
   try { return JSON.parse(data) } catch { return data }
 }
 
+export class ApiError extends Error {
+  statusCode: number
+  code?: string
+
+  constructor(message: string, statusCode: number, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.statusCode = statusCode
+    this.code = code
+  }
+}
+
 export function apiUrl(path: string) {
   return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
@@ -45,7 +57,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     setTimeout(() => uni.reLaunch({ url: '/pages/login/index' }), 500)
     throw new Error('登录已过期')
   }
-  if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(messageOf(data, `请求失败（${response.statusCode}）`))
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new ApiError(messageOf(data, `请求失败（${response.statusCode}）`), response.statusCode, data?.code)
+  }
   return data as T
 }
 
