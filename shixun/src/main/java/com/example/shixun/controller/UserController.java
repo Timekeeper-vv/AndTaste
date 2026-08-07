@@ -725,12 +725,33 @@ public class UserController {
                     "该账号已绑定其他小程序身份，请使用原登录方式或联系客服处理");
         }
         if (boundOpenIds.isEmpty()) {
-            jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
-                    existing.getId(), identity.appId(), identity.openId());
+            ensureAuthorizedWechatBinding(existing.getId(), identity);
             recordComplianceConsent(existing.getId(), phoneLoginConsent());
         }
         synchronizePlatformIdentity(existing);
         return existing;
+    }
+
+    /**
+     * Adds a provider binding without turning a repeated or concurrent request
+     * into a server error. The unique constraints remain the authority: after
+     * the no-op insert, always read the owner back and reject account takeover.
+     */
+    private void ensureAuthorizedWechatBinding(Long userId, WechatIdentity identity) {
+        jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?) "
+                        + "ON DUPLICATE KEY UPDATE id=id",
+                userId, identity.appId(), identity.openId());
+        List<Long> ownerIds = jdbc.query(
+                "SELECT user_id FROM wechat_user_binding WHERE app_id=? AND openid=? LIMIT 1",
+                (rs, rowNum) -> rs.getLong(1), identity.appId(), identity.openId());
+        if (ownerIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "该账号已绑定其他小程序身份，请使用原登录方式或联系客服处理");
+        }
+        if (!userId.equals(ownerIds.get(0))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "该微信账号已绑定其他平台账号，请使用原账号登录");
+        }
     }
 
     /**
