@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import type { AuthSession } from '../types'
 import andTasteLogo from '../assets/and_taste.png'
 import { isEmbeddedMiniapp, navigateToMiniappPage } from '../utils/miniappBridge'
@@ -256,6 +256,19 @@ const password = ref('')
 const loginMsg = ref('')
 const loginLoading = ref(false)
 const embeddedMiniapp = isEmbeddedMiniapp()
+const wechatWebLoading = ref(false)
+const wechatWebTicket = ref('')
+const wechatWebProfileRequired = ref(false)
+const wechatWebForm = reactive({
+  username: '', phone: '', age: '', email: '', signature: '',
+  agreeDisclaimer: false, agreeConfidentiality: false, agreeContentPolicy: false,
+  realNameAcknowledged: false,
+})
+const wechatWebConsents = [
+  { key: 'agreeDisclaimer' as const, label: '我已阅读并同意用户服务与隐私说明' },
+  { key: 'agreeConfidentiality' as const, label: '我已阅读并同意保密与知识产权约定' },
+  { key: 'agreeContentPolicy' as const, label: '我已阅读并同意内容创作规范' },
+]
 
 const regUsername = ref('')
 const regAge = ref('')
@@ -319,6 +332,85 @@ async function login() {
   } finally {
     loginLoading.value = false
   }
+}
+
+function submitLoginForm() {
+  if (wechatWebProfileRequired.value) void exchangeWechatWebLogin()
+  else void login()
+}
+
+function clearWechatWebCallbackParams() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('wechat_ticket')
+  url.searchParams.delete('wechat_error')
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+}
+
+function validWebWechatEmail(value: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) }
+function validWebWechatPhone(value: string) { return /^[0-9+()\-\s]{6,30}$/.test(value) }
+
+function validateWebWechatProfile() {
+  if (!wechatWebForm.username || !wechatWebForm.phone || !wechatWebForm.age || !wechatWebForm.email || !wechatWebForm.signature) {
+    throw new Error('请完整填写微信登录资料')
+  }
+  const age = Number(wechatWebForm.age)
+  if (!Number.isInteger(age) || age <= 0 || age > 120) throw new Error('请填写有效年龄')
+  if (!validWebWechatPhone(wechatWebForm.phone)) throw new Error('手机号格式不正确')
+  if (!validWebWechatEmail(wechatWebForm.email)) throw new Error('邮箱格式不正确')
+  if (!wechatWebForm.agreeDisclaimer || !wechatWebForm.agreeConfidentiality || !wechatWebForm.agreeContentPolicy || !wechatWebForm.realNameAcknowledged) {
+    throw new Error('请先完成全部使用确认')
+  }
+  return age
+}
+
+async function exchangeWechatWebLogin() {
+  if (wechatWebLoading.value || !wechatWebTicket.value) return
+  wechatWebLoading.value = true
+  loginMsg.value = ''
+  try {
+    const data: Record<string, unknown> = { ticket: wechatWebTicket.value }
+    if (wechatWebProfileRequired.value) Object.assign(data, wechatWebForm, { age: validateWebWechatProfile() })
+    const res = await fetch('/api/users/wechat-web/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    const payload = await res.json().catch(() => ({}))
+    if (res.status === 409 && payload?.code === 'WECHAT_PROFILE_REQUIRED') {
+      wechatWebProfileRequired.value = true
+      openModal('login')
+      loginMsg.value = '首次微信登录请补充资料并完成确认'
+      return
+    }
+    if (!res.ok) throw new Error(payload?.message || '微信登录失败，请重新扫码')
+    if (!payload?.token || !payload?.user) throw new Error('微信登录响应缺少令牌')
+    document.body.style.overflow = ''
+    emit('login', payload as AuthSession)
+  } catch (error: any) {
+    loginMsg.value = error?.message || '微信登录失败，请重新扫码'
+  } finally {
+    wechatWebLoading.value = false
+  }
+}
+
+async function openWechatWebLogin() {
+  if (wechatWebLoading.value) return
+  wechatWebLoading.value = true
+  loginMsg.value = ''
+  try {
+    const res = await fetch('/api/users/wechat-web/start', { cache: 'no-store' })
+    const payload = await res.json().catch(() => ({}))
+    if (!res.ok || !payload?.authorizationUrl) throw new Error(payload?.message || '网页微信登录尚未配置')
+    window.location.assign(payload.authorizationUrl)
+  } catch (error: any) {
+    loginMsg.value = error?.message || '微信登录暂不可用'
+  } finally {
+    wechatWebLoading.value = false
+  }
+}
+
+function toggleWebWechatConsent(key: 'agreeDisclaimer' | 'agreeConfidentiality' | 'agreeContentPolicy') {
+  wechatWebForm[key] = !wechatWebForm[key]
 }
 
 function openWechatLogin() {
@@ -385,6 +477,19 @@ let scrollObserver: IntersectionObserver | null = null
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  const params = new URL(window.location.href).searchParams
+  const ticket = params.get('wechat_ticket')
+  const error = params.get('wechat_error')
+  if (ticket) {
+    wechatWebTicket.value = ticket
+    clearWechatWebCallbackParams()
+    openModal('login')
+    void exchangeWechatWebLogin()
+  } else if (error) {
+    clearWechatWebCallbackParams()
+    openModal('login')
+    loginMsg.value = error === 'wechat_denied' ? '你取消了微信授权' : '微信登录失败，请重新扫码'
+  }
   scrollObserver = new IntersectionObserver((entries) => {
     entries.forEach(e => {
       if (e.isIntersecting) {
@@ -886,7 +991,7 @@ onUnmounted(() => {
             </p>
 
             <!-- Login form -->
-            <form v-if="modal === 'login'" @submit.prevent="login" class="modal-form">
+              <form v-if="modal === 'login'" @submit.prevent="submitLoginForm" class="modal-form">
               <div class="mfield">
                 <label>{{ t.fieldUsername }}</label>
                 <input v-model="username" :placeholder="t.fieldUserPh" required autocomplete="username" />
@@ -895,12 +1000,32 @@ onUnmounted(() => {
                 <label>{{ t.fieldPwd }}</label>
                 <input v-model="password" type="password" :placeholder="t.fieldPwdPh" required autocomplete="current-password" />
               </div>
+              <div v-if="wechatWebProfileRequired" class="wechat-web-profile">
+                <strong>首次微信登录资料</strong>
+                <input v-model.trim="wechatWebForm.username" placeholder="用户名" maxlength="40" />
+                <input v-model.trim="wechatWebForm.phone" placeholder="手机号" maxlength="30" inputmode="tel" />
+                <input v-model.trim="wechatWebForm.age" placeholder="年龄" maxlength="3" inputmode="numeric" />
+                <input v-model.trim="wechatWebForm.email" placeholder="邮箱" maxlength="100" type="email" />
+                <input v-model.trim="wechatWebForm.signature" placeholder="合规签署名" maxlength="100" />
+                <label v-for="item in wechatWebConsents" :key="item.key" class="wechat-consent" @click.prevent="toggleWebWechatConsent(item.key)">
+                  <span :class="['wechat-check', { checked: wechatWebForm[item.key] }]">✓</span>
+                  {{ item.label }}
+                </label>
+                <label class="wechat-consent" @click.prevent="wechatWebForm.realNameAcknowledged = !wechatWebForm.realNameAcknowledged">
+                  <span :class="['wechat-check', { checked: wechatWebForm.realNameAcknowledged }]">✓</span>
+                  我确认后续合作或生产时按要求完成实名认证
+                </label>
+              </div>
               <div v-if="loginMsg" class="modal-msg error">{{ loginMsg }}</div>
               <button type="submit" class="modal-submit" :disabled="loginLoading">
                 <span v-if="loginLoading" class="spinner"></span>
                 {{ loginLoading ? t.submittingLogin : t.submitLogin }}
               </button>
               <button v-if="embeddedMiniapp" type="button" class="modal-wechat-login" @click="openWechatLogin">微信小程序登录</button>
+              <button v-else type="button" class="modal-wechat-login" :disabled="wechatWebLoading" @click="wechatWebProfileRequired ? exchangeWechatWebLogin() : openWechatWebLogin()">
+                <span v-if="wechatWebLoading" class="spinner spinner-dark"></span>
+                {{ wechatWebProfileRequired ? '完成微信登录' : '微信扫码登录' }}
+              </button>
               <p class="modal-switch">{{ t.switchToReg }} <a @click="switchModal('register')">{{ t.switchToRegLink }}</a></p>
             </form>
 
@@ -2080,6 +2205,14 @@ onUnmounted(() => {
 .modal-submit:disabled { opacity: .5; cursor: not-allowed; }
 .modal-wechat-login { width: 100%; min-height: 42px; margin-top: 10px; border: 1px solid #86b49a; border-radius: 10px; background: #f2faf4; color: #34704d; font-weight: 700; cursor: pointer; }
 .modal-wechat-login:hover { background: #e8f5eb; }
+.modal-wechat-login:disabled { opacity: .55; cursor: wait; }
+.spinner-dark { border-color: rgba(52,112,77,.25); border-top-color: #34704d; }
+.wechat-web-profile { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid #d9e8dd; border-radius: 10px; background: #f7fbf8; }
+.wechat-web-profile strong { color: #34704d; font-size: 13px; }
+.wechat-web-profile input { height: 36px; padding: 0 11px; border: 1px solid #dce8df; border-radius: 8px; color: #0f172a; background: #fff; font: inherit; box-sizing: border-box; }
+.wechat-consent { display: flex; align-items: flex-start; gap: 7px; color: #64748b; font-size: 11px; line-height: 1.45; cursor: pointer; }
+.wechat-check { display: inline-grid; place-items: center; flex: 0 0 15px; width: 15px; height: 15px; border: 1px solid #b9cdbd; border-radius: 4px; background: #fff; color: transparent; font-size: 11px; line-height: 1; }
+.wechat-check.checked { border-color: #5e9971; background: #e5f3e8; color: #34704d; }
 
 .modal-switch {
   text-align: center; font-size: 13px; color: #64748b; margin: 0;

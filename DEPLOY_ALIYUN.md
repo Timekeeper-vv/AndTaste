@@ -270,6 +270,17 @@ curl -s http://127.0.0.1:8080/api/creative/ai/imagen/config
    PAYMENT_WECHAT_RECONCILE_ENABLED=true
    ```
 
+   网页端“微信扫码登录”还需要在微信开放平台创建网站应用，并额外配置：
+
+   ```dotenv
+   PAYMENT_WECHAT_WEB_APP_ID=微信开放平台网站应用AppID
+   PAYMENT_WECHAT_WEB_APP_SECRET=微信开放平台网站应用AppSecret
+   PAYMENT_WECHAT_WEB_REDIRECT_URI=https://你的域名/api/users/wechat-web/callback
+   PAYMENT_WECHAT_WEB_SUCCESS_URL=https://你的域名/
+   ```
+
+   开放平台网站应用的授权回调域名填写 `你的域名`，不能把小程序 AppID/AppSecret 直接当作网站应用凭据使用。
+
 5. 历史数据库先备份，再执行支付扩展表迁移，然后重新部署：
 
    ```bash
