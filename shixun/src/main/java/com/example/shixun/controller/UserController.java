@@ -685,8 +685,13 @@ public class UserController {
                 if (!"user".equals(existing.getRole())) {
                     throw new ResponseStatusException(HttpStatus.FORBIDDEN, "该微信账号不能登录用户端");
                 }
-                jdbc.update("UPDATE user SET phone=? WHERE id=?", phone, existing.getId());
-                existing.setPhone(phone);
+                // The OpenID binding already authenticates this account. Do
+                // not let a repeated phone-login request overwrite a profile
+                // phone; only complete a missing phone field.
+                if (blank(existing.getPhone())) {
+                    jdbc.update("UPDATE user SET phone=? WHERE id=?", phone, existing.getId());
+                    existing.setPhone(phone);
+                }
                 return new WechatLoginOutcome(existing, false);
             }
 
