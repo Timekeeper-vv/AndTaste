@@ -3192,7 +3192,7 @@ public class CreativeAiController {
 
     private BigDecimal rewardMissionAmount(String missionKey) {
         return switch (missionKey) {
-            case "first_image_success" -> BigDecimal.valueOf(5);
+            case "first_image_success" -> BigDecimal.valueOf(10);
             case "first_model_success" -> BigDecimal.valueOf(15);
             case "first_review_submit" -> BigDecimal.valueOf(10);
             case "first_approved_work" -> BigDecimal.valueOf(20);

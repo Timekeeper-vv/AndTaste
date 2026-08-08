@@ -7,6 +7,11 @@ import { request, uploadFile } from './client'
 export const getMuseums = () => request<any[]>('/api/creative/ai/consumer-production/museums')
 export const getCredits = () => request<any>('/api/creative/ai/consumer-credits/account')
 export const getCreditRules = () => request<any>('/api/creative/ai/consumer-credits/rules')
+export const getRewardOverview = () => request<any>('/api/creative/ai/consumer-rewards/overview')
+export const claimRewardMission = (missionKey: string) => request<any>(
+  `/api/creative/ai/consumer-rewards/missions/${encodeURIComponent(missionKey)}/claim`,
+  { method: 'POST', header: { 'content-type': 'application/json' } },
+)
 export const getAssets = (type?: string) => request<any[]>(`/api/creative/ai/assets${type ? `?type=${encodeURIComponent(type)}` : ''}`)
 export const getJobs = () => request<any[]>('/api/creative/ai/jobs')
 
