@@ -244,6 +244,7 @@ init_db(){
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260805_01__consumer_sample_payment.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260807_01__consumer_account_security.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260807_02__email_registration_verification.sql"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260808_01__selection_knowledge_base.sql"
   ok "数据库及业务账号已就绪：$DB_NAME / $DB_USER"
 }
 

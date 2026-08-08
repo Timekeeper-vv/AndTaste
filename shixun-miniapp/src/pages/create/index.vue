@@ -609,7 +609,15 @@ async function generate() {
     }
     uni.removeStorageSync('miniapp_atelier_draft')
     const generatedText = mode.value === 'image' || mode.value === 'reference' ? '作品已生成' : '3D 生成任务已创建'
-    uni.showModal({ title: '已提交创作', content: `${generatedText}，可在“我的作品”中查看进度。`, showCancel: false, success: () => uni.navigateTo({ url: '/pages/works/index' }) })
+    const assetId = Number(result?.assetId || result?.id)
+    if (mode.value === 'image' || mode.value === 'reference') {
+      uni.showModal({ title: '作品已生成', content: '可以先去作品库查看，也可以基于这张图继续做商品化选品方案。', cancelText: '去作品库', confirmText: '做成商品', success: (modal) => {
+        if (modal.confirm) uni.navigateTo({ url: `/pages/selection/index${Number.isFinite(assetId) && assetId > 0 ? `?assetId=${assetId}` : ''}` })
+        else uni.navigateTo({ url: '/pages/works/index' })
+      } })
+    } else {
+      uni.showModal({ title: '已提交创作', content: `${generatedText}，可在“我的作品”中查看进度。`, showCancel: false, success: () => uni.navigateTo({ url: '/pages/works/index' }) })
+    }
     return result
   } catch (error: any) {
     uni.showToast({ title: error.message || '生成失败', icon: 'none' })
