@@ -45,3 +45,5 @@ export const createQuoteRequest = (body: Record<string, unknown>) => request<any
 export const createConsignmentApplication = (body: Record<string, unknown>) => request<any>('/api/commercial/consumer/consignment-applications', { method: 'POST', data: body, header: { 'content-type': 'application/json' } })
 
 export const getCommercialRequests = () => request<{ quoteRequests: any[]; consignmentApplications: any[] }>('/api/commercial/consumer/requests')
+
+export const acceptCommercialQuote = (id: number) => request<any>(`/api/commercial/consumer/quote-requests/${id}/accept`, { method: 'POST' })

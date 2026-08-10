@@ -124,6 +124,18 @@ public class CommercialProductizationController {
         return out;
     }
 
+    @PostMapping("/consumer/quote-requests/{id}/accept")
+    @Transactional
+    public Map<String, Object> acceptQuoteRequest(
+            @PathVariable Long id,
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        Long userId = requireConsumer(principal);
+        int changed = jdbc.update("UPDATE creative_quote_request SET status='accepted',reviewed_at=NOW() WHERE id=? AND user_id=? AND status='quoted' AND quoted_unit_price IS NOT NULL AND quoted_total_price IS NOT NULL AND quoted_lead_time IS NOT NULL AND quoted_lead_time <> ''", id, userId);
+        if (changed == 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "报价尚未完整确认，或该申请已处理");
+        audit("quote", String.valueOf(id), "accepted", principal.username(), "用户接受报价，等待运营确认打样/生产");
+        return Map.of("success", true, "id", id, "status", "accepted", "message", "报价已接受，运营会联系你确认打样或生产细节");
+    }
+
     @GetMapping("/admin/quote-requests")
     public List<Map<String, Object>> adminQuoteRequests(
             @RequestParam(required = false, defaultValue = "new") String status,
@@ -146,6 +158,10 @@ public class CommercialProductizationController {
         BigDecimal total = decimal(body.get("quotedTotalPrice"));
         String lead = limit(text(body.get("quotedLeadTime")), 120);
         String comment = limit(text(body.get("operatorComment")), 1200);
+        if (Set.of("quoted", "accepted").contains(status)
+                && (unit == null || total == null || unit.signum() < 0 || total.signum() < 0 || blank(lead))) {
+            throw new IllegalArgumentException("保存报价前请填写单价、总价和交期");
+        }
         int changed = jdbc.update("UPDATE creative_quote_request SET status=?,quoted_unit_price=?,quoted_total_price=?,quoted_lead_time=?,operator_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=?", status, unit, total, lead, comment, principal.username(), id);
         if (changed == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "报价申请不存在");
         audit("quote", String.valueOf(id), status, principal.username(), comment);
