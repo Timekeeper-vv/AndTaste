@@ -103,6 +103,10 @@ public class AccountCancellationController {
         }
         if (tableExists("wechat_user_binding")) jdbc.update("DELETE FROM wechat_user_binding WHERE user_id=?", userId);
         if (tableExists("consumer_reward_mission_claim")) jdbc.update("DELETE FROM consumer_reward_mission_claim WHERE user_id=?", userId);
+        if (tableExists("creative_conversation_event") && tableExists("creative_conversation_session")) {
+            jdbc.update("DELETE FROM creative_conversation_event WHERE user_id=?", userId);
+            jdbc.update("DELETE FROM creative_conversation_session WHERE user_id=?", userId);
+        }
         if (tableExists("consumer_production_request")) jdbc.update("UPDATE consumer_production_request SET recipient_name=NULL,recipient_phone=NULL,recipient_address=NULL,note=NULL,review_comment=NULL WHERE user_id=?", userId);
         if (tableExists("consumer_professional_submission")) removeProfessionalSubmissions(userId);
         if (tableExists("ai_generation_job")) jdbc.update("UPDATE ai_generation_job SET created_by=NULL,prompt=NULL,negative_prompt=NULL,error_message=NULL WHERE created_by=?", userId);
