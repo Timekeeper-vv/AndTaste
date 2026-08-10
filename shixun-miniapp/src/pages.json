@@ -5,6 +5,7 @@
     { "path": "pages/web-login/index", "style": { "navigationStyle": "custom" } },
     { "path": "pages/register/index", "style": { "navigationBarTitleText": "创建创作账号", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/home/index", "style": { "navigationBarTitleText": "之间智造", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/conversation-create/index", "style": { "navigationBarTitleText": "对话式创作", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/selection/index", "style": { "navigationBarTitleText": "灵感选品", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/commercial/index", "style": { "navigationBarTitleText": "商品化申请", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/purpose/index", "style": { "navigationStyle": "custom" } },

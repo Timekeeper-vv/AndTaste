@@ -1,5 +1,32 @@
 import { request, uploadFile } from './client'
 
+export interface ConversationSession {
+  id: number
+  sessionNo?: string
+  mode?: 'template' | 'text' | 'image' | string
+  productType?: string
+  material?: string
+  status?: string
+  events?: ConversationEvent[]
+}
+
+export interface ConversationEvent {
+  id: number
+  step: string
+  eventType: string
+  payload?: Record<string, any>
+  createdAt?: string
+}
+
+export const createConversation = (mode?: 'template' | 'text' | 'image') => request<ConversationSession>('/api/creative/ai/conversations', {
+  method: 'POST', data: mode ? { mode } : {}, header: { 'content-type': 'application/json' },
+})
+export const getConversation = (id: number | string) => request<ConversationSession>(`/api/creative/ai/conversations/${encodeURIComponent(String(id))}`)
+export const saveConversationEvent = (id: number | string, body: { step: string; eventType: string; payload?: Record<string, any> }) => request<ConversationSession>(
+  `/api/creative/ai/conversations/${encodeURIComponent(String(id))}/events`,
+  { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
+)
+
 /**
  * 这里的接口全部通过 client.ts 自动携带的 Bearer Token 识别当前用户。
  * 不要再从小程序提交 currentUserId、role 之类可以被篡改的身份参数。
