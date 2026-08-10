@@ -119,7 +119,7 @@ public class CommercialProductizationController {
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         Long userId = requireConsumer(principal);
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("quoteRequests", jdbc.queryForList("SELECT r.id,r.request_no requestNo,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.status,r.quoted_unit_price quotedUnitPrice,r.quoted_total_price quotedTotalPrice,r.quoted_lead_time quotedLeadTime,r.operator_comment operatorComment,p.template_code templateCode,p.product_name productName,r.created_at createdAt,r.updated_at updatedAt FROM creative_quote_request r JOIN creative_product_template p ON p.id=r.product_template_id WHERE r.user_id=? ORDER BY r.id DESC LIMIT 100", userId));
+        out.put("quoteRequests", jdbc.queryForList("SELECT r.id,r.request_no requestNo,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.status,r.quoted_unit_price quotedUnitPrice,r.quoted_total_price quotedTotalPrice,r.quoted_lead_time quotedLeadTime,r.operator_comment operatorComment,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,p.template_code templateCode,p.product_name productName FROM creative_quote_request r JOIN creative_product_template p ON p.id=r.product_template_id WHERE r.user_id=? ORDER BY r.id DESC LIMIT 100", userId));
         out.put("consignmentApplications", jdbc.queryForList("SELECT a.id,a.application_no applicationNo,a.asset_id assetId,a.channel_id channelId,a.channel_name_snapshot channelName,a.sales_mode salesMode,a.creator_share_percent creatorSharePercent,a.platform_service_percent platformServicePercent,a.status,a.operator_comment operatorComment,p.template_code templateCode,p.product_name productName,a.created_at createdAt,a.updated_at updatedAt FROM creative_consignment_application a JOIN creative_product_template p ON p.id=a.product_template_id WHERE a.user_id=? ORDER BY a.id DESC LIMIT 100", userId));
         return out;
     }
@@ -130,10 +130,19 @@ public class CommercialProductizationController {
             @PathVariable Long id,
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         Long userId = requireConsumer(principal);
-        int changed = jdbc.update("UPDATE creative_quote_request SET status='accepted',reviewed_at=NOW() WHERE id=? AND user_id=? AND status='quoted' AND quoted_unit_price IS NOT NULL AND quoted_total_price IS NOT NULL AND quoted_lead_time IS NOT NULL AND quoted_lead_time <> ''", id, userId);
+        int changed = jdbc.update("UPDATE creative_quote_request SET status='accepted',sample_payment_status=CASE WHEN request_type='sample' THEN 'unpaid' ELSE 'not_required' END,sample_payment_order_no=NULL,sample_paid_at=NULL,reviewed_at=NOW() WHERE id=? AND user_id=? AND status='quoted' AND quoted_unit_price IS NOT NULL AND quoted_total_price IS NOT NULL AND quoted_lead_time IS NOT NULL AND quoted_lead_time <> ''", id, userId);
         if (changed == 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "报价尚未完整确认，或该申请已处理");
         audit("quote", String.valueOf(id), "accepted", principal.username(), "用户接受报价，等待运营确认打样/生产");
-        return Map.of("success", true, "id", id, "status", "accepted", "message", "报价已接受，运营会联系你确认打样或生产细节");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true); result.put("id", id); result.put("status", "accepted");
+        result.put("paymentRequired", isSampleQuote(id));
+        result.put("message", isSampleQuote(id) ? "报价已接受，请支付打样费，支付成功后进入生产安排" : "报价已接受，运营会联系你确认生产细节");
+        return result;
+    }
+
+    private boolean isSampleQuote(Long id) {
+        String type = jdbc.queryForObject("SELECT request_type FROM creative_quote_request WHERE id=?", String.class, id);
+        return "sample".equals(type);
     }
 
     @GetMapping("/admin/quote-requests")

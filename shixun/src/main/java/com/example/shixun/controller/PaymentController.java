@@ -359,6 +359,95 @@ public class PaymentController {
         }
     }
 
+    /** Create a payment order for a sample fee quoted through the commercial workflow. */
+    @PostMapping("/commercial-quote-sample-orders")
+    public Map<String, Object> createCommercialQuoteSampleOrder(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+            @RequestBody(required = false) Map<String, String> body) throws Exception {
+        Long userId = requireConsumer(principal);
+        String requestIdText = body == null ? "" : nullToEmpty(body.get("requestId"));
+        String channel = body == null ? "" : nullToEmpty(body.get("channel"));
+        long requestId;
+        try { requestId = Long.parseLong(requestIdText); } catch (Exception e) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "报价申请编号无效"); }
+        if (requestId <= 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "报价申请编号无效");
+        validateRequestedChannel(channel);
+
+        SampleOrderCreation creation;
+        try {
+            creation = Objects.requireNonNull(transactions.execute(status -> {
+                List<Map<String, Object>> rows = jdbc.queryForList(
+                        "SELECT id,request_type,status,product_name,quoted_total_price,sample_payment_status,sample_payment_order_no " +
+                                "FROM creative_quote_request r JOIN creative_product_template p ON p.id=r.product_template_id " +
+                                "WHERE r.id=? AND r.user_id=? FOR UPDATE", requestId, userId);
+                if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "商品化报价申请不存在");
+                Map<String, Object> request = rows.get(0);
+                if (!"sample".equals(String.valueOf(request.get("request_type")))) throw new IllegalStateException("当前报价不是打样申请");
+                if (!"accepted".equals(String.valueOf(request.get("status")))) throw new IllegalStateException("请先接受完整报价后再支付打样费");
+                BigDecimal feeYuan = decimal(request.get("quoted_total_price"));
+                if (feeYuan.signum() <= 0) throw new IllegalStateException("打样费用尚未配置，请联系运营");
+                String existingOrderNo = nullableText(request.get("sample_payment_order_no"));
+                if (!blank(existingOrderNo)) {
+                    List<Map<String, Object>> existing = jdbc.queryForList("SELECT status,channel FROM payment_order WHERE order_no=? AND user_id=? FOR UPDATE", existingOrderNo, userId);
+                    if (!existing.isEmpty()) {
+                        String existingStatus = String.valueOf(existing.get(0).get("status"));
+                        if (Set.of("pending", "manual_review", "paid").contains(existingStatus)) {
+                            return new SampleOrderCreation(existingOrderNo, true, feeYuan, String.valueOf(request.get("product_name")), String.valueOf(existing.get(0).get("channel")));
+                        }
+                    }
+                }
+                CreditPackage pkg = new CreditPackage("commercial_quote_sample_" + requestId,
+                        "打样费 · " + nullableText(request.get("product_name")), "商品化报价确认后的作品打样费用",
+                        feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
+                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
+                jdbc.update("UPDATE creative_quote_request SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=? AND user_id=?",
+                        order.orderNo, requestId, userId);
+                return new SampleOrderCreation(order.orderNo, order.reused, feeYuan, nullableText(request.get("product_name")), channel);
+            }));
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
+
+        String actualChannel = creation.channel;
+        if (creation.reused) return createdOrderView(creation.orderNo, userId, actualChannel, true);
+        if ("manual_wechat_qr".equals(actualChannel)) {
+            transactions.execute(status -> {
+                jdbc.update("UPDATE payment_order SET code_url=?,provider_response=? WHERE order_no=? AND user_id=?",
+                        manualWechatQrUrl.trim(), "manual receipt QR for commercial quote sample fee", creation.orderNo, userId);
+                return null;
+            });
+            return createdOrderView(creation.orderNo, userId, actualChannel, false);
+        }
+
+        CreditPackage pkg = new CreditPackage("commercial_quote_sample_" + requestId,
+                "打样费 · " + creation.productName, "商品化报价确认后的作品打样费用",
+                creation.feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
+        boolean providerSubmissionAttempted = false;
+        try {
+            if ("wechat_jsapi".equals(actualChannel)) {
+                String openId = boundOpenId(userId);
+                transactions.execute(status -> { prepareWechatOrderMetadata(creation.orderNo, openId); return null; });
+                providerSubmissionAttempted = true;
+                persistWechatPrepay(creation.orderNo, createWechatJsapiOrder(creation.orderNo, pkg, openId));
+            } else {
+                transactions.execute(status -> { prepareWechatOrderMetadata(creation.orderNo, null); return null; });
+                providerSubmissionAttempted = true;
+                persistWechatPrepay(creation.orderNo, createWechatNativeOrder(creation.orderNo, pkg));
+            }
+            return createdOrderView(creation.orderNo, userId, actualChannel, false);
+        } catch (Exception e) {
+            String nextStatus = providerSubmissionAttempted && providerResultUnknown(e) ? "payment_exception" : "failed";
+            transactions.execute(status -> {
+                jdbc.update("UPDATE payment_order SET status=?,provider_response=? WHERE order_no=? AND status='pending'", nextStatus, safeError(e), creation.orderNo);
+                if ("failed".equals(nextStatus)) {
+                    jdbc.update("UPDATE creative_quote_request SET sample_payment_status='unpaid',sample_payment_order_no=NULL WHERE sample_payment_order_no=? AND sample_payment_status='pending'", creation.orderNo);
+                }
+                return null;
+            });
+            throw userSafeWechatError(e, providerSubmissionAttempted && providerResultUnknown(e)
+                    ? "微信下单结果待核对，请勿重复付款或创建新订单" : "微信支付下单未成功，请稍后重试");
+        }
+    }
+
     @GetMapping("/orders/{orderNo}")
     public Map<String, Object> order(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
@@ -1970,6 +2059,16 @@ public class PaymentController {
                 if (linked != 1) throw new IllegalStateException("打样支付订单未关联到可生产申请");
             } catch (NumberFormatException ignored) {
                 throw new IllegalStateException("打样支付订单关联申请无效");
+            }
+            return;
+        }
+        if (productCode.startsWith("commercial_quote_sample_")) {
+            try {
+                long requestId = Long.parseLong(productCode.substring("commercial_quote_sample_".length()));
+                int linked = jdbc.update("UPDATE creative_quote_request SET sample_payment_status='paid',sample_paid_at=NOW() WHERE id=? AND sample_payment_order_no=? AND sample_payment_status IN ('pending','manual_review') AND status='accepted'", requestId, orderNo);
+                if (linked != 1) throw new IllegalStateException("商品化报价支付订单未关联到可支付申请");
+            } catch (NumberFormatException ignored) {
+                throw new IllegalStateException("商品化报价支付订单关联申请无效");
             }
             return;
         }
