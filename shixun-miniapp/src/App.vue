@@ -15,7 +15,7 @@
 <script setup lang="ts">
 import { onLaunch } from '@dcloudio/uni-app'
 import { ref } from 'vue'
-import { restoreSession, sessionStartRoute } from './utils/session'
+import { restoreSession } from './utils/session'
 
 const privacyVisible = ref(false)
 const privacyResolver = ref<((result: { event: 'agree' | 'disagree' }) => void) | null>(null)
@@ -55,21 +55,13 @@ onLaunch(() => {
       privacyResolver.value = resolve
       privacyVisible.value = true
     })
-    setTimeout(() => {
-      if (typeof wxApi.requirePrivacyAuthorize === 'function') {
-        wxApi.requirePrivacyAuthorize({ fail: () => undefined })
-      }
-    }, 120)
   }
   // #endif
+  // Visitors must be able to explore the home page before deciding whether to
+  // log in. Privacy authorization is requested only by a protected action,
+  // such as the user actively choosing phone-number quick login.
   restoreSession()
-    .then(() => {
-      const target = sessionStartRoute()
-      // 登录后的正式用户端由原生页面承载；web-view 仅用于网页扫码交接
-      // 及模型预览、材质编辑等必须使用 H5 的受限工具。
-      setTimeout(() => uni.reLaunch({ url: target }), 0)
-    })
-    .catch(() => undefined)
+    .finally(() => setTimeout(() => uni.reLaunch({ url: '/pages/home/index' }), 0))
 })
 </script>
 

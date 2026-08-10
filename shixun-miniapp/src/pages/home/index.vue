@@ -279,9 +279,10 @@ async function refreshHome() {
   await loadRewards()
 }
 
-onMounted(async () => {
-  if (!requireSession()) return
-  await refreshHome()
+onMounted(() => {
+  // The home page is a public showcase. Account-only data is loaded only
+  // after a session exists; creation and account routes keep their own guard.
+  if (getSession()) void refreshHome()
 })
 onShow(() => { if (getSession()) void refreshHome() })
 </script>

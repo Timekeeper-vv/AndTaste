@@ -14,9 +14,9 @@ export const getSession = (): AuthSession | null => uni.getStorageSync(KEY) || n
 export const saveSession = (session: AuthSession) => uni.setStorageSync(KEY, session)
 export const clearSession = () => uni.removeStorageSync(KEY)
 export async function restoreSession() { return getSession() }
-// Authenticate natively first so a new miniapp user never lands on an H5
-// username/password page. Native pages remain the canonical post-login experience.
-export const sessionStartRoute = () => getSession() ? CONSUMER_NATIVE_HOME_ROUTE : CONSUMER_LOGIN_ROUTE
+// Launch always starts on the browsable home page. Protected user actions use
+// requireSession below and then direct a visitor to native login by choice.
+export const sessionStartRoute = () => CONSUMER_NATIVE_HOME_ROUTE
 export const requireSession = () => {
   const session = getSession()
   if (!session) { uni.reLaunch({ url: '/pages/login/index' }); return null }
