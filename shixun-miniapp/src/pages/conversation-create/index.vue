@@ -12,7 +12,7 @@
 
       <view v-if="phase === 'mode'" class="choice-panel"><text class="choice-title">你想从哪种方式开始？</text><view class="choice-grid"><view v-for="item in modeOptions" :key="item.key" class="choice-card" @tap="chooseMode(item.key)"><text class="choice-mark">{{ item.mark }}</text><view><text>{{ item.title }}</text><text>{{ item.desc }}</text></view><text class="choice-arrow">›</text></view></view></view>
 
-      <view v-if="phase === 'product'" class="choice-panel"><text class="choice-title">先选一个要落地的产品</text><text class="choice-note">先从简单、容易打样的产品开始，后面还可以更换方向。</text><view class="product-grid"><view v-for="item in productOptions" :key="item.key" class="product-card" @tap="chooseProduct(item)"><text class="product-mark">{{ item.mark }}</text><text class="product-name">{{ item.name }}</text><text class="product-desc">{{ item.desc }}</text><text class="product-process">{{ item.process }}</text></view></view></view>
+      <view v-if="phase === 'product'" class="choice-panel"><text class="choice-title">先选一个要落地的产品</text><text class="choice-note">已接入《选品手册》全量商品和材质方案。价格、工期仅作方向参考，正式生产前会重新报价。</text><view class="catalog-tools"><input class="catalog-search" :value="productKeyword" maxlength="30" placeholder="搜索：书签、冰箱贴、马克杯…" @input="updateProductKeyword" /><scroll-view scroll-x class="catalog-categories" :show-scrollbar="false"><view><text class="catalog-category" :class="{ active: !productCategory }" @tap="productCategory = ''">全部</text><text v-for="item in productCatalogCategories" :key="item.key" class="catalog-category" :class="{ active: productCategory === item.key }" @tap="productCategory = item.key">{{ item.name }}</text></view></scroll-view><text class="catalog-count">{{ filteredProductOptions.length }} 个可制作方案</text></view><view v-if="catalogLoading" class="catalog-empty">正在读取选品手册…</view><view v-else-if="!filteredProductOptions.length" class="catalog-empty">没有找到匹配商品，换个关键词或品类试试。</view><view v-else class="product-grid"><view v-for="item in filteredProductOptions" :key="item.key" class="product-card" @tap="chooseProduct(item)"><text class="product-mark">{{ item.mark }}</text><text class="product-category-name">{{ item.categoryName }}</text><text class="product-name">{{ item.name }}</text><text class="product-desc">{{ item.desc }}</text><text class="product-process">{{ item.materials[0].name }} · {{ item.process }}</text></view></view></view>
 
       <view v-if="phase === 'inspiration'" class="input-panel"><text class="choice-title">说说你的已有灵感</text><text class="choice-note">可以写文化主题、故事、想做的造型、使用场景，越具体越容易落地。</text><textarea v-model="inspirationText" maxlength="1200" auto-height class="text-input" placeholder="例如：把家乡古城的城墙和祥云结合，做成适合游客带走的合金冰箱贴。" /><view class="input-foot"><text>{{ inspirationText.length }}/1200</text><button class="dark-button" :disabled="!inspirationText.trim() || busy" @tap="submitTextInspiration">继续</button></view></view>
 
@@ -40,6 +40,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
+import { getSelectionOptions, type SelectionOption } from '../../api/selection'
 import {
   createConversation,
   createImage,
@@ -60,7 +61,7 @@ import { requireSession } from '../../utils/session'
 type Phase = 'mode' | 'product' | 'inspiration' | 'image' | 'material' | 'style' | 'summary' | 'result' | 'multiview' | 'model'
 type Mode = 'template' | 'text' | 'image'
 interface Message { id: number; role: 'assistant' | 'user'; text: string }
-interface ProductOption { key: string; name: string; mark: string; desc: string; process: string; materials: MaterialOption[] }
+interface ProductOption { key: string; name: string; mark: string; desc: string; process: string; categoryKey: string; categoryName: string; materials: MaterialOption[] }
 interface MaterialOption { name: string; note: string; color: string }
 
 const modeOptions = [
@@ -68,13 +69,10 @@ const modeOptions = [
   { key: 'text' as Mode, mark: '字', title: '已有灵感（文字）', desc: '把你的想法、故事或需求告诉我' },
   { key: 'image' as Mode, mark: '图', title: '已有灵感（图片）', desc: '上传草图、照片或有权使用的参考图' },
 ]
-const productOptions: ProductOption[] = [
-  { key: 'alloy_magnet', name: '合金冰箱贴', mark: '贴', desc: '轮廓清晰，最适合首件打样', process: '压铸 · 浅浮雕 · 背磁', materials: [{ name: '锌合金', note: '适合金属浮雕与电镀', color: 'linear-gradient(145deg,#e5c989,#8e7554)' }, { name: '合金', note: '适合做复古器物质感', color: 'linear-gradient(145deg,#d9b780,#77624d)' }, { name: '亚克力', note: '适合轻量透明方案', color: 'linear-gradient(145deg,#fff,#9fc3c6)' }] },
-  { key: 'badge', name: '锌合金徽章', mark: '章', desc: '小尺寸、低复杂度、易做系列', process: '冲压 · 烤漆 · 蝴蝶扣', materials: [{ name: '锌合金', note: '适合浮雕和精细轮廓', color: 'linear-gradient(145deg,#e8d19e,#917451)' }, { name: '金属', note: '适合复古电镀效果', color: 'linear-gradient(145deg,#d8b978,#6d5845)' }] },
-  { key: 'keychain', name: '合金钥匙扣', mark: '扣', desc: '有明确挂孔，方便快速商品化', process: '压铸 · 电镀 · 挂环', materials: [{ name: '锌合金', note: '适合立体造型和金属边框', color: 'linear-gradient(145deg,#ecd49c,#947b55)' }, { name: '亚克力', note: '适合彩色平面图案', color: 'linear-gradient(145deg,#fff,#a4ced1)' }] },
-  { key: 'canvas_bag', name: '帆布袋', mark: '袋', desc: '适合系列纹样和实用型礼赠', process: '丝印 · 热转印 · 缝制', materials: [{ name: '帆布', note: '自然布面，适合日常使用', color: 'linear-gradient(145deg,#f5ead6,#b39a78)' }, { name: '棉帆布', note: '适合柔和国风插画', color: 'linear-gradient(145deg,#fff6e7,#c9ad8b)' }] },
-  { key: 'ceramic_mug', name: '陶瓷马克杯', mark: '杯', desc: '适合图案延展和礼赠场景', process: '釉面 · 热转印 · 烧制', materials: [{ name: '陶瓷', note: '适合釉面和器物感', color: 'linear-gradient(145deg,#fff,#bfd3c5)' }, { name: '陶瓷釉面', note: '适合温润高光效果', color: 'linear-gradient(145deg,#f8f2df,#9ebdb0)' }] },
-]
+const productOptions = ref<ProductOption[]>([])
+const productKeyword = ref('')
+const productCategory = ref('')
+const catalogLoading = ref(false)
 const styles = ['国潮', '敦煌', '青绿山水', '现代极简', '亲子卡通']
 const palettes = ['青绿金', '朱砂米白', '蓝白', '黑金', '明快多彩']
 const purposes = ['景区伴手礼', '博物馆文创', '企业礼赠', '个人收藏', '亲子纪念']
@@ -103,6 +101,22 @@ let sessionPromise: Promise<boolean> | null = null
 const forceNewSession = ref(false)
 
 const currentMaterials = computed(() => selectedProduct.value?.materials || [])
+const productCatalogCategories = computed(() => {
+  const seen = new Set<string>()
+  return productOptions.value.filter(item => {
+    if (seen.has(item.categoryKey)) return false
+    seen.add(item.categoryKey)
+    return true
+  }).map(item => ({ key: item.categoryKey, name: item.categoryName }))
+})
+const filteredProductOptions = computed(() => {
+  const keyword = productKeyword.value.trim().toLowerCase()
+  return productOptions.value.filter(item => {
+    if (productCategory.value && item.categoryKey !== productCategory.value) return false
+    if (!keyword) return true
+    return `${item.name} ${item.desc} ${item.process} ${item.materials.map(material => material.name).join(' ')}`.toLowerCase().includes(keyword)
+  })
+})
 const prompt = computed(() => {
   const product = selectedProduct.value?.name || '文创产品'
   const source = inspirationText.value.trim() || `为${product}设计一套具有文化辨识度、适合量产打样的产品视觉`
@@ -118,10 +132,59 @@ function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
 function openCommercial() { uni.navigateTo({ url: `/pages/commercial/index${generatedAssetId.value ? `?assetId=${generatedAssetId.value}` : ''}` }) }
 function selectedModeTitle() { return modeOptions.find(item => item.key === mode.value)?.title || '' }
 
+function productMark(name: string, category: string) {
+  if (name.includes('冰箱贴')) return '贴'
+  if (name.includes('徽章')) return '章'
+  if (name.includes('钥匙扣')) return '扣'
+  if (name.includes('书签')) return '签'
+  if (name.includes('杯')) return '杯'
+  if (name.includes('包') || name.includes('袋')) return '包'
+  if (name.includes('公仔')) return '偶'
+  if (name.includes('首饰') || name.includes('项链') || name.includes('耳')) return '饰'
+  return ({ food: '食', stationery: '文', daily: '用', toy: '玩', tableware: '器', souvenir: '礼', accessory: '饰', apparel: '衣', craft: '艺', precious: '金' } as Record<string, string>)[category] || '作'
+}
+
+function materialColor(material: string) {
+  if (/金属|合金|贵金属|马口铁|金箔|溅射金/.test(material)) return 'linear-gradient(145deg,#ead29d,#8a6a45)'
+  if (/陶瓷|骨瓷|琉璃|玻璃|搪瓷/.test(material)) return 'linear-gradient(145deg,#fffdf3,#a7c8ba)'
+  if (/亚克力|PC|PVC|ABS|硅胶|塑胶|树脂|搪胶/.test(material)) return 'linear-gradient(145deg,#f4fbfc,#97c2c7)'
+  if (/毛绒|布艺|帆布|棉|毛毡|纤维|涤纶/.test(material)) return 'linear-gradient(145deg,#f4e7d5,#bc9776)'
+  if (/木|竹|纸|杜邦/.test(material)) return 'linear-gradient(145deg,#f1e2c8,#a9835b)'
+  return 'linear-gradient(145deg,#e7ece4,#91aa9a)'
+}
+
+function productFromSelection(option: SelectionOption): ProductOption {
+  return {
+    key: option.optionKey,
+    name: option.name,
+    mark: productMark(option.name, option.categoryKey),
+    desc: option.subtitle || option.description,
+    process: option.process,
+    categoryKey: option.categoryKey,
+    categoryName: option.categoryName,
+    materials: [{ name: option.material, note: `${option.process} · ${option.specification}`, color: materialColor(option.material) }],
+  }
+}
+
+async function loadProductCatalog() {
+  if (catalogLoading.value) return
+  catalogLoading.value = true
+  try {
+    const options = await getSelectionOptions({ size: 300 })
+    productOptions.value = (Array.isArray(options) ? options : []).map(productFromSelection)
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '选品目录暂不可用，请稍后重试', icon: 'none' })
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+function updateProductKeyword(event: any) { productKeyword.value = String(event?.detail?.value || '') }
+
 function isNotFound(error: any) { return Number(error?.statusCode) === 404 || /not found|不存在|找不到/i.test(String(error?.message || '')) }
 
 function productByValue(productType?: string, productKey?: string) {
-  return productOptions.find(item => item.key === productKey || item.name === productType) || null
+  return productOptions.value.find(item => item.key === productKey || item.name === productType) || null
 }
 
 function resetViewState() {
@@ -462,6 +525,8 @@ function restart() {
 }
 onLoad(options => { forceNewSession.value = String(options?.new || '') === '1' })
 onMounted(async () => {
+  if (!requireSession()) return
+  await loadProductCatalog()
   if (!(await ensureSession())) return
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
 })
@@ -469,4 +534,5 @@ onMounted(async () => {
 
 <style scoped lang="scss">
 .page{min-height:100vh;padding-bottom:116rpx;background:linear-gradient(180deg,#f7f3ed 0%,#f1ece4 100%);color:#332d28}.topbar{position:fixed;z-index:5;top:0;left:0;right:0;display:flex;align-items:center;gap:12rpx;padding:18rpx 26rpx calc(16rpx + env(safe-area-inset-top));border-bottom:1rpx solid rgba(116,96,75,.12);background:rgba(247,243,237,.96);backdrop-filter:blur(14rpx)}.back{width:48rpx;height:48rpx;color:#6d5f52;font-size:58rpx;line-height:38rpx;text-align:center}.topbar>view:nth-child(2){display:flex;flex:1;flex-direction:column;gap:4rpx}.eyebrow{color:#668071;font-size:14rpx;font-weight:900;letter-spacing:2rpx}.top-title{font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.save-state{color:#88988b;font-size:15rpx}.chat{height:calc(100vh - 132rpx);box-sizing:border-box;padding:126rpx 24rpx 26rpx}.intro-line{margin:0 2rpx 20rpx;padding:12rpx 14rpx;border-left:3rpx solid #b58b69;background:#f3eee6;color:#84786c;font-size:15rpx;line-height:1.5}.message-row{display:flex;align-items:flex-start;gap:9rpx;margin:17rpx 0}.message-row.user{justify-content:flex-end}.avatar{display:grid;place-items:center;flex:0 0 48rpx;width:48rpx;height:48rpx;border-radius:15rpx;background:#5e7c6d;color:#fff;font-family:"Songti SC","STSong",serif;font-size:25rpx}.bubble{max-width:78%;padding:14rpx 16rpx;border:1rpx solid #e2d8cb;border-radius:17rpx;background:#fffdfa;box-shadow:0 6rpx 15rpx rgba(80,61,42,.045)}.bubble text{color:#534940;font-size:20rpx;line-height:1.55}.user .bubble{border-color:#a9bdae;background:#e5efe7}.user .bubble text{color:#4f685b}.choice-panel,.input-panel,.summary-panel,.result-panel{margin:22rpx 0 26rpx;padding:19rpx;border:1rpx solid #e2d9ce;border-radius:22rpx;background:rgba(255,253,249,.9);box-shadow:0 10rpx 25rpx rgba(79,60,41,.06)}.choice-title{display:block;color:#403831;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.choice-note{display:block;margin-top:7rpx;color:#8c8075;font-size:16rpx;line-height:1.5}.choice-grid,.product-grid,.material-grid{display:grid;gap:10rpx;margin-top:15rpx}.choice-card{display:grid;grid-template-columns:50rpx minmax(0,1fr) 20rpx;align-items:center;gap:10rpx;padding:13rpx;border:1rpx solid #e4dbd0;border-radius:16rpx;background:#fffefa}.choice-mark,.product-mark{display:grid;place-items:center;width:47rpx;height:47rpx;border-radius:14rpx;background:#e8f0e8;color:#5e806e;font-family:"Songti SC","STSong",serif;font-size:26rpx;font-weight:800}.choice-card view{display:flex;min-width:0;flex-direction:column;gap:4rpx}.choice-card view text:first-child{color:#463d35;font-size:21rpx;font-weight:800}.choice-card view text:last-child{color:#92867a;font-size:15rpx;line-height:1.4}.choice-arrow{color:#a16f59;font-size:33rpx}.product-grid{grid-template-columns:1fr 1fr}.product-card{display:flex;min-height:177rpx;flex-direction:column;padding:14rpx;border:1rpx solid #e5dbce;border-radius:17rpx;background:#fffefa}.product-card:active,.choice-card:active,.next-card:active{background:#f4efe7}.product-card:nth-child(2n) .product-mark{background:#f7e8df;color:#a96750}.product-card:nth-child(3n) .product-mark{background:#f5edd9;color:#947144}.product-name{margin-top:10rpx;color:#443a32;font-size:20rpx;font-weight:850}.product-desc{margin-top:5rpx;color:#8b7f73;font-size:14rpx;line-height:1.4}.product-process{margin-top:auto;color:#8c6e59;font-size:14rpx;font-weight:800}.text-input{width:100%;min-height:190rpx;box-sizing:border-box;margin-top:16rpx;padding:14rpx;border:1rpx solid #ddd2c5;border-radius:15rpx;background:#fbf9f5;color:#443b33;font-size:20rpx;line-height:1.6}.input-foot{display:flex;align-items:center;justify-content:space-between;margin-top:12rpx;color:#a09387;font-size:14rpx}.dark-button,.outline-button{height:76rpx;margin-top:15rpx;border-radius:14rpx;font-size:21rpx;font-weight:800}.dark-button{background:#3f3933;color:#fff}.dark-button::after,.outline-button::after,.link-button::after{border:0}.dark-button[disabled]{opacity:.48}.full-button{width:100%}.image-picker{display:flex;align-items:center;justify-content:center;height:300rpx;margin-top:16rpx;overflow:hidden;border:1rpx dashed #b5a796;border-radius:17rpx;background:#faf7f1}.image-picker>view{display:flex;align-items:center;flex-direction:column;gap:8rpx;color:#96897b}.image-picker>view text:first-child{font-size:62rpx;line-height:1}.image-picker image{width:100%;height:100%}.material-grid{grid-template-columns:1fr 1fr}.material-card{display:grid;grid-template-columns:36rpx minmax(0,1fr) 22rpx;align-items:center;gap:9rpx;min-height:74rpx;padding:11rpx;border:1rpx solid #e2d8cc;border-radius:15rpx;background:#fffefa}.material-card.active{border-color:#80a28f;background:#eef5ee}.swatch{width:32rpx;height:32rpx;border:1rpx solid rgba(100,80,58,.16);border-radius:10rpx}.material-card view:nth-child(2){display:flex;min-width:0;flex-direction:column;gap:4rpx}.material-card view text:first-child{color:#493f36;font-size:18rpx;font-weight:800}.material-card view text:last-child{color:#94877b;font-size:13rpx;line-height:1.3}.check{color:#56816c;font-size:21rpx;font-weight:900}.style-section{margin-top:17rpx}.style-section>text{color:#72675c;font-size:16rpx;font-weight:800}.pill-row{display:flex;flex-wrap:wrap;gap:8rpx;margin-top:9rpx}.pill{padding:9rpx 12rpx;border:1rpx solid #e1d7cb;border-radius:999rpx;background:#fffefa;color:#897d71;font-size:15rpx}.pill.active{border-color:#6e907e;background:#e7f0e8;color:#4d715f;font-weight:800}.summary-card{display:grid;gap:0;margin-top:15rpx;border-top:1rpx solid #e6ddd2}.summary-card>view{display:grid;grid-template-columns:110rpx 1fr;gap:10rpx;padding:12rpx 0;border-bottom:1rpx solid #eee7df}.summary-card text:first-child{color:#9c8b7d;font-size:15rpx}.summary-card text:last-child{color:#4c4239;font-size:17rpx;line-height:1.45}.summary-note,.result-tip{display:block;margin-top:14rpx;color:#82766a;font-size:16rpx;line-height:1.55}.link-button{display:block;margin:13rpx auto 0;padding:0;background:transparent;color:#93705d;font-size:16rpx}.result-kicker{display:block;color:#9d7a5e;font-size:14rpx;font-weight:900;letter-spacing:2rpx}.result-image{width:100%;height:430rpx;margin-top:15rpx;border-radius:17rpx;background:#eee7dc}.result-placeholder{display:flex;align-items:center;justify-content:center;height:260rpx;margin-top:15rpx;flex-direction:column;gap:9rpx;border-radius:17rpx;background:linear-gradient(145deg,#d9e7dc,#ead9cc);color:#557365}.result-placeholder text:first-child{font-family:"Songti SC","STSong",serif;font-size:62rpx}.result-placeholder text:last-child{font-size:16rpx}.next-grid{display:grid;gap:10rpx;margin-top:17rpx}.next-card{display:grid;grid-template-columns:48rpx minmax(0,1fr) 18rpx;align-items:center;gap:10rpx;padding:13rpx;border:1rpx solid #e2d8cd;border-radius:15rpx;background:#fffefa}.next-card>text:first-child{display:grid;place-items:center;width:44rpx;height:44rpx;border-radius:13rpx;background:#edf3eb;color:#5e806e;font-family:"Songti SC","STSong",serif;font-size:24rpx;font-weight:800}.next-card view{display:flex;min-width:0;flex-direction:column;gap:4rpx}.next-card view text:first-child{color:#473d35;font-size:19rpx;font-weight:800}.next-card view text:last-child{color:#92867a;font-size:14rpx}.next-card>text:last-child{color:#a16f59;font-size:31rpx}.view-grid{display:grid;grid-template-columns:1fr 1fr;gap:10rpx;margin-top:15rpx}.view-card{overflow:hidden;border:1rpx solid #e2d8cd;border-radius:14rpx;background:#fffefa}.view-card image,.view-placeholder{display:block;width:100%;height:190rpx;background:#eee8df}.view-placeholder{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5rpx;color:#817367;font-size:15rpx}.view-card>text:last-child{display:block;padding:8rpx 10rpx;color:#6f6257;font-size:15rpx;font-weight:800}.model-success{display:flex;align-items:center;gap:14rpx;margin-top:18rpx;padding:16rpx;border-radius:16rpx;background:#e8f0e9}.model-success>text{display:grid;place-items:center;width:74rpx;height:74rpx;border-radius:22rpx;background:#5f7d6e;color:#fff;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.model-success view{display:flex;flex:1;flex-direction:column;gap:6rpx}.model-success view text:first-child{color:#4c6e5c;font-size:20rpx;font-weight:800}.model-success view text:last-child{color:#789082;font-size:14rpx;line-height:1.4}.outline-button{border:1rpx solid #9ab4a2;background:#f7fbf6;color:#557564}.loading-bar{position:fixed;z-index:7;right:20rpx;bottom:115rpx;left:20rpx;padding:12rpx 14rpx;border:1rpx solid #d9c8b5;border-radius:13rpx;background:#fff7eb;color:#96704f;font-size:15rpx;text-align:center;box-shadow:0 8rpx 20rpx rgba(81,58,35,.12)}.bottom-actions{position:fixed;z-index:6;right:0;bottom:0;left:0;display:flex;justify-content:space-around;padding:13rpx 20rpx calc(13rpx + env(safe-area-inset-bottom));border-top:1rpx solid rgba(110,91,70,.14);background:rgba(247,243,237,.96);backdrop-filter:blur(13rpx)}.bottom-actions button{margin:0;background:transparent;color:#6f6256;font-size:16rpx}.bottom-actions button::after{border:0}
+.catalog-tools{margin-top:15rpx;padding:12rpx;border:1rpx solid #e6ddd2;border-radius:15rpx;background:#f8f4ed}.catalog-search{box-sizing:border-box;width:100%;height:66rpx;padding:0 13rpx;border:1rpx solid #ded4c7;border-radius:11rpx;background:#fffefa;color:#4c433a;font-size:18rpx}.catalog-categories{margin-top:10rpx;white-space:nowrap}.catalog-categories>view{display:flex;gap:7rpx}.catalog-category{display:inline-block;padding:7rpx 10rpx;border:1rpx solid #ded5c9;border-radius:9rpx;background:#fffefa;color:#897d72;font-size:14rpx}.catalog-category.active{border-color:#72917f;background:#e7f0e7;color:#4e705e;font-weight:800}.catalog-count{display:block;margin-top:9rpx;color:#907d6f;font-size:13rpx}.catalog-empty{margin-top:15rpx;padding:34rpx 16rpx;border:1rpx dashed #d8cbbd;border-radius:15rpx;background:#faf7f1;color:#8f8276;font-size:17rpx;text-align:center}.product-card{min-height:187rpx}.product-category-name{margin-top:9rpx;color:#9c8879;font-size:12rpx}.product-name{margin-top:4rpx;line-height:1.35}.product-desc,.product-process{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical}.product-desc{-webkit-line-clamp:2}.product-process{font-size:13rpx;line-height:1.35;-webkit-line-clamp:2}
 </style>

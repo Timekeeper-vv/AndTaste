@@ -56,7 +56,9 @@ public class SelectionKnowledgeController {
             @RequestParam(required = false, defaultValue = "24") int size,
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         Long userId = requireConsumer(principal);
-        return findOptions(userId, category, keyword, Math.max(1, Math.min(size, 60)));
+        // Conversational creation reads the complete handbook catalog. Keep a
+        // bounded limit so a malformed client cannot request an unbounded set.
+        return findOptions(userId, category, keyword, Math.max(1, Math.min(size, 300)));
     }
 
     @GetMapping("/options/{optionKey}")
@@ -137,7 +139,7 @@ public class SelectionKnowledgeController {
     public List<Map<String, Object>> favorites(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         Long userId = requireConsumer(principal);
-        return findOptions(userId, null, null, 100).stream()
+        return findOptions(userId, null, null, 300).stream()
                 .filter(row -> booleanValue(row.get("favorited")))
                 .toList();
     }
@@ -195,7 +197,7 @@ public class SelectionKnowledgeController {
     }
 
     private Map<String, Object> findOptionByKey(String optionKey, Long userId) {
-        return findOptions(userId, null, null, 100).stream()
+        return findOptions(userId, null, null, 300).stream()
                 .filter(row -> optionKey.equals(String.valueOf(row.get("optionKey"))))
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "选品方向不存在或尚未发布"));
