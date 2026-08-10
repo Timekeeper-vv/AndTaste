@@ -21,6 +21,7 @@ export interface ConversationEvent {
 export const createConversation = (mode?: 'template' | 'text' | 'image') => request<ConversationSession>('/api/creative/ai/conversations', {
   method: 'POST', data: mode ? { mode } : {}, header: { 'content-type': 'application/json' },
 })
+export const getConversations = () => request<ConversationSession[]>('/api/creative/ai/conversations')
 export const getConversation = (id: number | string) => request<ConversationSession>(`/api/creative/ai/conversations/${encodeURIComponent(String(id))}`)
 export const saveConversationEvent = (id: number | string, body: { step: string; eventType: string; payload?: Record<string, any> }) => request<ConversationSession>(
   `/api/creative/ai/conversations/${encodeURIComponent(String(id))}/events`,

@@ -37,12 +37,15 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import {
   createConversation,
   createImage,
   createImageWithReference,
   createModel,
   createSeedreamMultiView,
+  getConversation,
+  getConversations,
   optimizeImagePrompt,
   saveConversationEvent,
   uploadReference,
@@ -91,8 +94,11 @@ const multiviewImages = ref<SeedreamMultiViewImage[]>([])
 const messages = ref<Message[]>([])
 const busy = ref(false)
 const saving = ref(false)
+const sessionReady = ref(false)
 const scrollIntoView = ref('bottom-anchor')
 let messageId = 0
+let sessionPromise: Promise<boolean> | null = null
+const forceNewSession = ref(false)
 
 const currentMaterials = computed(() => selectedProduct.value?.materials || [])
 const prompt = computed(() => {
@@ -110,20 +116,194 @@ function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
 function openCommercial() { uni.navigateTo({ url: `/pages/commercial/index${generatedAssetId.value ? `?assetId=${generatedAssetId.value}` : ''}` }) }
 function selectedModeTitle() { return modeOptions.find(item => item.key === mode.value)?.title || '' }
 
-async function ensureSession() {
-  if (!requireSession()) return false
-  if (sessionId.value) return true
-  try {
-    const session = await createConversation()
-    sessionId.value = Number(session.id)
-    return Boolean(sessionId.value)
-  } catch (error: any) {
-    uni.showToast({ title: error?.message || '无法建立创作会话', icon: 'none' })
-    return false
+function isNotFound(error: any) { return Number(error?.statusCode) === 404 || /not found|不存在|找不到/i.test(String(error?.message || '')) }
+
+function productByValue(productType?: string, productKey?: string) {
+  return productOptions.find(item => item.key === productKey || item.name === productType) || null
+}
+
+function resetViewState() {
+  phase.value = 'mode'
+  mode.value = ''
+  selectedProduct.value = null
+  material.value = ''
+  style.value = '国潮'
+  palette.value = '青绿金'
+  purpose.value = '景区伴手礼'
+  inspirationText.value = ''
+  referencePath.value = ''
+  referenceAssetId.value = null
+  generatedAssetId.value = null
+  previewUrl.value = ''
+  multiviewImages.value = []
+  messages.value = []
+  messageId = 0
+}
+
+function restoreEvent(event: any) {
+  const payload = event?.payload || {}
+  switch (String(event?.eventType || '')) {
+    case 'mode_selected':
+      mode.value = payload.mode || mode.value
+      break
+    case 'product_selected':
+      selectedProduct.value = productByValue(payload.productType, payload.productKey) || selectedProduct.value
+      if (!material.value && selectedProduct.value) material.value = selectedProduct.value.materials[0].name
+      break
+    case 'text_inspiration_submitted':
+      inspirationText.value = String(payload.inspirationText || '')
+      break
+    case 'image_inspiration_uploaded':
+      referenceAssetId.value = Number(payload.inputAssetId) || null
+      break
+    case 'material_selected':
+      material.value = String(payload.material || payload.materialName || material.value)
+      break
+    case 'style_selected':
+      if (payload.style) style.value = String(payload.style)
+      if (payload.palette) palette.value = String(payload.palette)
+      if (payload.purpose) purpose.value = String(payload.purpose)
+      break
+    case 'palette_selected':
+      palette.value = String(payload.palette || palette.value)
+      break
+    case 'purpose_selected':
+      purpose.value = String(payload.purpose || purpose.value)
+      break
+    case 'creative_direction_confirmed':
+      if (payload.style) style.value = String(payload.style)
+      if (payload.palette) palette.value = String(payload.palette)
+      if (payload.purpose) purpose.value = String(payload.purpose)
+      if (payload.inspirationText) inspirationText.value = String(payload.inspirationText)
+      break
+    case 'image_generated':
+      generatedAssetId.value = Number(payload.generatedAssetId) || generatedAssetId.value
+      previewUrl.value = imageUrl({ previewUrl: payload.previewUrl })
+      break
+    case 'multiview_generated':
+      multiviewImages.value = Array.isArray(payload.images) ? payload.images : []
+      break
+    case 'model_submitted':
+      break
+    default:
+      break
   }
 }
+
+function restoreMessages(events: any[]) {
+  messages.value = []
+  messageId = 0
+  addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
+  for (const event of events) {
+    const payload = event?.payload || {}
+    switch (String(event?.eventType || '')) {
+      case 'mode_selected':
+        addMessage('user', modeOptions.find(item => item.key === payload.mode)?.title || String(payload.modeName || '已选择创作方式'))
+        addMessage('assistant', '好，我们先确定产品方向。你想把它做成什么？')
+        break
+      case 'product_selected': {
+        const product = productByValue(payload.productType, payload.productKey)
+        if (product) addMessage('user', product.name)
+        if (mode.value === 'template') addMessage('assistant', `${product?.name || '这个产品'}很适合先做一版。现在选材质，我会把工艺约束一起带进提示词。`)
+        else if (mode.value === 'text') addMessage('assistant', '收到。把你已有的文字灵感告诉我，不用写成复杂提示词。')
+        else addMessage('assistant', '收到。请上传一张你有权使用的灵感图片，我会保留主体并优化成产品视觉。')
+        break
+      }
+      case 'text_inspiration_submitted':
+        if (payload.inspirationText) addMessage('user', String(payload.inspirationText))
+        addMessage('assistant', '我记下了这段灵感。接下来选择材质，我会把材质、结构和生产限制一起考虑。')
+        break
+      case 'image_inspiration_uploaded':
+        addMessage('user', '已上传一张灵感图片')
+        addMessage('assistant', '图片已收到。你希望它用什么材质？')
+        break
+      case 'material_selected':
+        addMessage('user', String(payload.material || payload.materialName || material.value))
+        addMessage('assistant', '最后确认视觉风格、颜色和用途，我就可以为你整理完整方案。')
+        break
+      case 'creative_direction_confirmed':
+        addMessage('user', `${payload.style || style.value} · ${payload.palette || palette.value} · ${payload.purpose || purpose.value}`)
+        addMessage('assistant', '方案整理好了。确认后我会调用现有生图服务，并把成图与完整参数绑定到这次会话。')
+        break
+      case 'image_generated':
+        addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
+        break
+      case 'multiview_generated':
+        addMessage('assistant', '四个角度都已保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
+        break
+      case 'model_submitted':
+        addMessage('assistant', '3D 建模任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。')
+        break
+      default:
+        break
+    }
+  }
+}
+
+function restorePhase(events: any[]) {
+  phase.value = 'mode'
+  for (const event of events) {
+    switch (String(event?.eventType || '')) {
+      case 'mode_selected': phase.value = 'product'; break
+      case 'product_selected': phase.value = mode.value === 'template' ? 'material' : mode.value === 'text' ? 'inspiration' : 'image'; break
+      case 'text_inspiration_submitted': phase.value = 'material'; break
+      case 'image_inspiration_uploaded': phase.value = 'image'; break
+      case 'image_inspiration_confirmed': phase.value = 'material'; break
+      case 'material_selected': phase.value = 'style'; break
+      case 'creative_direction_confirmed': phase.value = 'summary'; break
+      case 'image_generated': phase.value = 'result'; break
+      case 'multiview_generated': phase.value = 'multiview'; break
+      case 'model_submitted': phase.value = 'model'; break
+      default: break
+    }
+  }
+}
+
+async function restoreLatestSession() {
+  const sessions = await getConversations()
+  const latest = sessions.find(item => String(item.status || 'draft') !== 'archived')
+  if (!latest?.id) return false
+  try {
+    const detail = await getConversation(latest.id)
+    const events = Array.isArray(detail.events) ? detail.events : []
+    resetViewState()
+    sessionId.value = Number(detail.id)
+    for (const event of events) restoreEvent(event)
+    restoreMessages(events)
+    restorePhase(events)
+    return Boolean(sessionId.value)
+  } catch (error) {
+    // A session may belong to an old deployment or have been removed. Do not
+    // expose a raw 404 toast; start a fresh draft instead.
+    if (isNotFound(error)) return false
+    throw error
+  }
+}
+
+async function ensureSession() {
+  if (sessionPromise) return sessionPromise
+  sessionPromise = (async () => {
+    if (!requireSession()) return false
+    if (sessionId.value) return true
+    try {
+      if (!forceNewSession.value) {
+        try { if (await restoreLatestSession()) return true } catch (error: any) { if (!isNotFound(error)) throw error }
+      }
+      const session = await createConversation()
+      sessionId.value = Number(session.id)
+      resetViewState()
+      return Boolean(sessionId.value)
+    } catch (error: any) {
+      uni.showToast({ title: isNotFound(error) ? '创作服务暂时不可用，请稍后再试' : (error?.message || '无法建立创作会话'), icon: 'none' })
+      return false
+    }
+  })()
+  const result = await sessionPromise
+  sessionReady.value = result
+  return result
+}
 async function saveEvent(step: string, eventType: string, payload: Record<string, any>) {
-  if (!sessionId.value) return
+  if (!(await ensureSession()) || !sessionId.value) return
   saving.value = true
   try { await saveConversationEvent(sessionId.value, { step, eventType, payload }) }
   catch (error: any) { uni.showToast({ title: error?.message || '步骤保存失败', icon: 'none' }) }
@@ -182,6 +362,7 @@ async function uploadInspirationImage(path: string) {
 async function submitImageInspiration() {
   if (!referenceAssetId.value) return
   addMessage('user', '已上传一张灵感图片')
+  await saveEvent('inspiration', 'image_inspiration_confirmed', { productType: selectedProduct.value?.name, inputAssetId: referenceAssetId.value })
   addMessage('assistant', '图片已收到。你希望它用什么材质？')
   phase.value = 'material'
 }
@@ -265,10 +446,22 @@ async function generateModel() {
   } catch (error: any) { uni.showToast({ title: error?.message || '3D 任务提交失败', icon: 'none' }) }
   finally { busy.value = false }
 }
-function restart() { uni.redirectTo({ url: '/pages/conversation-create/index' }) }
+function restart() {
+  if (busy.value || saving.value) {
+    uni.showToast({ title: '当前正在保存或生成，请稍候', icon: 'none' })
+    return
+  }
+  uni.showModal({
+    title: '重新开始创作',
+    content: '当前进度会保留在创作记录中，并为你新建一份空白创作。',
+    confirmText: '重新开始',
+    success: result => { if (result.confirm) uni.redirectTo({ url: '/pages/conversation-create/index?new=1' }) },
+  })
+}
+onLoad(options => { forceNewSession.value = String(options?.new || '') === '1' })
 onMounted(async () => {
   if (!(await ensureSession())) return
-  addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
+  if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
 })
 </script>
 
