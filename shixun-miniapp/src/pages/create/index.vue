@@ -7,6 +7,7 @@
       <text class="sub">{{ activeMode.description }}</text>
       <view class="mode-rail"><view v-for="item in modeOptions" :key="item.key" class="mode-tab" :class="{ active: mode === item.key }" @tap="selectMode(item.key)"><text>{{ item.mark }}</text><text>{{ item.short }}</text></view></view>
     </view>
+    <AiGeneratedNotice class="ai-disclosure" description="提交后生成的图片、四视图和 3D 原型均为人工智能生成内容。请在展示、销售、打样或生产前完成人工复核、版权核验和工艺确认。" />
 
     <view class="intention-card">
       <view class="intention-top"><view><text>CREATIVE INTENTION</text><text>{{ selectedProductCategory.label }} · {{ form.material }}</text></view><text>创作参数已同步</text></view>
@@ -106,6 +107,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import {
   assessProductionFeasibility,
   createImage,

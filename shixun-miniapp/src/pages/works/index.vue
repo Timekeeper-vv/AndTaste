@@ -7,6 +7,7 @@
       </view>
       <button class="refresh" size="mini" :loading="loading" @tap="refresh(true)">刷新</button>
     </view>
+    <AiGeneratedNotice class="ai-disclosure" compact description="带有“AI生成”标识的图片、四视图和 3D 原型由人工智能生成。展示、商业使用、打样和生产前请完成人工复核与权利核验。" />
 
     <view v-if="loading && !assets.length && !jobs.length" class="empty">正在同步作品状态…</view>
 
@@ -33,8 +34,11 @@
       <view v-else-if="assets.length" class="section">
         <view class="section-head"><text>作品库</text><text>{{ assets.length }} 件</text></view>
         <view v-for="item in assets" :key="item.id" class="asset">
-          <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" />
-          <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
+          <view class="asset-media">
+            <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" />
+            <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
+            <text v-if="isAiGenerated(item)" class="ai-output-badge">AI生成</text>
+          </view>
           <view class="body">
             <view class="row"><text class="name">{{ item.title || '未命名作品' }}</text><text class="status" :class="assetDisplayStatus(item)">{{ statusText(assetDisplayStatus(item)) }}</text></view>
             <text class="meta">{{ item.assetType === 'model' ? '3D 模型' : 'AI 图片' }} · {{ item.format?.toUpperCase() || '文件' }}</text>
@@ -74,6 +78,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
+import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import { getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { getSession, requireSession } from '../../utils/session'
@@ -113,6 +118,7 @@ const productionByAsset = computed(() => {
 })
 
 const jobFor = (asset: any) => assetJobMap.value[String(asset.id)]
+const isAiGenerated = (asset: any) => Boolean(jobFor(asset))
 const requestFor = (asset: any) => productionByAsset.value[String(asset.id)]
 const previewSrc = (asset: any) => {
   const secured = securedPreviews.value[String(asset.id)]
@@ -373,6 +379,7 @@ onPullDownRefresh(() => {
 </script>
 
 <style scoped lang="scss">
+.ai-disclosure{margin:-18rpx 0 10rpx}.asset-media{position:relative;flex:0 0 180rpx;width:180rpx;height:180rpx}.asset-media .cover,.asset-media .model{display:block;width:180rpx;height:180rpx}.asset-media .model{display:flex}.ai-output-badge{position:absolute;left:10rpx;top:10rpx;padding:5rpx 8rpx;border-radius:6rpx;background:rgba(107,67,49,.88);color:#fff;font-size:16rpx;font-weight:900;line-height:1.2}
 .page{min-height:100vh;padding:34rpx}.intro{display:flex;align-items:flex-start;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 34rpx}.title{font-size:48rpx;font-weight:800;display:block}.sub{font-size:24rpx;color:#8e7469;display:block;margin-top:12rpx;line-height:1.55}.refresh{margin:4rpx 0 0;background:#f4e5db;color:#873e26;font-size:21rpx}.section{margin-top:10rpx}.section-head{display:flex;justify-content:space-between;align-items:center;margin:24rpx 4rpx 18rpx;font-size:30rpx;font-weight:750}.section-head text:last-child{font-size:21rpx;color:#9a7d70;font-weight:400}.empty{padding:120rpx 34rpx;text-align:center;color:#9c8479;line-height:1.8}.create-first{width:300rpx;height:82rpx;line-height:82rpx;margin:28rpx auto 0;border-radius:42rpx;background:#963c23;color:#fff;font-size:27rpx}.asset,.job-card,.request-card{display:flex;background:#fff;border-radius:22rpx;margin-bottom:22rpx;overflow:hidden;box-shadow:0 8rpx 22rpx rgba(65,34,20,.07)}.cover,.model{width:180rpx;height:180rpx;flex-shrink:0}.cover{background:#f4e7df}.model,.job-icon{background:linear-gradient(145deg,#4b2518,#bc5a34);color:#fff;font-size:38rpx;font-weight:800;display:flex;align-items:center;justify-content:center}.body,.job-body{padding:20rpx;min-width:0;flex:1}.row{display:flex;align-items:center;gap:12rpx}.name,.request-title{font-weight:700;font-size:29rpx;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.approved,.status.succeeded,.status.paid{background:#e4f5e9;color:#248653}.status.rejected,.status.failed{background:#ffe5e1;color:#ba3d2e}.status.running,.status.queued,.status.processing{background:#fff0d5;color:#aa681e}.meta,.source,.generation,.request-state,.failure,.progress-text{display:block;font-size:21rpx;color:#967c70;margin-top:10rpx;line-height:1.5}.generation{color:#8b5a42}.source{color:#9d4e30}.request-state{color:#7b5c4e}.failure{color:#ba3d2e;white-space:normal}.progress-line{height:10rpx;border-radius:8rpx;background:#f2e4da;margin-top:14rpx;overflow:hidden}.progress-value{height:100%;background:linear-gradient(90deg,#c86a40,#8b351f);border-radius:inherit}.progress-text{margin-top:7rpx;font-size:19rpx}.actions{display:flex;flex-wrap:wrap;gap:10rpx;margin-top:14rpx}.actions button{margin:0;background:#f8ede5;color:#843b23;font-size:20rpx}.actions .production{background:#f8d9c0;color:#74301d}.job-card{padding:0}.job-icon{width:130rpx;min-height:150rpx;flex-shrink:0;font-size:29rpx}.job-card.failed .job-icon{background:linear-gradient(145deg,#7f2920,#c64d3d)}.request-section{padding-bottom:40rpx}.request-card{display:block;padding:24rpx;box-sizing:border-box}.request-title{display:block}
 </style>
 

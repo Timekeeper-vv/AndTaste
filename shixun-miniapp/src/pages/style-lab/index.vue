@@ -10,6 +10,7 @@
       </view>
       <view class="seal"><text>调</text><text>风</text></view>
     </view>
+    <AiGeneratedNotice class="ai-disclosure" compact description="组合后的提示词由人工智能生成或优化，仅供创作参考。涉及文化元素、馆藏图像、字体、品牌和第三方 IP 时，请先完成人工权利核验。" />
 
     <view class="process-card">
       <view v-for="(step, index) in processSteps" :key="step.title" class="process-item" :class="{ active: index === 1 }">
@@ -101,6 +102,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import {
   composeCreativePrompt,
   getCreativeStyleProfiles,

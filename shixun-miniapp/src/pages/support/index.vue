@@ -35,6 +35,7 @@
           <text>{{ hasHumanTakeover ? '人工已接入' : 'AI 首响在线' }}</text>
         </view>
       </view>
+      <AiGeneratedNotice class="ai-disclosure" compact description="标有“AI生成”的客服回复由人工智能生成，仅供参考。付款、版权、授权、生产交期和合作结论以人工复核及正式协议为准。" />
 
       <view class="conversation-meta" v-if="conversation">
         <text>{{ hasHumanTakeover ? humanTakeoverText : '你的问题会保留在本次服务会话中' }}</text>
@@ -71,6 +72,7 @@
               <view class="message-bubble"><text>{{ message.content }}</text></view>
               <view class="message-detail">
                 <text>{{ senderLabel(message.senderType, message.senderName) }}</text>
+                <text v-if="message.senderType === 'assistant'" class="ai-message-label">AI生成</text>
                 <text v-if="message.createdAt">{{ formatMessageTime(message.createdAt) }}</text>
               </view>
             </view>
@@ -190,6 +192,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { onHide, onLoad, onPullDownRefresh, onShow, onUnload } from '@dcloudio/uni-app'
+import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import {
   createCopyrightConsultation,
   getAssets,
@@ -437,6 +440,7 @@ onPullDownRefresh(async () => {
 </script>
 
 <style scoped lang="scss">
+.ai-disclosure{margin:0 20rpx 12rpx}.ai-message-label{padding:3rpx 6rpx;border-radius:5rpx;background:#f4e6dc;color:#9a6048;font-size:14rpx;font-weight:900;line-height:1.2}
 .page { position: relative; box-sizing: border-box; min-height: 100vh; overflow: hidden; padding: 38rpx 28rpx calc(54rpx + env(safe-area-inset-bottom)); background: linear-gradient(165deg, #fbfaf5 0%, #f4f0e7 64%, #edf1ea 100%); }
 .wash { position: absolute; z-index: 0; border-radius: 999rpx; pointer-events: none; }
 .wash-top { top: -145rpx; right: -124rpx; width: 530rpx; height: 370rpx; opacity: .75; background: radial-gradient(ellipse, rgba(109, 143, 125, .19), rgba(109, 143, 125, .04) 53%, transparent 71%); transform: rotate(-20deg); }

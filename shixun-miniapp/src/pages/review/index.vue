@@ -11,6 +11,7 @@
       </view>
       <text class="seal">审</text>
     </view>
+    <AiGeneratedNotice class="ai-disclosure" description="本页评审结论、评分、建议和路线图均为人工智能生成内容，仅供创作决策参考，不替代人工审核、版权判断、正式报价、质检或生产工艺确认。" />
 
     <view class="asset-card">
       <text class="asset-label">正在评审的作品</text>
@@ -76,6 +77,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app'
+import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import { createDesignReview, getDesignReviews, type DesignReviewAgent, type DesignReviewRecommendation, type DesignReviewReport } from '../../api/creative'
 import { requireSession } from '../../utils/session'
 

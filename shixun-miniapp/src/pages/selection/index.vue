@@ -6,6 +6,7 @@
       <text class="title">灵感选品</text>
       <text class="sub">从文化主题到可落地的商品方向，先选一个值得试做的起点。</text>
     </view>
+    <AiGeneratedNotice class="ai-disclosure" compact description="本页选品匹配和推荐理由包含人工智能生成或分析内容，仅供方向筛选参考；价格、工期、版权、授权和可生产性须由人工复核。" />
 
     <view class="filter-card">
       <view class="filter-head"><view><text>先告诉我们你的方向</text><text>推荐会结合预算、受众和场景排序</text></view><text class="version">资料版次 {{ version }}</text></view>
@@ -54,6 +55,7 @@
 <script setup lang="ts">
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app'
 import { reactive, ref } from 'vue'
+import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import { createSelectionDemand, getSelectionCategories, getSelectionRecommendations, addSelectionFavorite, removeSelectionFavorite, type SelectionFilters, type SelectionOption } from '../../api/selection'
 import { apiUrl } from '../../api/client'
 import { requireSession } from '../../utils/session'

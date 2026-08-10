@@ -4,6 +4,7 @@
 
     <scroll-view class="chat" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
       <view class="intro-line"><text>每一步都会变成你的创作档案，后面可继续生图、四视图、3D 和商品化。</text></view>
+      <AiGeneratedNotice class="ai-disclosure" compact description="对话建议、提示词和后续生成的图片、四视图、3D 原型均可能由人工智能生成，仅供创作参考，需经人工复核后再用于商业场景。" />
       <view v-for="item in messages" :id="`message-${item.id}`" :key="item.id" class="message-row" :class="item.role">
         <view v-if="item.role === 'assistant'" class="avatar">之</view>
         <view class="bubble"><text>{{ item.text }}</text></view>
@@ -38,6 +39,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import {
   createConversation,
   createImage,
