@@ -48,7 +48,7 @@
             <text v-if="requestFor(item)" class="request-state">{{ requestTypeText(requestFor(item)?.requestType) }}：{{ statusText(requestFor(item)?.status) }}{{ requestFor(item)?.reviewComment ? ` · ${requestFor(item).reviewComment}` : '' }}</text>
             <view class="actions">
               <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button>
-              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" :loading="openingMaterialId === String(item.id)" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
+              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
               <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="export" :loading="downloadingModelId === String(item.id)" @tap="chooseModelExport(item)">导出模型</button>
               <button v-if="canRunDesignReview(item)" size="mini" class="design-review" @tap="openDesignReview(item)">AI 深度评审</button>
               <button v-if="canSubmitReview(item)" size="mini" :loading="submittingId === item.id" @tap="submitReview(item)">提交审核</button>
@@ -74,7 +74,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
-import { getAssetPreviewAccess, getAssets, getJobs, getMaterialLabAccess, getProductionRequests, submitAssetReview } from '../../api/creative'
+import { getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { getSession, requireSession } from '../../utils/session'
 import { statusText } from '../../utils/format'
@@ -85,10 +85,8 @@ const productionRequests = ref<any[]>([])
 const securedPreviews = ref<Record<string, string>>({})
 const loading = ref(true)
 const submittingId = ref<number | null>(null)
-const openingMaterialId = ref('')
 const downloadingModelId = ref('')
-const previewBase = (import.meta.env.VITE_MODEL_PREVIEW_BASE_URL || '').replace(/\/$/, '')
-const configuredMaterialLabBase = ((import.meta.env as ImportMetaEnv & { VITE_MATERIAL_LAB_BASE_URL?: string }).VITE_MATERIAL_LAB_BASE_URL || '').replace(/\/$/, '')
+const DESKTOP_MODEL_URL = 'https://www.zhijiansk.com/'
 
 const assetJobMap = computed(() => {
   const result: Record<string, any> = {}
@@ -189,43 +187,6 @@ function absoluteMediaUrl(value: string | undefined, assetId: string, accessToke
   return accessToken ? apiUrl(`/api/creative/ai/assets/${encodeURIComponent(assetId)}/content?access_token=${encodeURIComponent(accessToken)}`) : ''
 }
 
-function appendQuery(base: string, values: Record<string, string>) {
-  const hashIndex = base.indexOf('#')
-  const path = hashIndex >= 0 ? base.slice(0, hashIndex) : base
-  const hash = hashIndex >= 0 ? base.slice(hashIndex) : ''
-  const query = Object.entries(values).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&')
-  return `${path}${path.includes('?') ? '&' : '?'}${query}${hash}`
-}
-
-function materialLabBaseUrl() {
-  if (/^https:\/\//.test(configuredMaterialLabBase)) return configuredMaterialLabBase
-  if (!/^https:\/\//.test(previewBase)) return ''
-  try {
-    const previewUrl = new URL(previewBase)
-    const directory = previewUrl.pathname.replace(/\/[^/]*$/, '/')
-    previewUrl.pathname = `${directory}material-lab.html`
-    previewUrl.search = ''
-    previewUrl.hash = ''
-    return previewUrl.toString()
-  } catch {
-    return ''
-  }
-}
-
-function absoluteModelUrl(value: string | undefined, assetId: string, accessToken?: string) {
-  const fallback = accessToken
-    ? apiUrl(`/api/creative/ai/assets/${encodeURIComponent(assetId)}/model-content?access_token=${encodeURIComponent(accessToken)}`)
-    : ''
-  if (!value) return fallback
-  const withAccessToken = (url: string) => {
-    if (!accessToken || /[?&]access_token=/.test(url)) return url
-    return `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(accessToken)}`
-  }
-  if (/^https:\/\//.test(value)) return withAccessToken(value)
-  if (value.startsWith('/')) return withAccessToken(apiUrl(value))
-  return fallback
-}
-
 async function hydratePreviews(rows: any[]) {
   const candidates = rows.filter((asset) => ['image', 'model'].includes(asset.assetType) && asset.id).slice(0, 12)
   const pairs = await Promise.all(candidates.map(async (asset) => {
@@ -263,37 +224,28 @@ async function refresh(notify = false) {
 }
 
 function preview(asset: any) {
-  uni.navigateTo({ url: `/pages/preview/index?id=${encodeURIComponent(String(asset.id))}&title=${encodeURIComponent(asset.title || '3D模型')}` })
+  showDesktopModelNotice('preview')
 }
 
-async function openMaterialLab(asset: any) {
-  const assetId = String(asset?.id || '')
-  if (!/^\d+$/.test(assetId)) {
-    uni.showToast({ title: '作品编号无效，无法打开材质实验室', icon: 'none' })
-    return
-  }
-  const labBase = materialLabBaseUrl()
-  if (!labBase) {
-    uni.showToast({ title: '请先配置 HTTPS 材质实验室域名', icon: 'none' })
-    return
-  }
-  if (openingMaterialId.value) return
-  openingMaterialId.value = assetId
-  try {
-    const access = await getMaterialLabAccess(assetId)
-    const accessToken = String(access?.accessToken || '')
-    const modelUrl = absoluteModelUrl(access?.modelUrl, assetId, accessToken)
-    if (!accessToken || !/^https:\/\//.test(modelUrl)) throw new Error('未能获取安全的模型编辑权限，请稍后重试')
-    const title = String(asset.title || '3D 模型')
-    const h5Url = appendQuery(labBase, { assetId, title, modelUrl, labToken: accessToken })
-    // 仅交给当前 web-view 一次；短时材质令牌不保存到普通小程序存储。
-    uni.setStorageSync('smart_pig_model_preview_url', h5Url)
-    uni.navigateTo({ url: '/pages/model-webview/index?mode=material' })
-  } catch (error: any) {
-    uni.showToast({ title: error?.message || '暂时无法打开材质实验室，请稍后重试', icon: 'none' })
-  } finally {
-    openingMaterialId.value = ''
-  }
+function openMaterialLab(_asset?: any) {
+  showDesktopModelNotice('material')
+}
+
+function showDesktopModelNotice(action: 'preview' | 'material') {
+  const feature = action === 'preview' ? '3D 模型预览' : '模型材质编辑'
+  uni.showModal({
+    title: '请使用电脑端',
+    content: `小程序端暂不支持${feature}，请在电脑浏览器打开：${DESKTOP_MODEL_URL}`,
+    cancelText: '知道了',
+    confirmText: '复制网址',
+    success: (result) => {
+      if (!result.confirm) return
+      uni.setClipboardData({
+        data: DESKTOP_MODEL_URL,
+        success: () => uni.showToast({ title: '电脑端网址已复制', icon: 'success' }),
+      })
+    },
+  })
 }
 
 type ModelExportFormat = 'GLB' | 'OBJ' | 'STL'

@@ -1,25 +1,23 @@
 <template>
-  <web-view v-if="source" :src="source" />
-  <view v-else class="empty">
-    <text class="title">无法打开 3D 预览</text>
-    <text class="desc">预览链接不存在或已失效，请返回作品页后重新打开。</text>
+  <view class="empty">
+    <text class="cube">3D</text>
+    <text class="title">请使用电脑端查看</text>
+    <text class="desc">小程序端暂不支持 3D 模型预览和材质编辑，请在电脑浏览器打开：</text>
+    <text class="url">https://www.zhijiansk.com/</text>
+    <button class="copy" @tap="copyDesktopUrl">复制电脑端网址</button>
     <button class="back" @tap="back">返回作品页</button>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+const desktopUrl = 'https://www.zhijiansk.com/'
 
-const source = ref('')
-
-onLoad((query: any) => {
-  const candidate = String(uni.getStorageSync('smart_pig_model_preview_url') || '')
-  // 链接只需交给当前 web-view 一次，避免短期媒体令牌长期保存在小程序本地存储。
-  uni.removeStorageSync('smart_pig_model_preview_url')
-  // 微信 web-view 只允许已配置的 HTTPS 业务域名；本地/HTTP 地址直接走可理解的降级页。
-  source.value = /^https:\/\//.test(candidate) ? candidate : ''
-})
+function copyDesktopUrl() {
+  uni.setClipboardData({
+    data: desktopUrl,
+    success: () => uni.showToast({ title: '电脑端网址已复制', icon: 'success' }),
+  })
+}
 
 function back() {
   uni.navigateBack()
@@ -27,5 +25,5 @@ function back() {
 </script>
 
 <style scoped lang="scss">
-.empty{min-height:100vh;padding:180rpx 60rpx;text-align:center;box-sizing:border-box}.title{display:block;font-size:42rpx;font-weight:800}.desc{display:block;font-size:26rpx;line-height:1.7;color:#8c7164;margin-top:22rpx}.back{height:90rpx;line-height:90rpx;margin-top:44rpx;border-radius:45rpx;background:#963c23;color:#fff;font-size:28rpx}
+.empty{min-height:100vh;padding:150rpx 55rpx;text-align:center;box-sizing:border-box;background:linear-gradient(180deg,#faf8f3,#f0e9df)}.cube{display:grid;place-items:center;width:180rpx;height:180rpx;margin:0 auto 42rpx;border-radius:28rpx;background:linear-gradient(145deg,#5b7b6d,#9fb7a9);box-shadow:20rpx 20rpx 0 #dde7dd;color:#fff;font-size:50rpx;font-weight:800}.title{display:block;color:#302b26;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:800}.desc{display:block;margin-top:22rpx;color:#81776c;font-size:26rpx;line-height:1.7}.url{display:block;margin-top:18rpx;padding:18rpx 12rpx;border:1rpx solid #c8d9cc;border-radius:14rpx;background:#f4f8f1;color:#557565;font-size:24rpx;word-break:break-all}.copy,.back{width:100%;height:86rpx;line-height:86rpx;border-radius:17rpx;font-size:27rpx}.copy{margin-top:28rpx;background:linear-gradient(135deg,#3e3933,#617e71);color:#fff}.back{margin-top:14rpx;background:#eee8df;color:#74685e}
 </style>
