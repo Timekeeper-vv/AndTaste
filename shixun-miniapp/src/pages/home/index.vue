@@ -25,6 +25,7 @@
     </view>
 
     <view class="selection-promo" @tap="go('/pages/selection/index')"><view class="selection-promo-mark">选</view><view><text class="selection-promo-title">灵感选品</text><text class="selection-promo-desc">按文化主题、预算和受众，找到能真正落地的商品方向</text></view><text class="selection-promo-arrow">›</text></view>
+    <view class="selection-promo commercial-promo" @tap="go('/pages/commercial/index')"><view class="selection-promo-mark">做</view><view><text class="selection-promo-title">申请商品化</text><text class="selection-promo-desc">选择冰箱贴、徽章、钥匙扣、帆布袋或马克杯，申请报价或渠道代销</text></view><text class="selection-promo-arrow">›</text></view>
 
     <view class="atelier-card">
       <view class="section-head">

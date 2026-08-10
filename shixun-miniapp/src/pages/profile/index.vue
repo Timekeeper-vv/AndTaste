@@ -30,6 +30,11 @@
         <view class="menu-copy"><text>我的作品</text><text>查看创作成果与审核状态</text></view>
         <text class="arrow">›</text>
       </view>
+      <view class="menu-row" @tap="go('/pages/commercial/index')">
+        <view class="menu-icon market">做</view>
+        <view class="menu-copy"><text>商品化申请</text><text>申请报价、打样或渠道代销</text></view>
+        <text class="arrow">›</text>
+      </view>
       <view class="menu-row" @tap="go('/pages/recharge/index')">
         <view class="menu-icon credit">点</view>
         <view class="menu-copy"><text>积分充值</text><text>管理创作所需积分</text></view>

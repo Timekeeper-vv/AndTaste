@@ -612,7 +612,7 @@ async function generate() {
     const assetId = Number(result?.assetId || result?.id)
     if (mode.value === 'image' || mode.value === 'reference') {
       uni.showModal({ title: '作品已生成', content: '可以先去作品库查看，也可以基于这张图继续做商品化选品方案。', cancelText: '去作品库', confirmText: '做成商品', success: (modal) => {
-        if (modal.confirm) uni.navigateTo({ url: `/pages/selection/index${Number.isFinite(assetId) && assetId > 0 ? `?assetId=${assetId}` : ''}` })
+        if (modal.confirm) uni.navigateTo({ url: `/pages/commercial/index${Number.isFinite(assetId) && assetId > 0 ? `?assetId=${assetId}` : ''}` })
         else uni.navigateTo({ url: '/pages/works/index' })
       } })
     } else {
