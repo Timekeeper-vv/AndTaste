@@ -177,10 +177,6 @@ public class CustomerServiceController {
     private Long longValue(Object o) { return o instanceof Number ? ((Number)o).longValue() : o == null ? null : Long.valueOf(String.valueOf(o)); }
     private String string(Object o) { return o == null ? null : String.valueOf(o); }
     private void ensureTables() {
-        jdbc.execute("CREATE TABLE IF NOT EXISTS customer_service_conversation (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL,user_name VARCHAR(100) NOT NULL,status VARCHAR(20) NOT NULL DEFAULT 'open',human_takeover TINYINT NOT NULL DEFAULT 0,taken_by BIGINT NULL,taken_by_name VARCHAR(100),created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,INDEX idx_customer_service_user (user_id),INDEX idx_customer_service_updated (updated_at))");
-        try { jdbc.execute("ALTER TABLE customer_service_conversation ADD COLUMN human_takeover TINYINT NOT NULL DEFAULT 0"); } catch (Exception ignored) { }
-        try { jdbc.execute("ALTER TABLE customer_service_conversation ADD COLUMN taken_by BIGINT NULL"); } catch (Exception ignored) { }
-        try { jdbc.execute("ALTER TABLE customer_service_conversation ADD COLUMN taken_by_name VARCHAR(100)"); } catch (Exception ignored) { }
-        jdbc.execute("CREATE TABLE IF NOT EXISTS customer_service_message (id BIGINT AUTO_INCREMENT PRIMARY KEY,conversation_id BIGINT NOT NULL,sender_type VARCHAR(20) NOT NULL,sender_id BIGINT NULL,sender_name VARCHAR(100),content TEXT NOT NULL,read_by_user TINYINT NOT NULL DEFAULT 0,read_by_staff TINYINT NOT NULL DEFAULT 0,created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,INDEX idx_customer_service_message_conversation (conversation_id))");
+        // Schema is verified and migrated before application startup by Flyway.
     }
 }

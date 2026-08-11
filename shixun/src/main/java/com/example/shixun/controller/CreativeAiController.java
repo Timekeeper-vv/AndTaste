@@ -174,23 +174,6 @@ public class CreativeAiController {
         this.creditTransactions = new TransactionTemplate(transactionManager);
         this.mapper = mapper;
         this.jwtService = jwtService;
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS design_review_report (id BIGINT AUTO_INCREMENT PRIMARY KEY, review_id BIGINT NOT NULL UNIQUE, report_json JSON NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='智能评估完整报告留存'");
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_account (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL UNIQUE, balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, frozen_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_recharged DECIMAL(12,2) NOT NULL DEFAULT 0.00, total_consumed DECIMAL(12,2) NOT NULL DEFAULT 0.00, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='C端用户额度账户'");
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_credit_transaction (id BIGINT AUTO_INCREMENT PRIMARY KEY, transaction_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NULL, job_id BIGINT NULL, biz_type VARCHAR(50) NOT NULL, amount DECIMAL(12,2) NOT NULL, direction VARCHAR(20) NOT NULL, status VARCHAR(30) NOT NULL, balance_before DECIMAL(12,2) NOT NULL DEFAULT 0.00, balance_after DECIMAL(12,2) NOT NULL DEFAULT 0.00, remark VARCHAR(500), operator VARCHAR(80), created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_credit_user(user_id), INDEX idx_credit_status(status), INDEX idx_credit_biz(biz_type)) COMMENT='C端用户额度流水'");
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_reward_mission_claim (id BIGINT AUTO_INCREMENT PRIMARY KEY, claim_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, mission_key VARCHAR(80) NOT NULL, asset_id BIGINT NULL, credit_transaction_id BIGINT NULL, status VARCHAR(30) NOT NULL DEFAULT 'claimed', claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_consumer_reward_mission (user_id, mission_key), INDEX idx_reward_mission_user(user_id)) COMMENT='C端一次性创作任务奖励领取记录'");
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_campaign_reward (id BIGINT AUTO_INCREMENT PRIMARY KEY, participation_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, campaign_key VARCHAR(80) NOT NULL, asset_id BIGINT NOT NULL, status VARCHAR(30) NOT NULL DEFAULT 'pending_review', reward_amount DECIMAL(12,2) NOT NULL, credit_transaction_id BIGINT NULL, reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY uq_consumer_campaign_user (user_id, campaign_key), UNIQUE KEY uq_consumer_campaign_asset (asset_id), INDEX idx_campaign_reward_status(status), INDEX idx_campaign_reward_user(user_id)) COMMENT='C端主题活动投稿与奖励记录'");
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY, request_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, asset_id BIGINT NOT NULL, request_type VARCHAR(20) NOT NULL, title VARCHAR(200), quantity INT NOT NULL DEFAULT 1, self_ship_quantity INT NOT NULL DEFAULT 0, museum_distribution_json TEXT, recipient_name VARCHAR(80), recipient_phone VARCHAR(80), recipient_address VARCHAR(500), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, sample_product_name VARCHAR(120), sample_fee_yuan DECIMAL(10,2) NULL, sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required', sample_payment_order_no VARCHAR(64) NULL, sample_paid_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cpr_user(user_id), INDEX idx_cpr_asset(asset_id), INDEX idx_cpr_type(request_type), INDEX idx_cpr_status(status), INDEX idx_cpr_sample_payment(sample_payment_status)) COMMENT='C端作品打样与生产申请'");
-        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_product_name VARCHAR(120) NULL"); } catch (Exception ignored) {}
-        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_fee_yuan DECIMAL(10,2) NULL"); } catch (Exception ignored) {}
-        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required'"); } catch (Exception ignored) {}
-        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_payment_order_no VARCHAR(64) NULL"); } catch (Exception ignored) {}
-        try { this.jdbc.execute("ALTER TABLE consumer_production_request ADD COLUMN sample_paid_at DATETIME NULL"); } catch (Exception ignored) {}
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_sample_fee_catalog (id BIGINT AUTO_INCREMENT PRIMARY KEY, product_name VARCHAR(120) NOT NULL UNIQUE, fee_yuan DECIMAL(10,2) NOT NULL, source_file VARCHAR(255) NOT NULL DEFAULT '工作簿2.xlsx', source_sheet VARCHAR(120) NOT NULL DEFAULT 'Sheet1', active TINYINT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_sample_fee_active(active)) COMMENT='打样费用目录（服务端定价）'");
-        seedSampleFeeCatalog();
-        this.jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_professional_submission (id BIGINT AUTO_INCREMENT PRIMARY KEY, submission_no VARCHAR(80) NOT NULL UNIQUE, user_id BIGINT NOT NULL, title VARCHAR(200) NOT NULL, original_name VARCHAR(260) NOT NULL, storage_name VARCHAR(260) NOT NULL, file_size BIGINT NOT NULL, purpose VARCHAR(30) NOT NULL DEFAULT 'personal', museum_id VARCHAR(80), museum_name VARCHAR(200), note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'review', review_comment VARCHAR(1000), reviewed_by VARCHAR(80), reviewed_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_cps_user(user_id), INDEX idx_cps_status(status)) COMMENT='C端专业设计师ZIP作品包审核'");
-        try { this.jdbc.execute("ALTER TABLE digital_asset ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
-        try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN created_by BIGINT NULL"); } catch (Exception ignored) {}
-        try { this.jdbc.execute("ALTER TABLE ai_generation_job ADD COLUMN credit_transaction_id BIGINT NULL"); } catch (Exception ignored) {}
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
@@ -3098,33 +3081,6 @@ public class CreativeAiController {
         return rows;
     }
 
-    /**
-     * Keep the workbook-backed fee catalog available on first boot as well as
-     * through the deployment migration. Prices are never accepted from the
-     * browser; this catalog is the single source used to create sample orders.
-     */
-    private void seedSampleFeeCatalog() {
-        List<Object[]> fees = List.of(
-                new Object[]{"合金冰箱贴", 2000}, new Object[]{"胸针/徽章", 1300},
-                new Object[]{"慕斯蛋糕", 2500}, new Object[]{"亚克力冰箱贴", 1000},
-                new Object[]{"针织包", 1000}, new Object[]{"马卡龙", 2500},
-                new Object[]{"树脂冰箱贴", 2500}, new Object[]{"帆布包", 500},
-                new Object[]{"曲奇饼干", 2500}, new Object[]{"陶瓷冰箱贴", 2000},
-                new Object[]{"摇摇笔", 1200}, new Object[]{"毛绒", 2000},
-                new Object[]{"橡皮", 1000}, new Object[]{"搪胶脸毛绒", 5000},
-                new Object[]{"服饰", 800}, new Object[]{"毛绒挂件", 2000},
-                new Object[]{"保温杯", 1000}, new Object[]{"金属挂件", 2000},
-                new Object[]{"笔记本", 1000}, new Object[]{"树脂摆件", 3000},
-                new Object[]{"磁吸笔记本", 2500}, new Object[]{"亚克力摆件", 1000},
-                new Object[]{"冰淇淋", 2000}, new Object[]{"叶雕灯", 1000},
-                new Object[]{"棒棒糖", 2000}, new Object[]{"考古挖掘盲盒", 3500},
-                new Object[]{"巧克力", 2000}
-        );
-        for (Object[] fee : fees) {
-            jdbc.update("INSERT IGNORE INTO consumer_sample_fee_catalog(product_name,fee_yuan) VALUES (?,?)", fee[0], fee[1]);
-        }
-    }
-
     private int parsePositiveInt(Object value,int fallback) {
         if(value==null||blank(String.valueOf(value))) return fallback;
         try { return Integer.parseInt(String.valueOf(value).trim()); } catch(Exception e) { throw new IllegalArgumentException("数量必须是整数"); }
@@ -3715,7 +3671,6 @@ public class CreativeAiController {
         Long userId = requireCurrentConsumerUser();
         String service = nullToEmpty(String.valueOf(body.getOrDefault("service", "")));
         if (blank(service)) throw new IllegalArgumentException("请选择确权服务");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_rights_consultation (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, asset_id BIGINT NULL, service_type VARCHAR(80) NOT NULL, note VARCHAR(1000), status VARCHAR(30) NOT NULL DEFAULT 'pending', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         Object assetValue = body.get("assetId"); Long assetId = assetValue instanceof Number ? ((Number) assetValue).longValue() : null;
         if (assetId != null) requireAssetAccess(assetId);
         jdbc.update("INSERT INTO creative_rights_consultation (user_id,asset_id,service_type,note) VALUES (?,?,?,?)", userId, assetId, service, nullToEmpty(String.valueOf(body.getOrDefault("note", ""))));

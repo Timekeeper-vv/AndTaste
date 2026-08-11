@@ -32,7 +32,6 @@ public class WorkflowController {
     public WorkflowController(JdbcTemplate jdbc, ObjectMapper mapper) {
         this.jdbc = jdbc;
         this.mapper = mapper;
-        ensureWorkflowSchema();
     }
 
     @GetMapping("/definitions")
@@ -550,28 +549,6 @@ public class WorkflowController {
     private String flowName(String flowType) { return "四人会签审批"; }
 
     private String handlerLabel(FlowStep step) { return step.approvers.isEmpty() ? String.join("/", step.roles) : String.join("/", step.approvers); }
-
-    private void ensureWorkflowSchema() {
-        String[] sqls = new String[] {
-                "ALTER TABLE workflow_application ADD COLUMN flow_type VARCHAR(50) NOT NULL DEFAULT 'standard'",
-                "ALTER TABLE workflow_application ADD COLUMN flow_name VARCHAR(100) NULL",
-                "ALTER TABLE workflow_application ADD COLUMN flow_config_json JSON NULL",
-                "ALTER TABLE workflow_application ADD COLUMN current_step INT NOT NULL DEFAULT 0",
-                "ALTER TABLE workflow_application ADD COLUMN current_step_name VARCHAR(100) NULL",
-                "ALTER TABLE workflow_application ADD COLUMN current_handler VARCHAR(100) NULL",
-                "ALTER TABLE workflow_application ADD COLUMN current_approval_count INT NOT NULL DEFAULT 0",
-                "ALTER TABLE workflow_application ADD COLUMN resubmit_count INT NOT NULL DEFAULT 0",
-                "ALTER TABLE workflow_application ADD COLUMN withdrawn_at DATETIME DEFAULT NULL",
-                "ALTER TABLE workflow_application ADD COLUMN finished_at DATETIME DEFAULT NULL",
-                "ALTER TABLE workflow_approval_log ADD COLUMN step_index INT NULL",
-                "ALTER TABLE workflow_approval_log ADD COLUMN step_name VARCHAR(100) NULL",
-                "ALTER TABLE workflow_approval_log ADD COLUMN approval_round INT NOT NULL DEFAULT 0",
-                "CREATE INDEX idx_workflow_log_step ON workflow_approval_log(application_id, action, step_index, approval_round)",
-                "CREATE TABLE IF NOT EXISTS workflow_notification (id BIGINT AUTO_INCREMENT PRIMARY KEY, application_id BIGINT NOT NULL, receiver VARCHAR(100) NOT NULL, title VARCHAR(200) NOT NULL, message VARCHAR(1000) NOT NULL, read_flag TINYINT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_workflow_notice_receiver (receiver, read_flag), INDEX idx_workflow_notice_app (application_id))"
-        };
-        for (String sql : sqls) { try { jdbc.execute(sql); } catch (Exception ignored) { } }
-        try { jdbc.update("UPDATE workflow_application SET flow_type=COALESCE(flow_type,'standard'), flow_name='四人会签审批', current_step=0, current_step_name='四人会签审批', current_handler=? WHERE deleted=0 AND status='pending'", String.join("/", REQUIRED_APPROVERS)); } catch (Exception ignored) { }
-    }
 
     private Set<String> approvedOperatorsForStep(Long id, int stepIndex, int round) {
         return new LinkedHashSet<>(jdbc.queryForList("SELECT DISTINCT operator FROM workflow_approval_log WHERE application_id=? AND action='approve' AND step_index=? AND approval_round=? AND operator IN (?,?,?,?)",

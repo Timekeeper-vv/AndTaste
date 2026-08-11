@@ -15,7 +15,7 @@
         <view class="consent-row" @tap="wechatTermsAccepted = !wechatTermsAccepted">
           <text class="check">{{ wechatTermsAccepted ? '✓' : '' }}</text><text>我已阅读并同意用户服务、隐私说明与内容规范，并确认后续合作按要求完成实名认证</text>
         </view>
-        <button class="phone-auth-button" open-type="getPhoneNumber|agreePrivacyAuthorization" phone-number-no-quota-toast="false" :loading="wechatLoading" :disabled="wechatLoading || !wechatTermsAccepted" @getphonenumber="authorizeWechatPhone" @agreeprivacyauthorization="handleOfficialPrivacyAuthorization">授权手机号并登录</button>
+        <button class="phone-auth-button" open-type="getPhoneNumber" phone-number-no-quota-toast="false" :loading="wechatLoading" :disabled="wechatLoading || !wechatTermsAccepted" @getphonenumber="authorizeWechatPhone">手机号快捷登录</button>
       </view>
       <view class="register-row"><text>还没有账号？</text><text @tap="goRegister">创建创作账号 ›</text></view>
       <text class="hint">支持用户名或邮箱登录。手机号快捷登录首次使用时需要补充必要资料并完成合规确认。</text>

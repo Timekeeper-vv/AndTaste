@@ -196,8 +196,6 @@ public class UserController {
     }
 
     private void recordComplianceConsent(Long userId, Map<String, Object> body) {
-        jdbc.execute("CREATE TABLE IF NOT EXISTS user_compliance_consent (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, disclaimer_accepted TINYINT NOT NULL, confidentiality_accepted TINYINT NOT NULL, content_policy_accepted TINYINT NOT NULL, real_name_acknowledged TINYINT NOT NULL DEFAULT 0, signature_name VARCHAR(100), policy_version VARCHAR(50) NOT NULL, accepted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-        try { jdbc.execute("ALTER TABLE user_compliance_consent ADD COLUMN signature_name VARCHAR(100)"); } catch (Exception ignored) { }
         jdbc.update("INSERT INTO user_compliance_consent (user_id,disclaimer_accepted,confidentiality_accepted,content_policy_accepted,real_name_acknowledged,signature_name,policy_version) VALUES (?,?,?,?,?,?,?)", userId, 1, 1, 1, yes(body.get("realNameAcknowledged")) ? 1 : 0, text(body.get("complianceSignature")), "2026-07-30");
     }
 
@@ -922,12 +920,7 @@ public class UserController {
     }
 
     private void ensureWechatBindingTable() {
-        jdbc.execute("CREATE TABLE IF NOT EXISTS wechat_user_binding ("
-                + "id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, app_id VARCHAR(64) NOT NULL, "
-                + "openid VARCHAR(128) NOT NULL, bound_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
-                + "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, "
-                + "UNIQUE KEY uk_wechat_user_app(user_id, app_id), UNIQUE KEY uk_wechat_app_openid(app_id, openid), "
-                + "INDEX idx_wechat_binding_user(user_id))");
+        // Schema is verified and migrated before application startup by Flyway.
     }
 
     private WechatIdentity exchangeWechatCode(String code) throws Exception {
@@ -1289,7 +1282,7 @@ public class UserController {
     }
 
     private void ensurePlatformIdentityTable() {
-        jdbc.execute("CREATE TABLE IF NOT EXISTS user_platform_identity (user_id BIGINT NOT NULL PRIMARY KEY, platform_user_id BIGINT NOT NULL UNIQUE, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)");
+        // Schema is verified and migrated before application startup by Flyway.
     }
 
     private Long mappedPlatformUserId(Long userId) {

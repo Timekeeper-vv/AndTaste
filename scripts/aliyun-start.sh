@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 if [ -f "$ENV_FILE" ]; then set -a; source "$ENV_FILE"; set +a; fi
 
-APP_PORT="${APP_PORT:-8080}"
+APP_PORT="${APP_PORT:-8080}"; SERVER_ADDRESS="${SERVER_ADDRESS:-127.0.0.1}"
 JAVA_OPTS="${JAVA_OPTS:--Xms512m -Xmx1536m -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai}"
 AUTH_JWT_SECRET="${AUTH_JWT_SECRET:-}"; AUTH_JWT_EXPIRES_SECONDS="${AUTH_JWT_EXPIRES_SECONDS:-28800}"
 BACKEND_DIR="$ROOT_DIR/shixun"; FRONTEND_DIR="$ROOT_DIR/shixun-vue"
@@ -95,7 +95,7 @@ write_config(){
   [ -n "$JIMENG_SECRET_ACCESS_KEY" ] || JIMENG_SECRET_ACCESS_KEY="$(existing_prop "jimeng.secret-access-key" || true)"
   [ -n "$MODAO_API_KEY" ] || MODAO_API_KEY="$(existing_prop "modao.api.key" || true)"
   cat > "$BACKEND_DIR/application-local.properties" <<CFG
-server.address=0.0.0.0
+server.address=$SERVER_ADDRESS
 server.port=$APP_PORT
 auth.jwt.secret=$AUTH_JWT_SECRET
 auth.jwt.expires-seconds=$AUTH_JWT_EXPIRES_SECONDS
@@ -240,13 +240,15 @@ init_db(){
   # Historical project sales are analytics facts only; they never mutate orders
   # or inventory and are safe to re-import by source batch/row.
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260804_01__historical_sales_insights.sql"
-  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260804_01__historical_sales_data.sql"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260804_02__historical_sales_data.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260805_01__consumer_sample_payment.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260807_01__consumer_account_security.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260807_02__email_registration_verification.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260808_01__selection_knowledge_base.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260810_01__commercial_productization_mvp.sql"
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260810_02__commercial_quote_sample_payment.sql"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260810_03__expand_selection_manual_catalog.sql"
+  mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260811_01__conversational_creation.sql"
   ok "数据库及业务账号已就绪：$DB_NAME / $DB_USER"
 }
 

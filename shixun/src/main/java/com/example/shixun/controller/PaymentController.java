@@ -20,7 +20,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 
-import javax.annotation.PostConstruct;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -114,51 +113,6 @@ public class PaymentController {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.transactions = new TransactionTemplate(transactionManager);
-    }
-
-    @PostConstruct
-    void initTables() {
-        jdbc.execute("CREATE TABLE IF NOT EXISTS payment_order (" +
-                "id BIGINT AUTO_INCREMENT PRIMARY KEY, order_no VARCHAR(64) NOT NULL UNIQUE, user_id BIGINT NOT NULL, " +
-                "product_code VARCHAR(64) NOT NULL, product_name VARCHAR(100) NOT NULL, amount_fen BIGINT NOT NULL, " +
-                "credit_amount DECIMAL(12,2) NOT NULL, channel VARCHAR(32) NOT NULL, provider_order_no VARCHAR(128) NULL, " +
-                "status VARCHAR(32) NOT NULL, code_url TEXT NULL, provider_response TEXT NULL, paid_at DATETIME NULL, " +
-                "expired_at DATETIME NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
-                "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
-                "INDEX idx_payment_user(user_id), INDEX idx_payment_status(status), " +
-                "UNIQUE KEY uk_provider_order(channel, provider_order_no)) COMMENT='C端额度支付订单'");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS payment_callback_log (" +
-                "id BIGINT AUTO_INCREMENT PRIMARY KEY, channel VARCHAR(32) NOT NULL, provider_event_id VARCHAR(128) NULL, " +
-                "payload_json LONGTEXT NOT NULL, verified TINYINT NOT NULL DEFAULT 0, processed TINYINT NOT NULL DEFAULT 0, " +
-                "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_payment_event(channel, provider_event_id)) " +
-                "COMMENT='支付回调审计日志'");
-        // Keep WeChat-specific data in extension tables. This lets a deployed
-        // instance upgrade without risky ALTERs on a financial order table.
-        jdbc.execute("CREATE TABLE IF NOT EXISTS wechat_user_binding (" +
-                "id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, app_id VARCHAR(64) NOT NULL, " +
-                "openid VARCHAR(128) NOT NULL, bound_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
-                "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
-                "UNIQUE KEY uk_wechat_user_app(user_id, app_id), UNIQUE KEY uk_wechat_app_openid(app_id, openid), " +
-                "INDEX idx_wechat_binding_user(user_id)) COMMENT='小程序微信OpenID绑定（不得向客户端返回）'");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS payment_wechat_order (" +
-                "order_no VARCHAR(64) NOT NULL PRIMARY KEY, app_id VARCHAR(64) NOT NULL, mch_id VARCHAR(64) NOT NULL, " +
-                "payer_openid VARCHAR(128) NULL, prepay_id VARCHAR(128) NULL, transaction_id VARCHAR(128) NULL, " +
-                "provider_trade_state VARCHAR(32) NULL, last_reconciled_at DATETIME NULL, " +
-                "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
-                "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
-                "UNIQUE KEY uk_wechat_transaction(transaction_id)) COMMENT='微信支付订单安全校验元数据'");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS payment_refund (" +
-                "id BIGINT AUTO_INCREMENT PRIMARY KEY, refund_no VARCHAR(64) NOT NULL UNIQUE, order_no VARCHAR(64) NOT NULL UNIQUE, " +
-                "user_id BIGINT NOT NULL, amount_fen BIGINT NOT NULL, credit_amount DECIMAL(12,2) NOT NULL, " +
-                "status VARCHAR(32) NOT NULL, reason VARCHAR(240) NULL, provider_refund_id VARCHAR(128) NULL, " +
-                "provider_response TEXT NULL, requested_by BIGINT NOT NULL, requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
-                "completed_at DATETIME NULL, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
-                "UNIQUE KEY uk_provider_refund(provider_refund_id), INDEX idx_refund_status(status)) COMMENT='微信充值退款及额度冻结流水'");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS payment_daily_reconciliation (" +
-                "bill_date DATE NOT NULL,bill_type VARCHAR(24) NOT NULL,status VARCHAR(32) NOT NULL,download_sha256 CHAR(64) NULL,download_bytes BIGINT NULL," +
-                "local_record_count INT NOT NULL DEFAULT 0,provider_record_count INT NULL,matched_record_count INT NULL,discrepancy_count INT NULL," +
-                "result_summary TEXT NULL,verified_by BIGINT NULL,verified_at DATETIME NULL,updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP," +
-                "PRIMARY KEY(bill_date,bill_type)) COMMENT='微信支付日账单下载与本地比对审计'");
     }
 
     @GetMapping("/packages")

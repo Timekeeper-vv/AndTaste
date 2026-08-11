@@ -103,7 +103,24 @@ bash scripts/aliyun-start.sh production
 7. 设置故障自动重启和开机自启
 8. 配置 Nginx 反向代理到 `127.0.0.1:8080`
 
-已有历史数据库时，首次升级到本版本前请先备份，并执行一次账号安全迁移：
+已有历史数据库时，首次升级到本版本前请先备份。当前部署脚本会自动执行已纳入版本管理的初始化迁移，Spring Boot 启动时再由 Flyway 执行 `20260812` 及之后的迁移。不要手工重复执行 Flyway 管理的 SQL：
+
+```bash
+cd /opt/smart_pig
+set -a && source .env && set +a
+mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p "$DB_NAME" \
+  > "/opt/${DB_NAME}-before-flyway-$(date +%F-%H%M%S).sql"
+```
+
+首次启用迁移后，核验服务和迁移记录：
+
+```bash
+curl -fsS http://127.0.0.1:8080/actuator/health
+MYSQL_PWD="$DB_PASSWORD" mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" "$DB_NAME" \
+  -e "SELECT installed_rank, version, description, success FROM schema_history ORDER BY installed_rank;"
+```
+
+仅当你的旧环境尚未执行过账号安全迁移时，再单独执行：
 
 ```bash
 mysql -u <数据库账号> -p shixun < shixun/src/main/resources/db/migration/V20260731_01__harden_account_bootstrap.sql
