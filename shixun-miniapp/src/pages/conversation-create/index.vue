@@ -460,8 +460,26 @@ async function submitTextInspiration() {
   addMessage('assistant', '我记下了这段灵感。接下来选择材质，我会把材质、结构和生产限制一起考虑。')
   phase.value = 'material'
 }
-function pickInspirationImage() {
-  if (busy.value) return
+async function requestImagePrivacyAuthorization() {
+  const wxApi = (globalThis as any).wx
+  if (typeof wxApi?.requirePrivacyAuthorize !== 'function') return true
+  return await new Promise<boolean>((resolve) => {
+    wxApi.requirePrivacyAuthorize({
+      success: () => resolve(true),
+      fail: (error: any) => {
+        const message = String(error?.errMsg || '')
+        if (!/cancel/i.test(message)) uni.showModal({ title: '需要隐私授权', content: `请先同意小程序隐私保护指引后再选择图片。\n\n微信返回：${message || '未提供错误信息'}`, showCancel: false })
+        resolve(false)
+      },
+    })
+  })
+}
+async function pickInspirationImage() {
+  if (busy.value) {
+    uni.showToast({ title: '图片正在上传或生成中，请稍候', icon: 'none' })
+    return
+  }
+  if (!(await requestImagePrivacyAuthorization())) return
   uni.chooseImage({ count: 1, sizeType: ['compressed'], sourceType: ['album'], success: (result) => {
     const path = result.tempFilePaths?.[0]
     if (!path) {
