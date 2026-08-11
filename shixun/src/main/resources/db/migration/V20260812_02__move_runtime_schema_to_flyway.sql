@@ -312,8 +312,23 @@ ALTER TABLE workflow_approval_log
     ADD COLUMN IF NOT EXISTS step_index INT NULL,
     ADD COLUMN IF NOT EXISTS step_name VARCHAR(100) NULL,
     ADD COLUMN IF NOT EXISTS approval_round INT NOT NULL DEFAULT 0;
-CREATE INDEX IF NOT EXISTS idx_workflow_log_step
-    ON workflow_approval_log(application_id, action, step_index, approval_round);
+-- MySQL 8 does not support CREATE INDEX IF NOT EXISTS. Check metadata so a
+-- partially applied production migration can be repaired and safely rerun.
+SET @workflow_log_step_index_exists := (
+    SELECT COUNT(*)
+      FROM information_schema.statistics
+     WHERE table_schema = DATABASE()
+       AND table_name = 'workflow_approval_log'
+       AND index_name = 'idx_workflow_log_step'
+);
+SET @workflow_log_step_index_sql := IF(
+    @workflow_log_step_index_exists = 0,
+    'CREATE INDEX idx_workflow_log_step ON workflow_approval_log(application_id, action, step_index, approval_round)',
+    'SELECT 1'
+);
+PREPARE workflow_log_step_index_statement FROM @workflow_log_step_index_sql;
+EXECUTE workflow_log_step_index_statement;
+DEALLOCATE PREPARE workflow_log_step_index_statement;
 CREATE TABLE IF NOT EXISTS workflow_notification (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     application_id BIGINT NOT NULL,
