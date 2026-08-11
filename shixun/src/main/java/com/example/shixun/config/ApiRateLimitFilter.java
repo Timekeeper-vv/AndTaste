@@ -1,6 +1,7 @@
 package com.example.shixun.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
@@ -31,6 +32,7 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
     @Value("${app.rate-limit.trust-forwarded-for:false}")
     private boolean trustForwardedFor;
 
+    @Autowired
     public ApiRateLimitFilter(ObjectMapper mapper) {
         this(mapper, Clock.systemUTC());
     }
