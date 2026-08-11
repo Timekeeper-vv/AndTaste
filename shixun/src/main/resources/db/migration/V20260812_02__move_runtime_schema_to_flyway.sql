@@ -290,28 +290,160 @@ CREATE TABLE IF NOT EXISTS customer_service_message (
     INDEX idx_customer_service_message_conversation (conversation_id)
 ) COMMENT='客服消息';
 
-ALTER TABLE user_compliance_consent
-    ADD COLUMN IF NOT EXISTS signature_name VARCHAR(100) NULL;
-ALTER TABLE digital_asset
-    ADD COLUMN IF NOT EXISTS created_by BIGINT NULL;
-ALTER TABLE ai_generation_job
-    ADD COLUMN IF NOT EXISTS created_by BIGINT NULL,
-    ADD COLUMN IF NOT EXISTS credit_transaction_id BIGINT NULL;
-ALTER TABLE workflow_application
-    ADD COLUMN IF NOT EXISTS flow_type VARCHAR(50) NOT NULL DEFAULT 'standard',
-    ADD COLUMN IF NOT EXISTS flow_name VARCHAR(100) NULL,
-    ADD COLUMN IF NOT EXISTS flow_config_json JSON NULL,
-    ADD COLUMN IF NOT EXISTS current_step INT NOT NULL DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS current_step_name VARCHAR(100) NULL,
-    ADD COLUMN IF NOT EXISTS current_handler VARCHAR(100) NULL,
-    ADD COLUMN IF NOT EXISTS current_approval_count INT NOT NULL DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS resubmit_count INT NOT NULL DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS withdrawn_at DATETIME NULL,
-    ADD COLUMN IF NOT EXISTS finished_at DATETIME NULL;
-ALTER TABLE workflow_approval_log
-    ADD COLUMN IF NOT EXISTS step_index INT NULL,
-    ADD COLUMN IF NOT EXISTS step_name VARCHAR(100) NULL,
-    ADD COLUMN IF NOT EXISTS approval_round INT NOT NULL DEFAULT 0;
+-- MySQL 8.0.46 does not support ADD COLUMN IF NOT EXISTS. Use metadata
+-- checks and prepared statements so existing installations can be resumed.
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'user_compliance_consent' AND column_name = 'signature_name'),
+    'SELECT 1',
+    'ALTER TABLE user_compliance_consent ADD COLUMN signature_name VARCHAR(100) NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'digital_asset' AND column_name = 'created_by'),
+    'SELECT 1',
+    'ALTER TABLE digital_asset ADD COLUMN created_by BIGINT NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'ai_generation_job' AND column_name = 'created_by'),
+    'SELECT 1',
+    'ALTER TABLE ai_generation_job ADD COLUMN created_by BIGINT NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'ai_generation_job' AND column_name = 'credit_transaction_id'),
+    'SELECT 1',
+    'ALTER TABLE ai_generation_job ADD COLUMN credit_transaction_id BIGINT NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'flow_type'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN flow_type VARCHAR(50) NOT NULL DEFAULT ''standard'''
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'flow_name'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN flow_name VARCHAR(100) NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'flow_config_json'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN flow_config_json JSON NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'current_step'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN current_step INT NOT NULL DEFAULT 0'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'current_step_name'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN current_step_name VARCHAR(100) NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'current_handler'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN current_handler VARCHAR(100) NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'current_approval_count'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN current_approval_count INT NOT NULL DEFAULT 0'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'resubmit_count'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN resubmit_count INT NOT NULL DEFAULT 0'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'withdrawn_at'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN withdrawn_at DATETIME NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_application' AND column_name = 'finished_at'),
+    'SELECT 1',
+    'ALTER TABLE workflow_application ADD COLUMN finished_at DATETIME NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_approval_log' AND column_name = 'step_index'),
+    'SELECT 1',
+    'ALTER TABLE workflow_approval_log ADD COLUMN step_index INT NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_approval_log' AND column_name = 'step_name'),
+    'SELECT 1',
+    'ALTER TABLE workflow_approval_log ADD COLUMN step_name VARCHAR(100) NULL'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_approval_log' AND column_name = 'approval_round'),
+    'SELECT 1',
+    'ALTER TABLE workflow_approval_log ADD COLUMN approval_round INT NOT NULL DEFAULT 0'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 -- MySQL 8 does not support CREATE INDEX IF NOT EXISTS. Check metadata so a
 -- partially applied production migration can be repaired and safely rerun.
 SET @workflow_log_step_index_exists := (
