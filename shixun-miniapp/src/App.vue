@@ -2,7 +2,7 @@
   <view v-if="privacyVisible" class="privacy-mask">
     <view class="privacy-dialog">
       <text class="privacy-title">请先阅读隐私保护指引</text>
-      <text class="privacy-copy">为了完成手机号快捷登录、账号安全和订单服务，我们会在你同意后处理必要的登录凭证和你主动授权的手机号。SessionKey 只在服务端使用，不会返回给小程序。</text>
+      <text class="privacy-copy">为了完成账号安全、订单服务和创作功能，我们会在你同意后处理必要的登录凭证、你主动授权的手机号，以及你主动选择上传的灵感图片。灵感图片仅用于本次创作、生成和生产服务，不会公开展示。SessionKey 只在服务端使用，不会返回给小程序。</text>
       <text class="privacy-link" @tap="openPrivacyContract">查看隐私保护指引</text>
       <view class="privacy-actions">
         <button class="privacy-secondary" @tap="rejectPrivacy">暂不使用</button>
@@ -41,7 +41,7 @@ function rejectPrivacy() {
   const resolve = privacyResolver.value
   privacyResolver.value = null
   resolve?.({ event: 'disagree' })
-  uni.showToast({ title: '同意隐私指引后才能使用手机号快捷登录', icon: 'none' })
+  uni.showToast({ title: '同意隐私指引后才能使用需要授权的功能', icon: 'none' })
 }
 
 onLaunch(() => {
