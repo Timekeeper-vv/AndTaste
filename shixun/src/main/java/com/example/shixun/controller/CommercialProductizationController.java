@@ -60,6 +60,94 @@ public class CommercialProductizationController {
         return rows;
     }
 
+    /**
+     * Searchable channel directory for the mini-program selector. The legacy
+     * channels endpoint remains available for existing clients.
+     */
+    @GetMapping("/consumer/channel-directory")
+    public Map<String, Object> consumerChannelDirectory(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String province,
+            @RequestParam(required = false) String region,
+            @RequestParam(name = "type", required = false) String channelType,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "30") int size,
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireConsumer(principal);
+        int safePage = Math.max(1, page);
+        int safeSize = Math.min(50, Math.max(10, size));
+        StringBuilder where = new StringBuilder(" WHERE enabled=1");
+        List<Object> args = new ArrayList<>();
+        appendChannelFilters(where, args, keyword, province, region, channelType);
+
+        int total = Optional.ofNullable(jdbc.queryForObject("SELECT COUNT(*) FROM channel_directory" + where, Integer.class, args.toArray())).orElse(0);
+        List<Object> itemArgs = new ArrayList<>(args);
+        itemArgs.add(safeSize);
+        itemArgs.add((safePage - 1) * safeSize);
+        List<Map<String, Object>> items = jdbc.queryForList(
+                "SELECT id,channel_code channelCode,name,province,city,district,channel_type channelType,source_type sourceType,cooperation_status cooperationStatus,official_url officialUrl,notes "
+                        + "FROM channel_directory" + where + " ORDER BY province,city,name LIMIT ? OFFSET ?",
+                itemArgs.toArray());
+        items.forEach(row -> row.put("cooperationNotice", channelNotice(text(row.get("cooperationStatus")))));
+
+        StringBuilder provinceWhere = new StringBuilder(" WHERE enabled=1 AND province IS NOT NULL AND province <> ''");
+        List<Object> provinceArgs = new ArrayList<>();
+        appendChannelFilters(provinceWhere, provinceArgs, null, null, region, channelType);
+        List<Map<String, Object>> provinces = jdbc.queryForList(
+                "SELECT province,COUNT(*) count FROM channel_directory" + provinceWhere + " GROUP BY province ORDER BY province",
+                provinceArgs.toArray());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("items", items);
+        result.put("total", total);
+        result.put("page", safePage);
+        result.put("size", safeSize);
+        result.put("provinces", provinces);
+        return result;
+    }
+
+    private void appendChannelFilters(StringBuilder where, List<Object> args, String keyword, String province, String region, String channelType) {
+        if (!blank(keyword)) {
+            where.append(" AND (name LIKE ? OR city LIKE ? OR province LIKE ?)");
+            String value = "%" + keyword.trim() + "%";
+            args.add(value); args.add(value); args.add(value);
+        }
+        if (!blank(channelType) && Set.of("museum", "scenic_spot", "cultural_store", "other").contains(channelType.trim())) {
+            where.append(" AND channel_type=?");
+            args.add(channelType.trim());
+        }
+        if (!blank(region)) {
+            List<String> provinces = provincesForRegion(region.trim());
+            if (!provinces.isEmpty()) {
+                where.append(" AND province IN (").append(String.join(",", Collections.nCopies(provinces.size(), "?"))).append(")");
+                args.addAll(provinces);
+            }
+        }
+        if (!blank(province)) {
+            where.append(" AND province=?");
+            args.add(province.trim());
+        }
+    }
+
+    private List<String> provincesForRegion(String region) {
+        return switch (region) {
+            case "north" -> List.of("北京市", "天津市", "河北省", "山西省", "内蒙古自治区");
+            case "northeast" -> List.of("辽宁省", "吉林省", "黑龙江省");
+            case "east" -> List.of("上海市", "江苏省", "浙江省", "安徽省", "福建省", "江西省", "山东省");
+            case "central" -> List.of("河南省", "湖北省", "湖南省");
+            case "south" -> List.of("广东省", "广西壮族自治区", "海南省");
+            case "southwest" -> List.of("重庆市", "四川省", "贵州省", "云南省", "西藏自治区");
+            case "northwest" -> List.of("陕西省", "甘肃省", "青海省", "宁夏回族自治区", "新疆维吾尔自治区");
+            default -> List.of();
+        };
+    }
+
+    private String channelNotice(String status) {
+        if ("cooperating".equals(status)) return "已标记为合作渠道，仍需以运营确认的品类、门店和授权范围为准。";
+        if ("pending_verification".equals(status)) return "运营提供的候选渠道，合作关系、具体点位和授权状态待核验。";
+        return "目录记录不代表平台已与该机构合作；提交后仍需人工联系、授权和渠道审核。";
+    }
+
     @PostMapping("/consumer/quote-requests")
     @Transactional
     public Map<String, Object> createQuoteRequest(
