@@ -448,7 +448,7 @@ async function submitTextInspiration() {
 }
 function pickInspirationImage() {
   if (busy.value) return
-  uni.chooseImage({ count: 1, sizeType: ['compressed'], success: (result) => {
+  uni.chooseImage({ count: 1, sizeType: ['compressed'], sourceType: ['album'], success: (result) => {
     const path = result.tempFilePaths?.[0]
     if (!path) {
       uni.showToast({ title: '没有读取到图片，请重新选择', icon: 'none' })
@@ -459,7 +459,13 @@ function pickInspirationImage() {
     void uploadInspirationImage(path)
   }, fail: (error: any) => {
     const message = String(error?.errMsg || '')
-    if (!/cancel/i.test(message)) uni.showToast({ title: '无法读取图片，请检查相册权限后重试', icon: 'none' })
+    if (/cancel/i.test(message)) return
+    const hint = /privacy/i.test(message)
+      ? '请先同意小程序隐私保护指引后重试'
+      : /auth|permission|deny/i.test(message)
+        ? '微信没有读取相册的权限，请在系统设置中检查微信的照片权限'
+        : '微信未能选取这张图片'
+    uni.showModal({ title: '选择图片失败', content: `${hint}\n\n微信返回：${message || '未提供错误信息'}`, showCancel: false })
   } })
 }
 async function uploadInspirationImage(path: string) {
