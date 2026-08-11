@@ -28,16 +28,16 @@
 
       <view v-if="phase === 'multiview'" class="result-panel"><text class="result-kicker">TURNAROUND VIEW</text><text class="choice-title">四视图已保存</text><text class="result-tip">系统已把产品的正面、左侧、背面和右侧都留在作品库，可以继续交给 3D 建模。</text><view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFill" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><text>{{ item.label }}</text></view></view><button class="dark-button full-button" :loading="busy" @tap="generateModel">继续生成 3D 模型</button><button class="outline-button full-button" @tap="openCommercial">先申请打样 / 商品化</button></view>
 
-      <view v-if="phase === 'model'" class="result-panel"><text class="result-kicker">3D PROTOTYPE</text><text class="choice-title">3D 建模任务已提交</text><view class="model-success"><text>3D</text><view><text>模型正在作品库生成</text><text>完成后可以预览、评审、申请打样或提交商品化报价。</text></view></view><button class="dark-button full-button" @tap="goWorks">查看我的作品</button><button class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button></view>
+      <view v-if="phase === 'model'" class="result-panel"><text class="result-kicker">3D PROTOTYPE</text><text class="choice-title">{{ modelTaskTitle }}</text><view class="model-success"><text>3D</text><view><text>{{ modelTaskDescription }}</text><text>{{ modelTaskDetail }}</text></view></view><view v-if="modelTask" class="model-progress"><view><text>建模进度</text><text>{{ normalizedModelProgress }}%</text></view><view class="model-progress-track"><view class="model-progress-value" :style="{ width: `${normalizedModelProgress}%` }" /></view></view><text v-if="modelTask?.errorMessage" class="model-error">{{ modelTask.errorMessage }}</text><button v-if="modelTask && !isModelTaskTerminal" class="outline-button full-button" :loading="modelRefreshing" @tap="refreshModelTask">刷新进度</button><button v-if="isModelTaskFailed" class="dark-button full-button" :loading="busy" @tap="generateModel">重新提交 3D 建模</button><button class="dark-button full-button" @tap="goWorks">{{ isModelTaskSucceeded ? '查看已完成的 3D 作品' : '查看我的作品' }}</button><button class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button></view>
     </scroll-view>
 
-    <view v-if="busy" class="loading-bar"><text>正在保存创作过程并调用 AI，请稍候…</text></view>
+    <view v-if="busy" class="loading-bar"><text>{{ busyMessage }}</text></view>
     <view class="bottom-actions"><button @tap="goWorks">作品库</button><button @tap="restart">重新开始</button></view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import { getSelectionOptions, type SelectionOption } from '../../api/selection'
@@ -49,6 +49,7 @@ import {
   createSeedreamMultiView,
   getConversation,
   getConversations,
+  getTripoModelTask,
   optimizeImagePrompt,
   saveConversationEvent,
   uploadReference,
@@ -63,6 +64,7 @@ type Mode = 'template' | 'text' | 'image'
 interface Message { id: number; role: 'assistant' | 'user'; text: string }
 interface ProductOption { key: string; name: string; mark: string; desc: string; process: string; categoryKey: string; categoryName: string; materials: MaterialOption[] }
 interface MaterialOption { name: string; note: string; color: string }
+interface ModelTask { jobId: number; status: string; progress: number; assetId?: number | null; previewUrl?: string; errorMessage?: string }
 
 const modeOptions = [
   { key: 'template' as Mode, mark: '模', title: '带模板开始', desc: '选择产品，自动生成一套可落地提示词' },
@@ -91,23 +93,33 @@ const sessionId = ref<number | null>(null)
 const generatedAssetId = ref<number | null>(null)
 const previewUrl = ref('')
 const multiviewImages = ref<SeedreamMultiViewImage[]>([])
+const modelTask = ref<ModelTask | null>(null)
 const messages = ref<Message[]>([])
 const busy = ref(false)
+const busyMessage = ref('正在保存创作过程并调用 AI，请稍候…')
 const saving = ref(false)
 const sessionReady = ref(false)
 const scrollIntoView = ref('bottom-anchor')
 let messageId = 0
 let sessionPromise: Promise<boolean> | null = null
 const forceNewSession = ref(false)
+const modelRefreshing = ref(false)
+let modelPollTimer: ReturnType<typeof setTimeout> | null = null
+let modelPollVersion = 0
 
 const currentMaterials = computed(() => selectedProduct.value?.materials || [])
+const categoryLabels: Record<string, string> = { food: '食品饮品', stationery: '文具纸品', souvenir: '景区文创', accessory: '饰品挂件', craft: '工艺收藏', daily: '日用生活', tableware: '餐饮器物', toy: '潮玩玩具', apparel: '服饰配件', precious: '贵金属' }
+const categoryOrder = ['food', 'stationery', 'souvenir', 'accessory', 'craft', 'daily', 'tableware', 'toy', 'apparel', 'precious']
 const productCatalogCategories = computed(() => {
-  const seen = new Set<string>()
-  return productOptions.value.filter(item => {
-    if (seen.has(item.categoryKey)) return false
-    seen.add(item.categoryKey)
-    return true
-  }).map(item => ({ key: item.categoryKey, name: item.categoryName }))
+  const names = new Map<string, string>()
+  productOptions.value.forEach(item => names.set(item.categoryKey, categoryLabels[item.categoryKey] || item.categoryName || '其他'))
+  return Array.from(names.entries())
+    .map(([key, name]) => ({ key, name }))
+    .sort((left, right) => {
+      const leftIndex = categoryOrder.indexOf(left.key)
+      const rightIndex = categoryOrder.indexOf(right.key)
+      return (leftIndex < 0 ? 999 : leftIndex) - (rightIndex < 0 ? 999 : rightIndex) || left.name.localeCompare(right.name, 'zh-CN')
+    })
 })
 const filteredProductOptions = computed(() => {
   const keyword = productKeyword.value.trim().toLowerCase()
@@ -122,6 +134,13 @@ const prompt = computed(() => {
   const source = inspirationText.value.trim() || `为${product}设计一套具有文化辨识度、适合量产打样的产品视觉`
   return `${source}。产品：${product}；材质：${material.value}；风格：${style.value}；主色：${palette.value}；用途：${purpose.value}。请考虑清晰轮廓、可生产结构、合理尺寸和适合商品展示的构图。`
 })
+const normalizedModelProgress = computed(() => Math.max(0, Math.min(100, Number(modelTask.value?.progress) || 0)))
+const isModelTaskSucceeded = computed(() => modelTask.value?.status === 'succeeded')
+const isModelTaskFailed = computed(() => modelTask.value?.status === 'failed')
+const isModelTaskTerminal = computed(() => isModelTaskSucceeded.value || isModelTaskFailed.value)
+const modelTaskTitle = computed(() => isModelTaskSucceeded.value ? '3D 模型已经生成' : isModelTaskFailed.value ? '3D 建模未完成' : '3D 建模正在生成')
+const modelTaskDescription = computed(() => isModelTaskSucceeded.value ? '3D 原型已保存到作品库' : isModelTaskFailed.value ? '本次 3D 建模失败，可回到产品图重新提交' : '正在从产品图生成立体原型')
+const modelTaskDetail = computed(() => isModelTaskSucceeded.value ? '可以在作品库查看模型、评审并申请打样。' : isModelTaskFailed.value ? '失败原因已保留。检查产品图和提示词后可以再次发起建模。' : '本页面会自动刷新进度，离开后也会继续在作品库保存。')
 
 function addMessage(role: Message['role'], text: string) {
   messages.value.push({ id: ++messageId, role, text })
@@ -161,7 +180,7 @@ function productFromSelection(option: SelectionOption): ProductOption {
     desc: option.subtitle || option.description,
     process: option.process,
     categoryKey: option.categoryKey,
-    categoryName: option.categoryName,
+    categoryName: categoryLabels[option.categoryKey] || option.categoryName || '其他',
     materials: [{ name: option.material, note: `${option.process} · ${option.specification}`, color: materialColor(option.material) }],
   }
 }
@@ -188,6 +207,7 @@ function productByValue(productType?: string, productKey?: string) {
 }
 
 function resetViewState() {
+  stopModelPolling()
   phase.value = 'mode'
   mode.value = ''
   selectedProduct.value = null
@@ -201,6 +221,7 @@ function resetViewState() {
   generatedAssetId.value = null
   previewUrl.value = ''
   multiviewImages.value = []
+  modelTask.value = null
   messages.value = []
   messageId = 0
 }
@@ -249,6 +270,13 @@ function restoreEvent(event: any) {
       multiviewImages.value = Array.isArray(payload.images) ? payload.images : []
       break
     case 'model_submitted':
+      setModelTask(payload)
+      break
+    case 'model_completed':
+      setModelTask({ ...payload, status: 'succeeded', progress: 100 })
+      break
+    case 'model_failed':
+      setModelTask({ ...payload, status: 'failed' })
       break
     default:
       break
@@ -299,6 +327,12 @@ function restoreMessages(events: any[]) {
       case 'model_submitted':
         addMessage('assistant', '3D 建模任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。')
         break
+      case 'model_completed':
+        addMessage('assistant', '3D 模型已经生成并保存到作品库，可以继续评审、申请打样或提交商品化报价。')
+        break
+      case 'model_failed':
+        addMessage('assistant', '3D 建模没有完成，失败原因已保存。可以检查产品图后重新提交。')
+        break
       default:
         break
     }
@@ -319,6 +353,8 @@ function restorePhase(events: any[]) {
       case 'image_generated': phase.value = 'result'; break
       case 'multiview_generated': phase.value = 'multiview'; break
       case 'model_submitted': phase.value = 'model'; break
+      case 'model_completed': phase.value = 'model'; break
+      case 'model_failed': phase.value = 'model'; break
       default: break
     }
   }
@@ -451,6 +487,7 @@ function editDirection() { phase.value = 'style' }
 async function generateProductImage() {
   if (busy.value || !selectedProduct.value || !material.value) return
   busy.value = true
+  busyMessage.value = '正在生成产品视觉并保存到作品库，请稍候…'
   try {
     await saveEvent('summary', 'generation_started', { productType: selectedProduct.value.name, material: material.value, prompt: prompt.value })
     let generationPrompt = prompt.value
@@ -469,13 +506,15 @@ async function generateProductImage() {
     } else {
       result = await createImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, scene: purpose.value, productType: selectedProduct.value.name, productCategory: selectedProduct.value.name, material: material.value })
     }
-    generatedAssetId.value = Number(result?.assetId || result?.id)
+    const assetId = Number(result?.assetId || result?.id)
+    if (!Number.isFinite(assetId) || assetId <= 0) throw new Error('产品图没有保存成功，请重新生成')
+    generatedAssetId.value = assetId
     previewUrl.value = imageUrl(result)
     await saveEvent('image', 'image_generated', { productType: selectedProduct.value.name, material: material.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value })
     addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
     phase.value = 'result'
   } catch (error: any) { uni.showToast({ title: error?.message || '生成失败，请稍后重试', icon: 'none' }) }
-  finally { busy.value = false }
+  finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
 }
 function imageUrl(item: any) {
   const raw = String(item?.previewUrl || item?.imageUrl || item?.fileUrl || '')
@@ -483,9 +522,69 @@ function imageUrl(item: any) {
   return raw.startsWith('/') ? apiUrl(raw) : ''
 }
 function previewImage() { if (previewUrl.value) uni.previewImage({ current: previewUrl.value, urls: [previewUrl.value] }) }
+
+function setModelTask(payload: any) {
+  const jobId = Number(payload?.jobId || payload?.modelJobId)
+  if (!Number.isFinite(jobId) || jobId <= 0) return
+  modelTask.value = {
+    jobId,
+    status: String(payload?.status || 'running').toLowerCase(),
+    progress: Number(payload?.progress) || 0,
+    assetId: Number(payload?.assetId || payload?.modelAssetId) || null,
+    previewUrl: imageUrl(payload),
+    errorMessage: String(payload?.errorMessage || payload?.error || ''),
+  }
+}
+
+function stopModelPolling() {
+  modelPollVersion += 1
+  if (modelPollTimer) clearTimeout(modelPollTimer)
+  modelPollTimer = null
+}
+
+async function refreshModelTask() {
+  if (!modelTask.value || modelRefreshing.value) return
+  modelRefreshing.value = true
+  try {
+    const result = await getTripoModelTask(modelTask.value.jobId)
+    const previousStatus = modelTask.value.status
+    setModelTask(result)
+    if (!modelTask.value) return
+    if (modelTask.value.status === 'succeeded' && previousStatus !== 'succeeded') {
+      await saveEvent('model', 'model_completed', { modelJobId: modelTask.value.jobId, assetId: modelTask.value.assetId, status: 'succeeded', progress: 100, previewUrl: modelTask.value.previewUrl })
+      addMessage('assistant', '3D 模型已经生成并保存到作品库，可以继续评审、申请打样或提交商品化报价。')
+    } else if (modelTask.value.status === 'failed' && previousStatus !== 'failed') {
+      await saveEvent('model', 'model_failed', { modelJobId: modelTask.value.jobId, status: 'failed', progress: modelTask.value.progress, errorMessage: modelTask.value.errorMessage })
+      addMessage('assistant', '3D 建模没有完成，失败原因已保存。可以检查产品图后重新提交。')
+    }
+  } catch (error: any) {
+    if (modelTask.value && !isModelTaskTerminal.value) modelTask.value.errorMessage = error?.message || '暂时无法读取建模进度，系统会自动重试'
+  } finally {
+    modelRefreshing.value = false
+  }
+}
+
+async function scheduleModelPolling(immediate = false) {
+  stopModelPolling()
+  const version = modelPollVersion
+  const poll = async () => {
+    if (version !== modelPollVersion || !modelTask.value || isModelTaskTerminal.value) return
+    await refreshModelTask()
+    if (version !== modelPollVersion || !modelTask.value || isModelTaskTerminal.value) return
+    modelPollTimer = setTimeout(poll, 5000)
+  }
+  if (immediate) await poll()
+  else modelPollTimer = setTimeout(poll, 5000)
+}
+
 async function generateMultiView() {
-  if (busy.value || !generatedAssetId.value) return
+  if (busy.value) return
+  if (!generatedAssetId.value) {
+    uni.showToast({ title: '当前产品图未保存成功，请先重新生成产品图', icon: 'none' })
+    return
+  }
   busy.value = true
+  busyMessage.value = '正在依次生成正面、左侧、背面和右侧，请稍候…'
   try {
     await saveEvent('multiview', 'multiview_started', { inputAssetId: generatedAssetId.value, productType: selectedProduct.value?.name, material: material.value })
     const result = await createSeedreamMultiView({ inputAssetId: generatedAssetId.value, prompt: prompt.value, size: '2K', watermark: true })
@@ -495,21 +594,30 @@ async function generateMultiView() {
     addMessage('assistant', '四个角度都已保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
     phase.value = 'multiview'
   } catch (error: any) { uni.showToast({ title: error?.message || '四视图生成失败', icon: 'none' }) }
-  finally { busy.value = false }
+  finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
 }
 async function generateModel() {
-  if (busy.value || !generatedAssetId.value) return
+  if (busy.value) return
+  if (!generatedAssetId.value) {
+    uni.showToast({ title: '当前产品图未保存成功，请先重新生成产品图', icon: 'none' })
+    return
+  }
   busy.value = true
+  busyMessage.value = '正在提交 3D 建模任务，请稍候…'
   try {
     const useMultiview = multiviewImages.value.length >= 4
     const payload: any = { title: `${selectedProduct.value?.name || '文创产品'} · 对话 3D 原型`, prompt: prompt.value, rawPrompt: prompt.value, mode: useMultiview ? 'multiview_to_model' : 'image_to_model', inputAssetId: generatedAssetId.value, productCategory: selectedProduct.value?.name, material: material.value, materialLabel: material.value, materialPrompt: `manufacturing material: ${material.value}`, multiviewAssetIds: useMultiview ? Object.fromEntries(multiviewImages.value.map(item => [item.view, Number(item.assetId)])) : undefined, exportFormats: 'GLB', texture: true, pbr: true, textureQuality: 'extreme', geometryQuality: 'detailed', textureAlignment: 'original_image', orientation: 'align_image', autoSize: true, imageAutofix: true, exportUv: true, faceLimit: 2000000 }
     await saveEvent('model', 'model_started', { inputAssetId: generatedAssetId.value, multiview: useMultiview, productType: selectedProduct.value?.name, material: material.value })
     const result = await createModel(payload)
-    await saveEvent('model', 'model_submitted', { inputAssetId: generatedAssetId.value, modelJobId: result?.jobId, modelAssetId: result?.assetId, productType: selectedProduct.value?.name, material: material.value })
+    const jobId = Number(result?.jobId)
+    if (!Number.isFinite(jobId) || jobId <= 0) throw new Error('3D 服务没有返回任务编号，请稍后重试')
+    setModelTask({ jobId, status: result?.status, progress: result?.progress, assetId: result?.assetId })
+    await saveEvent('model', 'model_submitted', { inputAssetId: generatedAssetId.value, modelJobId: jobId, modelAssetId: result?.assetId, status: modelTask.value?.status || 'running', progress: modelTask.value?.progress || 0, productType: selectedProduct.value?.name, material: material.value })
     addMessage('assistant', '3D 建模任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。')
     phase.value = 'model'
+    void scheduleModelPolling(true)
   } catch (error: any) { uni.showToast({ title: error?.message || '3D 任务提交失败', icon: 'none' }) }
-  finally { busy.value = false }
+  finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
 }
 function restart() {
   if (busy.value || saving.value) {
@@ -529,10 +637,12 @@ onMounted(async () => {
   await loadProductCatalog()
   if (!(await ensureSession())) return
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
+  if (phase.value === 'model' && modelTask.value && !isModelTaskTerminal.value) void scheduleModelPolling(true)
 })
+onUnmounted(() => stopModelPolling())
 </script>
 
 <style scoped lang="scss">
-.page{min-height:100vh;padding-bottom:116rpx;background:linear-gradient(180deg,#f7f3ed 0%,#f1ece4 100%);color:#332d28}.topbar{position:fixed;z-index:5;top:0;left:0;right:0;display:flex;align-items:center;gap:12rpx;padding:18rpx 26rpx calc(16rpx + env(safe-area-inset-top));border-bottom:1rpx solid rgba(116,96,75,.12);background:rgba(247,243,237,.96);backdrop-filter:blur(14rpx)}.back{width:48rpx;height:48rpx;color:#6d5f52;font-size:58rpx;line-height:38rpx;text-align:center}.topbar>view:nth-child(2){display:flex;flex:1;flex-direction:column;gap:4rpx}.eyebrow{color:#668071;font-size:14rpx;font-weight:900;letter-spacing:2rpx}.top-title{font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.save-state{color:#88988b;font-size:15rpx}.chat{height:calc(100vh - 132rpx);box-sizing:border-box;padding:126rpx 24rpx 26rpx}.intro-line{margin:0 2rpx 20rpx;padding:12rpx 14rpx;border-left:3rpx solid #b58b69;background:#f3eee6;color:#84786c;font-size:15rpx;line-height:1.5}.message-row{display:flex;align-items:flex-start;gap:9rpx;margin:17rpx 0}.message-row.user{justify-content:flex-end}.avatar{display:grid;place-items:center;flex:0 0 48rpx;width:48rpx;height:48rpx;border-radius:15rpx;background:#5e7c6d;color:#fff;font-family:"Songti SC","STSong",serif;font-size:25rpx}.bubble{max-width:78%;padding:14rpx 16rpx;border:1rpx solid #e2d8cb;border-radius:17rpx;background:#fffdfa;box-shadow:0 6rpx 15rpx rgba(80,61,42,.045)}.bubble text{color:#534940;font-size:20rpx;line-height:1.55}.user .bubble{border-color:#a9bdae;background:#e5efe7}.user .bubble text{color:#4f685b}.choice-panel,.input-panel,.summary-panel,.result-panel{margin:22rpx 0 26rpx;padding:19rpx;border:1rpx solid #e2d9ce;border-radius:22rpx;background:rgba(255,253,249,.9);box-shadow:0 10rpx 25rpx rgba(79,60,41,.06)}.choice-title{display:block;color:#403831;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.choice-note{display:block;margin-top:7rpx;color:#8c8075;font-size:16rpx;line-height:1.5}.choice-grid,.product-grid,.material-grid{display:grid;gap:10rpx;margin-top:15rpx}.choice-card{display:grid;grid-template-columns:50rpx minmax(0,1fr) 20rpx;align-items:center;gap:10rpx;padding:13rpx;border:1rpx solid #e4dbd0;border-radius:16rpx;background:#fffefa}.choice-mark,.product-mark{display:grid;place-items:center;width:47rpx;height:47rpx;border-radius:14rpx;background:#e8f0e8;color:#5e806e;font-family:"Songti SC","STSong",serif;font-size:26rpx;font-weight:800}.choice-card view{display:flex;min-width:0;flex-direction:column;gap:4rpx}.choice-card view text:first-child{color:#463d35;font-size:21rpx;font-weight:800}.choice-card view text:last-child{color:#92867a;font-size:15rpx;line-height:1.4}.choice-arrow{color:#a16f59;font-size:33rpx}.product-grid{grid-template-columns:1fr 1fr}.product-card{display:flex;min-height:177rpx;flex-direction:column;padding:14rpx;border:1rpx solid #e5dbce;border-radius:17rpx;background:#fffefa}.product-card:active,.choice-card:active,.next-card:active{background:#f4efe7}.product-card:nth-child(2n) .product-mark{background:#f7e8df;color:#a96750}.product-card:nth-child(3n) .product-mark{background:#f5edd9;color:#947144}.product-name{margin-top:10rpx;color:#443a32;font-size:20rpx;font-weight:850}.product-desc{margin-top:5rpx;color:#8b7f73;font-size:14rpx;line-height:1.4}.product-process{margin-top:auto;color:#8c6e59;font-size:14rpx;font-weight:800}.text-input{width:100%;min-height:190rpx;box-sizing:border-box;margin-top:16rpx;padding:14rpx;border:1rpx solid #ddd2c5;border-radius:15rpx;background:#fbf9f5;color:#443b33;font-size:20rpx;line-height:1.6}.input-foot{display:flex;align-items:center;justify-content:space-between;margin-top:12rpx;color:#a09387;font-size:14rpx}.dark-button,.outline-button{height:76rpx;margin-top:15rpx;border-radius:14rpx;font-size:21rpx;font-weight:800}.dark-button{background:#3f3933;color:#fff}.dark-button::after,.outline-button::after,.link-button::after{border:0}.dark-button[disabled]{opacity:.48}.full-button{width:100%}.image-picker{display:flex;align-items:center;justify-content:center;height:300rpx;margin-top:16rpx;overflow:hidden;border:1rpx dashed #b5a796;border-radius:17rpx;background:#faf7f1}.image-picker>view{display:flex;align-items:center;flex-direction:column;gap:8rpx;color:#96897b}.image-picker>view text:first-child{font-size:62rpx;line-height:1}.image-picker image{width:100%;height:100%}.material-grid{grid-template-columns:1fr 1fr}.material-card{display:grid;grid-template-columns:36rpx minmax(0,1fr) 22rpx;align-items:center;gap:9rpx;min-height:74rpx;padding:11rpx;border:1rpx solid #e2d8cc;border-radius:15rpx;background:#fffefa}.material-card.active{border-color:#80a28f;background:#eef5ee}.swatch{width:32rpx;height:32rpx;border:1rpx solid rgba(100,80,58,.16);border-radius:10rpx}.material-card view:nth-child(2){display:flex;min-width:0;flex-direction:column;gap:4rpx}.material-card view text:first-child{color:#493f36;font-size:18rpx;font-weight:800}.material-card view text:last-child{color:#94877b;font-size:13rpx;line-height:1.3}.check{color:#56816c;font-size:21rpx;font-weight:900}.style-section{margin-top:17rpx}.style-section>text{color:#72675c;font-size:16rpx;font-weight:800}.pill-row{display:flex;flex-wrap:wrap;gap:8rpx;margin-top:9rpx}.pill{padding:9rpx 12rpx;border:1rpx solid #e1d7cb;border-radius:999rpx;background:#fffefa;color:#897d71;font-size:15rpx}.pill.active{border-color:#6e907e;background:#e7f0e8;color:#4d715f;font-weight:800}.summary-card{display:grid;gap:0;margin-top:15rpx;border-top:1rpx solid #e6ddd2}.summary-card>view{display:grid;grid-template-columns:110rpx 1fr;gap:10rpx;padding:12rpx 0;border-bottom:1rpx solid #eee7df}.summary-card text:first-child{color:#9c8b7d;font-size:15rpx}.summary-card text:last-child{color:#4c4239;font-size:17rpx;line-height:1.45}.summary-note,.result-tip{display:block;margin-top:14rpx;color:#82766a;font-size:16rpx;line-height:1.55}.link-button{display:block;margin:13rpx auto 0;padding:0;background:transparent;color:#93705d;font-size:16rpx}.result-kicker{display:block;color:#9d7a5e;font-size:14rpx;font-weight:900;letter-spacing:2rpx}.result-image{width:100%;height:430rpx;margin-top:15rpx;border-radius:17rpx;background:#eee7dc}.result-placeholder{display:flex;align-items:center;justify-content:center;height:260rpx;margin-top:15rpx;flex-direction:column;gap:9rpx;border-radius:17rpx;background:linear-gradient(145deg,#d9e7dc,#ead9cc);color:#557365}.result-placeholder text:first-child{font-family:"Songti SC","STSong",serif;font-size:62rpx}.result-placeholder text:last-child{font-size:16rpx}.next-grid{display:grid;gap:10rpx;margin-top:17rpx}.next-card{display:grid;grid-template-columns:48rpx minmax(0,1fr) 18rpx;align-items:center;gap:10rpx;padding:13rpx;border:1rpx solid #e2d8cd;border-radius:15rpx;background:#fffefa}.next-card>text:first-child{display:grid;place-items:center;width:44rpx;height:44rpx;border-radius:13rpx;background:#edf3eb;color:#5e806e;font-family:"Songti SC","STSong",serif;font-size:24rpx;font-weight:800}.next-card view{display:flex;min-width:0;flex-direction:column;gap:4rpx}.next-card view text:first-child{color:#473d35;font-size:19rpx;font-weight:800}.next-card view text:last-child{color:#92867a;font-size:14rpx}.next-card>text:last-child{color:#a16f59;font-size:31rpx}.view-grid{display:grid;grid-template-columns:1fr 1fr;gap:10rpx;margin-top:15rpx}.view-card{overflow:hidden;border:1rpx solid #e2d8cd;border-radius:14rpx;background:#fffefa}.view-card image,.view-placeholder{display:block;width:100%;height:190rpx;background:#eee8df}.view-placeholder{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5rpx;color:#817367;font-size:15rpx}.view-card>text:last-child{display:block;padding:8rpx 10rpx;color:#6f6257;font-size:15rpx;font-weight:800}.model-success{display:flex;align-items:center;gap:14rpx;margin-top:18rpx;padding:16rpx;border-radius:16rpx;background:#e8f0e9}.model-success>text{display:grid;place-items:center;width:74rpx;height:74rpx;border-radius:22rpx;background:#5f7d6e;color:#fff;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.model-success view{display:flex;flex:1;flex-direction:column;gap:6rpx}.model-success view text:first-child{color:#4c6e5c;font-size:20rpx;font-weight:800}.model-success view text:last-child{color:#789082;font-size:14rpx;line-height:1.4}.outline-button{border:1rpx solid #9ab4a2;background:#f7fbf6;color:#557564}.loading-bar{position:fixed;z-index:7;right:20rpx;bottom:115rpx;left:20rpx;padding:12rpx 14rpx;border:1rpx solid #d9c8b5;border-radius:13rpx;background:#fff7eb;color:#96704f;font-size:15rpx;text-align:center;box-shadow:0 8rpx 20rpx rgba(81,58,35,.12)}.bottom-actions{position:fixed;z-index:6;right:0;bottom:0;left:0;display:flex;justify-content:space-around;padding:13rpx 20rpx calc(13rpx + env(safe-area-inset-bottom));border-top:1rpx solid rgba(110,91,70,.14);background:rgba(247,243,237,.96);backdrop-filter:blur(13rpx)}.bottom-actions button{margin:0;background:transparent;color:#6f6256;font-size:16rpx}.bottom-actions button::after{border:0}
+.page{min-height:100vh;padding-bottom:116rpx;background:linear-gradient(180deg,#f7f3ed 0%,#f1ece4 100%);color:#332d28}.topbar{position:fixed;z-index:5;top:0;left:0;right:0;display:flex;align-items:center;gap:12rpx;padding:18rpx 26rpx calc(16rpx + env(safe-area-inset-top));border-bottom:1rpx solid rgba(116,96,75,.12);background:rgba(247,243,237,.96);backdrop-filter:blur(14rpx)}.back{width:48rpx;height:48rpx;color:#6d5f52;font-size:58rpx;line-height:38rpx;text-align:center}.topbar>view:nth-child(2){display:flex;flex:1;flex-direction:column;gap:4rpx}.eyebrow{color:#668071;font-size:14rpx;font-weight:900;letter-spacing:2rpx}.top-title{font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.save-state{color:#88988b;font-size:15rpx}.chat{height:calc(100vh - 132rpx);box-sizing:border-box;padding:126rpx 24rpx 26rpx}.intro-line{margin:0 2rpx 20rpx;padding:12rpx 14rpx;border-left:3rpx solid #b58b69;background:#f3eee6;color:#84786c;font-size:15rpx;line-height:1.5}.message-row{display:flex;align-items:flex-start;gap:9rpx;margin:17rpx 0}.message-row.user{justify-content:flex-end}.avatar{display:grid;place-items:center;flex:0 0 48rpx;width:48rpx;height:48rpx;border-radius:15rpx;background:#5e7c6d;color:#fff;font-family:"Songti SC","STSong",serif;font-size:25rpx}.bubble{max-width:78%;padding:14rpx 16rpx;border:1rpx solid #e2d8cb;border-radius:17rpx;background:#fffdfa;box-shadow:0 6rpx 15rpx rgba(80,61,42,.045)}.bubble text{color:#534940;font-size:20rpx;line-height:1.55}.user .bubble{border-color:#a9bdae;background:#e5efe7}.user .bubble text{color:#4f685b}.choice-panel,.input-panel,.summary-panel,.result-panel{margin:22rpx 0 26rpx;padding:19rpx;border:1rpx solid #e2d9ce;border-radius:22rpx;background:rgba(255,253,249,.9);box-shadow:0 10rpx 25rpx rgba(79,60,41,.06)}.choice-title{display:block;color:#403831;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.choice-note{display:block;margin-top:7rpx;color:#8c8075;font-size:16rpx;line-height:1.5}.choice-grid,.product-grid,.material-grid{display:grid;gap:10rpx;margin-top:15rpx}.choice-card{display:grid;grid-template-columns:50rpx minmax(0,1fr) 20rpx;align-items:center;gap:10rpx;padding:13rpx;border:1rpx solid #e4dbd0;border-radius:16rpx;background:#fffefa}.choice-mark,.product-mark{display:grid;place-items:center;width:47rpx;height:47rpx;border-radius:14rpx;background:#e8f0e8;color:#5e806e;font-family:"Songti SC","STSong",serif;font-size:26rpx;font-weight:800}.choice-card view{display:flex;min-width:0;flex-direction:column;gap:4rpx}.choice-card view text:first-child{color:#463d35;font-size:21rpx;font-weight:800}.choice-card view text:last-child{color:#92867a;font-size:15rpx;line-height:1.4}.choice-arrow{color:#a16f59;font-size:33rpx}.product-grid{grid-template-columns:1fr 1fr}.product-card{display:flex;min-height:177rpx;flex-direction:column;padding:14rpx;border:1rpx solid #e5dbce;border-radius:17rpx;background:#fffefa}.product-card:active,.choice-card:active,.next-card:active{background:#f4efe7}.product-card:nth-child(2n) .product-mark{background:#f7e8df;color:#a96750}.product-card:nth-child(3n) .product-mark{background:#f5edd9;color:#947144}.product-name{margin-top:10rpx;color:#443a32;font-size:20rpx;font-weight:850}.product-desc{margin-top:5rpx;color:#8b7f73;font-size:14rpx;line-height:1.4}.product-process{margin-top:auto;color:#8c6e59;font-size:14rpx;font-weight:800}.text-input{width:100%;min-height:190rpx;box-sizing:border-box;margin-top:16rpx;padding:14rpx;border:1rpx solid #ddd2c5;border-radius:15rpx;background:#fbf9f5;color:#443b33;font-size:20rpx;line-height:1.6}.input-foot{display:flex;align-items:center;justify-content:space-between;margin-top:12rpx;color:#a09387;font-size:14rpx}.dark-button,.outline-button{height:76rpx;margin-top:15rpx;border-radius:14rpx;font-size:21rpx;font-weight:800}.dark-button{background:#3f3933;color:#fff}.dark-button::after,.outline-button::after,.link-button::after{border:0}.dark-button[disabled]{opacity:.48}.full-button{width:100%}.image-picker{display:flex;align-items:center;justify-content:center;height:300rpx;margin-top:16rpx;overflow:hidden;border:1rpx dashed #b5a796;border-radius:17rpx;background:#faf7f1}.image-picker>view{display:flex;align-items:center;flex-direction:column;gap:8rpx;color:#96897b}.image-picker>view text:first-child{font-size:62rpx;line-height:1}.image-picker image{width:100%;height:100%}.material-grid{grid-template-columns:1fr 1fr}.material-card{display:grid;grid-template-columns:36rpx minmax(0,1fr) 22rpx;align-items:center;gap:9rpx;min-height:74rpx;padding:11rpx;border:1rpx solid #e2d8cc;border-radius:15rpx;background:#fffefa}.material-card.active{border-color:#80a28f;background:#eef5ee}.swatch{width:32rpx;height:32rpx;border:1rpx solid rgba(100,80,58,.16);border-radius:10rpx}.material-card view:nth-child(2){display:flex;min-width:0;flex-direction:column;gap:4rpx}.material-card view text:first-child{color:#493f36;font-size:18rpx;font-weight:800}.material-card view text:last-child{color:#94877b;font-size:13rpx;line-height:1.3}.check{color:#56816c;font-size:21rpx;font-weight:900}.style-section{margin-top:17rpx}.style-section>text{color:#72675c;font-size:16rpx;font-weight:800}.pill-row{display:flex;flex-wrap:wrap;gap:8rpx;margin-top:9rpx}.pill{padding:9rpx 12rpx;border:1rpx solid #e1d7cb;border-radius:999rpx;background:#fffefa;color:#897d71;font-size:15rpx}.pill.active{border-color:#6e907e;background:#e7f0e8;color:#4d715f;font-weight:800}.summary-card{display:grid;gap:0;margin-top:15rpx;border-top:1rpx solid #e6ddd2}.summary-card>view{display:grid;grid-template-columns:110rpx 1fr;gap:10rpx;padding:12rpx 0;border-bottom:1rpx solid #eee7df}.summary-card text:first-child{color:#9c8b7d;font-size:15rpx}.summary-card text:last-child{color:#4c4239;font-size:17rpx;line-height:1.45}.summary-note,.result-tip{display:block;margin-top:14rpx;color:#82766a;font-size:16rpx;line-height:1.55}.link-button{display:block;margin:13rpx auto 0;padding:0;background:transparent;color:#93705d;font-size:16rpx}.result-kicker{display:block;color:#9d7a5e;font-size:14rpx;font-weight:900;letter-spacing:2rpx}.result-image{width:100%;height:430rpx;margin-top:15rpx;border-radius:17rpx;background:#eee7dc}.result-placeholder{display:flex;align-items:center;justify-content:center;height:260rpx;margin-top:15rpx;flex-direction:column;gap:9rpx;border-radius:17rpx;background:linear-gradient(145deg,#d9e7dc,#ead9cc);color:#557365}.result-placeholder text:first-child{font-family:"Songti SC","STSong",serif;font-size:62rpx}.result-placeholder text:last-child{font-size:16rpx}.next-grid{display:grid;gap:10rpx;margin-top:17rpx}.next-card{display:grid;grid-template-columns:48rpx minmax(0,1fr) 18rpx;align-items:center;gap:10rpx;padding:13rpx;border:1rpx solid #e2d8cd;border-radius:15rpx;background:#fffefa}.next-card>text:first-child{display:grid;place-items:center;width:44rpx;height:44rpx;border-radius:13rpx;background:#edf3eb;color:#5e806e;font-family:"Songti SC","STSong",serif;font-size:24rpx;font-weight:800}.next-card view{display:flex;min-width:0;flex-direction:column;gap:4rpx}.next-card view text:first-child{color:#473d35;font-size:19rpx;font-weight:800}.next-card view text:last-child{color:#92867a;font-size:14rpx}.next-card>text:last-child{color:#a16f59;font-size:31rpx}.view-grid{display:grid;grid-template-columns:1fr 1fr;gap:10rpx;margin-top:15rpx}.view-card{overflow:hidden;border:1rpx solid #e2d8cd;border-radius:14rpx;background:#fffefa}.view-card image,.view-placeholder{display:block;width:100%;height:190rpx;background:#eee8df}.view-placeholder{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5rpx;color:#817367;font-size:15rpx}.view-card>text:last-child{display:block;padding:8rpx 10rpx;color:#6f6257;font-size:15rpx;font-weight:800}.model-success{display:flex;align-items:center;gap:14rpx;margin-top:18rpx;padding:16rpx;border-radius:16rpx;background:#e8f0e9}.model-success>text{display:grid;place-items:center;width:74rpx;height:74rpx;border-radius:22rpx;background:#5f7d6e;color:#fff;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.model-success view{display:flex;flex:1;flex-direction:column;gap:6rpx}.model-success view text:first-child{color:#4c6e5c;font-size:20rpx;font-weight:800}.model-success view text:last-child{color:#789082;font-size:14rpx;line-height:1.4}.model-progress{margin-top:15rpx;padding:13rpx;border:1rpx solid #dbe7dc;border-radius:14rpx;background:#f7fbf6}.model-progress>view:first-child{display:flex;justify-content:space-between;color:#54715f;font-size:15rpx;font-weight:800}.model-progress-track{height:12rpx;margin-top:10rpx;overflow:hidden;border-radius:999rpx;background:#dbe8dd}.model-progress-value{height:100%;border-radius:inherit;background:#648875;transition:width .35s ease}.model-error{display:block;margin-top:12rpx;padding:11rpx;border-radius:12rpx;background:#fff0ec;color:#a05543;font-size:14rpx;line-height:1.45}.outline-button{border:1rpx solid #9ab4a2;background:#f7fbf6;color:#557564}.loading-bar{position:fixed;z-index:7;right:20rpx;bottom:115rpx;left:20rpx;padding:12rpx 14rpx;border:1rpx solid #d9c8b5;border-radius:13rpx;background:#fff7eb;color:#96704f;font-size:15rpx;text-align:center;box-shadow:0 8rpx 20rpx rgba(81,58,35,.12)}.bottom-actions{position:fixed;z-index:6;right:0;bottom:0;left:0;display:flex;justify-content:space-around;padding:13rpx 20rpx calc(13rpx + env(safe-area-inset-bottom));border-top:1rpx solid rgba(110,91,70,.14);background:rgba(247,243,237,.96);backdrop-filter:blur(13rpx)}.bottom-actions button{margin:0;background:transparent;color:#6f6256;font-size:16rpx}.bottom-actions button::after{border:0}
 .catalog-tools{margin-top:15rpx;padding:12rpx;border:1rpx solid #e6ddd2;border-radius:15rpx;background:#f8f4ed}.catalog-search{box-sizing:border-box;width:100%;height:66rpx;padding:0 13rpx;border:1rpx solid #ded4c7;border-radius:11rpx;background:#fffefa;color:#4c433a;font-size:18rpx}.catalog-categories{margin-top:10rpx;white-space:nowrap}.catalog-categories>view{display:flex;gap:7rpx}.catalog-category{display:inline-block;padding:7rpx 10rpx;border:1rpx solid #ded5c9;border-radius:9rpx;background:#fffefa;color:#897d72;font-size:14rpx}.catalog-category.active{border-color:#72917f;background:#e7f0e7;color:#4e705e;font-weight:800}.catalog-count{display:block;margin-top:9rpx;color:#907d6f;font-size:13rpx}.catalog-empty{margin-top:15rpx;padding:34rpx 16rpx;border:1rpx dashed #d8cbbd;border-radius:15rpx;background:#faf7f1;color:#8f8276;font-size:17rpx;text-align:center}.product-card{min-height:187rpx}.product-category-name{margin-top:9rpx;color:#9c8879;font-size:12rpx}.product-name{margin-top:4rpx;line-height:1.35}.product-desc,.product-process{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical}.product-desc{-webkit-line-clamp:2}.product-process{font-size:13rpx;line-height:1.35;-webkit-line-clamp:2}
 </style>

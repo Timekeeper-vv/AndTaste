@@ -195,10 +195,15 @@ export interface SeedreamMultiViewResult {
  */
 export const createSeedreamMultiView = (body: SeedreamMultiViewRequest) => request<SeedreamMultiViewResult>(
   '/api/creative/ai/volcengine/seedream/multiview',
-  { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
+  // Four views are generated sequentially to keep the product identity
+  // consistent. Give the native client enough time to receive all four.
+  { method: 'POST', data: body, timeout: 180000, header: { 'content-type': 'application/json' } },
 )
 
 export const createModel = (body: any) => request<any>('/api/creative/ai/tripo/generate', { method: 'POST', data: body, header: { 'content-type': 'application/json' } })
+export const getTripoModelTask = (jobId: number | string) => request<any>(
+  `/api/creative/ai/tripo/tasks/${encodeURIComponent(String(jobId))}`,
+)
 export const uploadReference = (filePath: string) => uploadFile<any>('/api/creative/ai/assets/upload', filePath)
 
 export type Tripo3dPromptTemplate = 'universal' | 'collectible' | 'oriental' | 'plush_toy' | 'ppc_precision'

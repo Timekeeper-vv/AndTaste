@@ -5,6 +5,8 @@ export interface CommercialProduct {
   templateCode: string
   productName: string
   productType: string
+  categoryKey?: string
+  categoryName?: string
   material: string
   process: string
   specification: string
