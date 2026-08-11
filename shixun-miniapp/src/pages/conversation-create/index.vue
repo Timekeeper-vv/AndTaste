@@ -24,7 +24,7 @@
 
       <view v-if="phase === 'summary'" class="summary-panel"><text class="choice-title">这是我为你整理的创作方案</text><view class="summary-card"><view><text>产品</text><text>{{ selectedProduct?.name }}</text></view><view><text>材质</text><text>{{ material }}</text></view><view><text>风格</text><text>{{ style }} · {{ palette }}</text></view><view><text>用途</text><text>{{ purpose }}</text></view><view><text>灵感</text><text>{{ inspirationText || '使用产品模板自动生成方向' }}</text></view></view><text class="summary-note">确认后会生成第一张产品视觉，生成结果会自动进入作品库；之后可以继续四视图和 3D 建模。</text><button class="dark-button full-button" :loading="busy" @tap="generateProductImage">确认并生成产品图</button><button class="link-button" @tap="editDirection">返回修改</button></view>
 
-      <view v-if="phase === 'result'" class="result-panel"><text class="result-kicker">PRODUCT VISUAL READY</text><text class="choice-title">第一张产品视觉已经完成</text><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><text class="result-tip">这不是流程终点。你可以继续补全四个角度，或直接进入 3D 原型。</text><view class="next-grid"><view class="next-card" @tap="generateMultiView"><text>观</text><view><text>生成三视图 / 四视图</text><text>补全正、左、背、右四个角度</text></view><text>›</text></view><view class="next-card" @tap="generateModel"><text>形</text><view><text>直接生成 3D 模型</text><text>从当前产品图创建立体原型</text></view><text>›</text></view><view class="next-card" @tap="openCommercial"><text>做</text><view><text>申请打样 / 商品化</text><text>把创作提交给运营报价</text></view><text>›</text></view></view></view>
+      <view v-if="phase === 'result'" class="result-panel"><text class="result-kicker">PRODUCT VISUAL READY</text><text class="choice-title">产品视觉已经完成</text><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view v-if="refiningImage" class="refinement-panel"><text>告诉我哪里不满意</text><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：把主图改得更简洁，保留祥云，去掉文字，做成圆形冰箱贴构图。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view><button class="link-button" @tap="cancelRefinement">返回当前方案</button></view><template v-else><text class="result-tip">满意可以继续补全四个角度或进入 3D；不满意可以在当前图基础上补充要求再生成，旧版本会保留在作品库。</text><view class="next-grid"><view class="next-card" @tap="startRefinement"><text>改</text><view><text>不满意，补充要求重生成</text><text>基于当前图片生成新的方案</text></view><text>›</text></view><view class="next-card" @tap="generateMultiView"><text>观</text><view><text>生成三视图 / 四视图</text><text>补全正、左、背、右四个角度</text></view><text>›</text></view><view class="next-card" @tap="generateModel"><text>形</text><view><text>直接生成 3D 模型</text><text>从当前产品图创建立体原型</text></view><text>›</text></view><view class="next-card" @tap="openCommercial"><text>做</text><view><text>申请打样 / 商品化</text><text>把创作提交给运营报价</text></view><text>›</text></view></view></template></view>
 
       <view v-if="phase === 'multiview'" class="result-panel"><text class="result-kicker">TURNAROUND VIEW</text><text class="choice-title">四视图已保存</text><text class="result-tip">系统已把产品的正面、左侧、背面和右侧都留在作品库，可以继续交给 3D 建模。</text><view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFill" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><text>{{ item.label }}</text></view></view><button class="dark-button full-button" :loading="busy" @tap="generateModel">继续生成 3D 模型</button><button class="outline-button full-button" @tap="openCommercial">先申请打样 / 商品化</button></view>
 
@@ -93,6 +93,8 @@ const sessionId = ref<number | null>(null)
 const generatedAssetId = ref<number | null>(null)
 const previewUrl = ref('')
 const multiviewImages = ref<SeedreamMultiViewImage[]>([])
+const refiningImage = ref(false)
+const refinementNote = ref('')
 const modelTask = ref<ModelTask | null>(null)
 const messages = ref<Message[]>([])
 const busy = ref(false)
@@ -226,6 +228,8 @@ function resetViewState() {
   generatedAssetId.value = null
   previewUrl.value = ''
   multiviewImages.value = []
+  refiningImage.value = false
+  refinementNote.value = ''
   modelTask.value = null
   messages.value = []
   messageId = 0
@@ -270,6 +274,11 @@ function restoreEvent(event: any) {
     case 'image_generated':
       generatedAssetId.value = Number(payload.generatedAssetId) || generatedAssetId.value
       previewUrl.value = imageUrl({ previewUrl: payload.previewUrl })
+      break
+    case 'image_refined':
+      generatedAssetId.value = Number(payload.generatedAssetId) || generatedAssetId.value
+      previewUrl.value = imageUrl({ previewUrl: payload.previewUrl })
+      refinementNote.value = ''
       break
     case 'multiview_generated':
       multiviewImages.value = Array.isArray(payload.images) ? payload.images : []
@@ -326,6 +335,10 @@ function restoreMessages(events: any[]) {
       case 'image_generated':
         addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
         break
+      case 'image_refined':
+        addMessage('user', `补充修改：${payload.refinementNote || '基于当前图重新生成'}`)
+        addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
+        break
       case 'multiview_generated':
         addMessage('assistant', '四个角度都已保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
         break
@@ -356,6 +369,7 @@ function restorePhase(events: any[]) {
       case 'material_selected': phase.value = 'style'; break
       case 'creative_direction_confirmed': phase.value = 'summary'; break
       case 'image_generated': phase.value = 'result'; break
+      case 'image_refined': phase.value = 'result'; break
       case 'multiview_generated': phase.value = 'multiview'; break
       case 'model_submitted': phase.value = 'model'; break
       case 'model_completed': phase.value = 'model'; break
@@ -595,6 +609,44 @@ function imageUrl(item: any) {
   return raw.startsWith('/') ? apiUrl(raw) : ''
 }
 function previewImage() { if (previewUrl.value) uni.previewImage({ current: previewUrl.value, urls: [previewUrl.value] }) }
+function startRefinement() {
+  if (!generatedAssetId.value) {
+    uni.showToast({ title: '当前产品图未保存成功，请先重新生成', icon: 'none' })
+    return
+  }
+  refinementNote.value = ''
+  refiningImage.value = true
+}
+function cancelRefinement() {
+  refiningImage.value = false
+  refinementNote.value = ''
+}
+async function regenerateWithRefinement() {
+  const sourceAssetId = generatedAssetId.value
+  const note = refinementNote.value.trim()
+  if (busy.value || !sourceAssetId || !note || !selectedProduct.value) return
+  busy.value = true
+  busyMessage.value = '正在基于当前产品图生成新方案，请稍候…'
+  try {
+    const refinementPrompt = `${prompt.value}。请严格以当前参考图为基础保留主体识别度，并按以下修改要求重新设计：${note}`
+    await saveEvent('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, productType: selectedProduct.value.name, material: material.value, prompt: refinementPrompt })
+    const result = await createImageWithReference({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productCategory: selectedProduct.value.name, material: material.value })
+    const newAssetId = Number(result?.assetId || result?.id)
+    if (!Number.isFinite(newAssetId) || newAssetId <= 0) throw new Error('修改后的产品图没有保存成功，请重试')
+    generatedAssetId.value = newAssetId
+    previewUrl.value = imageUrl(result)
+    multiviewImages.value = []
+    await saveEvent('image', 'image_refined', { previousAssetId: sourceAssetId, generatedAssetId: newAssetId, previewUrl: previewUrl.value, refinementNote: note, productType: selectedProduct.value.name, material: material.value, prompt: refinementPrompt })
+    addMessage('user', `补充修改：${note}`)
+    addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
+    cancelRefinement()
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '重新生成失败，请稍后重试', icon: 'none' })
+  } finally {
+    busy.value = false
+    busyMessage.value = '正在保存创作过程并调用 AI，请稍候…'
+  }
+}
 
 function setModelTask(payload: any) {
   const jobId = Number(payload?.jobId || payload?.modelJobId)
@@ -720,4 +772,5 @@ onUnmounted(() => stopModelPolling())
 .catalog-tools{margin-top:15rpx;padding:12rpx;border:1rpx solid #e6ddd2;border-radius:15rpx;background:#f8f4ed}.catalog-search{box-sizing:border-box;width:100%;height:66rpx;padding:0 13rpx;border:1rpx solid #ded4c7;border-radius:11rpx;background:#fffefa;color:#4c433a;font-size:18rpx}.catalog-categories{margin-top:10rpx;white-space:nowrap}.catalog-categories>view{display:flex;gap:7rpx}.catalog-category{display:inline-block;padding:7rpx 10rpx;border:1rpx solid #ded5c9;border-radius:9rpx;background:#fffefa;color:#897d72;font-size:14rpx}.catalog-category.active{border-color:#72917f;background:#e7f0e7;color:#4e705e;font-weight:800}.catalog-count{display:block;margin-top:9rpx;color:#907d6f;font-size:13rpx}.catalog-empty{margin-top:15rpx;padding:34rpx 16rpx;border:1rpx dashed #d8cbbd;border-radius:15rpx;background:#faf7f1;color:#8f8276;font-size:17rpx;text-align:center}.product-card{min-height:187rpx}.product-category-name{margin-top:9rpx;color:#9c8879;font-size:12rpx}.product-name{margin-top:4rpx;line-height:1.35}.product-desc,.product-process{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical}.product-desc{-webkit-line-clamp:2}.product-process{font-size:13rpx;line-height:1.35;-webkit-line-clamp:2}
 .category-entry-grid{display:grid;grid-template-columns:1fr 1fr;gap:10rpx;margin-top:15rpx}.category-entry{display:grid;grid-template-columns:44rpx minmax(0,1fr) 15rpx;align-items:center;gap:8rpx;min-height:112rpx;padding:12rpx;border:1rpx solid #dfd6ca;border-radius:15rpx;background:#fffefa}.category-entry:active{background:#f1f5ef}.category-entry-mark{display:grid;place-items:center;width:42rpx;height:42rpx;border-radius:12rpx;background:#e7f0e8;color:#567665;font-family:"Songti SC","STSong",serif;font-size:23rpx;font-weight:800}.category-entry view{display:flex;min-width:0;flex-direction:column;gap:5rpx}.category-entry view text:first-child{overflow:hidden;color:#4d433b;font-size:17rpx;font-weight:850;text-overflow:ellipsis;white-space:nowrap}.category-entry view text:last-child{color:#97887b;font-size:12rpx}.category-entry>text:last-child{color:#aa7a61;font-size:27rpx}.catalog-result-title{display:block;margin:16rpx 2rpx 0;color:#6a5c4e;font-size:18rpx;font-weight:850}
 .recommendation-card{border-color:#a8beab;background:#f0f7ef}.recommendation-mark{display:grid;place-items:center;width:32rpx;height:32rpx;border-radius:10rpx;background:#5d806b;color:#fff;font-size:18rpx;font-weight:850}.recommendation-pill{border-color:#8cad98;background:#edf5ed;color:#4f715d;font-weight:850}
+.refinement-panel{margin-top:16rpx;padding:15rpx;border:1rpx solid #d8c9b7;border-radius:15rpx;background:#f8f3eb}.refinement-panel>text:first-child{display:block;color:#5c5044;font-size:19rpx;font-weight:850}.refinement-input{min-height:130rpx;margin-top:10rpx;font-size:18rpx}.refinement-panel .dark-button{height:64rpx;margin:0;font-size:17rpx}
 </style>
