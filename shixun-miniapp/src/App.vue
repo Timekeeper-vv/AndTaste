@@ -6,7 +6,7 @@
       <text class="privacy-link" @tap="openPrivacyContract">查看隐私保护指引</text>
       <view class="privacy-actions">
         <button class="privacy-secondary" @tap="rejectPrivacy">暂不使用</button>
-        <button class="privacy-primary" @tap="agreePrivacy">同意并继续</button>
+        <button id="privacy-agree" class="privacy-primary" @tap="agreePrivacy">同意并继续</button>
       </view>
     </view>
   </view>
@@ -18,7 +18,7 @@ import { ref } from 'vue'
 import { restoreSession } from './utils/session'
 
 const privacyVisible = ref(false)
-const privacyResolver = ref<((result: { event: 'agree' | 'disagree' }) => void) | null>(null)
+const privacyResolver = ref<((result: { buttonId?: string; event: 'agree' | 'disagree' }) => void) | null>(null)
 
 function openPrivacyContract() {
   const wxApi = (globalThis as any).wx
@@ -33,7 +33,10 @@ function agreePrivacy() {
   privacyVisible.value = false
   const resolve = privacyResolver.value
   privacyResolver.value = null
-  resolve?.({ event: 'agree' })
+  // The privacy API only records consent when the agreeing button's id is
+  // returned together with the event. Omitting buttonId leaves protected APIs
+  // such as chooseImage blocked even after the user taps this button.
+  resolve?.({ buttonId: 'privacy-agree', event: 'agree' })
 }
 
 function rejectPrivacy() {
@@ -51,7 +54,7 @@ onLaunch(() => {
   // #ifdef MP-WEIXIN
   const wxApi = (globalThis as any).wx
   if (typeof wxApi?.onNeedPrivacyAuthorization === 'function') {
-    wxApi.onNeedPrivacyAuthorization((resolve: (result: { event: 'agree' | 'disagree' }) => void) => {
+    wxApi.onNeedPrivacyAuthorization((resolve: (result: { buttonId?: string; event: 'agree' | 'disagree' }) => void) => {
       privacyResolver.value = resolve
       privacyVisible.value = true
     })
