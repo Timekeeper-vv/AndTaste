@@ -1701,9 +1701,9 @@ function closeModelPreview() {
           <div class="purpose-channel-hero">
             <div>
               <button type="button" class="purpose-back" @click="backToPurposeChoice">← 返回作品去向</button>
-              <div class="purpose-step"><span>02</span><i></i><b>选择合作博物馆</b><small>获取渠道策略建议</small></div>
+              <div class="purpose-step"><span>02</span><i></i><b>选择售卖渠道</b><small>获取渠道策略建议</small></div>
               <h1 id="purpose-gate-title">选对渠道，<strong>让好作品被看见。</strong></h1>
-              <p>选择省份和合作博物馆后，即可获得渠道策略与热卖结构参考，并把这条去向带入后续审核和打样流程。</p>
+              <p>选择省份和目标博物馆或景区后，即可获得渠道策略与热卖结构参考，并把这条去向带入后续审核和打样流程。</p>
             </div>
             <aside class="purpose-channel-progress" aria-label="售卖创作进度">
               <span>SELLING ROUTE · 2 / 3</span>
@@ -1723,10 +1723,10 @@ function closeModelPreview() {
           </section>
           <div class="purpose-museum-layout">
             <div class="purpose-museum-select purpose-museum-select-simple">
-              <div class="purpose-select-head"><span>CHANNEL SETUP</span><b>选择合作博物馆</b><small>先选省份，再选择该省可合作的博物馆。</small></div>
+              <div class="purpose-select-head"><span>CHANNEL SETUP</span><b>选择售卖渠道</b><small>先选省份，再选择该省的博物馆或景区。</small></div>
               <label><span>省份 / 直辖市</span><select v-model="purposeProvince" @change="changePurposeProvince"><option value="">请选择省份 / 直辖市</option><option v-for="province in museumProvinces" :key="province" :value="province">{{ province }}</option></select></label>
-              <label><span>博物馆名称</span><select v-model="selectedPurposeMuseum" :disabled="!purposeProvince || !purposeMuseums.length" @change="selectMuseum(selectedPurposeMuseum)"><option :value="null">请选择该省博物馆</option><option v-for="museum in purposeMuseums" :key="museum.id" :value="museum">{{ museum.name }} · {{ museum.city }}</option></select></label>
-              <small class="purpose-select-note">所选博物馆会作为售卖作品的审核去向；实际合作仍需完成授权与审核。</small>
+              <label><span>博物馆 / 景区</span><select v-model="selectedPurposeMuseum" :disabled="!purposeProvince || !purposeMuseums.length" @change="selectMuseum(selectedPurposeMuseum)"><option :value="null">请选择该省博物馆或景区</option><option v-for="museum in purposeMuseums" :key="museum.id" :value="museum">{{ museum.name }} · {{ museum.channelType === 'scenic_spot' ? '景区' : '博物馆' }}</option></select></label>
+              <small class="purpose-select-note">所选渠道会作为售卖作品的审核去向；实际合作仍需完成授权与审核。</small>
             </div>
             <aside class="museum-recommendation" aria-live="polite">
               <template v-if="selectedMuseumRecommendation">
@@ -2173,15 +2173,15 @@ function closeModelPreview() {
                 <b>售卖（景区、博物馆）路径</b>
                 <span>全部数量将进入所选博物馆售卖，不支持拆分给个人或多个博物馆。</span>
               </div>
-              <div class="dist-head"><b>选择投放博物馆</b><small>全部 {{ productionForm.quantity || 0 }} 个</small></div>
+              <div class="dist-head"><b>选择投放渠道</b><small>全部 {{ productionForm.quantity || 0 }} 个</small></div>
               <div class="museum-location-select">
                 <select v-model="museumRegion.province" @change="changeMuseumProvince"><option value="">省 / 直辖市</option><option v-for="province in museumProvinces" :key="province" :value="province">{{ province }}</option></select>
               </div>
               <div v-if="productionForm.museumDistribution[0]" class="dist-row single museum-final-select">
-                <select v-model="productionForm.museumDistribution[0].museumId" :disabled="!museumRegion.province || !filteredMuseums.length" @change="changeMuseum(productionForm.museumDistribution[0])"><option value="">请选择该省博物馆</option><option v-for="m in filteredMuseums" :key="m.id" :value="m.id">{{ m.name }} · {{ m.city }} · {{ m.scene }}</option></select>
+                <select v-model="productionForm.museumDistribution[0].museumId" :disabled="!museumRegion.province || !filteredMuseums.length" @change="changeMuseum(productionForm.museumDistribution[0])"><option value="">请选择该省博物馆或景区</option><option v-for="m in filteredMuseums" :key="m.id" :value="m.id">{{ m.name }} · {{ m.channelType === 'scenic_spot' ? '景区' : '博物馆' }}</option></select>
               </div>
               <p v-if="productionForm.museumDistribution[0]?.museumName" class="museum-selection-tip">将投放至：{{ productionForm.museumDistribution[0].museumName }}（{{ museumRegion.province }} · {{ selectedPurposeMuseum?.city }} · {{ selectedPurposeMuseum?.district }}）</p>
-              <p v-else class="alloc-tip bad">请先选择省份，再选择该省博物馆。</p>
+              <p v-else class="alloc-tip bad">请先选择省份，再选择该省博物馆或景区。</p>
             </template>
             <template v-if="creationPurpose === 'personal'">
               <label><span>收件人</span><input v-model.trim="productionForm.recipientName" placeholder="收件人姓名" /></label>

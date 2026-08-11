@@ -1749,6 +1749,10 @@ public class CreativeAiController {
                 Map.of("id","sanxingdui-museum","name","三星堆博物馆","province","四川省","city","德阳市","district","广汉市","scene","古蜀文明 IP / 爆款文创渠道"),
                 Map.of("id","qinhuangdao-museum","name","秦皇岛博物馆","province","河北省","city","秦皇岛市","district","海港区","scene","城市伴手礼 / 滨海旅游场景")
         );
+        directory = jdbc.queryForList(
+                "SELECT id,name,province,city,district,channel_type channelType,source_type sourceType,cooperation_status cooperationStatus "
+                        + "FROM channel_directory WHERE enabled=1 AND channel_type IN ('museum','scenic_spot') "
+                        + "ORDER BY province,city,name");
         return directory.stream().map(this::withMuseumRecommendation).toList();
     }
 
@@ -1769,6 +1773,9 @@ public class CreativeAiController {
     private Map<String,Object> withMuseumRecommendation(Map<String,Object> museum) {
         String id = String.valueOf(museum.get("id"));
         Map<String,Object> item = new LinkedHashMap<>(museum);
+        String channelType = str(item.get("channelType"));
+        item.put("scene", "scenic_spot".equals(channelType) ? "景区文创候选渠道" : "博物馆文创候选渠道");
+        item.put("cooperationNotice", "目录记录不代表平台已合作；提交后仍需完成版权、授权与运营审核。");
         Map<String,Object> recommendation = new LinkedHashMap<>();
         boolean flagship = Set.of("national-museum", "shanghai-museum", "nanjing-museum", "shaanxi-history", "qinshihuang-museum", "hunan-museum", "sanxingdui-museum", "suzhou-museum").contains(id);
         boolean emerging = Set.of("ganzhou-museum", "ningbo-museum", "shenzhen-museum", "qinhuangdao-museum", "capital-museum", "china-art-museum").contains(id);

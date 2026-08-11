@@ -4,9 +4,9 @@
     <view class="choice" :class="{active: purpose==='personal'}" @tap="purpose='personal'"><text class="icon">✦</text><view><text class="name">个人创作</text><text class="intro">为自己的灵感、作品与生活方式而创作</text></view><text class="check">{{ purpose==='personal' ? '✓' : '' }}</text></view>
     <view class="choice" :class="{active: purpose==='museum_sale'}" @tap="purpose='museum_sale'"><text class="icon">⌘</text><view><text class="name">售卖（景区、博物馆）</text><text class="intro">面向景区文创店、博物馆文创店与文旅渠道售卖</text></view><text class="check">{{ purpose==='museum_sale' ? '✓' : '' }}</text></view>
     <view v-if="purpose==='museum_sale'" class="museum">
-      <text class="museum-title">选择服务博物馆</text>
+      <text class="museum-title">选择售卖渠道</text>
       <picker :range="provinces" :value="provinceIndex" @change="chooseProvince"><view class="picker">{{ province || '选择省 / 直辖市' }}<text>›</text></view></picker>
-      <picker :range="museumNames" :value="museumIndex" @change="chooseMuseum" :disabled="!province || !museumNames.length"><view class="picker">{{ museum?.name || '选择该省博物馆' }}<text>›</text></view></picker>
+      <picker :range="museumNames" :value="museumIndex" @change="chooseMuseum" :disabled="!province || !museumNames.length"><view class="picker">{{ museum?.name || '选择该省博物馆或景区' }}<text>›</text></view></picker>
       <text v-if="museum" class="museum-location">{{ museum.city }} · {{ museum.district }} · {{ museum.scene }}</text>
       <view v-if="museum?.recommendation" class="recommendation">
         <view class="recommendation-head"><text>选址策略建议（测试）</text><text>{{ museum.recommendation.badge }}</text></view>
@@ -27,7 +27,7 @@ import { requireSession } from '../../utils/session'
 const purpose = ref<'personal'|'museum_sale'|''>('')
 const museums = ref<any[]>([]); const province=ref(''); const museum=ref<any>(null)
 const provinceIndex=ref(0); const museumIndex=ref(0)
-const provinces=computed(()=>[...new Set(museums.value.map(x=>x.province))]); const filteredMuseums=computed(()=>museums.value.filter(x=>x.province===province.value)); const museumNames=computed(()=>filteredMuseums.value.map(x=>x.name)); const canEnter=computed(()=>purpose.value==='personal'||!!museum.value)
+const provinces=computed(()=>[...new Set(museums.value.map(x=>x.province))]); const filteredMuseums=computed(()=>museums.value.filter(x=>x.province===province.value)); const museumNames=computed(()=>filteredMuseums.value.map(x=>`${x.name} · ${x.channelType === 'scenic_spot' ? '景区' : '博物馆'}`)); const canEnter=computed(()=>purpose.value==='personal'||!!museum.value)
 function chooseProvince(e:any){province.value=provinces.value[e.detail.value];provinceIndex.value=e.detail.value;museum.value=null;museumIndex.value=0}
 function chooseMuseum(e:any){museum.value=filteredMuseums.value[e.detail.value];museumIndex.value=e.detail.value}
 function enter(){if(!canEnter.value)return;uni.setStorageSync('creation_context',{purpose:purpose.value,museum:museum.value});uni.reLaunch({url:'/pages/home/index'})}

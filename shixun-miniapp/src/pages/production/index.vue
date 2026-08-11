@@ -21,19 +21,19 @@
       <text class="label">用途与收货方式</text>
       <radio-group class="purpose-options" @change="changePurpose">
         <label :class="{ active: purpose === 'personal' }"><radio value="personal" :checked="purpose === 'personal'" color="#9b4328" />个人收藏 / 送礼</label>
-        <label :class="{ active: purpose === 'museum_sale' }"><radio value="museum_sale" :checked="purpose === 'museum_sale'" color="#9b4328" />博物馆售卖</label>
+        <label :class="{ active: purpose === 'museum_sale' }"><radio value="museum_sale" :checked="purpose === 'museum_sale'" color="#9b4328" />景区 / 博物馆售卖</label>
       </radio-group>
 
       <template v-if="purpose === 'museum_sale'">
-        <text class="label">投放博物馆</text>
+        <text class="label">投放渠道</text>
         <picker :range="provinces" :value="provinceIndex" @change="changeProvince">
           <view class="picker">{{ province || '选择省 / 直辖市' }}<text>›</text></view>
         </picker>
         <picker :range="museumNames" :value="museumIndex" @change="changeMuseum" :disabled="!province || !museumNames.length">
-          <view class="picker">{{ selectedMuseum?.name || '选择该省博物馆' }}<text>›</text></view>
+          <view class="picker">{{ selectedMuseum?.name || '选择该省博物馆或景区' }}<text>›</text></view>
         </picker>
         <text v-if="selectedMuseum" class="museum-location">{{ selectedMuseum.city }} · {{ selectedMuseum.district }} · {{ selectedMuseum.scene }}</text>
-        <text class="tip">博物馆售卖会将全部数量投放至选定机构，提交后等待平台与授权方审核。</text>
+        <text class="tip">售卖会将全部数量投放至选定渠道，提交后等待平台与授权方审核。</text>
       </template>
 
       <template v-else>
@@ -76,7 +76,7 @@ const submitting = ref(false)
 
 const provinces = computed(() => [...new Set(museums.value.map((museum) => museum.province))])
 const filteredMuseums = computed(() => museums.value.filter((museum) => museum.province === province.value))
-const museumNames = computed(() => filteredMuseums.value.map((museum) => museum.name))
+const museumNames = computed(() => filteredMuseums.value.map((museum) => `${museum.name} · ${museum.channelType === 'scenic_spot' ? '景区' : '博物馆'}`))
 const selectedMuseum = computed(() => filteredMuseums.value.find((museum) => String(museum.id) === selectedMuseumId.value) || null)
 
 function safelyDecode(value: unknown) {
