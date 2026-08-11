@@ -112,9 +112,12 @@ public class CommercialProductizationController {
             String value = "%" + keyword.trim() + "%";
             args.add(value); args.add(value); args.add(value);
         }
-        if (!blank(channelType) && Set.of("museum", "scenic_spot", "cultural_store", "other").contains(channelType.trim())) {
+        if (!blank(channelType) && Set.of("museum", "scenic_spot").contains(channelType.trim())) {
             where.append(" AND channel_type=?");
             args.add(channelType.trim());
+        } else {
+            // The consumer consignment selector only exposes museums and scenic spots.
+            where.append(" AND channel_type IN ('museum','scenic_spot')");
         }
         if (!blank(region)) {
             List<String> provinces = provincesForRegion(region.trim());
