@@ -450,7 +450,16 @@ function pickInspirationImage() {
   if (busy.value) return
   uni.chooseImage({ count: 1, sizeType: ['compressed'], success: (result) => {
     const path = result.tempFilePaths?.[0]
-    if (path) { referencePath.value = path; referenceAssetId.value = null; void uploadInspirationImage(path) }
+    if (!path) {
+      uni.showToast({ title: '没有读取到图片，请重新选择', icon: 'none' })
+      return
+    }
+    referencePath.value = path
+    referenceAssetId.value = null
+    void uploadInspirationImage(path)
+  }, fail: (error: any) => {
+    const message = String(error?.errMsg || '')
+    if (!/cancel/i.test(message)) uni.showToast({ title: '无法读取图片，请检查相册权限后重试', icon: 'none' })
   } })
 }
 async function uploadInspirationImage(path: string) {

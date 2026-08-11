@@ -18,6 +18,14 @@ function parsePayload(data: any) {
   try { return JSON.parse(data) } catch { return data }
 }
 
+function uploadFailureMessage(error: any) {
+  const raw = String(error?.errMsg || error?.message || error || '')
+  if (/url not in domain list|合法域名|not in domain/i.test(raw)) return '上传域名未配置，请在微信公众平台添加 https://zhijiansk.com 到 uploadFile 合法域名'
+  if (/ssl|certificate|cert/i.test(raw)) return '上传服务的 HTTPS 证书校验失败，请检查域名证书配置'
+  if (/timeout|timed out/i.test(raw)) return '图片上传超时，请检查网络后重试'
+  return messageOf(error, '上传失败，请检查服务地址和网络连接')
+}
+
 export class ApiError extends Error {
   statusCode: number
   code?: string
@@ -69,10 +77,11 @@ export async function uploadFile<T>(path: string, filePath: string, name = 'file
   try {
     response = await uni.uploadFile({
       url: apiUrl(path), filePath, name,
+      timeout: 120000,
       header: session?.token ? { Authorization: `Bearer ${session.token}` } : {},
     })
   } catch (error: any) {
-    throw new Error(messageOf(error, '上传失败，请检查服务地址和网络连接'))
+    throw new Error(uploadFailureMessage(error))
   }
   const data: any = parsePayload(response.data || '{}')
   if (response.statusCode === 401) {
