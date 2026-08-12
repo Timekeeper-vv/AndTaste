@@ -18,9 +18,9 @@
 
       <view v-if="phase === 'image'" class="input-panel"><text class="choice-title">上传你的灵感图片</text><text class="choice-note">可以是草图、照片、纹样或你有权使用的参考图。系统会保留主体，再优化为产品视觉。</text><view class="image-picker" :class="{ ready: referencePath }" @tap="pickInspirationImage"><image v-if="referencePath" :src="referencePath" mode="aspectFill" /><view v-else><text>+</text><text>选择一张图片</text></view></view><button class="dark-button full-button" :disabled="!referenceAssetId || busy" @tap="submitImageInspiration">{{ referenceAssetId ? '继续选择工艺' : '先上传图片' }}</button></view>
 
-      <view v-if="phase === 'material'" class="choice-panel"><text class="choice-title">你希望它用什么材质？</text><text class="choice-note">材质会同步进入生图、三视图、3D 和后续生产提示词。</text><view class="material-grid"><view class="material-card recommendation-card" @tap="chooseRecommendedMaterial"><text class="recommendation-mark">荐</text><view><text>你帮我推荐</text><text>按产品结构和量产工艺选择</text></view><text class="choice-arrow">›</text></view><view v-for="item in currentMaterials" :key="item.name" class="material-card" :class="{ active: material === item.name }" @tap="chooseMaterial(item)"><view class="swatch" :style="{ background: item.color }" /><view><text>{{ item.name }}</text><text>{{ item.note }}</text></view><text v-if="material === item.name" class="check">✓</text></view></view></view>
+      <view v-if="phase === 'material'" class="choice-panel"><text class="choice-title">你希望它用什么材质？</text><text class="choice-note">材质会同步进入生图、三视图、3D 和后续生产提示词。</text><view class="material-grid"><view class="material-card recommendation-card" :class="{ active: materialChoice === 'recommend' }" @tap="chooseRecommendedMaterial"><text class="recommendation-mark">荐</text><view><text>你帮我推荐</text><text>按产品结构和量产工艺选择</text></view><text v-if="materialChoice === 'recommend'" class="check">✓</text></view><view v-for="item in currentMaterials" :key="item.name" class="material-card" :class="{ active: materialChoice === item.name }" @tap="chooseMaterial(item)"><view class="swatch" :style="{ background: item.color }" /><view><text>{{ item.name }}</text><text>{{ item.note }}</text></view><text v-if="materialChoice === item.name" class="check">✓</text></view></view></view>
 
-      <view v-if="phase === 'style'" class="choice-panel"><text class="choice-title">最后确定创作气质</text><text class="choice-note">不确定的项目都可以交给我推荐，之后仍能手动修改。</text><view class="style-section"><text>视觉风格</text><view class="pill-row"><text class="pill recommendation-pill" @tap="recommendStyle">你帮我推荐</text><text v-for="item in styles" :key="item" class="pill" :class="{ active: style === item }" @tap="chooseStyle(item)">{{ item }}</text></view></view><view class="style-section"><text>主色方向</text><view class="pill-row"><text class="pill recommendation-pill" @tap="recommendPalette">你帮我推荐</text><text v-for="item in palettes" :key="item" class="pill" :class="{ active: palette === item }" @tap="choosePalette(item)">{{ item }}</text></view></view><view class="style-section"><text>主要用途</text><view class="pill-row"><text class="pill recommendation-pill" @tap="recommendPurpose">你帮我推荐</text><text v-for="item in purposes" :key="item" class="pill" :class="{ active: purpose === item }" @tap="choosePurpose(item)">{{ item }}</text></view></view><button class="dark-button full-button" :disabled="busy" @tap="confirmDirection">查看 AI 方案</button></view>
+      <view v-if="phase === 'style'" class="choice-panel"><text class="choice-title">最后确定创作气质</text><text class="choice-note">每一栏只能选一个：选择“你帮我推荐”后，其他具体选项会自动取消。</text><view class="style-section"><text>视觉风格</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: styleChoice === 'recommend' }" @tap="recommendStyle">你帮我推荐</text><text v-for="item in styles" :key="item" class="pill" :class="{ active: styleChoice === item }" @tap="chooseStyle(item)">{{ item }}</text></view></view><view class="style-section"><text>主色方向</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: paletteChoice === 'recommend' }" @tap="recommendPalette">你帮我推荐</text><text v-for="item in palettes" :key="item" class="pill" :class="{ active: paletteChoice === item }" @tap="choosePalette(item)">{{ item }}</text></view></view><view class="style-section"><text>主要用途</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: purposeChoice === 'recommend' }" @tap="recommendPurpose">你帮我推荐</text><text v-for="item in purposes" :key="item" class="pill" :class="{ active: purposeChoice === item }" @tap="choosePurpose(item)">{{ item }}</text></view></view><button class="dark-button full-button" :disabled="busy" @tap="confirmDirection">查看 AI 方案</button></view>
 
       <view v-if="phase === 'summary'" class="summary-panel"><text class="choice-title">这是我为你整理的创作方案</text><view class="summary-card"><view><text>产品</text><text>{{ selectedProduct?.name }}</text></view><view><text>材质</text><text>{{ material }}</text></view><view><text>风格</text><text>{{ style }} · {{ palette }}</text></view><view><text>用途</text><text>{{ purpose }}</text></view><view><text>灵感</text><text>{{ inspirationText || '使用产品模板自动生成方向' }}</text></view></view><text class="summary-note">确认后会生成第一张产品视觉，生成结果会自动进入作品库；之后可以继续四视图和 3D 建模。</text><button class="dark-button full-button" :loading="busy" @tap="generateProductImage">确认并生成产品图</button><button class="link-button" @tap="editDirection">返回修改</button></view>
 
@@ -83,9 +83,13 @@ const phase = ref<Phase>('mode')
 const mode = ref<Mode | ''>('')
 const selectedProduct = ref<ProductOption | null>(null)
 const material = ref('')
+const materialChoice = ref<'recommend' | string>('recommend')
 const style = ref('国潮')
 const palette = ref('青绿金')
 const purpose = ref('景区伴手礼')
+const styleChoice = ref<'recommend' | string>('recommend')
+const paletteChoice = ref<'recommend' | string>('recommend')
+const purposeChoice = ref<'recommend' | string>('recommend')
 const inspirationText = ref('')
 const referencePath = ref('')
 const referenceAssetId = ref<number | null>(null)
@@ -219,9 +223,13 @@ function resetViewState() {
   mode.value = ''
   selectedProduct.value = null
   material.value = ''
+  materialChoice.value = 'recommend'
   style.value = '国潮'
   palette.value = '青绿金'
   purpose.value = '景区伴手礼'
+  styleChoice.value = 'recommend'
+  paletteChoice.value = 'recommend'
+  purposeChoice.value = 'recommend'
   inspirationText.value = ''
   referencePath.value = ''
   referenceAssetId.value = null
@@ -243,7 +251,8 @@ function restoreEvent(event: any) {
       break
     case 'product_selected':
       selectedProduct.value = productByValue(payload.productType, payload.productKey) || selectedProduct.value
-      if (!material.value && selectedProduct.value) material.value = selectedProduct.value.materials[0].name
+      material.value = ''
+      materialChoice.value = 'recommend'
       break
     case 'text_inspiration_submitted':
       inspirationText.value = String(payload.inspirationText || '')
@@ -253,22 +262,31 @@ function restoreEvent(event: any) {
       break
     case 'material_selected':
       material.value = String(payload.material || payload.materialName || material.value)
+      materialChoice.value = payload.recommended ? 'recommend' : material.value
       break
     case 'style_selected':
-      if (payload.style) style.value = String(payload.style)
+      if (payload.style) {
+        style.value = String(payload.style)
+        styleChoice.value = payload.recommended ? 'recommend' : style.value
+      }
       if (payload.palette) palette.value = String(payload.palette)
       if (payload.purpose) purpose.value = String(payload.purpose)
       break
     case 'palette_selected':
       palette.value = String(payload.palette || palette.value)
+      paletteChoice.value = payload.recommended ? 'recommend' : palette.value
       break
     case 'purpose_selected':
       purpose.value = String(payload.purpose || purpose.value)
+      purposeChoice.value = payload.recommended ? 'recommend' : purpose.value
       break
     case 'creative_direction_confirmed':
       if (payload.style) style.value = String(payload.style)
       if (payload.palette) palette.value = String(payload.palette)
       if (payload.purpose) purpose.value = String(payload.purpose)
+      styleChoice.value = payload.styleChoice || styleChoice.value
+      paletteChoice.value = payload.paletteChoice || paletteChoice.value
+      purposeChoice.value = payload.purposeChoice || purposeChoice.value
       if (payload.inspirationText) inspirationText.value = String(payload.inspirationText)
       break
     case 'image_generated':
@@ -439,7 +457,8 @@ async function chooseMode(value: Mode) {
 }
 async function chooseProduct(value: ProductOption) {
   selectedProduct.value = value
-  material.value = value.materials[0].name
+  material.value = ''
+  materialChoice.value = 'recommend'
   addMessage('user', value.name)
   await saveEvent('product', 'product_selected', { productKey: value.key, productType: value.name, process: value.process })
   if (mode.value === 'template') {
@@ -510,6 +529,7 @@ async function submitImageInspiration() {
 }
 async function chooseMaterial(value: MaterialOption) {
   material.value = value.name
+  materialChoice.value = value.name
   addMessage('user', value.name)
   await saveEvent('material', 'material_selected', { productType: selectedProduct.value?.name, material: value.name, materialNote: value.note })
   addMessage('assistant', '最后确认视觉风格、颜色和用途，我就可以为你整理完整方案。')
@@ -525,6 +545,7 @@ async function chooseRecommendedMaterial() {
     return
   }
   material.value = recommendation.name
+  materialChoice.value = 'recommend'
   addMessage('user', '你帮我推荐材质')
   await saveEvent('material', 'material_selected', { productType: selectedProduct.value?.name, material: recommendation.name, materialNote: recommendation.note, recommended: true })
   addMessage('assistant', `根据${selectedProduct.value?.name || '当前产品'}的结构和工艺，我推荐${recommendation.name}。${recommendation.note}`)
@@ -555,25 +576,39 @@ function recommendedPurpose() {
 }
 function recommendStyle() {
   style.value = recommendedStyle()
+  styleChoice.value = 'recommend'
   void saveEvent('style', 'style_selected', { style: style.value, productType: selectedProduct.value?.name, recommended: true })
   uni.showToast({ title: `推荐：${style.value}`, icon: 'none' })
 }
 function recommendPalette() {
   palette.value = recommendedPalette()
+  paletteChoice.value = 'recommend'
   void saveEvent('style', 'palette_selected', { palette: palette.value, productType: selectedProduct.value?.name, recommended: true })
   uni.showToast({ title: `推荐：${palette.value}`, icon: 'none' })
 }
 function recommendPurpose() {
   purpose.value = recommendedPurpose()
+  purposeChoice.value = 'recommend'
   void saveEvent('style', 'purpose_selected', { purpose: purpose.value, productType: selectedProduct.value?.name, recommended: true })
   uni.showToast({ title: `推荐：${purpose.value}`, icon: 'none' })
 }
-function chooseStyle(value: string) { style.value = value; void saveEvent('style', 'style_selected', { style: value, productType: selectedProduct.value?.name }) }
-function choosePalette(value: string) { palette.value = value; void saveEvent('style', 'palette_selected', { palette: value, productType: selectedProduct.value?.name }) }
-function choosePurpose(value: string) { purpose.value = value; void saveEvent('style', 'purpose_selected', { purpose: value, productType: selectedProduct.value?.name }) }
+function chooseStyle(value: string) { style.value = value; styleChoice.value = value; void saveEvent('style', 'style_selected', { style: value, productType: selectedProduct.value?.name, recommended: false }) }
+function choosePalette(value: string) { palette.value = value; paletteChoice.value = value; void saveEvent('style', 'palette_selected', { palette: value, productType: selectedProduct.value?.name, recommended: false }) }
+function choosePurpose(value: string) { purpose.value = value; purposeChoice.value = value; void saveEvent('style', 'purpose_selected', { purpose: value, productType: selectedProduct.value?.name, recommended: false }) }
 async function confirmDirection() {
+  if (styleChoice.value === 'recommend') style.value = recommendedStyle()
+  if (paletteChoice.value === 'recommend') palette.value = recommendedPalette(style.value)
+  if (purposeChoice.value === 'recommend') purpose.value = recommendedPurpose()
+  if (!material.value) {
+    const recommendation = recommendedMaterial()
+    if (!recommendation) {
+      uni.showToast({ title: '请先选择材质或让系统推荐', icon: 'none' })
+      return
+    }
+    material.value = recommendation.name
+  }
   addMessage('user', `${style.value} · ${palette.value} · ${purpose.value}`)
-  await saveEvent('summary', 'creative_direction_confirmed', { productType: selectedProduct.value?.name, material: material.value, style: style.value, palette: palette.value, purpose: purpose.value, inspirationText: inspirationText.value.trim() })
+  await saveEvent('summary', 'creative_direction_confirmed', { productType: selectedProduct.value?.name, material: material.value, style: style.value, palette: palette.value, purpose: purpose.value, styleChoice: styleChoice.value, paletteChoice: paletteChoice.value, purposeChoice: purposeChoice.value, inspirationText: inspirationText.value.trim() })
   addMessage('assistant', '方案整理好了。确认后我会调用现有生图服务，并把成图与完整参数绑定到这次会话。')
   phase.value = 'summary'
 }
