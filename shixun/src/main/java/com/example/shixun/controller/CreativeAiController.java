@@ -822,8 +822,14 @@ public class CreativeAiController {
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先选择一张参考图");
         requireAssetAccess(req.inputAssetId);
         Map<String, Object> style = style(req.styleId);
-        String finalPrompt = buildPrompt(enforceMaterialConstraint(req.prompt, req.productCategory, req.material), style, req.scene, req.productType);
-        String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
+        String requestedPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        String finalPrompt = buildReferencePreservingPrompt(
+                buildPrompt(requestedPrompt, style, req.scene, req.productType),
+                req.productCategory,
+                req.material);
+        String negative = mergeNegative(
+                mergeNegative(req.negativePrompt, (String) style.get("negativePrompt")),
+                "different subject, unrelated object, replacement design, changed silhouette, changed main composition, changed color palette, lost distinctive details, generic product, random decoration, extra main subject");
         String jobNo = no("I2I");
         Long jobId = createJob(jobNo, "image_to_image", "siliconflow", imageEditModel, req.styleId, req.inputAssetId, finalPrompt, negative, "running", null, null);
         assignJobOwner(jobId, ownerUserId);
@@ -865,7 +871,13 @@ public class CreativeAiController {
                     req.inputAssetId,
                     "png",
                     req.tags == null || req.tags.isBlank() ? "图改图,AI生成,之间味道" : req.tags + ",图改图",
-                    withAssetOwner(Map.of("provider", "siliconflow", "model", imageEditModel, "remoteUrl", remoteUrl, "inputAssetId", req.inputAssetId), ownerUserId)
+                    withAssetOwner(Map.of(
+                            "provider", "siliconflow",
+                            "model", imageEditModel,
+                            "remoteUrl", remoteUrl,
+                            "inputAssetId", req.inputAssetId,
+                            "referencePreservation", "subject,silhouette,composition,main_colors,distinctive_details"
+                    ), ownerUserId)
             );
             jdbc.update("UPDATE ai_generation_job SET status='succeeded', output_asset_id=? WHERE id=?", assetId, jobId);
             Map<String,Object> result = new LinkedHashMap<>();
@@ -2970,6 +2982,24 @@ public class CreativeAiController {
         Object guard = style.get("culturalGuardrails");
         if (guard != null) sb.append(", cultural guardrails: ").append(guard);
         return sb.toString();
+    }
+
+    /**
+     * Image-to-image is a product adaptation of the supplied asset, not a new
+     * text-to-image concept. Keep this rule server-side so every client uses
+     * the same preservation contract even when it sends a weak prompt.
+     */
+    private String buildReferencePreservingPrompt(String requestedPrompt, String productCategory, String material) {
+        String product = blank(productCategory) ? "the requested cultural creative product" : productCategory.trim();
+        String surface = blank(material) ? "the requested production material and finish" : material.trim();
+        return "IMPORTANT IMAGE-TO-IMAGE IDENTITY LOCK: The supplied reference image is the single primary source of truth. "
+                + "Create a product adaptation of THAT SAME SUBJECT, not a newly invented design. "
+                + "Preserve the reference image's main subject identity, recognizable silhouette and proportions, overall composition, main color palette, "
+                + "and all distinctive visual details, motifs, markings and structural features that make it immediately recognizable. "
+                + "A viewer must immediately understand that the result was made from the supplied reference image. "
+                + "Only adapt the preserved subject for " + product + " using " + surface + "; do not replace, redesign, swap, crop away, or invent a different main subject. "
+                + "When any stylistic instruction conflicts with the reference identity, the reference identity always wins. "
+                + "Requested product presentation: " + requestedPrompt;
     }
 
     private String mergeNegative(String userNegative, String styleNegative) {
