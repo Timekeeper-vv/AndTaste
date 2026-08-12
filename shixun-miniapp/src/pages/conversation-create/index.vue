@@ -16,7 +16,7 @@
 
       <view v-if="phase === 'inspiration'" class="input-panel"><text class="choice-title">说说你的已有灵感</text><text class="choice-note">可以写文化主题、故事、想做的造型、使用场景，越具体越容易落地。</text><textarea v-model="inspirationText" maxlength="1200" auto-height class="text-input" placeholder="例如：把家乡古城的城墙和祥云结合，做成适合游客带走的合金冰箱贴。" /><view class="input-foot"><text>{{ inspirationText.length }}/1200</text><button class="dark-button" :disabled="!inspirationText.trim() || busy" @tap="submitTextInspiration">继续</button></view></view>
 
-      <view v-if="phase === 'image'" class="input-panel"><text class="choice-title">上传你的灵感图片</text><text class="choice-note">可以是草图、照片、纹样或你有权使用的参考图。系统会保留主体，再优化为产品视觉。</text><view class="image-picker" :class="{ ready: referencePath }" @tap="pickInspirationImage"><image v-if="referencePath" :src="referencePath" mode="aspectFill" /><view v-else><text>+</text><text>选择一张图片</text></view></view><button class="dark-button full-button" :disabled="!referenceAssetId || busy" @tap="submitImageInspiration">{{ referenceAssetId ? '继续选择工艺' : '先上传图片' }}</button></view>
+      <view v-if="phase === 'image'" class="input-panel"><text class="choice-title">上传你的灵感图片</text><text class="choice-note">可以是草图、照片、纹样或你有权使用的参考图。生成时系统会自动识别主体、场景、配色、构图和需去除的界面元素，再保真转成产品视觉。</text><view class="image-picker" :class="{ ready: referencePath }" @tap="pickInspirationImage"><image v-if="referencePath" :src="referencePath" mode="aspectFill" /><view v-else><text>+</text><text>选择一张图片</text></view></view><button class="dark-button full-button" :disabled="!referenceAssetId || busy" @tap="submitImageInspiration">{{ referenceAssetId ? '继续选择工艺' : '先上传图片' }}</button></view>
 
       <view v-if="phase === 'material'" class="choice-panel"><text class="choice-title">你希望它用什么材质？</text><text class="choice-note">材质会同步进入生图、三视图、3D 和后续生产提示词。</text><view class="material-grid"><view class="material-card recommendation-card" :class="{ active: materialChoice === 'recommend' }" @tap="chooseRecommendedMaterial"><text class="recommendation-mark">荐</text><view><text>你帮我推荐</text><text>按产品结构和量产工艺选择</text></view><text v-if="materialChoice === 'recommend'" class="check">✓</text></view><view v-for="item in currentMaterials" :key="item.name" class="material-card" :class="{ active: materialChoice === item.name }" @tap="chooseMaterial(item)"><view class="swatch" :style="{ background: item.color }" /><view><text>{{ item.name }}</text><text>{{ item.note }}</text></view><text v-if="materialChoice === item.name" class="check">✓</text></view></view></view>
 
@@ -620,14 +620,16 @@ async function generateProductImage() {
   try {
     await saveEvent('summary', 'generation_started', { productType: selectedProduct.value.name, material: material.value, prompt: prompt.value })
     let generationPrompt = prompt.value
-    try {
-      const optimized = await optimizeImagePrompt({ prompt: prompt.value, provider: 'tripo', productCategory: selectedProduct.value.name, material: material.value })
-      if (String(optimized?.prompt || '').trim()) {
+    if (mode.value !== 'image') {
+      try {
+        const optimized = await optimizeImagePrompt({ prompt: prompt.value, provider: 'tripo', productCategory: selectedProduct.value.name, material: material.value })
+        if (String(optimized?.prompt || '').trim()) {
         generationPrompt = String(optimized.prompt).trim()
         await saveEvent('summary', 'prompt_optimized', { productType: selectedProduct.value.name, material: material.value, sourcePrompt: prompt.value, optimizedPrompt: generationPrompt })
+        }
+      } catch {
+        await saveEvent('summary', 'prompt_optimization_fallback', { productType: selectedProduct.value.name, material: material.value, sourcePrompt: prompt.value, reason: 'optimization_unavailable' })
       }
-    } catch {
-      await saveEvent('summary', 'prompt_optimization_fallback', { productType: selectedProduct.value.name, material: material.value, sourcePrompt: prompt.value, reason: 'optimization_unavailable' })
     }
     let result: any
     if (mode.value === 'image') {
@@ -639,7 +641,7 @@ async function generateProductImage() {
     if (!Number.isFinite(assetId) || assetId <= 0) throw new Error('产品图没有保存成功，请重新生成')
     generatedAssetId.value = assetId
     previewUrl.value = imageUrl(result)
-    await saveEvent('image', 'image_generated', { productType: selectedProduct.value.name, material: material.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value })
+    await saveEvent('image', 'image_generated', { productType: selectedProduct.value.name, material: material.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
     addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
     phase.value = 'result'
   } catch (error: any) { uni.showToast({ title: error?.message || '生成失败，请稍后重试', icon: 'none' }) }

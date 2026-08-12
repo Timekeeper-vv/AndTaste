@@ -73,6 +73,9 @@ public class CreativeAiController {
     @Value("${siliconflow.chat.model:Qwen/Qwen3-32B}")
     private String chatModel;
 
+    @Value("${siliconflow.vision.model:Qwen/Qwen2.5-VL-72B-Instruct}")
+    private String visionModel;
+
     @Value("${tripo.api.key:}")
     private String tripoApiKey;
 
@@ -823,10 +826,12 @@ public class CreativeAiController {
         requireAssetAccess(req.inputAssetId);
         Map<String, Object> style = style(req.styleId);
         String requestedPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        ReferenceImageAnalysis referenceAnalysis = analyzeReferenceImage(req.inputAssetId);
         String finalPrompt = buildReferencePreservingPrompt(
                 buildPrompt(requestedPrompt, style, req.scene, req.productType),
                 req.productCategory,
-                req.material);
+                req.material,
+                referenceAnalysis.visualBrief);
         String negative = mergeNegative(
                 mergeNegative(req.negativePrompt, (String) style.get("negativePrompt")),
                 "different subject, unrelated object, replacement design, changed silhouette, changed main composition, changed color palette, lost distinctive details, generic product, random decoration, extra main subject");
@@ -842,6 +847,10 @@ public class CreativeAiController {
             payload.put("model", imageEditModel);
             payload.put("prompt", finalPrompt);
             payload.put("image", inputImage);
+            // These are the provider's documented stable edit settings for
+            // Qwen-Image-Edit, rather than text-to-image defaults.
+            payload.put("num_inference_steps", 20);
+            payload.put("guidance_scale", 4);
             if (negative != null && !negative.isBlank()) payload.put("negative_prompt", negative);
             payload.put("batch_size", 1);
             if (req.seed != null) payload.put("seed", req.seed);
@@ -871,18 +880,14 @@ public class CreativeAiController {
                     req.inputAssetId,
                     "png",
                     req.tags == null || req.tags.isBlank() ? "图改图,AI生成,之间味道" : req.tags + ",图改图",
-                    withAssetOwner(Map.of(
-                            "provider", "siliconflow",
-                            "model", imageEditModel,
-                            "remoteUrl", remoteUrl,
-                            "inputAssetId", req.inputAssetId,
-                            "referencePreservation", "subject,silhouette,composition,main_colors,distinctive_details"
-                    ), ownerUserId)
+                    withAssetOwner(referenceImageMetadata(remoteUrl, req.inputAssetId, referenceAnalysis), ownerUserId)
             );
             jdbc.update("UPDATE ai_generation_job SET status='succeeded', output_asset_id=? WHERE id=?", assetId, jobId);
             Map<String,Object> result = new LinkedHashMap<>();
             result.put("jobId", jobId); result.put("jobNo", jobNo); result.put("assetId", assetId);
             result.put("prompt", finalPrompt); result.put("negativePrompt", negative); result.put("status", "succeeded");
+            result.put("referenceAnalysis", referenceAnalysis.visualBrief);
+            result.put("referenceAnalysisSource", referenceAnalysis.source);
             addSignedAssetFields(result, assetId, "image");
             return result;
         } catch (Exception e) {
@@ -2989,7 +2994,7 @@ public class CreativeAiController {
      * text-to-image concept. Keep this rule server-side so every client uses
      * the same preservation contract even when it sends a weak prompt.
      */
-    private String buildReferencePreservingPrompt(String requestedPrompt, String productCategory, String material) {
+    private String buildReferencePreservingPrompt(String requestedPrompt, String productCategory, String material, String visualBrief) {
         String product = blank(productCategory) ? "the requested cultural creative product" : productCategory.trim();
         String surface = blank(material) ? "the requested production material and finish" : material.trim();
         return "IMPORTANT IMAGE-TO-IMAGE IDENTITY LOCK: The supplied reference image is the single primary source of truth. "
@@ -2998,8 +3003,74 @@ public class CreativeAiController {
                 + "and all distinctive visual details, motifs, markings and structural features that make it immediately recognizable. "
                 + "A viewer must immediately understand that the result was made from the supplied reference image. "
                 + "Only adapt the preserved subject for " + product + " using " + surface + "; do not replace, redesign, swap, crop away, or invent a different main subject. "
+                + "First preserve these objectively recognized reference-image facts: " + visualBrief + " "
+                + "If the reference is a screenshot, remove only phone/app frames, status bars, buttons, text controls and other UI overlays; retain the actual artwork, people, objects, scenery and color atmosphere underneath. "
                 + "When any stylistic instruction conflicts with the reference identity, the reference identity always wins. "
                 + "Requested product presentation: " + requestedPrompt;
+    }
+
+    private ReferenceImageAnalysis analyzeReferenceImage(Long assetId) {
+        String fallback = "Preserve every visible non-UI subject, person or object, its recognizable silhouette and proportions, the original scene layout, dominant colors, mood, decorative motifs and all distinguishing details.";
+        if (blank(siliconflowApiKey) || siliconflowApiKey.contains("YOUR_")) {
+            return new ReferenceImageAnalysis(fallback, "fallback_no_vision_key");
+        }
+        try {
+            String image = buildInputImageForSiliconFlow(assetId);
+            String system = "You are a precise visual analyst for image-to-image generation. Inspect the supplied reference image. "
+                    + "Return ONE concise ENGLISH visual preservation brief, no markdown and no introduction. "
+                    + "Describe only what is visibly present: main subject/person/object and distinctive appearance, secondary subjects, setting, dominant colors, composition, atmosphere, motifs, and any UI/screenshot overlays to remove. "
+                    + "Do not invent details. Prioritize facts needed to make a generated image clearly recognizable as derived from this reference.";
+            Map<String,Object> imagePart = new LinkedHashMap<>();
+            imagePart.put("type", "image_url");
+            imagePart.put("image_url", Map.of("url", image, "detail", "high"));
+            Map<String,Object> textPart = Map.of(
+                    "type", "text",
+                    "text", "Analyze this reference for faithful product adaptation. Include any phone/app UI, buttons, captions or status bars that must be removed from the final artwork.");
+            Map<String,Object> payload = new LinkedHashMap<>();
+            payload.put("model", visionModel);
+            payload.put("temperature", 0.1);
+            payload.put("max_tokens", 450);
+            payload.put("messages", List.of(
+                    Map.of("role", "system", "content", system),
+                    Map.of("role", "user", "content", List.of(imagePart, textPart))));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api.siliconflow.cn/v1/chat/completions"))
+                    .header("Authorization", "Bearer " + siliconflowApiKey.trim())
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
+                    .build();
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return new ReferenceImageAnalysis(fallback, "fallback_vision_http_" + response.statusCode());
+            }
+            String brief = mapper.readTree(response.body()).path("choices").path(0).path("message").path("content").asText("").trim();
+            if (brief.length() > 900) brief = brief.substring(0, 900);
+            return new ReferenceImageAnalysis(blank(brief) ? fallback : brief, blank(brief) ? "fallback_empty_vision_response" : "siliconflow:" + visionModel);
+        } catch (Exception ignored) {
+            return new ReferenceImageAnalysis(fallback, "fallback_vision_unavailable");
+        }
+    }
+
+    private Map<String,Object> referenceImageMetadata(String remoteUrl, Long inputAssetId, ReferenceImageAnalysis analysis) {
+        Map<String,Object> metadata = new LinkedHashMap<>();
+        metadata.put("provider", "siliconflow");
+        metadata.put("model", imageEditModel);
+        metadata.put("remoteUrl", remoteUrl);
+        metadata.put("inputAssetId", inputAssetId);
+        metadata.put("referencePreservation", "subject,silhouette,composition,main_colors,distinctive_details");
+        metadata.put("referenceAnalysis", analysis.visualBrief);
+        metadata.put("referenceAnalysisSource", analysis.source);
+        return metadata;
+    }
+
+    private static class ReferenceImageAnalysis {
+        private final String visualBrief;
+        private final String source;
+
+        private ReferenceImageAnalysis(String visualBrief, String source) {
+            this.visualBrief = visualBrief;
+            this.source = source;
+        }
     }
 
     private String mergeNegative(String userNegative, String styleNegative) {
