@@ -629,8 +629,7 @@ async function chooseMaterial(value: MaterialOption) {
   materialChoice.value = value.name
   addMessage('user', value.name)
   await saveEvent('material', 'material_selected', { productType: selectedProduct.value?.name, material: value.name, materialNote: value.note })
-  addMessage('assistant', '最后确认视觉风格和用途，我就可以为你整理完整方案。')
-  phase.value = 'style'
+  await generateImageAfterMaterialSelection()
 }
 function recommendedMaterial() {
   return currentMaterials.value[0] || null
@@ -646,7 +645,24 @@ async function chooseRecommendedMaterial() {
   addMessage('user', '你帮我推荐材质')
   await saveEvent('material', 'material_selected', { productType: selectedProduct.value?.name, material: recommendation.name, materialNote: recommendation.note, recommended: true })
   addMessage('assistant', `根据${selectedProduct.value?.name || '当前产品'}的结构和工艺，我推荐${recommendation.name}。${recommendation.note}`)
-  phase.value = 'style'
+  await generateImageAfterMaterialSelection()
+}
+
+async function generateImageAfterMaterialSelection() {
+  style.value = recommendedStyle()
+  styleChoice.value = 'recommend'
+  purpose.value = recommendedPurpose()
+  purposeChoice.value = 'recommend'
+  await saveEvent('summary', 'creative_direction_auto_confirmed', {
+    productType: selectedProduct.value?.name,
+    material: material.value,
+    style: style.value,
+    purpose: purpose.value,
+    autoSelected: true,
+    inputAssetId: referenceAssetId.value || undefined,
+  })
+  addMessage('assistant', `已自动匹配${style.value}风格和${purpose.value}用途，现在直接生成产品图。`)
+  await generateProductImage()
 }
 function recommendedStyle() {
   const context = `${selectedProduct.value?.name || ''} ${inspirationText.value}`
