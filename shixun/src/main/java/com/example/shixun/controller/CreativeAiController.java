@@ -777,7 +777,9 @@ public class CreativeAiController {
         }
         String size = blank(req.size) ? "2K" : req.size.trim();
         if (!Set.of("1K", "2K").contains(size)) throw new IllegalArgumentException("多视图仅支持 1K 或 2K 尺寸");
-        List<String> views = List.of("front", "left", "back", "right");
+        List<String> views = req.viewCount != null && req.viewCount == 3
+                ? List.of("front", "left", "back")
+                : List.of("front", "left", "back", "right");
         Map<String,String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
         List<Map<String,Object>> images = new ArrayList<>();
         String basePrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
@@ -823,7 +825,8 @@ public class CreativeAiController {
         }
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("provider", "volcengine-ark"); out.put("model", volcengineArkSeedreamMultiviewModel); out.put("images", images);
-        out.put("message", "Doubao Seedream 多视图已生成，可一键带入多视图 3D 建模");
+        out.put("viewCount", views.size());
+        out.put("message", "Doubao Seedream " + views.size() + " 视图已生成，可一键带入多视图 3D 建模");
         return out;
     }
 
@@ -3878,6 +3881,8 @@ public class CreativeAiController {
         public String material;
         public Long inputAssetId;
         public String size;
+        /** Conversational creation uses 3 views; the professional page keeps 4. */
+        public Integer viewCount;
         public Boolean watermark;
         public Long currentUserId;
     }

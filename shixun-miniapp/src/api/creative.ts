@@ -163,6 +163,8 @@ export interface SeedreamMultiViewRequest {
   productKey?: string
   productCategory?: string
   material?: string
+  /** Conversational route uses front/side/back; professional route defaults to four. */
+  viewCount?: 3 | 4
   /** Seedream 多视图接口当前只接受 1K 或 2K。 */
   size?: '1K' | '2K'
   watermark?: boolean
@@ -193,7 +195,7 @@ export const createSeedreamMultiView = (body: SeedreamMultiViewRequest) => reque
   '/api/creative/ai/volcengine/seedream/multiview',
   // Four views are generated sequentially to keep the product identity
   // consistent. Give the native client enough time to receive all four.
-  { method: 'POST', data: body, timeout: 180000, header: { 'content-type': 'application/json' } },
+  { method: 'POST', data: body, timeout: 300000, header: { 'content-type': 'application/json' } },
 )
 
 export const createModel = (body: any) => request<any>('/api/creative/ai/tripo/generate', { method: 'POST', data: body, header: { 'content-type': 'application/json' } })
