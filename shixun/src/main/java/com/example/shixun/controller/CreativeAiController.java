@@ -768,8 +768,12 @@ public class CreativeAiController {
         if (blank(req.prompt)) throw new IllegalArgumentException("请先填写要生成的产品或角色描述");
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先上传一张产品参考图，再生成多视图");
         requireAssetAccess(req.inputAssetId);
-        if (blank(volcengineArkApiKey) || volcengineArkApiKey.contains("YOUR_")) {
-            throw new IllegalStateException("未检测到火山引擎 Ark 密钥，请在密钥库注入 VOLCENGINE_ARK_API_KEY 后重启服务");
+        String arkApiKey = resolvedArkApiKey();
+        if (blank(arkApiKey) || arkApiKey.contains("YOUR_")) {
+            if (hasJimengSignatureCredentials()) {
+                throw new IllegalStateException("当前已配置即梦生图的 AccessKeyId + SecretAccessKey，但四视图使用火山引擎 Ark 接口，需要单独配置 VOLCENGINE_ARK_API_KEY（通常以 Vx 开头）；两套密钥不能互换，配置后重启服务");
+            }
+            throw new IllegalStateException("未检测到火山引擎 Ark API Key，请在密钥库注入 VOLCENGINE_ARK_API_KEY（通常以 Vx 开头）后重启服务");
         }
         String size = blank(req.size) ? "2K" : req.size.trim();
         if (!Set.of("1K", "2K").contains(size)) throw new IllegalArgumentException("多视图仅支持 1K 或 2K 尺寸");
@@ -793,7 +797,7 @@ public class CreativeAiController {
             payload.put("watermark", req.watermark == null || req.watermark);
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(volcengineArkImagesUrl))
-                    .header("Authorization", "Bearer " + volcengineArkApiKey.trim())
+                    .header("Authorization", "Bearer " + arkApiKey.trim())
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
                     .build();
@@ -820,6 +824,22 @@ public class CreativeAiController {
         out.put("provider", "volcengine-ark"); out.put("model", volcengineArkSeedreamMultiviewModel); out.put("images", images);
         out.put("message", "Doubao Seedream 多视图已生成，可一键带入多视图 3D 建模");
         return out;
+    }
+
+    /**
+     * Ark 图片接口使用 Bearer API Key；即梦视觉接口使用 AK/SK 签名。
+     * 只有在旧配置明确放入 Vx 开头的 Ark Key 时才允许复用，避免把 AK/SK
+     * 误当成 Bearer Key 发给 Ark。
+     */
+    private String resolvedArkApiKey() {
+        if (!blank(volcengineArkApiKey) && !volcengineArkApiKey.contains("YOUR_")) return volcengineArkApiKey;
+        if (!blank(jimengApiKey) && jimengApiKey.trim().startsWith("Vx")) return jimengApiKey;
+        return "";
+    }
+
+    private boolean hasJimengSignatureCredentials() {
+        return !blank(jimengAccessKeyId) && !blank(jimengSecretAccessKey)
+                && !jimengAccessKeyId.contains("YOUR_") && !jimengSecretAccessKey.contains("YOUR_");
     }
 
     @PostMapping("/image-to-image")
