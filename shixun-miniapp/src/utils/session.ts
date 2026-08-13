@@ -19,6 +19,8 @@ export async function restoreSession() { return getSession() }
 export const sessionStartRoute = () => CONSUMER_NATIVE_HOME_ROUTE
 export const requireSession = () => {
   const session = getSession()
-  if (!session) { uni.reLaunch({ url: '/pages/login/index' }); return null }
+  // Keep the previous page in the stack. A visitor can explicitly leave the
+  // login page, continue browsing, and decide later whether to sign in.
+  if (!session) { uni.navigateTo({ url: '/pages/login/index?from=protected' }); return null }
   return session
 }

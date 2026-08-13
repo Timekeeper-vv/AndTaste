@@ -8,11 +8,19 @@
       <view class="identity">
         <text class="eyebrow">MY ATELIER</text>
         <text class="name">{{ displayName }}</text>
-        <text class="role">{{ creatorModeLabel }} · 灵感与作品都在这里沉淀</text>
+        <text class="role">{{ loggedIn ? `${creatorModeLabel} · 灵感与作品都在这里沉淀` : '先浏览首页，登录后再管理作品与订单' }}</text>
       </view>
     </view>
 
-    <view class="welcome-card">
+    <view v-if="!loggedIn" class="guest-card">
+      <text class="guest-kicker">GUEST MODE</text>
+      <text class="guest-title">先随意看看，再决定是否登录。</text>
+      <text class="guest-copy">首页、选品方向和公开内容均可浏览；创作、保存、下单时再由你主动登录。</text>
+      <button class="guest-login" @tap="goLogin">登录后管理我的创作</button>
+      <text class="guest-home" @tap="goHome">暂不登录，返回首页继续浏览</text>
+    </view>
+
+    <view v-else class="welcome-card">
       <view>
         <text class="welcome-kicker">之间智造 · 创作服务</text>
         <text class="welcome-title">把一个灵感，慢慢做成一件好作品。</text>
@@ -20,11 +28,11 @@
       <text class="welcome-seal">印</text>
     </view>
 
-    <view class="section-heading">
+    <view v-if="loggedIn" class="section-heading">
       <text>创作与账户</text>
       <text>ACCOUNT</text>
     </view>
-    <view class="menu-card">
+    <view v-if="loggedIn" class="menu-card">
       <view class="menu-row" @tap="go('/pages/works/index')">
         <view class="menu-icon artwork">作</view>
         <view class="menu-copy"><text>我的作品</text><text>查看创作成果与审核状态</text></view>
@@ -62,11 +70,11 @@
       </view>
     </view>
 
-    <view class="section-heading market-heading">
+    <view v-if="loggedIn" class="section-heading market-heading">
       <text>文创商城</text>
       <text>MARKET &amp; ORDERS</text>
     </view>
-    <view class="menu-card market-card">
+    <view v-if="loggedIn" class="menu-card market-card">
       <view class="menu-row" @tap="go('/pages/market/index')">
         <view class="menu-icon market">集</view>
         <view class="menu-copy"><text>文创商城</text><text>浏览已审核的文化作品与实体衍生品</text></view>
@@ -79,11 +87,11 @@
       </view>
     </view>
 
-    <view class="section-heading service-heading">
+    <view v-if="loggedIn" class="section-heading service-heading">
       <text>服务与保障</text>
       <text>CARE &amp; RIGHTS</text>
     </view>
-    <view class="menu-card service-card">
+    <view v-if="loggedIn" class="menu-card service-card">
       <view class="menu-row" @tap="go('/pages/support/index?tab=chat')">
         <view class="menu-icon service">问</view>
         <view class="menu-copy"><text>在线客服</text><text>查看历史消息，咨询创作、生产与订单</text></view>
@@ -97,7 +105,7 @@
       </view>
     </view>
 
-    <button class="logout" @tap="logout">退出当前账号</button>
+    <button v-if="loggedIn" class="logout" @tap="logout">退出当前账号</button>
     <view class="bottom-nav">
       <view @tap="goHome"><text>⌂</text><text>首页</text></view>
       <view @tap="go('/pages/create/index?mode=image')"><text>✦</text><text>创作</text></view>
@@ -112,11 +120,13 @@ import { computed, ref } from 'vue'
 import { clearSession, getSession } from '../../utils/session'
 
 const user = ref(getSession()?.user)
+const loggedIn = computed(() => Boolean(user.value))
 const creatorMode = ref<'amateur' | 'professional'>((uni.getStorageSync('creation_context') || {}).creatorMode === 'professional' ? 'professional' : 'amateur')
 const displayName = computed(() => user.value?.username || '创作用户')
 const creatorModeLabel = computed(() => creatorMode.value === 'professional' ? '专业创作用户' : '业余创作用户')
 const go = (url: string) => uni.navigateTo({ url })
 const goHome = () => uni.reLaunch({ url: '/pages/home/index' })
+const goLogin = () => uni.navigateTo({ url: '/pages/login/index?from=profile' })
 
 function logout() {
   uni.showModal({
@@ -145,13 +155,14 @@ function logout() {
 .ink-wash { position: absolute; border-radius: 999rpx; pointer-events: none; filter: blur(2rpx); }
 .ink-wash-one { top: -116rpx; right: -116rpx; width: 420rpx; height: 360rpx; opacity: .68; background: radial-gradient(ellipse, rgba(113, 143, 128, .2) 0%, rgba(113, 143, 128, .04) 48%, transparent 72%); transform: rotate(-24deg); }
 .ink-wash-two { left: -220rpx; bottom: 130rpx; width: 460rpx; height: 280rpx; opacity: .6; background: radial-gradient(ellipse, rgba(177, 111, 84, .12), transparent 67%); transform: rotate(17deg); }
-.profile-hero, .welcome-card, .section-heading, .menu-card, .logout { position: relative; z-index: 1; }
+.profile-hero, .welcome-card, .guest-card, .section-heading, .menu-card, .logout { position: relative; z-index: 1; }
 .profile-hero { display: flex; align-items: center; gap: 23rpx; padding: 18rpx 7rpx 42rpx; }
 .seal-avatar { display: flex; align-items: center; justify-content: center; flex: none; width: 106rpx; height: 106rpx; border: 5rpx solid rgba(255, 255, 255, .74); border-radius: 36rpx 30rpx 38rpx 26rpx; color: #fffaf2; background: linear-gradient(145deg, #587669, #88a293); box-shadow: 0 15rpx 29rpx rgba(48, 78, 67, .23), inset 0 0 0 1rpx rgba(255, 255, 255, .28); font-family: "Songti SC", "STSong", serif; font-size: 47rpx; font-weight: 800; transform: rotate(-5deg); }
 .identity { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .eyebrow { color: #81958b; font-size: 18rpx; font-weight: 800; letter-spacing: 2.1rpx; }
 .name { overflow: hidden; margin-top: 7rpx; color: #292c28; font-family: "Songti SC", "STSong", serif; font-size: 40rpx; font-weight: 800; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .role { margin-top: 10rpx; color: #7a8078; font-size: 22rpx; }
+.guest-card { display:flex; flex-direction:column; margin-top:8rpx; padding:31rpx 28rpx; border:1rpx solid rgba(101,126,110,.2); border-radius:24rpx; background:linear-gradient(145deg,#f8fcf7,#edf3ea); box-shadow:0 13rpx 29rpx rgba(62,81,66,.08); }.guest-kicker{color:#6d8c7d;font-size:18rpx;font-weight:900;letter-spacing:2rpx}.guest-title{margin-top:12rpx;color:#354239;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:800}.guest-copy{margin-top:11rpx;color:#788078;font-size:21rpx;line-height:1.6}.guest-login{height:88rpx;line-height:88rpx;margin-top:25rpx;border-radius:15rpx;background:#527766;color:#fff;font-size:25rpx;font-weight:800}.guest-home{padding:22rpx 10rpx 0;color:#597766;text-align:center;font-size:22rpx;font-weight:800}
 .welcome-card { display: flex; align-items: center; justify-content: space-between; gap: 24rpx; overflow: hidden; box-sizing: border-box; min-height: 170rpx; padding: 29rpx 28rpx 27rpx; border: 1rpx solid rgba(100, 112, 94, .15); border-radius: 30rpx; background: linear-gradient(125deg, rgba(249, 252, 247, .97), rgba(232, 239, 231, .89)); box-shadow: 0 17rpx 38rpx rgba(57, 63, 50, .08); }
 .welcome-card::before { position: absolute; top: -35rpx; right: 32rpx; width: 188rpx; height: 156rpx; border: 1rpx solid rgba(107, 135, 116, .12); border-radius: 50%; content: ''; }
 .welcome-kicker { display: block; color: #6e8c7d; font-size: 19rpx; font-weight: 800; letter-spacing: 1.6rpx; }
