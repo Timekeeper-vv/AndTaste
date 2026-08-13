@@ -44,6 +44,7 @@
         <text class="order">金额：¥{{ orderAmount(paymentOrder) }} · {{ paymentOrder.credits }} 积分</text>
         <text class="order">支付结果由微信官方确认，请勿重复发起。</text>
         <button v-if="paymentOrder.status === 'pending'" class="query" :loading="paymentPolling" @tap="refreshPaymentStatus(true)">查询到账结果</button>
+        <button v-if="paymentIntent === 'cancelled' && paymentOrder.status === 'pending'" class="query" :loading="paymentPolling" @tap="confirmCancellation">确认取消本次支付</button>
         <text class="close" @tap="closePaymentOrder">关闭</text>
       </view>
     </view>
@@ -55,6 +56,7 @@ import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow, onUnload } from '@dcloudio/uni-app'
 import {
   bindWechatMiniapp,
+  cancelVirtualPaymentOrder,
   createPaymentOrder,
   getCredits,
   getPackages,
@@ -187,9 +189,35 @@ async function launchVirtualPayment(order: PaymentOrder) {
   } catch (error: any) {
     paymentIntent.value = paymentWasCancelled(error) ? 'cancelled' : 'failed'
     paymentHint.value = paymentIntent.value === 'cancelled' ? '本次支付已取消，未增加积分。' : (error?.errMsg || error?.message || '未能调起微信虚拟支付，请稍后重试')
+    if (paymentIntent.value === 'cancelled') await confirmCancellation()
   } finally {
     requestingPayment.value = false
-    startPaymentPolling()
+    if (paymentOrder.value?.status === 'pending') startPaymentPolling()
+  }
+}
+
+async function confirmCancellation() {
+  if (!paymentOrder.value?.orderNo) return
+  paymentPolling.value = true
+  try {
+    const latest = await cancelVirtualPaymentOrder(paymentOrder.value.orderNo)
+    paymentOrder.value = latest
+    if (latest.status === 'paid') {
+      paymentIntent.value = 'paid'
+      paymentHint.value = '微信支付已完成，积分已到账。'
+      await loadData(false)
+    } else if (latest.status === 'cancelled') {
+      stopPaymentPolling()
+      paymentHint.value = '本次支付已取消。你可以重新选择套餐发起支付。'
+      await loadData(false)
+    } else {
+      paymentIntent.value = 'exception'
+      paymentHint.value = '支付结果需要人工核验，请不要重复付款。'
+    }
+  } catch (error: any) {
+    paymentHint.value = error.message || '取消结果核验失败，请稍后刷新订单。'
+  } finally {
+    paymentPolling.value = false
   }
 }
 

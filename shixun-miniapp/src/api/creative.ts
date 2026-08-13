@@ -399,6 +399,7 @@ export const closePaymentOrderOnServer = (orderNo: string) => request<PaymentOrd
 export const getPaymentOrders = () => request<any[]>('/api/payments/orders')
 export const getPaymentOrder = (orderNo: string) => request<PaymentOrder>(`/api/payments/orders/${encodeURIComponent(orderNo)}`)
 export const getWechatPaymentParams = (orderNo: string) => request<PaymentOrder>(`/api/payments/orders/${encodeURIComponent(orderNo)}/payment-params`, { method: 'POST' })
+export const cancelVirtualPaymentOrder = (orderNo: string) => request<PaymentOrder>(`/api/payments/orders/${encodeURIComponent(orderNo)}/virtual-cancel`, { method: 'POST' })
 
 /**
  * 面向普通创作者开放的品牌风格档案。风格内容由后台维护，避免把一套固定的

@@ -462,6 +462,46 @@ public class PaymentController {
     }
 
     /**
+     * A client cancellation is never trusted directly. Query the official
+     * coin balance before releasing the order, so a late successful payment
+     * is credited rather than silently discarded.
+     */
+    @PostMapping("/orders/{orderNo}/virtual-cancel")
+    public Map<String, Object> cancelVirtualPaymentOrder(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+            @PathVariable String orderNo,
+            HttpServletRequest request) {
+        Long userId = requireConsumer(principal);
+        requireSafeOrderNo(orderNo);
+        requireVirtualPaymentReady();
+        return Objects.requireNonNull(transactions.execute(status -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT p.*,v.payer_openid,v.expected_coin_quantity,v.balance_before FROM payment_order p " +
+                            "JOIN payment_virtual_order v ON v.order_no=p.order_no WHERE p.order_no=? AND p.user_id=? FOR UPDATE", orderNo, userId);
+            if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "虚拟支付订单不存在");
+            Map<String, Object> order = rows.get(0);
+            if (!"wechat_virtual_payment".equals(String.valueOf(order.get("channel")))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该订单不是微信虚拟支付订单");
+            }
+            if (!"pending".equals(String.valueOf(order.get("status")))) return orderView(orderNo, userId);
+            String openId = nullableText(order.get("payer_openid"));
+            long currentBalance = queryWechatVirtualBalanceUnchecked(openId, activeVirtualSessionKey(userId, openId), clientIp(request));
+            long before = toLong(order.get("balance_before"));
+            long expected = toLong(order.get("expected_coin_quantity"));
+            if (currentBalance >= before + expected) {
+                jdbc.update("UPDATE payment_virtual_order SET balance_after=?,provider_status='PAID',last_reconciled_at=NOW() WHERE order_no=?", currentBalance, orderNo);
+                creditConfirmedOrder(order, "virtual:" + orderNo, "微信小程序虚拟支付代币充值 " + orderNo);
+            } else if (currentBalance == before) {
+                jdbc.update("UPDATE payment_virtual_order SET balance_after=?,provider_status='CANCELLED',last_reconciled_at=NOW() WHERE order_no=?", currentBalance, orderNo);
+                jdbc.update("UPDATE payment_order SET status='cancelled',provider_response='微信虚拟支付取消前余额核验未发现扣款' WHERE order_no=? AND status='pending'", orderNo);
+            } else {
+                markPaymentException(orderNo, "取消虚拟支付时发现代币余额变化，需人工核对");
+            }
+            return orderView(orderNo, userId);
+        }));
+    }
+
+    /**
      * Spring Boot normally serializes a {@link ResponseStatusException} as a
      * generic HTTP label such as "Conflict". Payment actions need the safe,
      * actionable reason so the mini program can guide the user to resume the
@@ -1315,6 +1355,9 @@ public class PaymentController {
         List<Map<String, Object>> orderRows = jdbc.queryForList("SELECT * FROM payment_order WHERE order_no=? FOR UPDATE", orderNo);
         if (orderRows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "支付订单不存在");
         Map<String, Object> order = orderRows.get(0);
+        if ("wechat_virtual_payment".equals(String.valueOf(order.get("channel")))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "虚拟支付订单必须在微信虚拟支付商户后台发起退款，不能走普通微信支付退款接口");
+        }
         if (!"paid".equals(String.valueOf(order.get("status")))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "仅已到账且未进入退款流程的订单可申请退款");
         }
