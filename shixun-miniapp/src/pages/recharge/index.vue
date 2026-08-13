@@ -44,7 +44,7 @@
         <text class="order">金额：¥{{ orderAmount(paymentOrder) }} · {{ paymentOrder.credits }} 积分</text>
         <text class="order">支付结果由微信官方确认，请勿重复发起。</text>
         <button v-if="paymentOrder.status === 'pending'" class="query" :loading="paymentPolling" @tap="refreshPaymentStatus(true)">查询到账结果</button>
-        <button v-if="paymentIntent === 'cancelled' && paymentOrder.status === 'pending'" class="query" :loading="paymentPolling" @tap="confirmCancellation">确认取消本次支付</button>
+        <button v-if="canConfirmNoPayment" class="query" :loading="paymentPolling" @tap="confirmCancellation">确认本次未支付</button>
         <text class="close" @tap="closePaymentOrder">关闭</text>
       </view>
     </view>
@@ -91,6 +91,7 @@ let paidNoticeShown = false
 
 const paymentEnabled = computed(() => virtualPaymentEnabled.value)
 const paymentButtonText = computed(() => !selected.value ? '请选择套餐' : `微信虚拟支付 ¥${packageAmount(selected.value)}`)
+const canConfirmNoPayment = computed(() => paymentOrder.value?.status === 'pending' && ['cancelled', 'failed'].includes(paymentIntent.value))
 const paymentStateIcon = computed(() => ({ idle: '⌛', launching: '…', awaiting_confirmation: '⌛', cancelled: '×', failed: '!', paid: '✓', exception: '!' }[paymentIntent.value] || '⌛'))
 const paymentStateTitle = computed(() => ({ idle: '等待支付结果', launching: '正在唤起微信虚拟支付', awaiting_confirmation: '正在确认积分到账', cancelled: '你已取消本次支付', failed: '未能完成微信虚拟支付', paid: '积分已到账', exception: '支付结果核验中' }[paymentIntent.value] || '等待支付结果'))
 
@@ -177,6 +178,33 @@ function paymentWasCancelled(error: any) {
   return message.includes('cancel') || message.includes('取消') || message.includes('-2')
 }
 
+function virtualPaymentFailureMessage(error: any) {
+  const code = Number(error?.errCode)
+  const providerMessages: Record<number, string> = {
+    '-15001': '支付参数无效，请刷新后重试。',
+    '-15005': '微信支付身份签名失效，请退出小程序后重新进入再试。',
+    '-15006': '支付签名校验失败，请联系平台客服处理。',
+    '-15007': '微信支付会话已过期，请重新进入小程序后重试。',
+    '-15009': '虚拟货币尚未在微信后台发布，暂时无法支付。',
+    '-15014': '虚拟货币刚发布，微信后台需要约 10 分钟生效。',
+    '-15017': '微信支付已限制该商户收款，请在微信商户平台查看原因。',
+    '-15018': '虚拟货币审核未通过，请在微信虚拟支付后台处理。',
+    '-15020': '操作过快，请稍后再试。',
+    '-15021': '该小程序交易过于频繁，请稍后再试。',
+  }
+  if (providerMessages[code]) return providerMessages[code]
+  const detail = String(error?.errMsg || error?.message || '').trim()
+  return detail || '未能调起微信虚拟支付，请稍后重试。'
+}
+
+function showPaymentFailure(message: string) {
+  uni.showModal({
+    title: '暂未调起微信支付',
+    content: message,
+    showCancel: false,
+  })
+}
+
 async function launchVirtualPayment(order: PaymentOrder) {
   paymentOrder.value = order
   paymentIntent.value = 'launching'
@@ -188,8 +216,9 @@ async function launchVirtualPayment(order: PaymentOrder) {
     paymentHint.value = '微信已受理，正在核验积分到账，请勿重复支付。'
   } catch (error: any) {
     paymentIntent.value = paymentWasCancelled(error) ? 'cancelled' : 'failed'
-    paymentHint.value = paymentIntent.value === 'cancelled' ? '本次支付已取消，未增加积分。' : (error?.errMsg || error?.message || '未能调起微信虚拟支付，请稍后重试')
+    paymentHint.value = paymentIntent.value === 'cancelled' ? '本次支付已取消，未增加积分。' : virtualPaymentFailureMessage(error)
     if (paymentIntent.value === 'cancelled') await confirmCancellation()
+    else showPaymentFailure(paymentHint.value)
   } finally {
     requestingPayment.value = false
     if (paymentOrder.value?.status === 'pending') startPaymentPolling()
@@ -279,7 +308,10 @@ async function startPayment() {
     const order = await createPaymentOrder(selected.value.code, 'wechat_virtual_payment')
     await launchVirtualPayment(order)
   } catch (error: any) {
-    uni.showToast({ title: error.message || '发起微信虚拟支付失败', icon: 'none' })
+    const message = error.message || '发起微信虚拟支付失败'
+    paymentIntent.value = 'failed'
+    paymentHint.value = message
+    showPaymentFailure(message)
   } finally {
     creatingOrder.value = false
   }
