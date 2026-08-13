@@ -698,7 +698,7 @@ async function generateProductImage() {
       busyMessage.value = '正在依据参考图生成产品视觉，预计需要 1-3 分钟…'
       result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productCategory: selectedProduct.value.name, material: material.value })
     } else {
-      busyMessage.value = '正在调用即梦生成产品视觉，预计需要 1-3 分钟…'
+      busyMessage.value = '正在调用之间大模型生成产品视觉，预计需要 1-3 分钟…'
       result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, scene: purpose.value, productType: selectedProduct.value.name, productCategory: selectedProduct.value.name, material: material.value })
     }
     const assetId = Number(result?.assetId || result?.id)
@@ -717,7 +717,7 @@ async function generateProductImage() {
 
 function generationFailureMessage(error: any) {
   const raw = String(error?.message || error?.errMsg || '').trim()
-  if (/timeout|timed out|超时/i.test(raw)) return '生成请求等待超时。即梦生图通常需要 1-3 分钟，请检查网络后重新提交；本次失败不会扣除未成功生成的积分。'
+  if (/timeout|timed out|超时/i.test(raw)) return '生成请求等待超时。之间大模型生成通常需要 1-3 分钟，请检查网络后重新提交；本次失败不会扣除未成功生成的积分。'
   if (/登录已过期|请先登录|401/i.test(raw)) return '登录状态已失效，请重新登录后再生成。'
   if (/accesskey|secretaccesskey|签名鉴权|服务尚未配置|未配置/i.test(raw)) return 'AI 生图服务没有完成配置。请检查服务器上的 JIMENG_ACCESS_KEY_ID、JIMENG_SECRET_ACCESS_KEY，配置后重启 smart-pig 服务。'
   if (/网络|network|fail|connect|refused|域名/i.test(raw)) return '无法连接 AI 生图服务。请检查微信公众平台 request 合法域名、网络连接和服务器运行状态。'
