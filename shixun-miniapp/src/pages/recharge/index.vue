@@ -21,6 +21,11 @@
     <button class="pay" :disabled="!selected || !paymentEnabled" :loading="creatingOrder || requestingPayment" @tap="startPayment">{{ paymentButtonText }}</button>
     <text v-if="!paymentEnabled" class="payment-unavailable">微信虚拟支付正在配置中，请稍后再试。</text>
     <text v-else class="payment-note">支付由微信小程序虚拟支付完成，积分到账以微信官方代币余额核验结果为准。</text>
+    <view v-if="paymentError" class="payment-error">
+      <text class="payment-error-title">本次未调起支付</text>
+      <text class="payment-error-detail">{{ paymentError }}</text>
+      <text v-if="paymentErrorCode" class="payment-error-code">微信错误码：{{ paymentErrorCode }}</text>
+    </view>
 
     <view class="section history">
       <view class="history-head"><text class="label">充值订单</text><text>{{ orders.length }} 笔</text></view>
@@ -84,6 +89,8 @@ const paymentOrder = ref<PaymentOrder | null>(null)
 const virtualPaymentEnabled = ref(false)
 const paymentIntent = ref<PaymentIntent>('idle')
 const paymentHint = ref('')
+const paymentError = ref('')
+const paymentErrorCode = ref<number | null>(null)
 const paymentPollAttempts = ref(0)
 let paymentTimer: ReturnType<typeof setInterval> | null = null
 let paymentPollInFlight = false
@@ -121,6 +128,12 @@ function closePaymentOrder() {
   paymentIntent.value = 'idle'
   paymentPollAttempts.value = 0
   paidNoticeShown = false
+}
+
+function recordPaymentError(error: any, fallback: string) {
+  const code = Number(error?.errCode)
+  paymentErrorCode.value = Number.isFinite(code) ? code : null
+  paymentError.value = virtualPaymentFailureMessage(error) || fallback
 }
 
 async function loadData(notify = false) {
@@ -161,8 +174,12 @@ function requireVirtualParams(order: PaymentOrder): WechatVirtualPaymentParams {
 function requestVirtualPayment(params: WechatVirtualPaymentParams): Promise<void> {
   return new Promise((resolve, reject) => {
     // #ifdef MP-WEIXIN
-    if (typeof wx === 'undefined' || (wx.canIUse && !wx.canIUse('requestVirtualPayment'))) {
+    if (typeof wx === 'undefined' || typeof wx.requestVirtualPayment !== 'function') {
       reject(new Error('当前微信版本不支持虚拟支付，请升级微信后重试'))
+      return
+    }
+    if (wx.canIUse && !wx.canIUse('requestVirtualPayment')) {
+      reject(new Error('当前微信基础库不支持虚拟支付，请将微信升级到最新版本后重试'))
       return
     }
     wx.requestVirtualPayment({ mode: params.mode, signData: params.signData, paySig: params.paySig, signature: params.signature, success: () => resolve(), fail: error => reject(error) })
@@ -191,6 +208,9 @@ function virtualPaymentFailureMessage(error: any) {
     '-15018': '虚拟货币审核未通过，请在微信虚拟支付后台处理。',
     '-15020': '操作过快，请稍后再试。',
     '-15021': '该小程序交易过于频繁，请稍后再试。',
+    '-4': '微信风控暂时拦截了本次支付，请稍后再试或更换网络。',
+    '-5': '微信正在确认签约状态，请稍后再试。',
+    '1001': '支付参数错误，平台正在检查虚拟支付配置。',
   }
   if (providerMessages[code]) return providerMessages[code]
   const detail = String(error?.errMsg || error?.message || '').trim()
@@ -218,7 +238,10 @@ async function launchVirtualPayment(order: PaymentOrder) {
     paymentIntent.value = paymentWasCancelled(error) ? 'cancelled' : 'failed'
     paymentHint.value = paymentIntent.value === 'cancelled' ? '本次支付已取消，未增加积分。' : virtualPaymentFailureMessage(error)
     if (paymentIntent.value === 'cancelled') await confirmCancellation()
-    else showPaymentFailure(paymentHint.value)
+    else {
+      recordPaymentError(error, paymentHint.value)
+      showPaymentFailure(paymentHint.value)
+    }
   } finally {
     requestingPayment.value = false
     if (paymentOrder.value?.status === 'pending') startPaymentPolling()
@@ -300,6 +323,8 @@ async function refreshPaymentStatus(showLoading = false) {
 
 async function startPayment() {
   if (!selected.value || !paymentEnabled.value || !requireSession()) return
+  paymentError.value = ''
+  paymentErrorCode.value = null
   creatingOrder.value = true
   try {
     const code = await loginForWechatCode()
@@ -308,7 +333,8 @@ async function startPayment() {
     const order = await createPaymentOrder(selected.value.code, 'wechat_virtual_payment')
     await launchVirtualPayment(order)
   } catch (error: any) {
-    const message = error.message || '发起微信虚拟支付失败'
+    recordPaymentError(error, '发起微信虚拟支付失败')
+    const message = paymentError.value
     paymentIntent.value = 'failed'
     paymentHint.value = message
     showPaymentFailure(message)
@@ -323,5 +349,5 @@ onUnload(stopPaymentPolling)
 </script>
 
 <style scoped lang="scss">
-.page{min-height:100vh;padding:34rpx;box-sizing:border-box;background:linear-gradient(180deg,#faf8f3,#f0e9df)}.head{display:flex;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 30rpx}.title{display:block;font-size:48rpx;font-weight:800;color:#302b26}.sub{display:block;font-size:23rpx;color:#82786d;margin-top:12rpx;line-height:1.6}.refresh{flex-shrink:0;margin:4rpx 0 0;background:#edf3ed;color:#607b6e;font-size:21rpx}.card{border:1rpx solid rgba(114,96,78,.12);background:linear-gradient(145deg,#eaf2eb,#d8e5dc);border-radius:25rpx;color:#385043;padding:34rpx;box-shadow:0 10rpx 23rpx rgba(63,82,69,.08)}.balance{font-size:24rpx;display:block}.balance text{font-size:62rpx;font-weight:800;margin-left:16rpx}.rules{font-size:21rpx;color:#668075;margin-top:20rpx;display:block}.section{margin-top:36rpx}.label{font-size:30rpx;font-weight:700}.pkg{display:flex;justify-content:space-between;align-items:center;margin-top:18rpx;background:#fff;border:1rpx solid rgba(129,112,93,.12);border-radius:18rpx;padding:26rpx;box-shadow:0 8rpx 18rpx rgba(67,53,37,.045)}.pkg.selected{border-color:#9caf9f;background:#eff5ef}.pkg-name,.pkg-credit{display:block}.pkg-name{font-size:29rpx;font-weight:700}.pkg-credit{font-size:22rpx;color:#8d8277;margin-top:8rpx}.price{font-size:38rpx;font-weight:800;color:#9f624b}.pay,.query{height:94rpx;line-height:94rpx;border-radius:17rpx;font-size:29rpx;margin-top:40rpx}.pay{background:linear-gradient(135deg,#3e3933,#617e71);box-shadow:0 12rpx 22rpx rgba(52,58,52,.16);color:#fff}.pay[disabled]{opacity:.4}.payment-unavailable,.payment-note{display:block;margin:18rpx 12rpx 0;color:#ad442c;font-size:22rpx;line-height:1.6;text-align:center}.payment-note{color:#8d7469}.history{padding-bottom:42rpx}.history-head,.row,.order-bottom{display:flex;align-items:center;justify-content:space-between}.history-head text:last-child,.order-meta{font-size:21rpx;color:#9b8175}.no-order{padding:50rpx;text-align:center;color:#a48c80;font-size:24rpx}.order-item{margin-top:16rpx;background:#fff;border:1rpx solid rgba(129,112,93,.12);border-radius:18rpx;padding:24rpx;box-shadow:0 8rpx 18rpx rgba(67,53,37,.045)}.row{gap:16rpx}.order-name{font-size:27rpx;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.paid{background:#e4f5e9;color:#248653}.status.payment_exception{background:#ffe5e1;color:#ba3d2e}.order-meta{display:block;margin-top:10rpx}.order-bottom{margin-top:15rpx;color:#765b4e;font-size:22rpx}.order-price{font-size:29rpx;font-weight:800;color:#9f624b}.modal{position:fixed;inset:0;background:rgba(0,0,0,.48);display:flex;align-items:flex-end;z-index:10}.sheet{width:100%;background:#fffdfa;border-radius:34rpx 34rpx 0 0;padding:44rpx;box-sizing:border-box;text-align:center}.sheet-title{font-size:34rpx;font-weight:700}.payment-state{margin:30rpx 0 24rpx;padding:34rpx 28rpx;border-radius:22rpx;background:#fff8f2}.payment-state.awaiting_confirmation,.payment-state.launching{background:#fff7de}.payment-state.paid{background:#e9f8ec}.payment-state.cancelled,.payment-state.failed{background:#fff0ec}.state-icon{display:block;font-size:54rpx;font-weight:800;color:#9e4325;line-height:1}.paid .state-icon{color:#248653}.state-title{display:block;margin-top:16rpx;font-size:29rpx;font-weight:700}.state-hint,.order{display:block;margin-top:12rpx;font-size:22rpx;line-height:1.65;color:#8f7062}.order{font-size:21rpx;margin-top:4rpx}.query{margin-top:25rpx;background:#fff;border:2rpx solid #698477;color:#5c796c}.close{display:block;padding:25rpx;color:#8e7469;font-size:26rpx}
+.page{min-height:100vh;padding:34rpx;box-sizing:border-box;background:linear-gradient(180deg,#faf8f3,#f0e9df)}.head{display:flex;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 30rpx}.title{display:block;font-size:48rpx;font-weight:800;color:#302b26}.sub{display:block;font-size:23rpx;color:#82786d;margin-top:12rpx;line-height:1.6}.refresh{flex-shrink:0;margin:4rpx 0 0;background:#edf3ed;color:#607b6e;font-size:21rpx}.card{border:1rpx solid rgba(114,96,78,.12);background:linear-gradient(145deg,#eaf2eb,#d8e5dc);border-radius:25rpx;color:#385043;padding:34rpx;box-shadow:0 10rpx 23rpx rgba(63,82,69,.08)}.balance{font-size:24rpx;display:block}.balance text{font-size:62rpx;font-weight:800;margin-left:16rpx}.rules{font-size:21rpx;color:#668075;margin-top:20rpx;display:block}.section{margin-top:36rpx}.label{font-size:30rpx;font-weight:700}.pkg{display:flex;justify-content:space-between;align-items:center;margin-top:18rpx;background:#fff;border:1rpx solid rgba(129,112,93,.12);border-radius:18rpx;padding:26rpx;box-shadow:0 8rpx 18rpx rgba(67,53,37,.045)}.pkg.selected{border-color:#9caf9f;background:#eff5ef}.pkg-name,.pkg-credit{display:block}.pkg-name{font-size:29rpx;font-weight:700}.pkg-credit{font-size:22rpx;color:#8d8277;margin-top:8rpx}.price{font-size:38rpx;font-weight:800;color:#9f624b}.pay,.query{height:94rpx;line-height:94rpx;border-radius:17rpx;font-size:29rpx;margin-top:40rpx}.pay{background:linear-gradient(135deg,#3e3933,#617e71);box-shadow:0 12rpx 22rpx rgba(52,58,52,.16);color:#fff}.pay[disabled]{opacity:.4}.payment-unavailable,.payment-note{display:block;margin:18rpx 12rpx 0;color:#ad442c;font-size:22rpx;line-height:1.6;text-align:center}.payment-note{color:#8d7469}.payment-error{margin:18rpx 0 0;padding:22rpx 24rpx;border:1rpx solid #f0b7a7;border-radius:14rpx;background:#fff1ed;color:#963d28}.payment-error-title,.payment-error-detail,.payment-error-code{display:block}.payment-error-title{font-size:25rpx;font-weight:700}.payment-error-detail{margin-top:8rpx;font-size:22rpx;line-height:1.55}.payment-error-code{margin-top:8rpx;font-size:20rpx;color:#af624c}.history{padding-bottom:42rpx}.history-head,.row,.order-bottom{display:flex;align-items:center;justify-content:space-between}.history-head text:last-child,.order-meta{font-size:21rpx;color:#9b8175}.no-order{padding:50rpx;text-align:center;color:#a48c80;font-size:24rpx}.order-item{margin-top:16rpx;background:#fff;border:1rpx solid rgba(129,112,93,.12);border-radius:18rpx;padding:24rpx;box-shadow:0 8rpx 18rpx rgba(67,53,37,.045)}.row{gap:16rpx}.order-name{font-size:27rpx;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.paid{background:#e4f5e9;color:#248653}.status.payment_exception{background:#ffe5e1;color:#ba3d2e}.order-meta{display:block;margin-top:10rpx}.order-bottom{margin-top:15rpx;color:#765b4e;font-size:22rpx}.order-price{font-size:29rpx;font-weight:800;color:#9f624b}.modal{position:fixed;inset:0;background:rgba(0,0,0,.48);display:flex;align-items:flex-end;z-index:10}.sheet{width:100%;background:#fffdfa;border-radius:34rpx 34rpx 0 0;padding:44rpx;box-sizing:border-box;text-align:center}.sheet-title{font-size:34rpx;font-weight:700}.payment-state{margin:30rpx 0 24rpx;padding:34rpx 28rpx;border-radius:22rpx;background:#fff8f2}.payment-state.awaiting_confirmation,.payment-state.launching{background:#fff7de}.payment-state.paid{background:#e9f8ec}.payment-state.cancelled,.payment-state.failed{background:#fff0ec}.state-icon{display:block;font-size:54rpx;font-weight:800;color:#9e4325;line-height:1}.paid .state-icon{color:#248653}.state-title{display:block;margin-top:16rpx;font-size:29rpx;font-weight:700}.state-hint,.order{display:block;margin-top:12rpx;font-size:22rpx;line-height:1.65;color:#8f7062}.order{font-size:21rpx;margin-top:4rpx}.query{margin-top:25rpx;background:#fff;border:2rpx solid #698477;color:#5c796c}.close{display:block;padding:25rpx;color:#8e7469;font-size:26rpx}
 </style>
