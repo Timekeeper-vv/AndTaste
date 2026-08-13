@@ -155,6 +155,19 @@ export const optimizeImagePrompt = (body: ImagePromptOptimizeRequest) => request
   { method: 'POST', data: body, timeout: 30000, header: { 'content-type': 'application/json' } },
 )
 
+export interface ImageEditPromptOptimizeRequest {
+  prompt?: string
+  refinementNote: string
+  productCategory?: string
+  material?: string
+}
+
+/** 将用户的补充修改转为平衡的图改图指令，保留主题连续性并明确执行修改。 */
+export const optimizeImageEditPrompt = (body: ImageEditPromptOptimizeRequest) => request<{ prompt?: string }>(
+  '/api/creative/ai/prompt/image-edit-optimize',
+  { method: 'POST', data: body, timeout: 30000, header: { 'content-type': 'application/json' } },
+)
+
 export interface SeedreamMultiViewRequest {
   /** 用户上传并已归属到当前账号的单张参考图资产。 */
   inputAssetId: number | string

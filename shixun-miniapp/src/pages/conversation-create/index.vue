@@ -57,6 +57,7 @@ import {
   getConversation,
   getConversations,
   getTripoModelTask,
+  optimizeImageEditPrompt,
   optimizeImagePrompt,
   saveConversationEvent,
   uploadReference,
@@ -800,17 +801,30 @@ async function regenerateWithRefinement() {
   const note = refinementNote.value.trim()
   if (busy.value || !sourceAssetId || !note || !selectedProduct.value) return
   busy.value = true
-  busyMessage.value = '正在基于当前产品图生成新方案，请稍候…'
+  busyMessage.value = '正在理解修改要求并生成新方案，请稍候…'
   try {
-    const refinementPrompt = `${prompt.value}。请严格以当前参考图为基础保留主体识别度，并按以下修改要求重新设计：${note}`
-    await saveEvent('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, productType: selectedProduct.value.name, material: material.value, prompt: refinementPrompt })
-    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value })
+    let refinementPrompt = note
+    try {
+      busyMessage.value = '正在由之间大模型优化修改要求…'
+      const optimized = await optimizeImageEditPrompt({
+        prompt: prompt.value,
+        refinementNote: note,
+        productCategory: selectedProduct.value.name,
+        material: material.value,
+      })
+      if (String(optimized?.prompt || '').trim()) refinementPrompt = String(optimized.prompt).trim()
+    } catch {
+      // The edit request remains usable when prompt optimization is temporarily unavailable.
+    }
+    busyMessage.value = '正在基于当前产品图生成新方案，请稍候…'
+    await saveEvent('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, optimizedPrompt: refinementPrompt, productType: selectedProduct.value.name, material: material.value })
+    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value, refinement: true, refinementNote: note })
     const newAssetId = Number(result?.assetId || result?.id)
     if (!Number.isFinite(newAssetId) || newAssetId <= 0) throw new Error('修改后的产品图没有保存成功，请重试')
     generatedAssetId.value = newAssetId
     previewUrl.value = imageUrl(result)
     multiviewImages.value = []
-    await saveEvent('image', 'image_refined', { previousAssetId: sourceAssetId, generatedAssetId: newAssetId, previewUrl: previewUrl.value, refinementNote: note, productType: selectedProduct.value.name, material: material.value, prompt: refinementPrompt })
+    await saveEvent('image', 'image_refined', { previousAssetId: sourceAssetId, generatedAssetId: newAssetId, previewUrl: previewUrl.value, refinementNote: note, optimizedPrompt: refinementPrompt, productType: selectedProduct.value.name, material: material.value })
     addMessage('user', `补充修改：${note}`)
     addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
     cancelRefinement()

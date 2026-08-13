@@ -699,6 +699,35 @@ public class CreativeAiController {
         );
     }
 
+    /**
+     * Refine a user's change request into an image-to-image instruction. This
+     * is deliberately separate from text-to-image prompt optimization: the
+     * current image remains the visual source, while the requested edit must
+     * be concrete enough for the edit model to carry out.
+     */
+    @PostMapping("/prompt/image-edit-optimize")
+    public Map<String,Object> optimizeImageEditPrompt(@RequestBody GenerateImageRequest req) throws Exception {
+        assertCompliantPrompt(req.refinementNote, req.productCategory);
+        if (blank(req.refinementNote)) throw new IllegalArgumentException("请先填写希望修改的内容");
+        String system = "You are a precise image-to-image editing prompt writer for commercial cultural creative products. "
+                + "Return ONE concise ENGLISH edit prompt only, with no title, explanation, Markdown, JSON, or Chinese. "
+                + "The current image is the reference source. Preserve its recognizable main subject identity, cultural theme, dominant color family, and key decorative motifs unless the user's edit explicitly changes one of them. "
+                + "The user's requested edit is mandatory and has higher priority than preserving shape, carrier, composition, or product form. "
+                + "If they request a new shape, carrier, product category, pose, composition, or structure, state that change explicitly and make it visibly clear. "
+                + "Do not return a near-duplicate of the current image, but do not invent an unrelated subject, theme, color world, or random extra objects. "
+                + "Describe one coherent finished commercial product image, centered and clearly readable. Keep under 700 characters. "
+                + ProductPromptPolicy.optimizerRules(req.productCategory, req.material);
+        String user = "Original creation direction: " + nullToEmpty(req.prompt) + "\n"
+                + "Product category: " + nullToEmpty(req.productCategory) + "\n"
+                + "Material: " + nullToEmpty(req.material) + "\n"
+                + "MANDATORY USER EDIT: " + req.refinementNote.trim();
+        String optimized = callChat(system, user).trim()
+                .replaceAll("(?is)^```[a-z]*", "").replaceAll("(?is)```$", "").trim();
+        if (blank(optimized)) throw new IllegalStateException("提示词优化服务未返回有效修改方案");
+        if (optimized.length() > 900) optimized = optimized.substring(0, 900);
+        return Map.of("prompt", optimized, "source", "siliconflow:" + chatModel, "target", "siliconflow:image-to-image");
+    }
+
     private String buildProductUsageGuide(GenerateImageRequest req, String optimizedPrompt) {
         try {
             String provider = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? "Google Imagen 4" : "Tripo";
@@ -855,14 +884,13 @@ public class CreativeAiController {
         Map<String, Object> style = style(req.styleId);
         String requestedPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
         ReferenceImageAnalysis referenceAnalysis = analyzeReferenceImage(req.inputAssetId);
-        String finalPrompt = buildReferencePreservingPrompt(
-                buildPrompt(requestedPrompt, style, req.scene, req.productType),
-                req.productCategory,
-                req.material,
-                referenceAnalysis.visualBrief);
-        String negative = mergeNegative(
-                mergeNegative(req.negativePrompt, (String) style.get("negativePrompt")),
-                "different subject, unrelated object, replacement design, changed silhouette, changed main composition, changed color palette, lost distinctive details, generic product, random decoration, extra main subject");
+        boolean refinement = Boolean.TRUE.equals(req.refinement);
+        String finalPrompt = refinement
+                ? buildBalancedRefinementPrompt(requestedPrompt, req.productCategory, req.material, referenceAnalysis.visualBrief, req.refinementNote)
+                : buildReferencePreservingPrompt(buildPrompt(requestedPrompt, style, req.scene, req.productType), req.productCategory, req.material, referenceAnalysis.visualBrief);
+        String negative = mergeNegative(mergeNegative(req.negativePrompt, (String) style.get("negativePrompt")), refinement
+                ? "unrelated subject, unrelated theme, random extra object, duplicate product, unreadable form, low detail, distorted anatomy, broken product structure, text, watermark"
+                : "different subject, unrelated object, replacement design, changed silhouette, changed main composition, changed color palette, lost distinctive details, generic product, random decoration, extra main subject");
         String jobNo = no("I2I");
         Long jobId = createJob(jobNo, "image_to_image", "siliconflow", imageEditModel, req.styleId, req.inputAssetId, finalPrompt, negative, "running", null, null);
         storeJobProductIdentity(jobId, req.productKey, req.productCategory, req.material);
@@ -876,10 +904,11 @@ public class CreativeAiController {
             payload.put("model", imageEditModel);
             payload.put("prompt", finalPrompt);
             payload.put("image", inputImage);
-            // These are the provider's documented stable edit settings for
-            // Qwen-Image-Edit, rather than text-to-image defaults.
-            payload.put("num_inference_steps", 20);
-            payload.put("guidance_scale", 4);
+            // Refinements use moderate prompt guidance: strong enough to make
+            // the requested edit visible, but not so high that the image loses
+            // its established subject, theme, and product identity.
+            payload.put("num_inference_steps", refinement ? 28 : 20);
+            payload.put("guidance_scale", refinement ? 6 : 4);
             if (negative != null && !negative.isBlank()) payload.put("negative_prompt", negative);
             payload.put("batch_size", 1);
             if (req.seed != null) payload.put("seed", req.seed);
@@ -909,7 +938,7 @@ public class CreativeAiController {
                     req.inputAssetId,
                     "png",
                     req.tags == null || req.tags.isBlank() ? "图改图,AI生成,之间味道" : req.tags + ",图改图",
-                    withProductIdentity(withAssetOwner(referenceImageMetadata(remoteUrl, req.inputAssetId, referenceAnalysis), ownerUserId), req.productKey, req.productCategory, req.material)
+                    withProductIdentity(withAssetOwner(referenceImageMetadata(remoteUrl, req.inputAssetId, referenceAnalysis, refinement), ownerUserId), req.productKey, req.productCategory, req.material)
             );
             jdbc.update("UPDATE ai_generation_job SET status='succeeded', output_asset_id=? WHERE id=?", assetId, jobId);
             Map<String,Object> result = new LinkedHashMap<>();
@@ -3068,6 +3097,17 @@ public class CreativeAiController {
                 + "Requested product presentation: " + requestedPrompt;
     }
 
+    private String buildBalancedRefinementPrompt(String optimizedEdit, String productCategory, String material, String visualBrief, String refinementNote) {
+        String product = blank(productCategory) ? "the current cultural creative product" : productCategory.trim();
+        String surface = blank(material) ? "its current production material and finish" : material.trim();
+        return "BALANCED IMAGE EDIT: Use the supplied image as the visual source. Keep the recognizable subject identity, cultural theme, dominant color family and key decorative motifs from the current image. "
+                + "Do not return a near-duplicate. The mandatory requested change below must be clearly visible in the finished image, including any requested change of shape, carrier, product form, structure or composition. "
+                + "Retain continuity with these reference facts where they do not conflict with the requested change: " + visualBrief + " "
+                + "Create one coherent, production-oriented " + product + " using " + surface + ". "
+                + "Mandatory user change: " + nullToEmpty(refinementNote) + " "
+                + "Optimized edit direction: " + optimizedEdit;
+    }
+
     private ReferenceImageAnalysis analyzeReferenceImage(Long assetId) {
         String fallback = "Preserve every visible non-UI subject, person or object, its recognizable silhouette and proportions, the original scene layout, dominant colors, mood, decorative motifs and all distinguishing details.";
         if (blank(siliconflowApiKey) || siliconflowApiKey.contains("YOUR_")) {
@@ -3110,13 +3150,14 @@ public class CreativeAiController {
         }
     }
 
-    private Map<String,Object> referenceImageMetadata(String remoteUrl, Long inputAssetId, ReferenceImageAnalysis analysis) {
+    private Map<String,Object> referenceImageMetadata(String remoteUrl, Long inputAssetId, ReferenceImageAnalysis analysis, boolean refinement) {
         Map<String,Object> metadata = new LinkedHashMap<>();
         metadata.put("provider", "siliconflow");
         metadata.put("model", imageEditModel);
         metadata.put("remoteUrl", remoteUrl);
         metadata.put("inputAssetId", inputAssetId);
         metadata.put("referencePreservation", "subject,silhouette,composition,main_colors,distinctive_details");
+        metadata.put("refinement", refinement);
         metadata.put("referenceAnalysis", analysis.visualBrief);
         metadata.put("referenceAnalysisSource", analysis.source);
         return metadata;
@@ -3865,6 +3906,8 @@ public class CreativeAiController {
         public Long seed;
         public String tags;
         public Long inputAssetId;
+        public Boolean refinement;
+        public String refinementNote;
         public String tripoImageModel;
         public String tripoTemplate;
         public Boolean tPose;
