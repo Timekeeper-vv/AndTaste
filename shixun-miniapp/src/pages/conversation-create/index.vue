@@ -24,9 +24,9 @@
 
       <view v-if="phase === 'summary'" class="summary-panel"><text class="choice-title">这是我为你整理的创作方案</text><view class="summary-card"><view><text>产品</text><text>{{ selectedProduct?.name }}</text></view><view><text>材质</text><text>{{ material }}</text></view><view><text>风格</text><text>{{ style }}</text></view><view><text>用途</text><text>{{ purpose }}</text></view><view><text>灵感</text><text>{{ inspirationText || '使用产品模板自动生成方向' }}</text></view></view><text v-if="isFoodProduct" class="food-direction-note">食品成品方向：将生成可食用的烘焙/食品本体、可食用图案和食品包装效果，不生成徽章、摆件或金属饰品。</text><text class="summary-note">确认后会生成第一张产品视觉，生成结果会自动进入作品库；之后可以继续四视图和 3D 建模。</text><button class="dark-button full-button" :loading="busy" @tap="generateProductImage">确认并生成产品图</button><button class="link-button" @tap="editDirection">返回修改</button></view>
 
-      <view v-if="phase === 'result'" class="result-panel"><text class="result-kicker">PRODUCT VISUAL READY</text><text class="choice-title">产品视觉已经完成</text><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view v-if="refiningImage" class="refinement-panel"><text>告诉我哪里不满意</text><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：把主图改得更简洁，保留祥云，去掉文字，做成圆形冰箱贴构图。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view><button class="link-button" @tap="cancelRefinement">返回当前方案</button></view><template v-else><text class="result-tip">满意可以继续生成三视图或进入 3D；不满意可以在当前图基础上补充要求再生成，旧版本会保留在作品库。</text><view class="next-grid"><view class="next-card" @tap="startRefinement"><text>改</text><view><text>不满意，补充要求重生成</text><text>基于当前图片生成新的方案</text></view><text>›</text></view><view class="next-card" @tap="generateMultiView"><text>观</text><view><text>生成三视图</text><text>补全正面、侧面和背面</text></view><text>›</text></view><view class="next-card" @tap="generateModel"><text>形</text><view><text>直接生成 3D 模型</text><text>从当前产品图创建立体原型</text></view><text>›</text></view><view class="next-card" @tap="openCommercial"><text>做</text><view><text>申请打样 / 商品化</text><text>把创作提交给运营报价</text></view><text>›</text></view></view></template></view>
+      <view v-if="phase === 'result'" class="result-panel"><text class="result-kicker">PRODUCT VISUAL READY</text><text class="choice-title">产品视觉已经完成</text><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view v-if="refiningImage" class="refinement-panel"><text>告诉我哪里不满意</text><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：把主图改得更简洁，保留祥云，去掉文字，做成圆形冰箱贴构图。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view><button class="link-button" @tap="cancelRefinement">返回当前方案</button></view><template v-else><text class="result-tip">当前是一张产品图。可以直接单图建模，或先补全三视图再做更完整的多视图建模。</text><view class="next-grid"><view class="next-card" @tap="startRefinement"><text>改</text><view><text>不满意，补充要求重生成</text><text>基于当前图片生成新的方案</text></view><text>›</text></view><view class="next-card" @tap="generateMultiView"><text>观</text><view><text>生成三视图</text><text>补全正面、侧面和背面后再建模</text></view><text>›</text></view><view class="next-card" @tap="generateModel"><text>形</text><view><text>用单张产品图生成 3D</text><text>直接交给 Tripo 单图建模</text></view><text>›</text></view><view class="next-card" @tap="openCommercial"><text>做</text><view><text>申请打样 / 商品化</text><text>把创作提交给运营报价</text></view><text>›</text></view></view></template></view>
 
-      <view v-if="phase === 'multiview'" class="result-panel"><text class="result-kicker">TURNAROUND VIEW</text><text class="choice-title">三视图已保存</text><text class="result-tip">系统已把产品的正面、侧面和背面留在作品库，可以继续交给 3D 建模。</text><view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFill" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><text>{{ item.label }}</text></view></view><button class="dark-button full-button" :loading="busy" @tap="generateModel">继续生成 3D 模型</button><button class="outline-button full-button" @tap="openCommercial">先申请打样 / 商品化</button></view>
+      <view v-if="phase === 'multiview'" class="result-panel"><text class="result-kicker">TURNAROUND VIEW</text><text class="choice-title">三视图已保存</text><text class="result-tip">已保存正面、侧面和背面。本次会把三张图一起交给 Tripo 多视图建模。</text><view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFill" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><text>{{ item.label }}</text></view></view><button class="dark-button full-button" :loading="busy" @tap="generateModel">用三视图生成 3D 模型</button><button class="outline-button full-button" @tap="openCommercial">先申请打样 / 商品化</button></view>
 
       <view v-if="phase === 'model'" class="result-panel"><text class="result-kicker">3D PROTOTYPE</text><text class="choice-title">{{ modelTaskTitle }}</text><view class="model-success"><text>3D</text><view><text>{{ modelTaskDescription }}</text><text>{{ modelTaskDetail }}</text></view></view><view v-if="modelTask" class="model-progress"><view><text>建模进度</text><text>{{ normalizedModelProgress }}%</text></view><view class="model-progress-track"><view class="model-progress-value" :style="{ width: `${normalizedModelProgress}%` }" /></view></view><text v-if="modelTask?.errorMessage" class="model-error">{{ modelTask.errorMessage }}</text><button v-if="modelTask && !isModelTaskTerminal" class="outline-button full-button" :loading="modelRefreshing" @tap="refreshModelTask">刷新进度</button><button v-if="isModelTaskFailed" class="dark-button full-button" :loading="busy" @tap="generateModel">重新提交 3D 建模</button><button class="dark-button full-button" @tap="goWorks">{{ isModelTaskSucceeded ? '查看已完成的 3D 作品' : '查看我的作品' }}</button><button class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button></view>
     </scroll-view>
@@ -104,6 +104,7 @@ const sessionId = ref<number | null>(null)
 const generatedAssetId = ref<number | null>(null)
 const previewUrl = ref('')
 const multiviewImages = ref<SeedreamMultiViewImage[]>([])
+const modelInputMode = ref<'single' | 'multiview'>('single')
 const refiningImage = ref(false)
 const refinementNote = ref('')
 const modelTask = ref<ModelTask | null>(null)
@@ -159,8 +160,13 @@ const isModelTaskSucceeded = computed(() => modelTask.value?.status === 'succeed
 const isModelTaskFailed = computed(() => modelTask.value?.status === 'failed')
 const isModelTaskTerminal = computed(() => isModelTaskSucceeded.value || isModelTaskFailed.value)
 const modelTaskTitle = computed(() => isModelTaskSucceeded.value ? '3D 模型已经生成' : isModelTaskFailed.value ? '3D 建模未完成' : '3D 建模正在生成')
-const modelTaskDescription = computed(() => isModelTaskSucceeded.value ? '3D 原型已保存到作品库' : isModelTaskFailed.value ? '本次 3D 建模失败，可回到产品图重新提交' : '正在从产品图生成立体原型')
-const modelTaskDetail = computed(() => isModelTaskSucceeded.value ? '可以在作品库查看模型、评审并申请打样。' : isModelTaskFailed.value ? '失败原因已保留。检查产品图和提示词后可以再次发起建模。' : '本页面会自动刷新进度，离开后也会继续在作品库保存。')
+const hasCompleteThreeViews = computed(() => {
+  const available = new Set(multiviewImages.value.map(item => String(item?.view || '').toLowerCase()))
+  return ['front', 'left', 'back'].every(view => available.has(view))
+})
+const modelInputLabel = computed(() => modelInputMode.value === 'multiview' ? '三视图建模' : '单图建模')
+const modelTaskDescription = computed(() => isModelTaskSucceeded.value ? `${modelInputLabel.value}的 3D 原型已保存到作品库` : isModelTaskFailed.value ? `本次${modelInputLabel.value}失败，可回到产品图重新提交` : `正在进行${modelInputLabel.value}`)
+const modelTaskDetail = computed(() => isModelTaskSucceeded.value ? '可以在作品库查看模型、评审并申请打样。' : isModelTaskFailed.value ? '失败原因已保留。检查产品图或三视图后可以再次发起建模。' : '本页面会自动刷新进度，离开后也会继续在作品库保存。')
 const activePolicy = computed(() => getCreativePolicy(policyDialog.value?.key || 'ai-output'))
 
 function addMessage(role: Message['role'], text: string) {
@@ -298,6 +304,7 @@ function resetViewState() {
   generatedAssetId.value = null
   previewUrl.value = ''
   multiviewImages.value = []
+  modelInputMode.value = 'single'
   refiningImage.value = false
   refinementNote.value = ''
   modelTask.value = null
@@ -368,6 +375,7 @@ function restoreEvent(event: any) {
       multiviewImages.value = Array.isArray(payload.images) ? payload.images : []
       break
     case 'model_submitted':
+      modelInputMode.value = payload.multiview ? 'multiview' : 'single'
       setModelTask(payload)
       break
     case 'model_completed':
@@ -911,9 +919,9 @@ async function generateMultiView() {
     await saveEvent('multiview', 'multiview_started', { inputAssetId: generatedAssetId.value, productType: selectedProduct.value?.name, material: material.value })
     const result = await createSeedreamMultiView({ inputAssetId: generatedAssetId.value, prompt: prompt.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, viewCount: 3, size: '2K', watermark: true })
     multiviewImages.value = (Array.isArray(result?.images) ? result.images : []).filter(item => Number(item?.assetId) > 0)
-    if (multiviewImages.value.length < 3) throw new Error('三视图没有完整返回，请稍后重试')
+    if (!hasCompleteThreeViews.value) throw new Error('三视图没有完整返回正面、侧面和背面，请稍后重试')
     await saveEvent('multiview', 'multiview_generated', { inputAssetId: generatedAssetId.value, images: multiviewImages.value.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })) })
-    addMessage('assistant', '四个角度都已保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
+    addMessage('assistant', '正面、侧面和背面都已保存。现在可以把三张图一起交给 Tripo 多视图建模，结构会比单张图更完整。')
     phase.value = 'multiview'
   } catch (error: any) { uni.showToast({ title: error?.message || '四视图生成失败', icon: 'none' }) }
   finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
@@ -933,15 +941,18 @@ async function generateModel() {
   busy.value = true
   busyMessage.value = '正在提交 3D 建模任务，请稍候…'
   try {
-    const useMultiview = multiviewImages.value.length >= 3
-    const payload: any = { title: `${selectedProduct.value?.name || '文创产品'} · 对话 3D 原型`, prompt: prompt.value, rawPrompt: prompt.value, mode: useMultiview ? 'multiview_to_model' : 'image_to_model', inputAssetId: generatedAssetId.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, materialLabel: material.value, materialPrompt: `manufacturing material: ${material.value}`, multiviewAssetIds: useMultiview ? Object.fromEntries(multiviewImages.value.map(item => [item.view, Number(item.assetId)])) : undefined, exportFormats: 'GLB', texture: true, pbr: true, textureQuality: 'extreme', geometryQuality: 'detailed', textureAlignment: 'original_image', orientation: 'align_image', autoSize: true, imageAutofix: true, exportUv: true, faceLimit: 2000000 }
-    await saveEvent('model', 'model_started', { inputAssetId: generatedAssetId.value, multiview: useMultiview, productType: selectedProduct.value?.name, material: material.value })
+    const useMultiview = phase.value === 'multiview'
+    if (useMultiview && !hasCompleteThreeViews.value) throw new Error('请先生成完整的正面、侧面和背面，再提交多视图建模')
+    modelInputMode.value = useMultiview ? 'multiview' : 'single'
+    busyMessage.value = useMultiview ? '正在提交三视图 3D 建模任务，请稍候…' : '正在提交单图 3D 建模任务，请稍候…'
+    const payload: any = { title: `${selectedProduct.value?.name || '文创产品'} · ${useMultiview ? '三视图' : '单图'} 3D 原型`, prompt: prompt.value, rawPrompt: prompt.value, mode: useMultiview ? 'multiview_to_model' : 'image_to_model', inputAssetId: generatedAssetId.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, materialLabel: material.value, materialPrompt: `manufacturing material: ${material.value}`, multiviewAssetIds: useMultiview ? Object.fromEntries(multiviewImages.value.map(item => [item.view, Number(item.assetId)])) : undefined, exportFormats: 'GLB', texture: true, pbr: true, textureQuality: 'extreme', geometryQuality: 'detailed', textureAlignment: 'original_image', orientation: 'align_image', autoSize: true, imageAutofix: true, exportUv: true, faceLimit: 2000000 }
+    await saveEvent('model', 'model_started', { inputAssetId: generatedAssetId.value, multiview: useMultiview, inputMode: modelInputMode.value, productType: selectedProduct.value?.name, material: material.value })
     const result = await createModel(payload)
     const jobId = Number(result?.jobId)
     if (!Number.isFinite(jobId) || jobId <= 0) throw new Error('3D 服务没有返回任务编号，请稍后重试')
     setModelTask({ jobId, status: result?.status, progress: result?.progress, assetId: result?.assetId })
-    await saveEvent('model', 'model_submitted', { inputAssetId: generatedAssetId.value, modelJobId: jobId, modelAssetId: result?.assetId, status: modelTask.value?.status || 'running', progress: modelTask.value?.progress || 0, productType: selectedProduct.value?.name, material: material.value })
-    addMessage('assistant', '3D 建模任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。')
+    await saveEvent('model', 'model_submitted', { inputAssetId: generatedAssetId.value, multiview: useMultiview, inputMode: modelInputMode.value, modelJobId: jobId, modelAssetId: result?.assetId, status: modelTask.value?.status || 'running', progress: modelTask.value?.progress || 0, productType: selectedProduct.value?.name, material: material.value })
+    addMessage('assistant', `${modelInputLabel.value}任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。`)
     phase.value = 'model'
     void scheduleModelPolling(true)
   } catch (error: any) { uni.showToast({ title: error?.message || '3D 任务提交失败', icon: 'none' }) }
