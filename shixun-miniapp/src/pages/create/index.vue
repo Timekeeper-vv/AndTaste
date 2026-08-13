@@ -110,8 +110,6 @@ import { onLoad } from '@dcloudio/uni-app'
 import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import {
   assessProductionFeasibility,
-  createImage,
-  createImageWithReference,
   createModel,
   createSeedreamMultiView,
   getCreditRules,
@@ -122,7 +120,7 @@ import {
   type Tripo3dPromptTemplate,
   uploadReference,
 } from '../../api/creative'
-import { apiUrl } from '../../api/client'
+import { apiUrl, createReferenceToImage, createTextToImage } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
 import {
   findMaterialDefinition,
@@ -586,7 +584,7 @@ async function generate() {
   try {
     let result: any
     if (mode.value === 'image') {
-      result = await createImage({
+      result = await createTextToImage({
         title: form.title || `${selectedProductCategory.value.label} · ${form.material}`,
         prompt,
         rawPrompt: prompt,
@@ -597,7 +595,7 @@ async function generate() {
       })
     } else if (mode.value === 'reference') {
       const inputAssetId = await ensureReferenceAsset()
-      result = await createImageWithReference({
+      result = await createReferenceToImage({
         title: form.title || `图文结合 · ${selectedProductCategory.value.label}`,
         prompt,
         inputAssetId,

@@ -136,14 +136,6 @@ export const createCopyrightConsultation = (body: CopyrightConsultationPayload) 
   { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
 )
 
-/**
- * 即梦接口会在服务端轮询任务完成后才返回，通常超过小程序 request 的默认
- * 60 秒。这里与后端 180 秒轮询窗口及 Nginx 360 秒代理窗口保持一致。
- */
-export const createImage = (body: any) => request<any>('/api/creative/ai/jimeng/text-to-image', {
-  method: 'POST', data: body, timeout: 240000, header: { 'content-type': 'application/json' },
-})
-
 export interface ImagePromptOptimizeRequest {
   prompt: string
   provider?: string
@@ -162,14 +154,6 @@ export const optimizeImagePrompt = (body: ImagePromptOptimizeRequest) => request
   // 提示词优化只是增强步骤，失败时创作页会立即使用原始提示词继续生图。
   { method: 'POST', data: body, timeout: 30000, header: { 'content-type': 'application/json' } },
 )
-
-/**
- * 参考图改造沿用 C 端已经验证的图文结合接口；小程序只上传用户选择的
- * 原图并传回资产编号，服务端仍负责权限校验、生成和作品入库。
- */
-export const createImageWithReference = (body: any) => request<any>('/api/creative/ai/image-to-image', {
-  method: 'POST', data: body, timeout: 240000, header: { 'content-type': 'application/json' },
-})
 
 export interface SeedreamMultiViewRequest {
   /** 用户上传并已归属到当前账号的单张参考图资产。 */

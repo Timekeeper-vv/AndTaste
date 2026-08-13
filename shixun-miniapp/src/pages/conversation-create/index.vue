@@ -52,8 +52,6 @@ import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import { getSelectionOptions, type SelectionOption } from '../../api/selection'
 import {
   createConversation,
-  createImage,
-  createImageWithReference,
   createModel,
   createSeedreamMultiView,
   getConversation,
@@ -65,7 +63,7 @@ import {
   type ConversationSession,
   type SeedreamMultiViewImage,
 } from '../../api/creative'
-import { apiUrl } from '../../api/client'
+import { apiUrl, createReferenceToImage, createTextToImage } from '../../api/client'
 import { CREATIVE_POLICY_VERSION, getCreativePolicy, type CreativePolicyKey } from '../../utils/compliance'
 import { requireSession } from '../../utils/session'
 
@@ -669,10 +667,10 @@ async function generateProductImage() {
     if (mode.value === 'image') {
       if (!referenceAssetId.value) throw new Error('参考图片还没有保存完成，请重新上传后再生成')
       busyMessage.value = '正在依据参考图生成产品视觉，预计需要 1-3 分钟…'
-      result = await createImageWithReference({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productCategory: selectedProduct.value.name, material: material.value })
+      result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productCategory: selectedProduct.value.name, material: material.value })
     } else {
       busyMessage.value = '正在调用即梦生成产品视觉，预计需要 1-3 分钟…'
-      result = await createImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, scene: purpose.value, productType: selectedProduct.value.name, productCategory: selectedProduct.value.name, material: material.value })
+      result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, scene: purpose.value, productType: selectedProduct.value.name, productCategory: selectedProduct.value.name, material: material.value })
     }
     const assetId = Number(result?.assetId || result?.id)
     if (!Number.isFinite(assetId) || assetId <= 0) throw new Error('产品图没有保存成功，请重新生成')
@@ -723,7 +721,7 @@ async function regenerateWithRefinement() {
   try {
     const refinementPrompt = `${prompt.value}。请严格以当前参考图为基础保留主体识别度，并按以下修改要求重新设计：${note}`
     await saveEvent('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, productType: selectedProduct.value.name, material: material.value, prompt: refinementPrompt })
-    const result = await createImageWithReference({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productCategory: selectedProduct.value.name, material: material.value })
+    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productCategory: selectedProduct.value.name, material: material.value })
     const newAssetId = Number(result?.assetId || result?.id)
     if (!Number.isFinite(newAssetId) || newAssetId <= 0) throw new Error('修改后的产品图没有保存成功，请重试')
     generatedAssetId.value = newAssetId
