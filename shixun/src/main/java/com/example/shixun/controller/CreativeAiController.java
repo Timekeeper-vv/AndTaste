@@ -797,12 +797,8 @@ public class CreativeAiController {
         if (blank(req.prompt)) throw new IllegalArgumentException("请先填写要生成的产品或角色描述");
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先上传一张产品参考图，再生成多视图");
         requireAssetAccess(req.inputAssetId);
-        String arkApiKey = resolvedArkApiKey();
-        if (blank(arkApiKey) || arkApiKey.contains("YOUR_")) {
-            if (hasJimengSignatureCredentials()) {
-                throw new IllegalStateException("当前已配置即梦生图的 AccessKeyId + SecretAccessKey，但四视图使用火山引擎 Ark 接口，需要单独配置 VOLCENGINE_ARK_API_KEY（通常以 Vx 开头）；两套密钥不能互换，配置后重启服务");
-            }
-            throw new IllegalStateException("未检测到火山引擎 Ark API Key，请在密钥库注入 VOLCENGINE_ARK_API_KEY（通常以 Vx 开头）后重启服务");
+        if (blank(siliconflowApiKey) || siliconflowApiKey.contains("YOUR_")) {
+            throw new IllegalStateException("多视图服务暂不可用，请联系平台管理员检查已配置的图改图服务");
         }
         String size = blank(req.size) ? "2K" : req.size.trim();
         if (!Set.of("1K", "2K").contains(size)) throw new IllegalArgumentException("多视图仅支持 1K 或 2K 尺寸");
@@ -812,50 +808,53 @@ public class CreativeAiController {
         Map<String,String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
         List<Map<String,Object>> images = new ArrayList<>();
         String basePrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
-        String referenceImage = buildArkReferenceImage(req.inputAssetId);
+        String referenceImage = buildInputImageForSiliconFlow(req.inputAssetId);
         for (String view : views) {
-            String viewPrompt = basePrompt + ". Use the supplied reference image as the single source of truth. Generate ONE consistent product turntable reference image, " + view + " view only. "
-                    + "Preserve the reference product identity, silhouette, proportions, colors, materials, accessories and recognizable details; infer unseen surfaces plausibly. "
-                    + "Centered isolated object, clean light neutral studio background, full object visible, no collage, no text, no watermark overlay, no extra objects, high-detail commercial product rendering.";
+            String viewPrompt = "PRODUCT TURNAROUND IMAGE EDIT. Use the supplied reference image as the only source of truth. "
+                    + "Generate exactly one " + view + " view of the SAME product, not a redesign. "
+                    + "Strictly preserve its recognizable identity, silhouette, proportions, colors, material finish, motifs, accessories and all distinctive details. "
+                    + "For unseen surfaces, infer only the minimal structure needed to keep the same product consistent. "
+                    + "Show the full centered product at the same scale on a clean light-neutral studio background. "
+                    + "No collage, no split screen, no extra object, no human, no packaging mockup, no text, no logo, no watermark. "
+                    + "Product direction: " + basePrompt;
             Map<String,Object> payload = new LinkedHashMap<>();
-            payload.put("model", volcengineArkSeedreamMultiviewModel);
+            payload.put("model", imageEditModel);
             payload.put("prompt", viewPrompt);
-            payload.put("image", List.of(referenceImage));
-            payload.put("sequential_image_generation", "disabled");
-            payload.put("response_format", "url");
-            payload.put("size", size);
-            payload.put("stream", false);
-            payload.put("watermark", req.watermark == null || req.watermark);
+            payload.put("image", referenceImage);
+            payload.put("negative_prompt", "different product, changed silhouette, changed color palette, collage, split screen, multiple objects, duplicate product, person, hand, text, logo, watermark, cropped object, blurry, distorted product structure");
+            payload.put("num_inference_steps", 28);
+            payload.put("guidance_scale", 6);
+            payload.put("batch_size", 1);
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(volcengineArkImagesUrl))
-                    .header("Authorization", "Bearer " + arkApiKey.trim())
+                    .uri(URI.create("https://api.siliconflow.cn/v1/images/generations"))
+                    .header("Authorization", "Bearer " + siliconflowApiKey.trim())
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
                     .build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalStateException("火山引擎 Seedream 多视图生成失败（" + labels.get(view) + "）HTTP " + response.statusCode());
+                throw new IllegalStateException("多视图生成失败（" + labels.get(view) + "）HTTP " + response.statusCode());
             }
             String remoteUrl = extractImageUrl(mapper.readTree(response.body()));
-            if (blank(remoteUrl)) throw new IllegalStateException("火山引擎 Seedream 未返回" + labels.get(view) + "图地址");
-            String localUrl = saveRemoteImage(remoteUrl, "doubao-multiview-" + view + "-", ".png");
+            if (blank(remoteUrl)) throw new IllegalStateException("多视图服务未返回" + labels.get(view) + "图地址");
+            String localUrl = saveRemoteImage(remoteUrl, "siliconflow-multiview-" + view + "-", ".png");
             Map<String,Object> metadata = new LinkedHashMap<>();
-            metadata.put("provider", "volcengine-ark"); metadata.put("model", volcengineArkSeedreamMultiviewModel);
+            metadata.put("provider", "siliconflow"); metadata.put("model", imageEditModel);
             metadata.put("view", view); metadata.put("remoteUrl", remoteUrl); metadata.put("multiView", true);
             addProductIdentity(metadata, req.productKey, req.productCategory, req.material);
             metadata.put("createdByUserId", ownerUserId);
             if (currentConsumerUserIdOrNull() != null) metadata.put("consumerWork", true);
-            Long assetId = createAsset("Doubao 多视图参考 · " + labels.get(view), "image", "ai_generated", localUrl, localUrl,
-                    basePrompt, null, null, req.inputAssetId, "png", "Doubao,Seedream,多视图,3D参考," + labels.get(view), metadata);
+            Long assetId = createAsset("AI 多视图参考 · " + labels.get(view), "image", "ai_generated", localUrl, localUrl,
+                    viewPrompt, null, null, req.inputAssetId, "png", "AI生成,多视图,3D参考," + labels.get(view), metadata);
             Map<String,Object> item = new LinkedHashMap<>();
             item.put("view", view); item.put("label", labels.get(view)); item.put("assetId", assetId);
             addSignedAssetFields(item, assetId, "image");
             images.add(item);
         }
         Map<String,Object> out = new LinkedHashMap<>();
-        out.put("provider", "volcengine-ark"); out.put("model", volcengineArkSeedreamMultiviewModel); out.put("images", images);
+        out.put("provider", "siliconflow"); out.put("model", imageEditModel); out.put("images", images);
         out.put("viewCount", views.size());
-        out.put("message", "Doubao Seedream " + views.size() + " 视图已生成，可一键带入多视图 3D 建模");
+        out.put("message", "AI 图改图已生成 " + views.size() + " 个一致视角，可一键带入 Tripo 多视图建模");
         return out;
     }
 

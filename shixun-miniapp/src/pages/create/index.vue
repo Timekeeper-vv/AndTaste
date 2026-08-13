@@ -61,7 +61,7 @@
         </view>
 
         <template v-if="multiViewSource === 'seedream'">
-          <text class="multiview-intro">由同一张参考图派生正、左、背、右四视图；只有服务端真实返回并存入作品库的图片，才能进入下一步建模。</text>
+          <text class="multiview-intro">由同一张参考图生成正、左、背、右四个一致视角；只有服务端真实返回并存入作品库的图片，才能进入下一步建模。</text>
           <view class="turnaround-flow">
             <view v-for="slot in multiViewSlots" :key="slot.key" class="turnaround-step" :class="{ ready: multiViewAssetIdByView[slot.key] }"><text>{{ slot.short }}</text><text>{{ slot.label }}</text></view>
           </view>
@@ -81,7 +81,7 @@
             <view class="multiview-credit-note"><text>积分说明</text><text>生成四视图阶段不预扣平台积分；提交 3D 时后端会按当前规则预扣 {{ imageTo3dCreditLabel }}，若提交失败会自动退回。</text></view>
             <button class="model-submit" :loading="loading && loadingAction === 'model'" :disabled="loading || !hasCompleteMultiView" @tap="submitMultiViewModel"><text>3D</text>{{ multiViewModelButtonLabel }}</button>
           </view>
-          <view v-else class="multiview-empty"><view class="turntable-orb"><text>3D</text></view><view><text>先生成可用的四视图</text><text>选择一张主体清晰的参考图，再提交真实的 Seedream 多视图生成请求。</text></view></view>
+          <view v-else class="multiview-empty"><view class="turntable-orb"><text>3D</text></view><view><text>先生成可用的四视图</text><text>选择一张主体清晰的参考图，系统会基于原图补全一致视角。</text></view></view>
         </template>
 
         <template v-else>
@@ -195,7 +195,7 @@ const modeOptions: Array<{ key: CreateMode; mark: string; short: string; title: 
   { key: 'reference', mark: '鉴', short: '参考图改造', title: '保留原有特征，重构文化语言。', description: '上传草图、普通产品图或灵感图，用文创设计重新组织它的材质与场景。', notice: '请使用你拥有版权或已获得授权的参考图片；生成结果会保留在你的作品库。', cost: 16 },
   { key: 'text3d', mark: '形', short: '文字 3D', title: '把一段描述，推向立体原型。', description: '清楚描述主体、材质和结构，生成后可在作品库发起 3D 安全预览。', notice: '3D 生成完成后，请先提交审核；审核通过的模型才能申请打样或生产。', cost: 60 },
   { key: 'image3d', mark: '立', short: '图片 3D', title: '从参考图，生成可预览的原型。', description: '上传主体清晰的图像，系统会生成可进入作品库继续推进的三维模型。', notice: '请尽量使用主体完整、背景干净的图片，以便获得更准确的 3D 结构；材质偏好会随本次作品工艺方向一并记录。', cost: 70 },
-  { key: 'multiview', mark: '观', short: '多视图 3D', title: '从一张图，补全一件作品的四面。', description: '先由 Doubao Seedream 生成一致的正、左、背、右视图，再一键交给 Tripo 创建 3D 原型。', notice: '四视图阶段会真实调用火山 Seedream 并保存图片；平台积分只会在下一步提交 Tripo 3D 任务时按当前规则预扣。材质偏好会同步为本次工艺方向记录。', cost: 0 },
+  { key: 'multiview', mark: '观', short: '多视图 3D', title: '从一张图，补全一件作品的四面。', description: '先基于原图生成一致的正、左、背、右视图，再一键交给 Tripo 创建 3D 原型。', notice: '四视图会以原图为唯一依据生成并保存；平台积分只会在下一步提交 Tripo 3D 任务时按当前规则预扣。材质偏好会同步为本次工艺方向记录。', cost: 0 },
 ]
 const patterns = [
   { id: 'taotie', name: '饕餮回纹', category: '青铜纹样', prompt: '简化饕餮回纹，适合文创产品边缘与局部浮雕装饰', tone: '#6d8476', mark: '饕' },
@@ -251,7 +251,7 @@ const assessmentLevelClass = computed(() => {
 })
 const referencePanel = computed(() => {
   if (mode.value === 'reference') return { eyebrow: 'REFERENCE REMIX', description: '上传产品、草图或灵感图，AI 会保留主体特征后进行文创改造。' }
-  if (mode.value === 'multiview') return { eyebrow: 'MULTIVIEW SOURCE', description: '上传一张主体完整的产品图。Seedream 会以它为唯一依据，补全正、左、背、右四个一致视角。' }
+  if (mode.value === 'multiview') return { eyebrow: 'MULTIVIEW SOURCE', description: '上传一张主体完整的产品图。系统会以它为唯一依据，补全正、左、背、右四个一致视角。' }
   return { eyebrow: 'IMAGE TO 3D', description: '上传主体清晰的产品图，生成可继续预览与打样的 3D 原型。' }
 })
 const multiViewAssetIdByView = computed<Record<MultiViewKey, number | null>>(() => {
@@ -284,7 +284,7 @@ const multiViewModelButtonLabel = computed(() => `用 4 视图创建 3D（预扣
 const manualMultiViewModelButtonLabel = computed(() => `用已上传视图创建 3D（预扣 ${imageTo3dCreditLabel.value}）`)
 const generateButtonLabel = computed(() => {
   if (loading.value) {
-    if (loadingAction.value === 'multiview') return '正在调用 Seedream 生成四个视图…'
+    if (loadingAction.value === 'multiview') return '正在基于原图生成四个视图…'
     if (loadingAction.value === 'model') return '正在提交多视图 3D 任务…'
     return '正在生成，请稍候…'
   }
@@ -656,7 +656,7 @@ async function generateMultiView(prompt: string) {
       watermark: true,
     })
     multiViewImages.value = normalizeMultiViewImages(result)
-    multiViewMessage.value = result.message || 'Doubao Seedream 已完成四个一致视角，可提交给 Tripo 创建 3D。'
+    multiViewMessage.value = result.message || 'AI 已完成四个一致视角，可提交给 Tripo 创建 3D。'
     uni.showToast({ title: '四视图已生成', icon: 'success' })
   } catch (error: any) {
     const message = error?.message || '多视图生成失败，请稍后重试'
@@ -691,7 +691,7 @@ async function submitMultiViewModel() {
     const prompt = buildPrompt()
     await refreshProductionAssessment({ prompt, quiet: true })
     const result = await createModel({
-      title: form.title || `${multiViewSource.value === 'seedream' ? 'Seedream' : '手动'} 多视图 · ${selectedProductCategory.value.label} 3D 原型`,
+      title: form.title || `${multiViewSource.value === 'seedream' ? 'AI 补全' : '手动'} 多视图 · ${selectedProductCategory.value.label} 3D 原型`,
       prompt,
       rawPrompt: prompt,
       mode: 'multiview_to_model',

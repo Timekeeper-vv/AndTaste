@@ -914,7 +914,7 @@ async function generateMultiView() {
     await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'ai-output', policyVersion: CREATIVE_POLICY_VERSION })
   }
   busy.value = true
-    busyMessage.value = '正在调用火山大模型生成正面、侧面和背面，请稍候…'
+  busyMessage.value = '正在基于当前产品图生成正面、侧面和背面，请稍候…'
   try {
     await saveEvent('multiview', 'multiview_started', { inputAssetId: generatedAssetId.value, productType: selectedProduct.value?.name, material: material.value })
     const result = await createSeedreamMultiView({ inputAssetId: generatedAssetId.value, prompt: prompt.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, viewCount: 3, size: '2K', watermark: true })
