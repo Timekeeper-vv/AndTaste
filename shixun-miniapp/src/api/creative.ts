@@ -136,13 +136,6 @@ export const createCopyrightConsultation = (body: CopyrightConsultationPayload) 
   { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
 )
 
-export interface JimengConfig {
-  configured?: boolean
-  serviceReachable?: boolean
-  message?: string
-  displayName?: string
-}
-
 /**
  * 即梦接口会在服务端轮询任务完成后才返回，通常超过小程序 request 的默认
  * 60 秒。这里与后端 180 秒轮询窗口及 Nginx 360 秒代理窗口保持一致。
@@ -150,8 +143,6 @@ export interface JimengConfig {
 export const createImage = (body: any) => request<any>('/api/creative/ai/jimeng/text-to-image', {
   method: 'POST', data: body, timeout: 240000, header: { 'content-type': 'application/json' },
 })
-
-export const getJimengConfig = () => request<JimengConfig>('/api/creative/ai/jimeng/config', { timeout: 15000 })
 
 export interface ImagePromptOptimizeRequest {
   prompt: string

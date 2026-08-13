@@ -58,7 +58,6 @@ import {
   createSeedreamMultiView,
   getConversation,
   getConversations,
-  getJimengConfig,
   getTripoModelTask,
   optimizeImagePrompt,
   saveConversationEvent,
@@ -650,15 +649,8 @@ async function generateProductImage() {
     await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'ai-output', policyVersion: CREATIVE_POLICY_VERSION })
   }
   busy.value = true
-  busyMessage.value = '正在检查 AI 生图服务…'
+  busyMessage.value = '正在保存创作参数…'
   try {
-    if (mode.value !== 'image') {
-      const config = await getJimengConfig()
-      if (!config?.configured || !config?.serviceReachable) {
-        throw new Error(config?.message || 'AI 生图服务尚未配置完成，请联系管理员检查即梦密钥')
-      }
-    }
-    busyMessage.value = '正在保存创作参数…'
     await saveEvent('summary', 'generation_started', { productType: selectedProduct.value.name, material: material.value, prompt: prompt.value })
     let generationPrompt = prompt.value
     if (mode.value !== 'image') {
