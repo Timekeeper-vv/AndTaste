@@ -49,6 +49,7 @@ import {
   createSeedreamMultiView,
   getConversation,
   getConversations,
+  getJimengConfig,
   getTripoModelTask,
   optimizeImagePrompt,
   saveConversationEvent,
@@ -607,19 +608,37 @@ async function confirmDirection() {
 }
 function editDirection() { phase.value = 'style' }
 async function generateProductImage() {
-  if (busy.value || !selectedProduct.value || !material.value) return
+  if (busy.value) {
+    uni.showToast({ title: '图片正在生成，请不要重复提交', icon: 'none' })
+    return
+  }
+  if (!selectedProduct.value || !material.value) {
+    uni.showModal({ title: '暂时不能生成', content: '请先完成产品和材质选择，再生成产品图。', showCancel: false })
+    return
+  }
   if (!aiPolicyConfirmed.value) {
     const confirmed = await confirmCreativePolicy('ai-output')
-    if (!confirmed) return
+    if (!confirmed) {
+      uni.showToast({ title: '已取消本次 AI 生成', icon: 'none' })
+      return
+    }
     aiPolicyConfirmed.value = true
     await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'ai-output', policyVersion: CREATIVE_POLICY_VERSION })
   }
   busy.value = true
-  busyMessage.value = '正在生成产品视觉并保存到作品库，请稍候…'
+  busyMessage.value = '正在检查 AI 生图服务…'
   try {
+    if (mode.value !== 'image') {
+      const config = await getJimengConfig()
+      if (!config?.configured || !config?.serviceReachable) {
+        throw new Error(config?.message || 'AI 生图服务尚未配置完成，请联系管理员检查即梦密钥')
+      }
+    }
+    busyMessage.value = '正在保存创作参数…'
     await saveEvent('summary', 'generation_started', { productType: selectedProduct.value.name, material: material.value, prompt: prompt.value })
     let generationPrompt = prompt.value
     if (mode.value !== 'image') {
+      busyMessage.value = '正在整理产品提示词…'
       try {
         const optimized = await optimizeImagePrompt({ prompt: prompt.value, provider: 'tripo', productCategory: selectedProduct.value.name, material: material.value })
         if (String(optimized?.prompt || '').trim()) {
@@ -632,8 +651,11 @@ async function generateProductImage() {
     }
     let result: any
     if (mode.value === 'image') {
+      if (!referenceAssetId.value) throw new Error('参考图片还没有保存完成，请重新上传后再生成')
+      busyMessage.value = '正在依据参考图生成产品视觉，预计需要 1-3 分钟…'
       result = await createImageWithReference({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productCategory: selectedProduct.value.name, material: material.value })
     } else {
+      busyMessage.value = '正在调用即梦生成产品视觉，预计需要 1-3 分钟…'
       result = await createImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, scene: purpose.value, productType: selectedProduct.value.name, productCategory: selectedProduct.value.name, material: material.value })
     }
     const assetId = Number(result?.assetId || result?.id)
@@ -643,8 +665,20 @@ async function generateProductImage() {
     await saveEvent('image', 'image_generated', { productType: selectedProduct.value.name, material: material.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
     addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
     phase.value = 'result'
-  } catch (error: any) { uni.showToast({ title: error?.message || '生成失败，请稍后重试', icon: 'none' }) }
+  } catch (error: any) {
+    const message = generationFailureMessage(error)
+    uni.showModal({ title: '产品图未生成', content: message, showCancel: false })
+  }
   finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
+}
+
+function generationFailureMessage(error: any) {
+  const raw = String(error?.message || error?.errMsg || '').trim()
+  if (/timeout|timed out|超时/i.test(raw)) return '生成请求等待超时。即梦生图通常需要 1-3 分钟，请检查网络后重新提交；本次失败不会扣除未成功生成的积分。'
+  if (/登录已过期|请先登录|401/i.test(raw)) return '登录状态已失效，请重新登录后再生成。'
+  if (/accesskey|secretaccesskey|签名鉴权|服务尚未配置|未配置/i.test(raw)) return 'AI 生图服务没有完成配置。请检查服务器上的 JIMENG_ACCESS_KEY_ID、JIMENG_SECRET_ACCESS_KEY，配置后重启 smart-pig 服务。'
+  if (/网络|network|fail|connect|refused|域名/i.test(raw)) return '无法连接 AI 生图服务。请检查微信公众平台 request 合法域名、网络连接和服务器运行状态。'
+  return raw || '生成服务暂时不可用，请稍后重试。'
 }
 function imageUrl(item: any) {
   const raw = String(item?.previewUrl || item?.imageUrl || item?.fileUrl || '')
