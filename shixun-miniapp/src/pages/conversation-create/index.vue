@@ -14,15 +14,11 @@
 
       <view v-if="phase === 'product'" class="choice-panel"><text class="choice-title">先选要落地的产品类别</text><text class="choice-note">先确定品类，再选具体产品、材质和工艺。价格、工期仅作方向参考，正式生产前会重新报价。</text><view class="catalog-tools"><input class="catalog-search" :value="productKeyword" maxlength="30" placeholder="搜索：书签、冰箱贴、冰淇淋、马克杯…" @input="updateProductKeyword" /><scroll-view scroll-x class="catalog-categories" :show-scrollbar="false"><view><text class="catalog-category" :class="{ active: !productCategory }" @tap="productCategory = ''">全部分类</text><text v-for="item in productCatalogCategories" :key="item.key" class="catalog-category" :class="{ active: productCategory === item.key }" @tap="productCategory = item.key">{{ item.name }}</text></view></scroll-view><text class="catalog-count">{{ productCategory || productKeyword.trim() ? `${filteredProductOptions.length} 个可制作方案` : '请选择一个产品类别' }}</text></view><view v-if="catalogLoading" class="catalog-empty">正在读取选品手册…</view><view v-else-if="!productCategory && !productKeyword.trim()" class="category-entry-grid"><view v-for="item in productCatalogCategories" :key="item.key" class="category-entry" @tap="productCategory = item.key"><text class="category-entry-mark">{{ categoryMark(item.key) }}</text><view><text>{{ item.name }}</text><text>{{ productCountForCategory(item.key) }} 个产品方向</text></view><text>›</text></view></view><view v-else-if="!filteredProductOptions.length" class="catalog-empty">没有找到匹配商品，换个关键词或品类试试。</view><view v-else><text class="catalog-result-title">{{ productCategoryName || '搜索结果' }}</text><view class="product-grid"><view v-for="item in filteredProductOptions" :key="item.key" class="product-card" @tap="chooseProduct(item)"><text class="product-mark">{{ item.mark }}</text><text class="product-category-name">{{ item.categoryName }}</text><text class="product-name">{{ item.name }}</text><text class="product-desc">{{ item.desc }}</text><text class="product-process">{{ item.materials[0].name }} · {{ item.process }}</text></view></view></view></view>
 
-      <view v-if="phase === 'inspiration'" class="input-panel"><text class="choice-title">说说你的已有灵感</text><text class="choice-note">可以写文化主题、故事、想做的造型、使用场景，越具体越容易落地。提交后系统会自动匹配适合的材质、风格和用途并直接生成产品图。</text><textarea v-model="inspirationText" maxlength="1200" auto-height class="text-input" placeholder="例如：把家乡古城的城墙和祥云结合，做成适合游客带走的合金冰箱贴。" /><view class="input-foot"><text>{{ inspirationText.length }}/1200</text><button class="dark-button" :disabled="!inspirationText.trim() || busy" @tap="submitTextInspiration">直接生成产品图</button></view></view>
+      <view v-if="phase === 'inspiration'" class="input-panel"><text class="choice-title">说说你的已有灵感</text><text class="choice-note">可以写文化主题、故事、想做的造型、使用场景，越具体越容易落地。提交后系统会自动推荐适合的材质并直接生成产品图。</text><textarea v-model="inspirationText" maxlength="1200" auto-height class="text-input" placeholder="例如：把家乡古城的城墙和祥云结合，做成适合游客带走的合金冰箱贴。" /><view class="input-foot"><text>{{ inspirationText.length }}/1200</text><button class="dark-button" :disabled="!inspirationText.trim() || busy" @tap="submitTextInspiration">直接生成产品图</button></view></view>
 
       <view v-if="phase === 'image'" class="input-panel"><text class="choice-title">上传你的灵感图片</text><text class="choice-note">可以是草图、照片、纹样或你有权使用的参考图。生成时系统会自动识别主体、场景、配色、构图和需去除的界面元素，再保真转成产品视觉。</text><view class="image-picker" :class="{ ready: referencePath }" @tap="pickInspirationImage"><image v-if="referencePath" :src="referencePath" mode="aspectFill" /><view v-else><text>+</text><text>选择一张图片</text></view></view><button class="dark-button full-button" :disabled="!referenceAssetId || busy" @tap="submitImageInspiration">{{ referenceAssetId ? '继续选择工艺' : '先上传图片' }}</button></view>
 
       <view v-if="phase === 'material'" class="choice-panel"><text class="choice-title">你希望它用什么材质？</text><text class="choice-note">材质会同步进入生图、三视图、3D 和后续生产提示词。</text><view class="material-grid"><view class="material-card recommendation-card" :class="{ active: materialChoice === 'recommend' }" @tap="chooseRecommendedMaterial"><text class="recommendation-mark">荐</text><view><text>你帮我推荐</text><text>按产品结构和量产工艺选择</text></view><text v-if="materialChoice === 'recommend'" class="check">✓</text></view><view v-for="item in currentMaterials" :key="item.name" class="material-card" :class="{ active: materialChoice === item.name }" @tap="chooseMaterial(item)"><view class="swatch" :style="{ background: item.color }" /><view><text>{{ item.name }}</text><text>{{ item.note }}</text></view><text v-if="materialChoice === item.name" class="check">✓</text></view></view></view>
-
-      <view v-if="phase === 'style'" class="choice-panel"><text class="choice-title">最后确定创作气质</text><text class="choice-note">每一栏只能选一个：选择“你帮我推荐”后，其他具体选项会自动取消。配色将由系统根据产品和风格自动完成。</text><view class="style-section"><text>视觉风格</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: styleChoice === 'recommend' }" @tap="recommendStyle">你帮我推荐</text><text v-for="item in styles" :key="item" class="pill" :class="{ active: styleChoice === item }" @tap="chooseStyle(item)">{{ item }}</text></view></view><view class="style-section"><text>主要用途</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: purposeChoice === 'recommend' }" @tap="recommendPurpose">你帮我推荐</text><text v-for="item in purposes" :key="item" class="pill" :class="{ active: purposeChoice === item }" @tap="choosePurpose(item)">{{ item }}</text></view></view><button class="dark-button full-button" :disabled="busy" @tap="confirmDirection">查看 AI 方案</button></view>
-
-      <view v-if="phase === 'summary'" class="summary-panel"><text class="choice-title">这是我为你整理的创作方案</text><view class="summary-card"><view><text>产品</text><text>{{ selectedProduct?.name }}</text></view><view><text>材质</text><text>{{ material }}</text></view><view><text>风格</text><text>{{ style }}</text></view><view><text>用途</text><text>{{ purpose }}</text></view><view><text>灵感</text><text>{{ inspirationText || '使用产品模板自动生成方向' }}</text></view></view><text v-if="isFoodProduct" class="food-direction-note">食品成品方向：将生成可食用的烘焙/食品本体、可食用图案和食品包装效果，不生成徽章、摆件或金属饰品。</text><text class="summary-note">确认后会生成第一张产品视觉，生成结果会自动进入作品库；之后可以继续四视图和 3D 建模。</text><button class="dark-button full-button" :loading="busy" @tap="generateProductImage">确认并生成产品图</button><button class="link-button" @tap="editDirection">返回修改</button></view>
 
       <view v-if="phase === 'result'" class="result-panel"><text class="result-kicker">PRODUCT VISUAL READY</text><text class="choice-title">产品视觉已经完成</text><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view v-if="refiningImage" class="refinement-panel"><text>告诉我哪里不满意</text><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：把主图改得更简洁，保留祥云，去掉文字，做成圆形冰箱贴构图。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view><button class="link-button" @tap="cancelRefinement">返回当前方案</button></view><template v-else><text class="result-tip">当前是一张产品图。可以直接单图建模，或先补全三视图再做更完整的多视图建模。</text><view class="next-grid"><view class="next-card" @tap="startRefinement"><text>改</text><view><text>不满意，补充要求重生成</text><text>基于当前图片生成新的方案</text></view><text>›</text></view><view class="next-card" @tap="generateMultiView"><text>观</text><view><text>生成三视图</text><text>补全正面、侧面和背面后再建模</text></view><text>›</text></view><view class="next-card" @tap="generateModel"><text>形</text><view><text>用单张产品图生成 3D</text><text>直接交给 Tripo 单图建模</text></view><text>›</text></view><view class="next-card" @tap="openCommercial"><text>做</text><view><text>申请打样 / 商品化</text><text>把创作提交给运营报价</text></view><text>›</text></view></view></template></view>
 
@@ -68,7 +64,7 @@ import { apiUrl, createReferenceToImage, createTextToImage } from '../../api/cli
 import { CREATIVE_POLICY_VERSION, getCreativePolicy, type CreativePolicyKey } from '../../utils/compliance'
 import { requireSession } from '../../utils/session'
 
-type Phase = 'mode' | 'product' | 'inspiration' | 'image' | 'material' | 'style' | 'summary' | 'result' | 'multiview' | 'model'
+type Phase = 'mode' | 'product' | 'inspiration' | 'image' | 'material' | 'result' | 'multiview' | 'model'
 type Mode = 'template' | 'text' | 'image'
 interface Message { id: number; role: 'assistant' | 'user'; text: string }
 interface ProductOption { key: string; name: string; mark: string; desc: string; process: string; categoryKey: string; categoryName: string; materials: MaterialOption[] }
@@ -84,8 +80,6 @@ const productOptions = ref<ProductOption[]>([])
 const productKeyword = ref('')
 const productCategory = ref('')
 const catalogLoading = ref(false)
-const styles = ['国潮', '敦煌', '青绿山水', '现代极简', '亲子卡通']
-const purposes = ['景区伴手礼', '博物馆文创', '企业礼赠', '个人收藏', '亲子纪念']
 
 const phase = ref<Phase>('mode')
 const canGoPrevious = computed(() => phase.value !== 'mode' && !busy.value && !saving.value)
@@ -95,8 +89,6 @@ const material = ref('')
 const materialChoice = ref<'recommend' | string>('recommend')
 const style = ref('国潮')
 const purpose = ref('景区伴手礼')
-const styleChoice = ref<'recommend' | string>('recommend')
-const purposeChoice = ref<'recommend' | string>('recommend')
 const inspirationText = ref('')
 const referencePath = ref('')
 const referenceAssetId = ref<number | null>(null)
@@ -195,9 +187,7 @@ function previousPhase(current: Phase): Phase | null {
     inspiration: 'product',
     image: 'product',
     material: mode.value === 'image' ? 'image' : 'inspiration',
-    style: 'material',
-    summary: 'style',
-    result: 'summary',
+    result: 'material',
     multiview: 'result',
     model: multiviewImages.value.length >= 3 ? 'multiview' : 'result',
   }
@@ -296,8 +286,6 @@ function resetViewState() {
   materialChoice.value = 'recommend'
   style.value = '国潮'
   purpose.value = '景区伴手礼'
-  styleChoice.value = 'recommend'
-  purposeChoice.value = 'recommend'
   inspirationText.value = ''
   referencePath.value = ''
   referenceAssetId.value = null
@@ -337,31 +325,13 @@ function restoreEvent(event: any) {
       materialChoice.value = payload.recommended ? 'recommend' : material.value
       break
     case 'style_selected':
-      if (payload.style) {
-        style.value = String(payload.style)
-        styleChoice.value = payload.recommended ? 'recommend' : style.value
-      }
-      if (payload.purpose) purpose.value = String(payload.purpose)
-      break
     case 'purpose_selected':
-      purpose.value = String(payload.purpose || purpose.value)
-      purposeChoice.value = payload.recommended ? 'recommend' : purpose.value
+    case 'creative_direction_confirmed':
+    case 'creative_direction_auto_confirmed':
+      if (payload.style) style.value = String(payload.style)
+      if (payload.purpose) purpose.value = String(payload.purpose)
+      if (payload.inspirationText) inspirationText.value = String(payload.inspirationText)
       break
-      case 'creative_direction_confirmed':
-        if (payload.style) style.value = String(payload.style)
-        if (payload.purpose) purpose.value = String(payload.purpose)
-        styleChoice.value = payload.styleChoice || styleChoice.value
-        purposeChoice.value = payload.purposeChoice || purposeChoice.value
-        if (payload.inspirationText) inspirationText.value = String(payload.inspirationText)
-        break
-      case 'creative_direction_auto_confirmed':
-        if (payload.material) material.value = String(payload.material)
-        if (payload.style) style.value = String(payload.style)
-        if (payload.purpose) purpose.value = String(payload.purpose)
-        inspirationText.value = String(payload.inspirationText || inspirationText.value)
-        styleChoice.value = 'recommend'
-        purposeChoice.value = 'recommend'
-        break
     case 'image_generated':
       generatedAssetId.value = Number(payload.generatedAssetId) || generatedAssetId.value
       previewUrl.value = imageUrl({ previewUrl: payload.previewUrl })
@@ -418,14 +388,10 @@ function restoreMessages(events: any[]) {
         break
       case 'material_selected':
         addMessage('user', String(payload.material || payload.materialName || material.value))
-        addMessage('assistant', '最后确认视觉风格和用途，我就可以为你整理完整方案。')
-        break
-      case 'creative_direction_confirmed':
-        addMessage('user', `${payload.style || style.value} · ${payload.purpose || purpose.value}`)
-        addMessage('assistant', '方案整理好了。确认后我会调用现有生图服务，并把成图与完整参数绑定到这次会话。')
+        addMessage('assistant', '材质已确认，我会直接按产品和灵感生成产品图。')
         break
       case 'creative_direction_auto_confirmed':
-        addMessage('assistant', `我会根据你的灵感自动匹配${payload.material || material.value}、${payload.style || style.value}风格和${payload.purpose || purpose.value}用途，现在直接生成产品图。`)
+        addMessage('assistant', `我会根据你的灵感自动匹配${payload.material || material.value}，现在直接生成产品图。`)
         break
       case 'image_generated':
         addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
@@ -461,9 +427,9 @@ function restorePhase(events: any[]) {
       case 'text_inspiration_submitted': phase.value = 'material'; break
       case 'image_inspiration_uploaded': phase.value = 'image'; break
       case 'image_inspiration_confirmed': phase.value = 'material'; break
-      case 'material_selected': phase.value = 'style'; break
-      case 'creative_direction_confirmed': phase.value = 'summary'; break
-      case 'creative_direction_auto_confirmed': phase.value = 'summary'; break
+      case 'material_selected': phase.value = 'material'; break
+      case 'creative_direction_confirmed':
+      case 'creative_direction_auto_confirmed': phase.value = 'material'; break
       case 'image_generated': phase.value = 'result'; break
       case 'image_refined': phase.value = 'result'; break
       case 'multiview_generated': phase.value = 'multiview'; break
@@ -569,12 +535,9 @@ async function submitTextInspiration() {
   material.value = recommendation.name
   materialChoice.value = 'recommend'
   style.value = recommendedStyle()
-  styleChoice.value = 'recommend'
   purpose.value = recommendedPurpose()
-  purposeChoice.value = 'recommend'
   await saveEvent('material', 'material_selected', { productType: selectedProduct.value?.name, material: recommendation.name, materialNote: recommendation.note, recommended: true, autoSelected: true })
-  await saveEvent('summary', 'creative_direction_auto_confirmed', { productType: selectedProduct.value?.name, material: material.value, style: style.value, purpose: purpose.value, autoSelected: true, inspirationText: inspirationText.value.trim() })
-  addMessage('assistant', `我会根据你的灵感自动匹配${recommendation.name}、${style.value}风格和${purpose.value}用途，现在直接生成产品图。`)
+  addMessage('assistant', `我会根据你的灵感自动匹配${recommendation.name}，现在直接生成产品图。`)
   await generateProductImage()
 }
 async function pickInspirationImage() {
@@ -662,18 +625,8 @@ async function chooseRecommendedMaterial() {
 
 async function generateImageAfterMaterialSelection() {
   style.value = recommendedStyle()
-  styleChoice.value = 'recommend'
   purpose.value = recommendedPurpose()
-  purposeChoice.value = 'recommend'
-  await saveEvent('summary', 'creative_direction_auto_confirmed', {
-    productType: selectedProduct.value?.name,
-    material: material.value,
-    style: style.value,
-    purpose: purpose.value,
-    autoSelected: true,
-    inputAssetId: referenceAssetId.value || undefined,
-  })
-  addMessage('assistant', `已自动匹配${style.value}风格和${purpose.value}用途，现在直接生成产品图。`)
+  addMessage('assistant', '材质已确认，现在直接生成产品图。')
   await generateProductImage()
 }
 function recommendedStyle() {
@@ -692,37 +645,6 @@ function recommendedPurpose() {
   if (/收藏|纪念/.test(context)) return '个人收藏'
   return '景区伴手礼'
 }
-function recommendStyle() {
-  style.value = recommendedStyle()
-  styleChoice.value = 'recommend'
-  void saveEvent('style', 'style_selected', { style: style.value, productType: selectedProduct.value?.name, recommended: true })
-  uni.showToast({ title: `推荐：${style.value}`, icon: 'none' })
-}
-function recommendPurpose() {
-  purpose.value = recommendedPurpose()
-  purposeChoice.value = 'recommend'
-  void saveEvent('style', 'purpose_selected', { purpose: purpose.value, productType: selectedProduct.value?.name, recommended: true })
-  uni.showToast({ title: `推荐：${purpose.value}`, icon: 'none' })
-}
-function chooseStyle(value: string) { style.value = value; styleChoice.value = value; void saveEvent('style', 'style_selected', { style: value, productType: selectedProduct.value?.name, recommended: false }) }
-function choosePurpose(value: string) { purpose.value = value; purposeChoice.value = value; void saveEvent('style', 'purpose_selected', { purpose: value, productType: selectedProduct.value?.name, recommended: false }) }
-async function confirmDirection() {
-  if (styleChoice.value === 'recommend') style.value = recommendedStyle()
-  if (purposeChoice.value === 'recommend') purpose.value = recommendedPurpose()
-  if (!material.value) {
-    const recommendation = recommendedMaterial()
-    if (!recommendation) {
-      uni.showToast({ title: '请先选择材质或让系统推荐', icon: 'none' })
-      return
-    }
-    material.value = recommendation.name
-  }
-  addMessage('user', `${style.value} · ${purpose.value}`)
-  await saveEvent('summary', 'creative_direction_confirmed', { productType: selectedProduct.value?.name, material: material.value, style: style.value, purpose: purpose.value, styleChoice: styleChoice.value, purposeChoice: purposeChoice.value, inspirationText: inspirationText.value.trim() })
-  addMessage('assistant', '方案整理好了。确认后我会调用现有生图服务，并把成图与完整参数绑定到这次会话。')
-  phase.value = 'summary'
-}
-function editDirection() { phase.value = 'style' }
 async function generateProductImage() {
   if (busy.value) {
     uni.showToast({ title: '图片正在生成，请不要重复提交', icon: 'none' })
