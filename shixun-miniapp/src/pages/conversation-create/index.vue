@@ -514,7 +514,10 @@ async function saveEvent(step: string, eventType: string, payload: Record<string
   if (!(await ensureSession()) || !sessionId.value) return
   saving.value = true
   try { await saveConversationEvent(sessionId.value, { step, eventType, payload }) }
-  catch (error: any) { uni.showToast({ title: error?.message || '步骤保存失败', icon: 'none' }) }
+  catch {
+    // Conversation history improves continuity, but must never interrupt a
+    // user's product selection or AI generation when a background save fails.
+  }
   finally { saving.value = false }
 }
 async function chooseMode(value: Mode) {

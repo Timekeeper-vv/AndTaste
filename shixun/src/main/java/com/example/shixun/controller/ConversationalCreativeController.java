@@ -35,7 +35,7 @@ import java.util.Set;
 @RequestMapping("/api/creative/ai/conversations")
 public class ConversationalCreativeController {
     private static final Set<String> MODES = Set.of("template", "text", "image");
-    private static final Set<String> STEPS = Set.of("welcome", "mode", "product", "inspiration", "material", "style", "summary", "image", "multiview", "model", "commercial");
+    private static final Set<String> STEPS = Set.of("welcome", "mode", "product", "inspiration", "material", "style", "summary", "image", "multiview", "model", "commercial", "compliance", "navigation");
     private static final int MAX_PAYLOAD_LENGTH = 12000;
 
     private final JdbcTemplate jdbc;
