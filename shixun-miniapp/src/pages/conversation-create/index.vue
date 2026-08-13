@@ -167,7 +167,15 @@ function addMessage(role: Message['role'], text: string) {
 }
 function goBack() { uni.navigateBack() }
 function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
-function openCommercial() { uni.navigateTo({ url: `/pages/commercial/index${generatedAssetId.value ? `?assetId=${generatedAssetId.value}` : ''}` }) }
+function openCommercial() {
+  const params: string[] = []
+  if (generatedAssetId.value) params.push(`assetId=${encodeURIComponent(String(generatedAssetId.value))}`)
+  if (selectedProduct.value?.key) params.push(`productKey=${encodeURIComponent(selectedProduct.value.key)}`)
+  if (selectedProduct.value?.name) params.push(`productName=${encodeURIComponent(selectedProduct.value.name)}`)
+  if (material.value) params.push(`material=${encodeURIComponent(material.value)}`)
+  const query = params.join('&')
+  uni.navigateTo({ url: `/pages/commercial/index${query ? `?${query}` : ''}` })
+}
 function selectedModeTitle() { return modeOptions.find(item => item.key === mode.value)?.title || '' }
 
 function confirmCreativePolicyInPage(key: CreativePolicyKey): Promise<boolean> {

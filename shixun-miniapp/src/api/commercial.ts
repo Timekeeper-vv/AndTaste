@@ -3,6 +3,7 @@ import { request } from './client'
 export interface CommercialProduct {
   id: number
   templateCode: string
+  optionKey?: string
   productName: string
   productType: string
   categoryKey?: string
