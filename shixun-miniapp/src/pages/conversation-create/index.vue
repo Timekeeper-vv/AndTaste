@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="topbar"><view @tap="goBack" class="back">‹</view><view><text class="eyebrow">CONVERSATIONAL STUDIO</text><text class="top-title">对话式创作</text></view><text class="save-state">{{ saving ? '保存中' : '已留存' }}</text></view>
+    <view class="topbar"><view @tap="goBack" class="back">‹</view><view><text class="eyebrow">CONVERSATIONAL STUDIO</text><text class="top-title">对话式创作</text></view><view class="topbar-actions"><button v-if="canGoPrevious" class="previous-button" :disabled="busy || saving" @tap="goPreviousStep">上一步</button><text class="save-state">{{ saving ? '保存中' : '已留存' }}</text></view></view>
 
     <scroll-view class="chat" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
       <view class="intro-line"><text>每一步都会变成你的创作档案，后面可继续生图、四视图、3D 和商品化。</text></view>
@@ -32,7 +32,7 @@
     </scroll-view>
 
     <view v-if="busy" class="loading-bar"><text>{{ busyMessage }}</text></view>
-    <view class="bottom-actions"><button @tap="goWorks">作品库</button><button @tap="restart">重新开始</button></view>
+    <view class="bottom-actions"><button v-if="canGoPrevious" :disabled="busy || saving" @tap="goPreviousStep">上一步</button><button @tap="goWorks">作品库</button><button @tap="restart">重新开始</button></view>
 
     <view v-if="policyDialog" class="policy-mask" @tap="resolvePolicyDialog(false)">
       <view class="policy-dialog" @tap.stop>
@@ -87,6 +87,7 @@ const styles = ['国潮', '敦煌', '青绿山水', '现代极简', '亲子卡�
 const purposes = ['景区伴手礼', '博物馆文创', '企业礼赠', '个人收藏', '亲子纪念']
 
 const phase = ref<Phase>('mode')
+const canGoPrevious = computed(() => phase.value !== 'mode' && !busy.value && !saving.value)
 const mode = ref<Mode | ''>('')
 const selectedProduct = ref<ProductOption | null>(null)
 const material = ref('')
@@ -166,6 +167,35 @@ function addMessage(role: Message['role'], text: string) {
   void nextTick(() => { scrollIntoView.value = `message-${messageId}` })
 }
 function goBack() { uni.navigateBack() }
+
+async function goPreviousStep() {
+  if (!canGoPrevious.value) return
+  const from = phase.value
+  const to = previousPhase(from)
+  if (!to) return
+  phase.value = to
+  addMessage('assistant', '已回到上一步，之前填写和上传的内容都已保留，可以继续修改。')
+  try {
+    await saveEvent('navigation', 'previous_step', { from, to })
+  } catch {
+    // Local progress remains available even if the audit event cannot be saved.
+  }
+}
+
+function previousPhase(current: Phase): Phase | null {
+  const transitions: Partial<Record<Phase, Phase>> = {
+    product: 'mode',
+    inspiration: 'product',
+    image: 'product',
+    material: mode.value === 'image' ? 'image' : 'inspiration',
+    style: 'material',
+    summary: 'style',
+    result: 'summary',
+    multiview: 'result',
+    model: multiviewImages.value.length >= 3 ? 'multiview' : 'result',
+  }
+  return transitions[current] || null
+}
 function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
 function openCommercial() {
   const params: string[] = []
@@ -915,4 +945,5 @@ onUnmounted(() => { resolvePolicyDialog(false); stopModelPolling() })
 .refinement-panel{margin-top:16rpx;padding:15rpx;border:1rpx solid #d8c9b7;border-radius:15rpx;background:#f8f3eb}.refinement-panel>text:first-child{display:block;color:#5c5044;font-size:19rpx;font-weight:850}.refinement-input{min-height:130rpx;margin-top:10rpx;font-size:18rpx}.refinement-panel .dark-button{height:64rpx;margin:0;font-size:17rpx}
 .food-direction-note{display:block;margin-top:14rpx;padding:12rpx;border-left:4rpx solid #b37b4d;border-radius:0 10rpx 10rpx 0;background:#fbf2e5;color:#795b42;font-size:16rpx;line-height:1.55}
 .policy-mask{position:fixed;z-index:20;inset:0;display:flex;align-items:center;justify-content:center;padding:38rpx;background:rgba(24,29,26,.58);box-sizing:border-box}.policy-dialog{width:100%;max-height:80vh;overflow:hidden;border-radius:18rpx;background:#fffdfa;box-shadow:0 20rpx 50rpx rgba(25,31,27,.3)}.policy-dialog-head{display:flex;align-items:center;justify-content:space-between;padding:22rpx 22rpx 13rpx;border-bottom:1rpx solid #ece4d9}.policy-dialog-head text:first-child{color:#3d3831;font-size:24rpx;font-weight:850}.policy-dialog-head text:last-child{color:#a36e57;font-size:14rpx}.policy-dialog-title{display:block;padding:18rpx 22rpx 7rpx;color:#332e29;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:850}.policy-dialog-copy{box-sizing:border-box;width:100%;height:270rpx;padding:0 22rpx 18rpx}.policy-dialog-copy text{color:#6f665c;font-size:17rpx;line-height:1.7}.policy-dialog-actions{display:flex;gap:10rpx;padding:14rpx 22rpx calc(18rpx + env(safe-area-inset-bottom));border-top:1rpx solid #eee7de;background:#fffdfa}.policy-dialog-actions button{flex:1;height:78rpx;margin:0;border-radius:10rpx;font-size:18rpx;font-weight:850}.policy-dialog-actions button::after{border:0}.policy-cancel{border:1rpx solid #ded5c9;background:#f7f3ed;color:#827568}.policy-confirm{background:#3f3933;color:#fff}
+.topbar-actions{display:flex;align-items:center;gap:10rpx}.previous-button{height:46rpx;margin:0;padding:0 12rpx;border:1rpx solid #bfd0c1;border-radius:9rpx;background:#f3f8f3;color:#527463;font-size:14rpx;line-height:46rpx}.previous-button::after{border:0}.previous-button[disabled],.bottom-actions button[disabled]{opacity:.55}
 </style>
