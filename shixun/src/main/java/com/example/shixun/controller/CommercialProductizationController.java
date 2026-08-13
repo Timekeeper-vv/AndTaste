@@ -161,6 +161,7 @@ public class CommercialProductizationController {
         Map<String, Object> product = product(body.get("templateCode"));
         Long assetId = longValue(body.get("assetId"));
         if (assetId != null) requireOwnedAsset(assetId, userId);
+        if (assetId != null) requireAssetProductMatch(assetId, product);
         int quantity = positiveInt(body.get("quantity"), 1, 100000, "数量必须在1到100000之间");
         String requestType = enumValue(body.get("requestType"), Set.of("sample", "bulk", "personal"), "sample");
         String purpose = enumValue(body.get("purpose"), Set.of("personal", "channel_sale", "museum_sale"), "personal");
@@ -185,6 +186,7 @@ public class CommercialProductizationController {
         if (assetId == null) throw new IllegalArgumentException("代销申请必须关联一件自己的作品");
         requireOwnedAsset(assetId, userId);
         Map<String, Object> product = product(body.get("templateCode"));
+        requireAssetProductMatch(assetId, product);
         Long channelId = longValue(body.get("channelId"));
         String channelName = null;
         if (channelId != null) {
@@ -295,9 +297,26 @@ public class CommercialProductizationController {
 
     private Map<String, Object> product(Object code) {
         if (blank(code)) throw new IllegalArgumentException("请选择商品方向");
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT id,template_code templateCode FROM creative_product_template WHERE template_code=? AND published=1 AND supply_status <> 'suspended'", String.valueOf(code).trim());
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.id,p.template_code templateCode,o.option_key optionKey FROM creative_product_template p LEFT JOIN selection_option o ON o.id=p.selection_option_id WHERE p.template_code=? AND p.published=1 AND p.supply_status <> 'suspended'", String.valueOf(code).trim());
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "商品方向不存在或暂未开放");
         return rows.get(0);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void requireAssetProductMatch(Long assetId, Map<String, Object> product) {
+        String optionKey = text(product.get("optionKey"));
+        if (blank(optionKey)) return;
+        List<String> rows = jdbc.queryForList("SELECT metadata_json FROM digital_asset WHERE id=?", String.class, assetId);
+        if (rows.isEmpty() || blank(rows.get(0))) return;
+        try {
+            Map<String, Object> metadata = new com.fasterxml.jackson.databind.ObjectMapper().readValue(rows.get(0), Map.class);
+            String assetProductKey = text(metadata.get("productKey"));
+            if (!blank(assetProductKey) && !optionKey.equals(assetProductKey)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "该作品已绑定“" + text(metadata.get("productName")) + "”，不能改为其他产品申请商品化");
+            }
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) {
+            // Historical assets may not have metadata in the current format.
+        }
     }
 
     private Long requireConsumer(JwtService.Claims principal) {

@@ -160,6 +160,9 @@ export interface SeedreamMultiViewRequest {
   inputAssetId: number | string
   /** 产品/角色描述。服务端会为正、左、背、右四个真实请求补齐视角约束。 */
   prompt: string
+  productKey?: string
+  productCategory?: string
+  material?: string
   /** Seedream 多视图接口当前只接受 1K 或 2K。 */
   size?: '1K' | '2K'
   watermark?: boolean

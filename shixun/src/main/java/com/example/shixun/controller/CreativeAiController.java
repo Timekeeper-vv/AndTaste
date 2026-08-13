@@ -811,6 +811,7 @@ public class CreativeAiController {
             Map<String,Object> metadata = new LinkedHashMap<>();
             metadata.put("provider", "volcengine-ark"); metadata.put("model", volcengineArkSeedreamMultiviewModel);
             metadata.put("view", view); metadata.put("remoteUrl", remoteUrl); metadata.put("multiView", true);
+            addProductIdentity(metadata, req.productKey, req.productCategory, req.material);
             metadata.put("createdByUserId", ownerUserId);
             if (currentConsumerUserIdOrNull() != null) metadata.put("consumerWork", true);
             Long assetId = createAsset("Doubao 多视图参考 · " + labels.get(view), "image", "ai_generated", localUrl, localUrl,
@@ -861,6 +862,7 @@ public class CreativeAiController {
                 "different subject, unrelated object, replacement design, changed silhouette, changed main composition, changed color palette, lost distinctive details, generic product, random decoration, extra main subject");
         String jobNo = no("I2I");
         Long jobId = createJob(jobNo, "image_to_image", "siliconflow", imageEditModel, req.styleId, req.inputAssetId, finalPrompt, negative, "running", null, null);
+        storeJobProductIdentity(jobId, req.productKey, req.productCategory, req.material);
         assignJobOwner(jobId, ownerUserId);
         try {
             if (siliconflowApiKey == null || siliconflowApiKey.trim().isEmpty() || siliconflowApiKey.contains("YOUR_")) {
@@ -904,7 +906,7 @@ public class CreativeAiController {
                     req.inputAssetId,
                     "png",
                     req.tags == null || req.tags.isBlank() ? "图改图,AI生成,之间味道" : req.tags + ",图改图",
-                    withAssetOwner(referenceImageMetadata(remoteUrl, req.inputAssetId, referenceAnalysis), ownerUserId)
+                    withProductIdentity(withAssetOwner(referenceImageMetadata(remoteUrl, req.inputAssetId, referenceAnalysis), ownerUserId), req.productKey, req.productCategory, req.material)
             );
             jdbc.update("UPDATE ai_generation_job SET status='succeeded', output_asset_id=? WHERE id=?", assetId, jobId);
             Map<String,Object> result = new LinkedHashMap<>();
@@ -956,6 +958,7 @@ public class CreativeAiController {
         Long creditTxId = consumerUserId == null ? null : reserveConsumerCredit(consumerUserId,"image2d",consumerCreditCost("image2d"),"C端2D图片生成预扣");
         String jobNo = no("JMG");
         Long jobId = createJob(jobNo, "text_to_image", "jimeng", jimengReqKey, req.styleId, null, prompt, req.negativePrompt, "running", null, size + " " + aspect);
+        storeJobProductIdentity(jobId, req.productKey, req.productCategory, req.material);
         assignJobOwner(jobId, ownerUserId);
         linkCreditTransaction(creditTxId,jobId,null);
         try {
@@ -1287,6 +1290,7 @@ public class CreativeAiController {
             Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
                     primaryInputAssetId, storedPrompt, storedNegativePrompt, "running", null,
                     Boolean.TRUE.equals(req.quad) ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
+            storeJobProductIdentity(jobId, req.productKey, req.productCategory, req.material);
             assignJobOwner(jobId, ownerUserId);
             linkCreditTransaction(creditTxId,jobId,null);
             jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
@@ -1353,7 +1357,7 @@ public class CreativeAiController {
     }
 
     private synchronized Map<String,Object> pollTripoTask(Long jobId) throws Exception {
-        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
+        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,product_key productKey,product_name productName,product_material productMaterial,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
         String taskId=str(job.get("externalTaskId")); if(blank(taskId))throw new IllegalStateException("任务没有Tripo task_id");
         if(job.get("outputAssetId")!=null) return completedTripoJob(jobId,job);
         String response=tripoJson("GET","/tasks/"+URLEncoder.encode(taskId,StandardCharsets.UTF_8),null);
@@ -1370,15 +1374,17 @@ public class CreativeAiController {
             Long inputId=job.get("inputAssetId") instanceof Number ? ((Number)job.get("inputAssetId")).longValue() : null;
             String modelName=jdbc.queryForObject("SELECT model_name FROM ai_generation_job WHERE id=?",String.class,jobId);
             Map<String,Object> metadata=new LinkedHashMap<>(); metadata.put("provider","tripo"); metadata.put("taskId",taskId); metadata.put("remoteModel",modelUrl); metadata.put("modelVersion",modelName);
+            addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")), str(job.get("productMaterial")));
             if(job.get("createdBy") instanceof Number){
                 Long ownerUserId=((Number)job.get("createdBy")).longValue();
                 metadata.put("createdByUserId", ownerUserId);
                 if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork",true);
             }
-            Long assetId=createAsset("Tripo "+modelName+" 3D模型","model","ai_generated",localModel,localPreview,String.valueOf(jdbc.queryForObject("SELECT prompt FROM ai_generation_job WHERE id=?",String.class,jobId)),null,null,inputId,suffixFromUrl(modelUrl,".glb").replace(".",""),"Tripo,3D模型,"+modelName,metadata);
+            String productName = str(job.get("productName"));
+            Long assetId=createAsset(blank(productName) ? "Tripo "+modelName+" 3D模型" : productName+" · 3D 原型","model","ai_generated",localModel,localPreview,String.valueOf(jdbc.queryForObject("SELECT prompt FROM ai_generation_job WHERE id=?",String.class,jobId)),null,null,inputId,suffixFromUrl(modelUrl,".glb").replace(".",""),"Tripo,3D模型,"+modelName,metadata);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100 WHERE id=?",assetId,jobId);
             completeConsumerCredit(job.get("creditTransactionId") instanceof Number?((Number)job.get("creditTransactionId")).longValue():null,jobId,assetId);
-            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
+            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,product_key productKey,product_name productName,product_material productMaterial,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
             return completedTripoJob(jobId,job);
         }
         Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);return out;
@@ -2404,6 +2410,7 @@ public class CreativeAiController {
         meta.put("height", wh[1]);
         meta.put("outputFormat", format);
         meta.put("promptForJimeng", finalPrompt);
+        addProductIdentity(meta, req.productKey, req.productCategory, req.material);
         Long ownerUserId = jobOwnerId(jobId);
         if (ownerUserId != null) {
             meta.put("createdByUserId", ownerUserId);
@@ -3182,6 +3189,24 @@ public class CreativeAiController {
         return assetId;
     }
 
+    private void addProductIdentity(Map<String, Object> metadata, String productKey, String productName, String material) {
+        if (!blank(productKey)) metadata.put("productKey", productKey.trim());
+        if (!blank(productName)) metadata.put("productName", productName.trim());
+        if (!blank(material)) metadata.put("productMaterial", material.trim());
+    }
+
+    private Map<String, Object> withProductIdentity(Map<String, Object> metadata, String productKey, String productName, String material) {
+        addProductIdentity(metadata, productKey, productName, material);
+        return metadata;
+    }
+
+    private void storeJobProductIdentity(Long jobId, String productKey, String productName, String material) {
+        if (jobId == null) return;
+        jdbc.update("UPDATE ai_generation_job SET product_key=?,product_name=?,product_material=? WHERE id=?",
+                blank(productKey) ? null : productKey.trim(), blank(productName) ? null : productName.trim(),
+                blank(material) ? null : material.trim(), jobId);
+    }
+
     private void assignAssetOwner(Long assetId, Long userId) {
         if(assetId==null||userId==null) return;
         try { jdbc.update("UPDATE digital_asset SET created_by=? WHERE id=?", userId, assetId); } catch(Exception ignored) {}
@@ -3831,6 +3856,7 @@ public class CreativeAiController {
         public String scene;
         public String productType;
         public String productCategory;
+        public String productKey;
         public String material;
         public String imageSize;
         public Long seed;
@@ -3848,6 +3874,7 @@ public class CreativeAiController {
     public static class MultiViewImageRequest {
         public String prompt;
         public String productCategory;
+        public String productKey;
         public String material;
         public Long inputAssetId;
         public String size;
@@ -3866,6 +3893,7 @@ public class CreativeAiController {
         public String materialPrompt;
         public String material;
         public String productCategory;
+        public String productKey;
         public Long inputAssetId;
         public Map<String,Long> multiviewAssetIds;
         public String exportFormats;

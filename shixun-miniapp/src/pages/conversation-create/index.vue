@@ -704,10 +704,10 @@ async function generateProductImage() {
     if (mode.value === 'image') {
       if (!referenceAssetId.value) throw new Error('参考图片还没有保存完成，请重新上传后再生成')
       busyMessage.value = '正在依据参考图生成产品视觉，预计需要 1-3 分钟…'
-      result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productCategory: selectedProduct.value.name, material: material.value })
+      result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value })
     } else {
       busyMessage.value = '正在调用之间大模型生成产品视觉，预计需要 1-3 分钟…'
-      result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, scene: purpose.value, productType: selectedProduct.value.name, productCategory: selectedProduct.value.name, material: material.value })
+      result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, scene: purpose.value, productType: selectedProduct.value.name, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value })
     }
     const assetId = Number(result?.assetId || result?.id)
     if (!Number.isFinite(assetId) || assetId <= 0) throw new Error('产品图没有保存成功，请重新生成')
@@ -758,7 +758,7 @@ async function regenerateWithRefinement() {
   try {
     const refinementPrompt = `${prompt.value}。请严格以当前参考图为基础保留主体识别度，并按以下修改要求重新设计：${note}`
     await saveEvent('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, productType: selectedProduct.value.name, material: material.value, prompt: refinementPrompt })
-    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productCategory: selectedProduct.value.name, material: material.value })
+    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value })
     const newAssetId = Number(result?.assetId || result?.id)
     if (!Number.isFinite(newAssetId) || newAssetId <= 0) throw new Error('修改后的产品图没有保存成功，请重试')
     generatedAssetId.value = newAssetId
@@ -846,7 +846,7 @@ async function generateMultiView() {
   busyMessage.value = '正在依次生成正面、左侧、背面和右侧，请稍候…'
   try {
     await saveEvent('multiview', 'multiview_started', { inputAssetId: generatedAssetId.value, productType: selectedProduct.value?.name, material: material.value })
-    const result = await createSeedreamMultiView({ inputAssetId: generatedAssetId.value, prompt: prompt.value, size: '2K', watermark: true })
+    const result = await createSeedreamMultiView({ inputAssetId: generatedAssetId.value, prompt: prompt.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, size: '2K', watermark: true })
     multiviewImages.value = (Array.isArray(result?.images) ? result.images : []).filter(item => Number(item?.assetId) > 0)
     if (multiviewImages.value.length < 4) throw new Error('四视图没有完整返回，请稍后重试')
     await saveEvent('multiview', 'multiview_generated', { inputAssetId: generatedAssetId.value, images: multiviewImages.value.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })) })
@@ -871,7 +871,7 @@ async function generateModel() {
   busyMessage.value = '正在提交 3D 建模任务，请稍候…'
   try {
     const useMultiview = multiviewImages.value.length >= 4
-    const payload: any = { title: `${selectedProduct.value?.name || '文创产品'} · 对话 3D 原型`, prompt: prompt.value, rawPrompt: prompt.value, mode: useMultiview ? 'multiview_to_model' : 'image_to_model', inputAssetId: generatedAssetId.value, productCategory: selectedProduct.value?.name, material: material.value, materialLabel: material.value, materialPrompt: `manufacturing material: ${material.value}`, multiviewAssetIds: useMultiview ? Object.fromEntries(multiviewImages.value.map(item => [item.view, Number(item.assetId)])) : undefined, exportFormats: 'GLB', texture: true, pbr: true, textureQuality: 'extreme', geometryQuality: 'detailed', textureAlignment: 'original_image', orientation: 'align_image', autoSize: true, imageAutofix: true, exportUv: true, faceLimit: 2000000 }
+    const payload: any = { title: `${selectedProduct.value?.name || '文创产品'} · 对话 3D 原型`, prompt: prompt.value, rawPrompt: prompt.value, mode: useMultiview ? 'multiview_to_model' : 'image_to_model', inputAssetId: generatedAssetId.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, materialLabel: material.value, materialPrompt: `manufacturing material: ${material.value}`, multiviewAssetIds: useMultiview ? Object.fromEntries(multiviewImages.value.map(item => [item.view, Number(item.assetId)])) : undefined, exportFormats: 'GLB', texture: true, pbr: true, textureQuality: 'extreme', geometryQuality: 'detailed', textureAlignment: 'original_image', orientation: 'align_image', autoSize: true, imageAutofix: true, exportUv: true, faceLimit: 2000000 }
     await saveEvent('model', 'model_started', { inputAssetId: generatedAssetId.value, multiview: useMultiview, productType: selectedProduct.value?.name, material: material.value })
     const result = await createModel(payload)
     const jobId = Number(result?.jobId)
