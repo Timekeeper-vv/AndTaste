@@ -18,7 +18,7 @@
       </view>
     </view>
 
-    <button class="pay" :disabled="!selected || !paymentEnabled" :loading="creatingOrder || requestingPayment" @tap="startPayment">{{ paymentButtonText }}</button>
+    <button class="pay" :disabled="!selected || creatingOrder || requestingPayment" :loading="creatingOrder || requestingPayment" @tap="startPayment">{{ paymentButtonText }}</button>
     <text v-if="!paymentEnabled" class="payment-unavailable">微信虚拟支付正在配置中，请稍后再试。</text>
     <text v-else class="payment-note">支付由微信小程序虚拟支付完成，积分到账以微信官方代币余额核验结果为准。</text>
     <view v-if="paymentError" class="payment-error">
@@ -97,7 +97,7 @@ let paymentPollInFlight = false
 let paidNoticeShown = false
 
 const paymentEnabled = computed(() => virtualPaymentEnabled.value)
-const paymentButtonText = computed(() => !selected.value ? '请选择套餐' : `微信虚拟支付 ¥${packageAmount(selected.value)}`)
+const paymentButtonText = computed(() => !selected.value ? '请选择套餐' : paymentEnabled.value ? `微信虚拟支付 ¥${packageAmount(selected.value)}` : '检查微信虚拟支付')
 const canConfirmNoPayment = computed(() => paymentOrder.value?.status === 'pending' && ['cancelled', 'failed'].includes(paymentIntent.value))
 const paymentStateIcon = computed(() => ({ idle: '⌛', launching: '…', awaiting_confirmation: '⌛', cancelled: '×', failed: '!', paid: '✓', exception: '!' }[paymentIntent.value] || '⌛'))
 const paymentStateTitle = computed(() => ({ idle: '等待支付结果', launching: '正在唤起微信虚拟支付', awaiting_confirmation: '正在确认积分到账', cancelled: '你已取消本次支付', failed: '未能完成微信虚拟支付', paid: '积分已到账', exception: '支付结果核验中' }[paymentIntent.value] || '等待支付结果'))
@@ -178,10 +178,10 @@ function requestVirtualPayment(params: WechatVirtualPaymentParams): Promise<void
       reject(new Error('当前微信版本不支持虚拟支付，请升级微信后重试'))
       return
     }
-    if (wx.canIUse && !wx.canIUse('requestVirtualPayment')) {
-      reject(new Error('当前微信基础库不支持虚拟支付，请将微信升级到最新版本后重试'))
-      return
-    }
+    // The official compatibility rule is "SDK version supported OR canIUse".
+    // Once the real API exists, canIUse may still return false on some iOS
+    // clients. Do not reject a callable payment API before it has a chance to
+    // open the official payment sheet.
     wx.requestVirtualPayment({ mode: params.mode, signData: params.signData, paySig: params.paySig, signature: params.signature, success: () => resolve(), fail: error => reject(error) })
     // #endif
     // #ifndef MP-WEIXIN
@@ -322,9 +322,17 @@ async function refreshPaymentStatus(showLoading = false) {
 }
 
 async function startPayment() {
-  if (!selected.value || !paymentEnabled.value || !requireSession()) return
+  if (!selected.value || !requireSession()) return
   paymentError.value = ''
   paymentErrorCode.value = null
+  if (!paymentEnabled.value) {
+    const message = '微信虚拟支付尚未完成服务器配置，暂时不能发起付款。请联系平台管理员检查支付开关、OfferId、现网 AppKey 和会话加密密钥。'
+    paymentIntent.value = 'failed'
+    paymentHint.value = message
+    paymentError.value = message
+    showPaymentFailure(message)
+    return
+  }
   creatingOrder.value = true
   try {
     const code = await loginForWechatCode()

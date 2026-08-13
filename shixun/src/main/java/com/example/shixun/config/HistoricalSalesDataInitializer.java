@@ -27,7 +27,7 @@ public class HistoricalSalesDataInitializer implements InitializingBean {
     private static final String IMPORT_BATCH = "2026-sales-20260804";
     private static final int EXPECTED_SOURCE_ROWS = 1696;
     private static final String SCHEMA_SCRIPT = "db/migration/V20260804_01__historical_sales_insights.sql";
-    private static final String DATA_SCRIPT = "db/migration/V20260804_01__historical_sales_data.sql";
+    private static final String DATA_SCRIPT = "db/migration/V20260804_02__historical_sales_data.sql";
 
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
