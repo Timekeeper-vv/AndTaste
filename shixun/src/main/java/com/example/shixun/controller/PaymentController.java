@@ -113,9 +113,9 @@ public class PaymentController {
     private volatile VirtualAccessToken virtualAccessToken;
 
     private static final List<CreditPackage> PACKAGES = List.of(
-            new CreditPackage("credit_100", "体验包", "适合少量图片生成和一次3D尝试", 990, new BigDecimal("100")),
-            new CreditPackage("credit_500", "创作包", "适合连续做系列文创方案", 4950, new BigDecimal("500")),
-            new CreditPackage("credit_1000", "生产预备包", "适合博物馆售卖方向的批量创作", 9900, new BigDecimal("1000"))
+            new CreditPackage("credit_100", "体验包", "适合少量图片生成和一次3D尝试", 1000, new BigDecimal("100")),
+            new CreditPackage("credit_500", "创作包", "适合连续做系列文创方案", 5000, new BigDecimal("500")),
+            new CreditPackage("credit_1000", "生产预备包", "适合博物馆售卖方向的批量创作", 10000, new BigDecimal("1000"))
     );
 
     public PaymentController(JdbcTemplate jdbc, ObjectMapper mapper, PlatformTransactionManager transactionManager) {
