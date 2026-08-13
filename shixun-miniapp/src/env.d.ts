@@ -6,3 +6,17 @@ interface ImportMetaEnv {
   readonly VITE_CONSUMER_WEB_URL?: string
 }
 interface ImportMeta { readonly env: ImportMetaEnv }
+
+interface WechatVirtualPaymentOptions {
+  mode: 'short_series_coin'
+  signData: string
+  paySig: string
+  signature: string
+  success?: (result: { errMsg?: string }) => void
+  fail?: (error: { errMsg?: string; errCode?: number; message?: string }) => void
+}
+
+declare const wx: {
+  requestVirtualPayment(options: WechatVirtualPaymentOptions): void
+  canIUse?(schema: string): boolean
+}

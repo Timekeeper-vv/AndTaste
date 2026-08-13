@@ -357,7 +357,7 @@ export const bindWechatMiniapp = (code: string) => request<{ bound: boolean; ope
   method: 'POST', data: { code }, header: { 'content-type': 'application/json' },
 })
 
-export type PaymentChannel = 'manual_wechat_qr' | 'wechat_jsapi'
+export type PaymentChannel = 'manual_wechat_qr' | 'wechat_jsapi' | 'wechat_virtual_payment'
 
 export interface WechatJsapiPaymentParams {
   timeStamp: string | number
@@ -365,6 +365,13 @@ export interface WechatJsapiPaymentParams {
   package: string
   signType: 'RSA' | 'MD5' | 'HMAC-SHA256' | string
   paySign: string
+}
+
+export interface WechatVirtualPaymentParams {
+  mode: 'short_series_coin'
+  signData: string
+  paySig: string
+  signature: string
 }
 
 export interface PaymentOrder {
@@ -380,9 +387,10 @@ export interface PaymentOrder {
   createdAt?: string
   refundStatus?: string
   paymentParams?: WechatJsapiPaymentParams
+  virtualPayment?: WechatVirtualPaymentParams
 }
 
-export const createPaymentOrder = (packageCode: string, channel: PaymentChannel = 'manual_wechat_qr') => request<PaymentOrder>('/api/payments/orders', {
+export const createPaymentOrder = (packageCode: string, channel: PaymentChannel = 'wechat_virtual_payment') => request<PaymentOrder>('/api/payments/orders', {
   method: 'POST', data: { packageCode, channel }, header: { 'content-type': 'application/json' },
 })
 export const manualComplete = (orderNo: string) => request<any>(`/api/payments/orders/${encodeURIComponent(orderNo)}/manual-complete`, { method: 'POST' })

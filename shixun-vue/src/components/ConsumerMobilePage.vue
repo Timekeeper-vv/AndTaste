@@ -624,9 +624,9 @@ function changeCreationPurpose() {
 }
 
 function openCreditPanel() {
-  // Use the native mini-program page inside a web-view so wx.requestPayment can
-  // open the official WeChat cashier. The H5 page remains the desktop/browser
-  // fallback and never exposes a personal collection QR code.
+  // Virtual goods must be paid through the native mini-program capability.
+  // The browser view may inspect balances and orders, but cannot create an
+  // ordinary-WeChat-Pay fallback for credits.
   if (isEmbeddedMiniapp() && navigateToMiniappPage('/pages/recharge/index')) return
   creditPanelOpen.value = true
 }
@@ -703,11 +703,10 @@ async function loadPaymentPackages() {
   try {
     const data = await json('/api/payments/packages')
     rechargePackages.value = Array.isArray(data?.items) ? data.items : []
-    const channels = Array.isArray(data?.channels) ? data.channels : []
-    wechatPaymentEnabled.value = !!channels.find((x: any) => x.code === 'wechat' && x.enabled)
-    // New orders must use the official WeChat channel. Manual collection QR
-    // remains available only for historical orders in the admin console.
-    paymentChannelEnabled.value = wechatPaymentEnabled.value
+    // Credits are virtual goods: browser/H5 never presents an ordinary WeChat
+    // Pay checkout. Users are guided to the native mini-program instead.
+    wechatPaymentEnabled.value = false
+    paymentChannelEnabled.value = false
   } catch {
     rechargePackages.value = []
     paymentChannelEnabled.value = false
@@ -2138,10 +2137,10 @@ function closeModelPreview() {
                 <span>{{ pkg.name }} · ¥{{ pkg.amountYuan }}</span>
                 <em>{{ pkg.description }}</em>
               </button>
-              <p v-if="!rechargePackages.length" class="recharge-note">充值套餐加载中，请稍后重试。</p><p v-else-if="!paymentChannelEnabled" class="recharge-note">官方微信支付暂不可用，请管理员完成商户配置后重试。</p>
+              <p v-if="!rechargePackages.length" class="recharge-note">充值套餐加载中，请稍后重试。</p><p v-else-if="!paymentChannelEnabled" class="recharge-note">积分充值仅支持微信小程序虚拟支付，请在「之间智造」微信小程序内完成。</p>
             </div>
             <p v-if="paymentError" class="payment-error">{{ paymentError }}</p>
-            <p class="recharge-note">请使用官方微信支付完成付款。支付成功后由微信回调自动验签，系统会自动为账户增加积分，不需要人工审批。</p>
+            <p class="recharge-note">积分属于虚拟内容，仅在微信小程序内通过官方虚拟支付完成充值。</p>
           </main>
           <footer>
             <button v-if="paymentOrder" type="button" @click="closePaymentOrder">返回套餐</button>

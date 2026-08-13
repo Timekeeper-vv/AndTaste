@@ -21,8 +21,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 
 import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import javax.servlet.http.HttpServletRequest;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -102,11 +104,18 @@ public class PaymentController {
     @Value("${payment.wechat.reconcile-limit:40}") private int wechatReconcileLimit;
     @Value("${payment.manual-qr-url:/payment-collection-qr.jpg}") private String manualWechatQrUrl;
     @Value("${payment.manual-qr-enabled:false}") private boolean manualWechatQrEnabled;
+    @Value("${payment.wechat.virtual.enabled:false}") private boolean virtualPaymentEnabled;
+    @Value("${payment.wechat.virtual.offer-id:}") private String virtualPaymentOfferId;
+    @Value("${payment.wechat.virtual.env:0}") private int virtualPaymentEnv;
+    @Value("${payment.wechat.virtual.production-app-key:}") private String virtualPaymentProductionAppKey;
+    @Value("${payment.wechat.virtual.sandbox-app-key:}") private String virtualPaymentSandboxAppKey;
+    @Value("${payment.wechat.virtual.session-encryption-key:}") private String virtualSessionEncryptionKey;
+    private volatile VirtualAccessToken virtualAccessToken;
 
     private static final List<CreditPackage> PACKAGES = List.of(
             new CreditPackage("credit_100", "体验包", "适合少量图片生成和一次3D尝试", 990, new BigDecimal("100")),
-            new CreditPackage("credit_500", "创作包", "适合连续做系列文创方案", 3990, new BigDecimal("500")),
-            new CreditPackage("credit_1000", "生产预备包", "适合博物馆售卖方向的批量创作", 6990, new BigDecimal("1000"))
+            new CreditPackage("credit_500", "创作包", "适合连续做系列文创方案", 4950, new BigDecimal("500")),
+            new CreditPackage("credit_1000", "生产预备包", "适合博物馆售卖方向的批量创作", 9900, new BigDecimal("1000"))
     );
 
     public PaymentController(JdbcTemplate jdbc, ObjectMapper mapper, PlatformTransactionManager transactionManager) {
@@ -122,10 +131,11 @@ public class PaymentController {
             items.add(Map.of("code", pkg.code, "name", pkg.name, "description", pkg.description,
                     "amountFen", pkg.amountFen, "amountYuan", fenToYuan(pkg.amountFen), "credits", pkg.credits));
         }
+        // Credits are virtual goods. Never expose ordinary JSAPI/QR payment as
+        // a fallback here, otherwise the client would have a review-bypassing
+        // route. Physical sample fees use the separate sample-order endpoints.
         return Map.of("items", items, "channels", List.of(
-                Map.of("code", "manual_wechat_qr", "name", "微信收款码", "enabled", manualWechatQrReady(), "mode", "manual_qr"),
-                Map.of("code", "wechat", "name", "微信扫码支付", "enabled", wechatPaymentReady(), "mode", "native"),
-                Map.of("code", "wechat_jsapi", "name", "微信小程序支付", "enabled", wechatJsapiReady(), "mode", "jsapi")
+                Map.of("code", "wechat_virtual_payment", "name", "微信虚拟支付", "enabled", virtualPaymentReady(), "mode", "virtual_payment")
         ));
     }
 
@@ -138,15 +148,15 @@ public class PaymentController {
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
             @RequestBody(required = false) Map<String, String> body) throws Exception {
         Long userId = requireConsumer(principal);
-        requireWechatJsapiReady();
+        requireWechatMiniProgramLoginReady();
         String code = body == null ? "" : nullToEmpty(body.get("code"));
         if (code.length() < 6 || code.length() > 512 || code.contains(" ")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信登录凭证无效，请重新进入小程序后重试");
         }
-        String openId = exchangeMiniProgramCode(code);
+        WechatIdentity identity = exchangeMiniProgramCode(code);
         try {
             transactions.execute(status -> {
-                bindOpenIdInTransaction(userId, openId);
+                bindOpenIdInTransaction(userId, identity);
                 return null;
             });
         } catch (DataIntegrityViolationException e) {
@@ -160,12 +170,22 @@ public class PaymentController {
     @PostMapping("/orders")
     public Map<String, Object> createOrder(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
-            @RequestBody(required = false) Map<String, String> body) throws Exception {
+            @RequestBody(required = false) Map<String, String> body,
+            HttpServletRequest request) throws Exception {
         Long userId = requireConsumer(principal);
         String packageCode = body == null ? "" : nullToEmpty(body.get("packageCode"));
         String channel = body == null ? "" : nullToEmpty(body.get("channel"));
         CreditPackage pkg = packageFor(packageCode);
-        validateRequestedChannel(channel);
+        if (!"wechat_virtual_payment".equals(channel)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "积分充值必须使用微信小程序虚拟支付");
+        }
+        return createVirtualPaymentOrder(userId, pkg, clientIp(request));
+        /*
+         * Kept below historically for physical payment flow reference. It is
+         * intentionally unreachable for recharge orders; sample fees invoke
+         * their dedicated endpoints and still use ordinary WeChat Pay.
+         */
+        /*
 
         OrderCreation creation;
         try {
@@ -218,6 +238,7 @@ public class PaymentController {
                     ? "微信下单结果待核对，请勿重复付款或创建新订单"
                     : "微信支付下单未成功，请稍后重试");
         }
+        */
     }
 
     /**
@@ -407,6 +428,13 @@ public class PaymentController {
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
             @PathVariable String orderNo) {
         Long userId = requireConsumer(principal);
+        Map<String, Object> current = findOrderForUser(orderNo, userId);
+        if ("wechat_virtual_payment".equals(String.valueOf(current.get("channel")))
+                && "pending".equals(String.valueOf(current.get("status"))) && virtualPaymentReady()) {
+            try { reconcileVirtualPayment(orderNo, null); }
+            catch (ResponseStatusException error) { throw error; }
+            catch (Exception error) { log.warn("用户查询虚拟支付订单时核验失败 orderNo={}", orderNo, error); }
+        }
         return orderView(orderNo, userId);
     }
 
@@ -419,7 +447,11 @@ public class PaymentController {
         // A pending JSAPI order may be resumed after the user cancels or the
         // client is interrupted. Generate a fresh client signature only for
         // the authenticated owner; never create a second provider trade.
-        if (!"wechat_jsapi".equals(String.valueOf(result.get("channel")))) {
+        String channel = String.valueOf(result.get("channel"));
+        if ("wechat_virtual_payment".equals(channel)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "虚拟支付订单不能重复拉起，请重新选择套餐发起一笔新订单");
+        }
+        if (!"wechat_jsapi".equals(channel)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该订单不支持小程序支付");
         }
         if (!"pending".equals(String.valueOf(result.get("status")))) {
@@ -692,6 +724,11 @@ public class PaymentController {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("officialPaymentReady", wechatPaymentReady());
         result.put("miniappPaymentReady", wechatJsapiReady());
+        result.put("virtualPaymentReady", virtualPaymentReady());
+        result.put("virtualPaymentEnv", virtualPaymentEnv);
+        result.put("virtualOfferIdConfigured", !blank(virtualPaymentOfferId));
+        result.put("virtualAppKeyConfigured", !blank(selectedVirtualAppKey()));
+        result.put("virtualSessionEncryptionReady", virtualSessionEncryptionReady());
         result.put("manualQrEnabled", manualWechatQrReady());
         result.put("privateKeyReadable", !blank(wechatPrivateKeyPath) && readableFile(wechatPrivateKeyPath));
         result.put("privateKeyValid", validMerchantPrivateKey());
@@ -710,6 +747,9 @@ public class PaymentController {
         Long userId = requireConsumer(principal);
         Map<String, Object> current = findOrderForUser(orderNo, userId);
         String channel = String.valueOf(current.get("channel"));
+        if ("wechat_virtual_payment".equals(channel)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "虚拟支付订单将由微信官方结果自动核验，不能手动关闭");
+        }
         if (WECHAT_CHANNELS.contains(channel) && "pending".equals(String.valueOf(current.get("status")))) {
             try {
                 closeWechatTrade(orderNo);
@@ -745,16 +785,26 @@ public class PaymentController {
      */
     @Scheduled(fixedDelayString = "${payment.wechat.reconcile-delay-ms:300000}", initialDelayString = "${payment.wechat.reconcile-initial-delay-ms:45000}")
     public void reconcileWechatOrdersOnSchedule() {
-        if (!wechatReconcileEnabled || !wechatPaymentReady()) return;
+        if (!wechatReconcileEnabled) return;
         int limit = Math.max(1, Math.min(wechatReconcileLimit, 100));
-        List<String> paymentOrders = jdbc.query("SELECT order_no FROM payment_order WHERE channel IN ('wechat','wechat_jsapi') " +
-                        "AND status IN ('pending','payment_exception') ORDER BY updated_at ASC LIMIT ?",
-                (rs, rowNum) -> rs.getString(1), limit);
-        for (String orderNo : paymentOrders) {
-            try {
-                reconcileWechatPayment(orderNo);
-                expireWechatTradeIfDue(orderNo);
-            } catch (Exception error) { log.warn("微信支付订单对账失败 orderNo={}", orderNo, error); /* retry next run; never silently expire */ }
+        if (wechatPaymentReady()) {
+            List<String> paymentOrders = jdbc.query("SELECT order_no FROM payment_order WHERE channel IN ('wechat','wechat_jsapi') " +
+                            "AND status IN ('pending','payment_exception') ORDER BY updated_at ASC LIMIT ?",
+                    (rs, rowNum) -> rs.getString(1), limit);
+            for (String orderNo : paymentOrders) {
+                try {
+                    reconcileWechatPayment(orderNo);
+                    expireWechatTradeIfDue(orderNo);
+                } catch (Exception error) { log.warn("微信支付订单对账失败 orderNo={}", orderNo, error); }
+            }
+        }
+        if (virtualPaymentReady()) {
+            List<String> virtualOrders = jdbc.query("SELECT order_no FROM payment_order WHERE channel='wechat_virtual_payment' " +
+                            "AND status='pending' ORDER BY updated_at ASC LIMIT ?", (rs, rowNum) -> rs.getString(1), limit);
+            for (String orderNo : virtualOrders) {
+                try { reconcileVirtualPayment(orderNo, null); }
+                catch (Exception error) { log.warn("微信虚拟支付订单核验失败 orderNo={}", orderNo, error); }
+            }
         }
         List<String> refundOrders = jdbc.query("SELECT order_no FROM payment_refund WHERE status IN ('refund_requested','refund_processing','refund_unknown') " +
                         "ORDER BY updated_at ASC LIMIT ?", (rs, rowNum) -> rs.getString(1), limit);
@@ -859,7 +909,8 @@ public class PaymentController {
         if ("wechat_jsapi".equals(channel)) requireWechatJsapiReady();
     }
 
-    private void bindOpenIdInTransaction(Long userId, String openId) {
+    private void bindOpenIdInTransaction(Long userId, WechatIdentity identity) {
+        String openId = identity.openId;
         List<Map<String, Object>> ownerRows = jdbc.queryForList(
                 "SELECT user_id FROM wechat_user_binding WHERE app_id=? AND openid=? FOR UPDATE", wechatAppId, openId);
         if (!ownerRows.isEmpty() && ((Number) ownerRows.get(0).get("user_id")).longValue() != userId) {
@@ -868,22 +919,28 @@ public class PaymentController {
         Integer pending = jdbc.queryForObject("SELECT COUNT(*) FROM payment_order p JOIN payment_wechat_order w ON w.order_no=p.order_no " +
                 "WHERE p.user_id=? AND p.channel='wechat_jsapi' AND p.status='pending' AND w.payer_openid<>?", Integer.class, userId, openId);
         if (pending != null && pending > 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "请先完成或关闭当前待支付订单后再更换微信账号");
-        int changed = jdbc.update("UPDATE wechat_user_binding SET openid=?,bound_at=NOW() WHERE user_id=? AND app_id=?", openId, userId, wechatAppId);
-        if (changed == 0) jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)", userId, wechatAppId, openId);
+        String sessionCiphertext = virtualSessionEncryptionReady() ? encryptVirtualSessionKey(identity.sessionKey) : null;
+        int changed = jdbc.update("UPDATE wechat_user_binding SET openid=?,session_key_ciphertext=COALESCE(?,session_key_ciphertext)," +
+                        "session_key_updated_at=CASE WHEN ? IS NULL THEN session_key_updated_at ELSE NOW() END,bound_at=NOW() WHERE user_id=? AND app_id=?",
+                openId, sessionCiphertext, sessionCiphertext, userId, wechatAppId);
+        if (changed == 0) jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid,session_key_ciphertext,session_key_updated_at) VALUES (?,?,?,?,NOW())",
+                userId, wechatAppId, openId, sessionCiphertext);
     }
 
-    private String exchangeMiniProgramCode(String code) throws Exception {
+    private WechatIdentity exchangeMiniProgramCode(String code) throws Exception {
         String url = "https://api.weixin.qq.com/sns/jscode2session?appid=" + encode(wechatAppId)
                 + "&secret=" + encode(wechatMiniAppSecret) + "&js_code=" + encode(code) + "&grant_type=authorization_code";
         HttpResponse<String> response = http.send(httpRequest(URI.create(url), WECHAT_SESSION_TIMEOUT).GET().build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() != 200) throw new IllegalStateException("微信登录凭证校验服务不可用");
         JsonNode root = mapper.readTree(response.body());
-        if (root.path("errcode").asInt(0) != 0 || blank(root.path("openid").asText())) {
+        if (root.path("errcode").asInt(0) != 0 || blank(root.path("openid").asText()) || blank(root.path("session_key").asText())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信登录凭证已失效，请重新进入小程序后重试");
         }
         String openId = root.path("openid").asText().trim();
         if (openId.length() > 128) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信账号标识无效");
-        return openId;
+        String sessionKey = root.path("session_key").asText().trim();
+        if (sessionKey.length() > 512) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信登录会话无效，请重新进入小程序后重试");
+        return new WechatIdentity(openId, sessionKey);
     }
 
     private String boundOpenId(Long userId) {
@@ -892,6 +949,218 @@ public class PaymentController {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "请先调用微信登录绑定，再发起小程序支付");
         }
         return rows.get(0);
+    }
+
+    /**
+     * Prepares the exact signed payload required by wx.requestVirtualPayment.
+     * The transaction is never submitted by this server: WeChat creates it
+     * inside the client API, and the subsequent balance reconciliation is the
+     * only signal that credits may be recorded locally.
+     */
+    private Map<String, Object> createVirtualPaymentOrder(Long userId, CreditPackage pkg, String userIp) throws Exception {
+        requireVirtualPaymentReady();
+        return Objects.requireNonNull(transactions.execute(status -> {
+            expireOverdueOrders(userId);
+            jdbc.queryForList("SELECT id FROM user WHERE id=? FOR UPDATE", userId);
+            List<Map<String, Object>> activeOrders = jdbc.queryForList(
+                    "SELECT order_no,status FROM payment_order WHERE user_id=? AND channel='wechat_virtual_payment' " +
+                            "AND status='pending' ORDER BY id DESC LIMIT 1 FOR UPDATE", userId);
+            if (!activeOrders.isEmpty()) {
+                String activeOrderNo = String.valueOf(activeOrders.get(0).get("order_no"));
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "已有待确认的虚拟支付订单 " + activeOrderNo + "，请等待微信确认到账后再发起新订单");
+            }
+            List<Map<String, Object>> bindingRows = jdbc.queryForList(
+                    "SELECT openid,session_key_ciphertext FROM wechat_user_binding WHERE user_id=? AND app_id=? FOR UPDATE", userId, wechatAppId);
+            if (bindingRows.isEmpty() || blank(nullableText(bindingRows.get(0).get("openid"))) || blank(nullableText(bindingRows.get(0).get("session_key_ciphertext")))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "请重新进入微信小程序后再发起支付");
+            }
+            String openId = nullableText(bindingRows.get(0).get("openid"));
+            String sessionKey = decryptVirtualSessionKey(nullableText(bindingRows.get(0).get("session_key_ciphertext")));
+            long balanceBefore = queryWechatVirtualBalanceUnchecked(openId, sessionKey, userIp);
+            String orderNo = newVirtualOrderNo();
+            LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
+            jdbc.update("INSERT INTO payment_order(order_no,user_id,product_code,product_name,amount_fen,credit_amount,channel,status,expired_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    orderNo, userId, pkg.code, pkg.name, pkg.amountFen, pkg.credits, "wechat_virtual_payment", "pending", expiresAt);
+            jdbc.update("INSERT INTO payment_virtual_order(order_no,app_id,offer_id,env,payer_openid,expected_coin_quantity,balance_before,provider_status) VALUES (?,?,?,?,?,?,?,?)",
+                    orderNo, wechatAppId, virtualPaymentOfferId.trim(), virtualPaymentEnv, openId, virtualCoinQuantity(pkg), balanceBefore, "PREPARED");
+            String signData = virtualRechargeSignDataUnchecked(orderNo, virtualCoinQuantity(pkg));
+            String paySig = hmacSha256HexUnchecked(selectedVirtualAppKey(), "requestVirtualPayment&" + signData);
+            String signature = hmacSha256HexUnchecked(sessionKey, signData);
+            Map<String, Object> result = orderView(orderNo, userId);
+            result.put("virtualPayment", Map.of("mode", "short_series_coin", "signData", signData, "paySig", paySig, "signature", signature));
+            return result;
+        }));
+    }
+
+    /** Reconciles the official virtual currency balance, never a client callback. */
+    private void reconcileVirtualPayment(String orderNo, String suppliedUserIp) throws Exception {
+        transactions.execute(status -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT p.*,v.payer_openid,v.expected_coin_quantity,v.balance_before,v.provider_status " +
+                            "FROM payment_order p JOIN payment_virtual_order v ON v.order_no=p.order_no WHERE p.order_no=? FOR UPDATE", orderNo);
+            if (rows.isEmpty()) return null;
+            Map<String, Object> order = rows.get(0);
+            if (!"wechat_virtual_payment".equals(String.valueOf(order.get("channel"))) || !"pending".equals(String.valueOf(order.get("status")))) return null;
+            String openId = nullableText(order.get("payer_openid"));
+            String sessionKey = activeVirtualSessionKey(toLong(order.get("user_id")), openId);
+            long currentBalance = queryWechatVirtualBalanceUnchecked(openId, sessionKey, suppliedUserIp == null ? "127.0.0.1" : suppliedUserIp);
+            long before = toLong(order.get("balance_before"));
+            long expected = toLong(order.get("expected_coin_quantity"));
+            if (currentBalance < before) {
+                markPaymentException(orderNo, "微信虚拟支付代币余额异常下降，需人工核对");
+                return null;
+            }
+            long delta = currentBalance - before;
+            jdbc.update("UPDATE payment_virtual_order SET balance_after=?,last_reconciled_at=NOW(),provider_status=? WHERE order_no=?",
+                    currentBalance, delta >= expected ? "PAID" : "PENDING", orderNo);
+            if (delta >= expected) {
+                creditConfirmedOrder(order, "virtual:" + orderNo, "微信小程序虚拟支付代币充值 " + orderNo);
+            }
+            return null;
+        });
+    }
+
+    private long queryWechatVirtualBalance(String openId, String sessionKey, String userIp) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("openid", openId);
+        body.put("env", virtualPaymentEnv);
+        body.put("user_ip", blank(userIp) ? "127.0.0.1" : userIp);
+        String payload = mapper.writeValueAsString(body);
+        String url = "https://api.weixin.qq.com/xpay/query_user_balance?access_token=" + encode(virtualWechatAccessToken())
+                + "&signature=" + encode(hmacSha256Hex(sessionKey, payload))
+                + "&pay_sig=" + encode(hmacSha256Hex(selectedVirtualAppKey(), "/xpay/query_user_balance&" + payload));
+        HttpResponse<String> response = http.send(httpRequest(URI.create(url), WECHAT_SESSION_TIMEOUT)
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (response.statusCode() != 200) throw new IllegalStateException("微信虚拟支付余额核验服务不可用");
+        JsonNode root = mapper.readTree(response.body());
+        if (root.path("errcode").asInt(0) != 0) {
+            int code = root.path("errcode").asInt();
+            if (code == 268490009) throw new ResponseStatusException(HttpStatus.CONFLICT, "微信支付会话已过期，请重新发起支付");
+            log.warn("微信虚拟支付余额查询失败 errcode={} errmsg={}", code, root.path("errmsg").asText());
+            throw new IllegalStateException("微信虚拟支付余额核验失败");
+        }
+        return root.path("balance").asLong(-1);
+    }
+
+    private long queryWechatVirtualBalanceUnchecked(String openId, String sessionKey, String userIp) {
+        try { return queryWechatVirtualBalance(openId, sessionKey, userIp); }
+        catch (ResponseStatusException error) { throw error; }
+        catch (Exception error) { throw new IllegalStateException("微信虚拟支付余额核验失败", error); }
+    }
+
+    private String activeVirtualSessionKey(Long userId, String expectedOpenId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT openid,session_key_ciphertext FROM wechat_user_binding WHERE user_id=? AND app_id=?", userId, wechatAppId);
+        if (rows.isEmpty() || !expectedOpenId.equals(nullableText(rows.get(0).get("openid")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "微信支付身份已变更，请重新发起支付");
+        }
+        String ciphertext = nullableText(rows.get(0).get("session_key_ciphertext"));
+        if (blank(ciphertext)) throw new ResponseStatusException(HttpStatus.CONFLICT, "微信支付会话已失效，请重新发起支付");
+        return decryptVirtualSessionKey(ciphertext);
+    }
+
+    private String virtualWechatAccessToken() throws Exception {
+        VirtualAccessToken cached = virtualAccessToken;
+        long now = System.currentTimeMillis();
+        if (cached != null && cached.expiresAt > now + Duration.ofMinutes(1).toMillis()) return cached.value;
+        synchronized (this) {
+            cached = virtualAccessToken;
+            if (cached != null && cached.expiresAt > now + Duration.ofMinutes(1).toMillis()) return cached.value;
+            String url = "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=" + encode(wechatAppId)
+                    + "&secret=" + encode(wechatMiniAppSecret);
+            HttpResponse<String> response = http.send(httpRequest(URI.create(url), WECHAT_SESSION_TIMEOUT).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() != 200) throw new IllegalStateException("微信虚拟支付配置校验服务不可用");
+            JsonNode root = mapper.readTree(response.body());
+            String token = root.path("access_token").asText("").trim();
+            int expiresIn = root.path("expires_in").asInt(0);
+            if (blank(token) || expiresIn <= 60) {
+                log.warn("获取微信虚拟支付 access_token 失败 errcode={}", root.path("errcode").asInt());
+                throw new IllegalStateException("微信虚拟支付配置校验失败");
+            }
+            virtualAccessToken = new VirtualAccessToken(token, now + Duration.ofSeconds(expiresIn).toMillis());
+            return token;
+        }
+    }
+
+    private String encryptVirtualSessionKey(String sessionKey) {
+        try {
+            byte[] nonce = new byte[12];
+            ThreadLocalRandom.current().nextBytes(nonce);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(virtualSessionAesKey(), "AES"), new GCMParameterSpec(128, nonce));
+            byte[] encrypted = cipher.doFinal(sessionKey.getBytes(StandardCharsets.UTF_8));
+            byte[] packed = new byte[nonce.length + encrypted.length];
+            System.arraycopy(nonce, 0, packed, 0, nonce.length);
+            System.arraycopy(encrypted, 0, packed, nonce.length, encrypted.length);
+            return Base64.getEncoder().encodeToString(packed);
+        } catch (Exception e) {
+            throw new IllegalStateException("微信支付会话加密失败", e);
+        }
+    }
+
+    private String decryptVirtualSessionKey(String ciphertext) {
+        try {
+            byte[] packed = Base64.getDecoder().decode(ciphertext);
+            if (packed.length <= 28) throw new IllegalArgumentException("密文长度无效");
+            byte[] nonce = Arrays.copyOfRange(packed, 0, 12);
+            byte[] encrypted = Arrays.copyOfRange(packed, 12, packed.length);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(virtualSessionAesKey(), "AES"), new GCMParameterSpec(128, nonce));
+            return new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "微信支付会话已失效，请重新发起支付");
+        }
+    }
+
+    private byte[] virtualSessionAesKey() {
+        try {
+            byte[] key = Base64.getDecoder().decode(virtualSessionEncryptionKey);
+            if (key.length != 32) throw new IllegalArgumentException("key length");
+            return key;
+        } catch (Exception e) {
+            throw new IllegalStateException("微信虚拟支付会话加密密钥配置无效", e);
+        }
+    }
+
+    private String hmacSha256Hex(String key, String value) throws Exception {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        return HexFormat.of().formatHex(mac.doFinal(value.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private String selectedVirtualAppKey() {
+        return virtualPaymentEnv == 0 ? virtualPaymentProductionAppKey.trim() : virtualPaymentSandboxAppKey.trim();
+    }
+
+    private String clientIp(HttpServletRequest request) {
+        String forwarded = request == null ? "" : nullableText(request.getHeader("X-Forwarded-For"));
+        String candidate = forwarded.contains(",") ? forwarded.substring(0, forwarded.indexOf(',')).trim() : forwarded;
+        if (candidate.matches("^[0-9a-fA-F:.]{3,64}$")) return candidate;
+        String remote = request == null ? "" : nullableText(request.getRemoteAddr());
+        return remote.matches("^[0-9a-fA-F:.]{3,64}$") ? remote : "127.0.0.1";
+    }
+
+    private String virtualRechargeSignData(String orderNo, long buyQuantity) throws Exception {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("offerId", virtualPaymentOfferId.trim());
+        data.put("buyQuantity", buyQuantity);
+        data.put("env", virtualPaymentEnv);
+        data.put("currencyType", "CNY");
+        data.put("outTradeNo", orderNo);
+        data.put("attach", "credit:" + orderNo);
+        return mapper.writeValueAsString(data);
+    }
+
+    private String virtualRechargeSignDataUnchecked(String orderNo, long buyQuantity) {
+        try { return virtualRechargeSignData(orderNo, buyQuantity); }
+        catch (Exception error) { throw new IllegalStateException("微信虚拟支付签名数据生成失败", error); }
+    }
+
+    private String hmacSha256HexUnchecked(String key, String value) {
+        try { return hmacSha256Hex(key, value); }
+        catch (Exception error) { throw new IllegalStateException("微信虚拟支付签名生成失败", error); }
     }
 
     private void prepareWechatOrderMetadata(String orderNo, String openId) {
@@ -2104,7 +2373,10 @@ public class PaymentController {
         String status = String.valueOf(result.get("status"));
         result.put("expired", "expired".equals(status));
         result.put("canManualComplete", "pending".equals(status) && "manual_wechat_qr".equals(result.get("channel")));
-        result.put("canClose", "pending".equals(status));
+        // Virtual payment must not be locally closed: a late WeChat result is
+        // reconciled from the official coin balance and must keep its matching
+        // order reference until confirmed.
+        result.put("canClose", "pending".equals(status) && !"wechat_virtual_payment".equals(result.get("channel")));
         return result;
     }
 
@@ -2152,6 +2424,34 @@ public class PaymentController {
         return wechatPaymentReady() && !blank(wechatMiniAppSecret);
     }
 
+    private boolean virtualPaymentReady() {
+        if (!virtualPaymentEnabled || blank(wechatAppId) || blank(wechatMiniAppSecret)
+                || blank(virtualPaymentOfferId) || virtualPaymentEnv < 0 || virtualPaymentEnv > 1
+                || blank(selectedVirtualAppKey())) return false;
+        return virtualSessionEncryptionReady();
+    }
+
+    private boolean virtualSessionEncryptionReady() {
+        if (blank(virtualSessionEncryptionKey)) return false;
+        try { return virtualSessionAesKey().length == 32; }
+        catch (Exception ignored) { return false; }
+    }
+
+    private void requireWechatMiniProgramLoginReady() {
+        if (blank(wechatAppId) || blank(wechatMiniAppSecret)) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "微信小程序登录配置尚未完成");
+        }
+    }
+
+    private void requireVirtualPaymentReady() {
+        if (!virtualPaymentReady()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "微信虚拟支付未配置完成，请在服务器配置 offerId、AppKey 与会话加密密钥");
+        }
+    }
+
+    private long virtualCoinQuantity(CreditPackage pkg) { return pkg.credits.longValueExact(); }
+
     private boolean wechatRefundReady() {
         return wechatPaymentReady() && !blank(wechatRefundNotifyUrl) && wechatRefundNotifyUrl.startsWith("https://");
     }
@@ -2194,6 +2494,7 @@ public class PaymentController {
         return HttpRequest.newBuilder(uri).timeout(timeout);
     }
     private String newOrderNo() { return newPaymentReference("PAY"); }
+    private String newVirtualOrderNo() { return newPaymentReference("VPY"); }
     private String newRefundNo() { return newPaymentReference("RFD"); }
     private String newPaymentReference(String prefix) {
         // 3-char prefix + base36 millisecond time + unsigned 64-bit random
@@ -2255,6 +2556,8 @@ public class PaymentController {
     private record BillRecord(String key, Long amountFen) { }
     private record ParsedBill(List<BillRecord> records, List<String> issues) { }
     private record VerifiedWechatNotification(String eventId, String eventType, Map<String, Object> resource) { }
+    private record WechatIdentity(String openId, String sessionKey) { }
+    private record VirtualAccessToken(String value, long expiresAt) { }
     private static final class WechatApiException extends RuntimeException {
         final int statusCode;
         final String providerCode;
