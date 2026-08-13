@@ -206,6 +206,25 @@ export const getTripoModelTask = (jobId: number | string) => request<any>(
 )
 export const uploadReference = (filePath: string) => uploadFile<any>('/api/creative/ai/assets/upload', filePath)
 
+export interface ProfessionalSubmission {
+  id?: number
+  submissionNo?: string
+  title?: string
+  originalName?: string
+  fileSize?: number
+  purpose?: 'personal' | 'museum_sale' | string
+  museumName?: string
+  note?: string
+  status?: 'review' | 'approved' | 'rejected' | string
+  reviewComment?: string
+  createdAt?: string
+}
+
+export const uploadProfessionalSubmission = (filePath: string, formData: Record<string, string>) => uploadFile<any>(
+  '/api/creative/ai/consumer-professional-submissions', filePath, 'file', formData,
+)
+export const getMyProfessionalSubmissions = () => request<ProfessionalSubmission[]>('/api/creative/ai/consumer-professional-submissions/my')
+
 export type Tripo3dPromptTemplate = 'universal' | 'collectible' | 'oriental' | 'plush_toy' | 'ppc_precision'
 
 export interface Tripo3dPromptOptimizeRequest {
@@ -244,6 +263,8 @@ export interface ProductionFeasibilityResult {
   level: string
   issues: string[]
   suggestions: string[]
+  productPolicy?: string
+  productRules?: string
   disclaimer?: string
 }
 

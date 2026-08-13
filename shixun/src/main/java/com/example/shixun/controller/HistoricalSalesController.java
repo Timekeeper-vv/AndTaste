@@ -45,8 +45,8 @@ public class HistoricalSalesController {
                 + "COUNT(DISTINCT project_name) projects, COUNT(DISTINCT product_code) products FROM historical_sales_fact" + where,
                 args.toArray());
         List<Object> itemArgs = new ArrayList<>(args);
-        itemArgs.add((safePage - 1) * safeSize);
         itemArgs.add(safeSize);
+        itemArgs.add((safePage - 1) * safeSize);
         List<Map<String, Object>> items = jdbc.queryForList("SELECT id,report_year reportYear,project_name projectName,product_code productCode,"
                 + "product_name productName,product_type productType,secondary_type secondaryType,sales_jan janSales,sales_feb febSales,"
                 + "sales_mar marSales,sales_apr aprSales,sales_may maySales,sales_jun junSales,sales_jul julSales,sales_ytd sales,loss_ytd loss,"

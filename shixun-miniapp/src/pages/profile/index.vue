@@ -8,7 +8,7 @@
       <view class="identity">
         <text class="eyebrow">MY ATELIER</text>
         <text class="name">{{ displayName }}</text>
-        <text class="role">创作用户 · 灵感与作品都在这里沉淀</text>
+        <text class="role">{{ creatorModeLabel }} · 灵感与作品都在这里沉淀</text>
       </view>
     </view>
 
@@ -47,7 +47,12 @@
       </view>
       <view class="menu-row" @tap="go('/pages/purpose/index')">
         <view class="menu-icon purpose">向</view>
-        <view class="menu-copy"><text>切换创作用途</text><text>个人收藏或景区、博物馆售卖</text></view>
+        <view class="menu-copy"><text>切换创作模式与用途</text><text>{{ creatorModeLabel }} · 个人创作或景区、博物馆售卖</text></view>
+        <text class="arrow">›</text>
+      </view>
+      <view v-if="creatorMode === 'professional'" class="menu-row" @tap="go('/pages/professional/index')">
+        <view class="menu-icon professional">专</view>
+        <view class="menu-copy"><text>专业作品提交</text><text>上传 ZIP 作品包，查看评审进度</text></view>
         <text class="arrow">›</text>
       </view>
       <view class="menu-row" @tap="go('/pages/style-lab/index')">
@@ -107,7 +112,9 @@ import { computed, ref } from 'vue'
 import { clearSession, getSession } from '../../utils/session'
 
 const user = ref(getSession()?.user)
+const creatorMode = ref<'amateur' | 'professional'>((uni.getStorageSync('creation_context') || {}).creatorMode === 'professional' ? 'professional' : 'amateur')
 const displayName = computed(() => user.value?.username || '创作用户')
+const creatorModeLabel = computed(() => creatorMode.value === 'professional' ? '专业创作用户' : '业余创作用户')
 const go = (url: string) => uni.navigateTo({ url })
 const goHome = () => uni.reLaunch({ url: '/pages/home/index' })
 
@@ -160,7 +167,7 @@ function logout() {
 .menu-row:last-child { border-bottom: 0; }
 .menu-row:active { background: #f8f4ed; }
 .menu-icon { display: flex; align-items: center; justify-content: center; flex: none; width: 58rpx; height: 58rpx; margin-right: 19rpx; border-radius: 18rpx; font-family: "Songti SC", "STSong", serif; font-size: 27rpx; font-weight: 800; }
-.artwork { color: #55796a; background: #e8f0e9; }.credit { color: #b56b46; background: #f9ebdf; }.purpose { color: #8d7655; background: #f4efe2; }.style { color: #667b95; background: #e8edf5; }.market { color: #5d7e70; background: #e6f0e8; }.orders { color: #a06249; background: #f8ebe2; }.service { color: #4f8374; background: #e4f2ed; }.rights { color: #a26047; background: #f6e9e2; }
+.artwork { color: #55796a; background: #e8f0e9; }.credit { color: #b56b46; background: #f9ebdf; }.purpose { color: #8d7655; background: #f4efe2; }.professional { color: #a45f48; background: #f6e9e1; }.style { color: #667b95; background: #e8edf5; }.market { color: #5d7e70; background: #e6f0e8; }.orders { color: #a06249; background: #f8ebe2; }.service { color: #4f8374; background: #e4f2ed; }.rights { color: #a26047; background: #f6e9e2; }
 .menu-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .menu-copy text:first-child { color: #33352f; font-size: 29rpx; font-weight: 700; }
 .menu-copy text:last-child { overflow: hidden; margin-top: 7rpx; color: #909087; font-size: 20rpx; text-overflow: ellipsis; white-space: nowrap; }

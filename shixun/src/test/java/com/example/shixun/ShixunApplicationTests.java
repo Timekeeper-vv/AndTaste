@@ -2,12 +2,14 @@ package com.example.shixun;
 
 import com.example.shixun.mapper.UserMapper;
 import com.example.shixun.model.User;
+import com.example.shixun.config.HistoricalSalesDataInitializer;
 import com.example.shixun.service.UserService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
@@ -29,6 +31,12 @@ class ShixunApplicationTests {
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private HistoricalSalesDataInitializer historicalSalesDataInitializer;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final List<Long> createdUserIds = new ArrayList<>();
 
@@ -37,6 +45,17 @@ class ShixunApplicationTests {
     @Test
     void contextLoads() {
         assertThat(userMapper).isNotNull();
+    }
+
+    @Test
+    void historicalSalesSeedIsAvailableInANewDatabase() {
+        assertThat(historicalSalesDataInitializer).isNotNull();
+        Integer rowCount = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM historical_sales_fact WHERE import_batch=?",
+                Integer.class,
+                "2026-sales-20260804"
+        );
+        assertThat(rowCount).isEqualTo(1696);
     }
 
     // ========== User Mapper ==========

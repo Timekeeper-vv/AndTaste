@@ -41,7 +41,7 @@
       <view v-if="is3dMode" class="feasibility-panel">
         <view class="feasibility-head"><view><text>PRODUCTION READINESS</text><text>生产可行性初筛</text></view><button class="assessment-action" :loading="assessmentLoading" :disabled="assessmentLoading || !form.prompt.trim()" @tap="refreshProductionAssessment()">{{ assessmentLoading ? '评估中' : '更新初筛' }}</button></view>
         <text class="feasibility-intro">依据 {{ selectedProductCategory.label }} · {{ form.material }} 和创作描述，提前识别打样风险；不会替代工厂的正式工艺确认。</text>
-        <view v-if="productionAssessment" class="assessment-result" :class="assessmentLevelClass"><view class="assessment-score"><view><text>{{ productionAssessment.level }}</text><text>本次工艺方向</text></view><text>{{ productionAssessment.score }}</text></view><view v-if="assessmentIssues.length" class="assessment-list"><text>需要关注</text><text v-for="(issue, index) in assessmentIssues" :key="`issue-${index}`">{{ issue }}</text></view><view v-if="assessmentSuggestions.length" class="assessment-list suggestions"><text>建议处理</text><text v-for="(suggestion, index) in assessmentSuggestions" :key="`suggestion-${index}`">{{ suggestion }}</text></view><text v-if="optimized3dTip" class="assessment-tip">3D 建模建议：{{ optimized3dTip }}</text></view>
+        <view v-if="productionAssessment" class="assessment-result" :class="assessmentLevelClass"><view class="assessment-score"><view><text>{{ productionAssessment.level }}</text><text>本次工艺方向</text></view><text>{{ productionAssessment.score }}</text></view><text v-if="productionAssessment.productRules" class="product-rule-tip">已锁定{{ selectedProductCategory.label }}生产规则：{{ productionAssessment.productRules }}</text><view v-if="assessmentIssues.length" class="assessment-list"><text>需要关注</text><text v-for="(issue, index) in assessmentIssues" :key="`issue-${index}`">{{ issue }}</text></view><view v-if="assessmentSuggestions.length" class="assessment-list suggestions"><text>建议处理</text><text v-for="(suggestion, index) in assessmentSuggestions" :key="`suggestion-${index}`">{{ suggestion }}</text></view><text v-if="optimized3dTip" class="assessment-tip">3D 建模建议：{{ optimized3dTip }}</text></view>
         <view v-else class="assessment-empty"><text>先写好创作描述，即可查看当前产品与材质的量产风险提示。</text><text>系统会在提交 3D 前自动再做一次初筛。</text></view>
       </view>
 
@@ -123,6 +123,7 @@ import {
   uploadReference,
 } from '../../api/creative'
 import { apiUrl } from '../../api/client'
+import { confirmCreativePolicy } from '../../utils/compliance'
 import {
   findMaterialDefinition,
   isRecommendedMaterial,
@@ -179,6 +180,9 @@ const assessmentLoading = ref(false)
 const optimized3dTip = ref('')
 const imagePromptOptimizing = ref(false)
 const imagePromptGuide = ref('')
+const referencePolicyConfirmed = ref(false)
+const aiPolicyConfirmed = ref(false)
+const threeDimensionalPolicyConfirmed = ref(false)
 
 const multiViewSlots: MultiViewSlot[] = [
   { key: 'front', label: '正面', short: '正' },
@@ -360,7 +364,9 @@ function setMultiViewSource(source: MultiViewSource) {
     clearMultiViewResult()
   }
 }
-function pickImage() {
+async function pickImage() {
+  if (!referencePolicyConfirmed.value && !(await confirmCreativePolicy('reference-materials'))) return
+  referencePolicyConfirmed.value = true
   uni.chooseImage({
     count: 1,
     sizeType: ['compressed'],
@@ -375,8 +381,10 @@ function pickImage() {
     },
   })
 }
-function pickManualMultiView(view: MultiViewKey) {
+async function pickManualMultiView(view: MultiViewKey) {
   if (loading.value || manualMultiViewUploading.value) return
+  if (!referencePolicyConfirmed.value && !(await confirmCreativePolicy('reference-materials'))) return
+  referencePolicyConfirmed.value = true
   uni.chooseImage({
     count: 1,
     sizeType: ['compressed'],
@@ -567,6 +575,10 @@ async function generate() {
   if (!requireSession()) return
   if (!form.prompt.trim()) return uni.showToast({ title: '请填写创作描述', icon: 'none' })
   if (needsReference.value && !referencePath.value) return uni.showToast({ title: '请先选择一张参考图片', icon: 'none' })
+  if (!aiPolicyConfirmed.value && !(await confirmCreativePolicy('ai-output'))) return
+  aiPolicyConfirmed.value = true
+  if (is3dMode.value && !threeDimensionalPolicyConfirmed.value && !(await confirmCreativePolicy('three-dimensional'))) return
+  if (is3dMode.value) threeDimensionalPolicyConfirmed.value = true
   const prompt = buildPrompt()
   if (isMultiViewMode.value) return multiViewSource.value === 'manual' ? submitMultiViewModel() : generateMultiView(prompt)
   loading.value = true
@@ -632,6 +644,8 @@ async function generate() {
 async function generateMultiView(prompt: string) {
   if (!requireSession()) return
   if (!referencePath.value) return uni.showToast({ title: '请先选择一张参考图片', icon: 'none' })
+  if (!aiPolicyConfirmed.value && !(await confirmCreativePolicy('ai-output'))) return
+  aiPolicyConfirmed.value = true
   loading.value = true
   loadingAction.value = 'multiview'
   clearMultiViewResult()
@@ -671,6 +685,8 @@ async function submitMultiViewModel() {
   if (multiViewSource.value === 'manual' && (!front || viewCount < 2)) {
     return uni.showToast({ title: '请先上传正面图与至少一个其他角度', icon: 'none' })
   }
+  if (!threeDimensionalPolicyConfirmed.value && !(await confirmCreativePolicy('three-dimensional'))) return
+  threeDimensionalPolicyConfirmed.value = true
   loading.value = true
   loadingAction.value = 'model'
   try {
@@ -737,4 +753,5 @@ onLoad((query: any) => {
 .prompt-label-row{display:flex;align-items:center;justify-content:space-between;gap:12rpx}.prompt-optimize{height:48rpx;margin:0;padding:0 12rpx;border:1rpx solid #b9cdbc;border-radius:10rpx;background:#f1f6ef;color:#537363;font-size:14rpx;font-weight:900}.prompt-optimize::after{border:0}.prompt-optimize[disabled]{opacity:.58}
 .material-meta{align-items:center}.material-meta>view{min-width:0;flex:1}.material-toggle{flex:0 0 auto;height:50rpx;margin:0;padding:0 11rpx;border:1rpx solid #b9cdbc;border-radius:10rpx;background:#f1f6ef;color:#537363;font-size:14rpx;font-weight:900}.material-toggle::after{border:0}.material-scope-tip{display:block;margin-top:10rpx;padding:10rpx 11rpx;border-left:3rpx solid #b98a6b;border-radius:0 10rpx 10rpx 0;background:#faf3eb;color:#796d62;font-size:14rpx;line-height:1.52}.material-chip{position:relative;padding-right:52rpx}.material-chip .material-recommended,.material-chip .material-cross{position:absolute;right:9rpx;top:9rpx;margin:0!important;padding:4rpx 6rpx;border-radius:99rpx;font-size:11rpx!important;font-weight:900!important;line-height:1.1}.material-chip .material-recommended{color:#557867!important;background:#e4f1e5}.material-chip .material-cross{color:#93735f!important;background:#f4ece4}
 .multiview-source-switch{display:grid;grid-template-columns:1fr 1fr;gap:8rpx;margin-top:13rpx}.multiview-source-switch button{display:flex;min-height:84rpx;flex-direction:column;align-items:flex-start;justify-content:center;gap:4rpx;margin:0;padding:12rpx;border:1rpx solid #ddd7ce;border-radius:13rpx;background:#fffdf9;color:#746b61;text-align:left}.multiview-source-switch button::after{border:0}.multiview-source-switch button text:first-child{font-size:17rpx;font-weight:900}.multiview-source-switch button text:last-child{color:#978c81;font-size:13rpx;line-height:1.4}.multiview-source-switch button.active{border-color:#86a894;background:#eef5ed;color:#4b6c5a;box-shadow:0 6rpx 14rpx rgba(78,109,89,.09)}.multiview-source-switch button.active text:last-child{color:#6d8677}.manual-view-grid{display:grid;grid-template-columns:1fr 1fr;gap:9rpx;margin-top:14rpx}.manual-view-slot{position:relative;min-height:180rpx;overflow:hidden;border:1rpx dashed #cfc8bd;border-radius:15rpx;background:rgba(255,253,249,.74)}.manual-view-slot.ready{border-style:solid;border-color:#9db8a5;background:#f4faf3}.manual-view-slot.uploading{opacity:.68}.manual-view-slot image{display:block;width:100%;height:180rpx;background:#e9ece5}.manual-view-empty{display:flex;height:180rpx;flex-direction:column;align-items:center;justify-content:center;gap:5rpx;color:#7a756c}.manual-view-empty text:first-child{display:grid;place-items:center;width:45rpx;height:45rpx;border-radius:50%;background:#ece7df;color:#627a6d;font-family:"Songti SC","STSong",serif;font-size:25rpx;font-weight:800}.manual-view-empty text:nth-child(2){color:#544c43;font-size:18rpx;font-weight:900}.manual-view-empty text:last-child{color:#978c81;font-size:13rpx}.manual-view-meta{position:absolute;right:0;bottom:0;left:0;display:flex;align-items:center;justify-content:space-between;gap:6rpx;padding:8rpx 9rpx;background:rgba(38,46,40,.68);color:#fff}.manual-view-meta text:first-child{font-size:15rpx;font-weight:900}.manual-view-meta text:last-child{color:rgba(255,255,255,.76);font-size:12rpx}
+.product-rule-tip{display:block;margin-top:11rpx;padding:10rpx 11rpx;border-left:3rpx solid #799887;border-radius:0 10rpx 10rpx 0;background:#f1f6ef;color:#5f7668;font-size:14rpx;line-height:1.55}
 </style>

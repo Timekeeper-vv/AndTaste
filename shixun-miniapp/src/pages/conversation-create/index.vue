@@ -20,9 +20,9 @@
 
       <view v-if="phase === 'material'" class="choice-panel"><text class="choice-title">你希望它用什么材质？</text><text class="choice-note">材质会同步进入生图、三视图、3D 和后续生产提示词。</text><view class="material-grid"><view class="material-card recommendation-card" :class="{ active: materialChoice === 'recommend' }" @tap="chooseRecommendedMaterial"><text class="recommendation-mark">荐</text><view><text>你帮我推荐</text><text>按产品结构和量产工艺选择</text></view><text v-if="materialChoice === 'recommend'" class="check">✓</text></view><view v-for="item in currentMaterials" :key="item.name" class="material-card" :class="{ active: materialChoice === item.name }" @tap="chooseMaterial(item)"><view class="swatch" :style="{ background: item.color }" /><view><text>{{ item.name }}</text><text>{{ item.note }}</text></view><text v-if="materialChoice === item.name" class="check">✓</text></view></view></view>
 
-      <view v-if="phase === 'style'" class="choice-panel"><text class="choice-title">最后确定创作气质</text><text class="choice-note">每一栏只能选一个：选择“你帮我推荐”后，其他具体选项会自动取消。</text><view class="style-section"><text>视觉风格</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: styleChoice === 'recommend' }" @tap="recommendStyle">你帮我推荐</text><text v-for="item in styles" :key="item" class="pill" :class="{ active: styleChoice === item }" @tap="chooseStyle(item)">{{ item }}</text></view></view><view class="style-section"><text>主色方向</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: paletteChoice === 'recommend' }" @tap="recommendPalette">你帮我推荐</text><text v-for="item in palettes" :key="item" class="pill" :class="{ active: paletteChoice === item }" @tap="choosePalette(item)">{{ item }}</text></view></view><view class="style-section"><text>主要用途</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: purposeChoice === 'recommend' }" @tap="recommendPurpose">你帮我推荐</text><text v-for="item in purposes" :key="item" class="pill" :class="{ active: purposeChoice === item }" @tap="choosePurpose(item)">{{ item }}</text></view></view><button class="dark-button full-button" :disabled="busy" @tap="confirmDirection">查看 AI 方案</button></view>
+      <view v-if="phase === 'style'" class="choice-panel"><text class="choice-title">最后确定创作气质</text><text class="choice-note">每一栏只能选一个：选择“你帮我推荐”后，其他具体选项会自动取消。配色将由系统根据产品和风格自动完成。</text><view class="style-section"><text>视觉风格</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: styleChoice === 'recommend' }" @tap="recommendStyle">你帮我推荐</text><text v-for="item in styles" :key="item" class="pill" :class="{ active: styleChoice === item }" @tap="chooseStyle(item)">{{ item }}</text></view></view><view class="style-section"><text>主要用途</text><view class="pill-row"><text class="pill recommendation-pill" :class="{ active: purposeChoice === 'recommend' }" @tap="recommendPurpose">你帮我推荐</text><text v-for="item in purposes" :key="item" class="pill" :class="{ active: purposeChoice === item }" @tap="choosePurpose(item)">{{ item }}</text></view></view><button class="dark-button full-button" :disabled="busy" @tap="confirmDirection">查看 AI 方案</button></view>
 
-      <view v-if="phase === 'summary'" class="summary-panel"><text class="choice-title">这是我为你整理的创作方案</text><view class="summary-card"><view><text>产品</text><text>{{ selectedProduct?.name }}</text></view><view><text>材质</text><text>{{ material }}</text></view><view><text>风格</text><text>{{ style }} · {{ palette }}</text></view><view><text>用途</text><text>{{ purpose }}</text></view><view><text>灵感</text><text>{{ inspirationText || '使用产品模板自动生成方向' }}</text></view></view><text class="summary-note">确认后会生成第一张产品视觉，生成结果会自动进入作品库；之后可以继续四视图和 3D 建模。</text><button class="dark-button full-button" :loading="busy" @tap="generateProductImage">确认并生成产品图</button><button class="link-button" @tap="editDirection">返回修改</button></view>
+      <view v-if="phase === 'summary'" class="summary-panel"><text class="choice-title">这是我为你整理的创作方案</text><view class="summary-card"><view><text>产品</text><text>{{ selectedProduct?.name }}</text></view><view><text>材质</text><text>{{ material }}</text></view><view><text>风格</text><text>{{ style }}</text></view><view><text>用途</text><text>{{ purpose }}</text></view><view><text>灵感</text><text>{{ inspirationText || '使用产品模板自动生成方向' }}</text></view></view><text v-if="isFoodProduct" class="food-direction-note">食品成品方向：将生成可食用的烘焙/食品本体、可食用图案和食品包装效果，不生成徽章、摆件或金属饰品。</text><text class="summary-note">确认后会生成第一张产品视觉，生成结果会自动进入作品库；之后可以继续四视图和 3D 建模。</text><button class="dark-button full-button" :loading="busy" @tap="generateProductImage">确认并生成产品图</button><button class="link-button" @tap="editDirection">返回修改</button></view>
 
       <view v-if="phase === 'result'" class="result-panel"><text class="result-kicker">PRODUCT VISUAL READY</text><text class="choice-title">产品视觉已经完成</text><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view v-if="refiningImage" class="refinement-panel"><text>告诉我哪里不满意</text><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：把主图改得更简洁，保留祥云，去掉文字，做成圆形冰箱贴构图。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view><button class="link-button" @tap="cancelRefinement">返回当前方案</button></view><template v-else><text class="result-tip">满意可以继续补全四个角度或进入 3D；不满意可以在当前图基础上补充要求再生成，旧版本会保留在作品库。</text><view class="next-grid"><view class="next-card" @tap="startRefinement"><text>改</text><view><text>不满意，补充要求重生成</text><text>基于当前图片生成新的方案</text></view><text>›</text></view><view class="next-card" @tap="generateMultiView"><text>观</text><view><text>生成三视图 / 四视图</text><text>补全正、左、背、右四个角度</text></view><text>›</text></view><view class="next-card" @tap="generateModel"><text>形</text><view><text>直接生成 3D 模型</text><text>从当前产品图创建立体原型</text></view><text>›</text></view><view class="next-card" @tap="openCommercial"><text>做</text><view><text>申请打样 / 商品化</text><text>把创作提交给运营报价</text></view><text>›</text></view></view></template></view>
 
@@ -57,6 +57,7 @@ import {
   type SeedreamMultiViewImage,
 } from '../../api/creative'
 import { apiUrl } from '../../api/client'
+import { confirmCreativePolicy, CREATIVE_POLICY_VERSION } from '../../utils/compliance'
 import { requireSession } from '../../utils/session'
 
 type Phase = 'mode' | 'product' | 'inspiration' | 'image' | 'material' | 'style' | 'summary' | 'result' | 'multiview' | 'model'
@@ -76,7 +77,6 @@ const productKeyword = ref('')
 const productCategory = ref('')
 const catalogLoading = ref(false)
 const styles = ['国潮', '敦煌', '青绿山水', '现代极简', '亲子卡通']
-const palettes = ['青绿金', '朱砂米白', '蓝白', '黑金', '明快多彩']
 const purposes = ['景区伴手礼', '博物馆文创', '企业礼赠', '个人收藏', '亲子纪念']
 
 const phase = ref<Phase>('mode')
@@ -85,10 +85,8 @@ const selectedProduct = ref<ProductOption | null>(null)
 const material = ref('')
 const materialChoice = ref<'recommend' | string>('recommend')
 const style = ref('国潮')
-const palette = ref('青绿金')
 const purpose = ref('景区伴手礼')
 const styleChoice = ref<'recommend' | string>('recommend')
-const paletteChoice = ref<'recommend' | string>('recommend')
 const purposeChoice = ref<'recommend' | string>('recommend')
 const inspirationText = ref('')
 const referencePath = ref('')
@@ -110,6 +108,9 @@ let messageId = 0
 let sessionPromise: Promise<boolean> | null = null
 const forceNewSession = ref(false)
 const modelRefreshing = ref(false)
+const referencePolicyConfirmed = ref(false)
+const aiPolicyConfirmed = ref(false)
+const threeDimensionalPolicyConfirmed = ref(false)
 let modelPollTimer: ReturnType<typeof setTimeout> | null = null
 let modelPollVersion = 0
 
@@ -136,10 +137,12 @@ const filteredProductOptions = computed(() => {
   })
 })
 const productCategoryName = computed(() => productCatalogCategories.value.find(item => item.key === productCategory.value)?.name || '')
+const isFoodProduct = computed(() => selectedProduct.value?.categoryKey === 'food'
+  || /食品|食用|曲奇|饼干|糕点|月饼|咖啡|饮品|茶|巧克力|糖果/.test(`${selectedProduct.value?.name || ''} ${material.value}`))
 const prompt = computed(() => {
   const product = selectedProduct.value?.name || '文创产品'
   const source = inspirationText.value.trim() || `为${product}设计一套具有文化辨识度、适合量产打样的产品视觉`
-  return `${source}。产品：${product}；材质：${material.value}；风格：${style.value}；主色：${palette.value}；用途：${purpose.value}。请考虑清晰轮廓、可生产结构、合理尺寸和适合商品展示的构图。`
+  return `${source}。产品：${product}；材质：${material.value}；风格：${style.value}；配色由系统按产品和风格自动协调；用途：${purpose.value}。请考虑清晰轮廓、可生产结构、合理尺寸和适合商品展示的构图。`
 })
 const normalizedModelProgress = computed(() => Math.max(0, Math.min(100, Number(modelTask.value?.progress) || 0)))
 const isModelTaskSucceeded = computed(() => modelTask.value?.status === 'succeeded')
@@ -225,10 +228,8 @@ function resetViewState() {
   material.value = ''
   materialChoice.value = 'recommend'
   style.value = '国潮'
-  palette.value = '青绿金'
   purpose.value = '景区伴手礼'
   styleChoice.value = 'recommend'
-  paletteChoice.value = 'recommend'
   purposeChoice.value = 'recommend'
   inspirationText.value = ''
   referencePath.value = ''
@@ -239,6 +240,9 @@ function resetViewState() {
   refiningImage.value = false
   refinementNote.value = ''
   modelTask.value = null
+  referencePolicyConfirmed.value = false
+  aiPolicyConfirmed.value = false
+  threeDimensionalPolicyConfirmed.value = false
   messages.value = []
   messageId = 0
 }
@@ -269,12 +273,7 @@ function restoreEvent(event: any) {
         style.value = String(payload.style)
         styleChoice.value = payload.recommended ? 'recommend' : style.value
       }
-      if (payload.palette) palette.value = String(payload.palette)
       if (payload.purpose) purpose.value = String(payload.purpose)
-      break
-    case 'palette_selected':
-      palette.value = String(payload.palette || palette.value)
-      paletteChoice.value = payload.recommended ? 'recommend' : palette.value
       break
     case 'purpose_selected':
       purpose.value = String(payload.purpose || purpose.value)
@@ -282,10 +281,8 @@ function restoreEvent(event: any) {
       break
     case 'creative_direction_confirmed':
       if (payload.style) style.value = String(payload.style)
-      if (payload.palette) palette.value = String(payload.palette)
       if (payload.purpose) purpose.value = String(payload.purpose)
       styleChoice.value = payload.styleChoice || styleChoice.value
-      paletteChoice.value = payload.paletteChoice || paletteChoice.value
       purposeChoice.value = payload.purposeChoice || purposeChoice.value
       if (payload.inspirationText) inspirationText.value = String(payload.inspirationText)
       break
@@ -344,10 +341,10 @@ function restoreMessages(events: any[]) {
         break
       case 'material_selected':
         addMessage('user', String(payload.material || payload.materialName || material.value))
-        addMessage('assistant', '最后确认视觉风格、颜色和用途，我就可以为你整理完整方案。')
+        addMessage('assistant', '最后确认视觉风格和用途，我就可以为你整理完整方案。')
         break
       case 'creative_direction_confirmed':
-        addMessage('user', `${payload.style || style.value} · ${payload.palette || palette.value} · ${payload.purpose || purpose.value}`)
+        addMessage('user', `${payload.style || style.value} · ${payload.purpose || purpose.value}`)
         addMessage('assistant', '方案整理好了。确认后我会调用现有生图服务，并把成图与完整参数绑定到这次会话。')
         break
       case 'image_generated':
@@ -484,6 +481,12 @@ async function pickInspirationImage() {
     uni.showToast({ title: '图片正在上传或生成中，请稍候', icon: 'none' })
     return
   }
+  if (!referencePolicyConfirmed.value) {
+    const confirmed = await confirmCreativePolicy('reference-materials')
+    if (!confirmed) return
+    referencePolicyConfirmed.value = true
+    await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'reference-materials', policyVersion: CREATIVE_POLICY_VERSION })
+  }
   // chooseImage is the protected API itself. Calling it directly lets WeChat
   // invoke the app-level privacy resolver and then resume this exact action.
   // A separate requirePrivacyAuthorize call can consume the tap without
@@ -517,7 +520,12 @@ async function uploadInspirationImage(path: string) {
     referenceAssetId.value = id
     await saveEvent('inspiration', 'image_inspiration_uploaded', { productType: selectedProduct.value?.name, inputAssetId: id, fileType: 'image' })
     uni.showToast({ title: '图片已留存', icon: 'success' })
-  } catch (error: any) { referencePath.value = ''; uni.showToast({ title: error?.message || '图片上传失败', icon: 'none' }) }
+  } catch (error: any) {
+    referencePath.value = ''
+    const message = error?.message || '图片上传失败'
+    // Toast 文案长度有限，网络上传错误改用弹窗，避免关键的微信错误被截断。
+    uni.showModal({ title: '图片上传失败', content: message, showCancel: false })
+  }
   finally { busy.value = false }
 }
 async function submitImageInspiration() {
@@ -532,7 +540,7 @@ async function chooseMaterial(value: MaterialOption) {
   materialChoice.value = value.name
   addMessage('user', value.name)
   await saveEvent('material', 'material_selected', { productType: selectedProduct.value?.name, material: value.name, materialNote: value.note })
-  addMessage('assistant', '最后确认视觉风格、颜色和用途，我就可以为你整理完整方案。')
+  addMessage('assistant', '最后确认视觉风格和用途，我就可以为你整理完整方案。')
   phase.value = 'style'
 }
 function recommendedMaterial() {
@@ -559,13 +567,6 @@ function recommendedStyle() {
   if (/简约|极简|现代|科技/.test(context)) return '现代极简'
   return '国潮'
 }
-function recommendedPalette(styleValue = style.value) {
-  if (styleValue === '敦煌') return '朱砂米白'
-  if (styleValue === '青绿山水') return '青绿金'
-  if (styleValue === '现代极简') return '蓝白'
-  if (styleValue === '亲子卡通') return '明快多彩'
-  return selectedProduct.value?.categoryKey === 'precious' ? '黑金' : '青绿金'
-}
 function recommendedPurpose() {
   const context = `${selectedProduct.value?.name || ''} ${inspirationText.value}`
   if (/博物馆|文物|展馆/.test(context)) return '博物馆文创'
@@ -580,12 +581,6 @@ function recommendStyle() {
   void saveEvent('style', 'style_selected', { style: style.value, productType: selectedProduct.value?.name, recommended: true })
   uni.showToast({ title: `推荐：${style.value}`, icon: 'none' })
 }
-function recommendPalette() {
-  palette.value = recommendedPalette()
-  paletteChoice.value = 'recommend'
-  void saveEvent('style', 'palette_selected', { palette: palette.value, productType: selectedProduct.value?.name, recommended: true })
-  uni.showToast({ title: `推荐：${palette.value}`, icon: 'none' })
-}
 function recommendPurpose() {
   purpose.value = recommendedPurpose()
   purposeChoice.value = 'recommend'
@@ -593,11 +588,9 @@ function recommendPurpose() {
   uni.showToast({ title: `推荐：${purpose.value}`, icon: 'none' })
 }
 function chooseStyle(value: string) { style.value = value; styleChoice.value = value; void saveEvent('style', 'style_selected', { style: value, productType: selectedProduct.value?.name, recommended: false }) }
-function choosePalette(value: string) { palette.value = value; paletteChoice.value = value; void saveEvent('style', 'palette_selected', { palette: value, productType: selectedProduct.value?.name, recommended: false }) }
 function choosePurpose(value: string) { purpose.value = value; purposeChoice.value = value; void saveEvent('style', 'purpose_selected', { purpose: value, productType: selectedProduct.value?.name, recommended: false }) }
 async function confirmDirection() {
   if (styleChoice.value === 'recommend') style.value = recommendedStyle()
-  if (paletteChoice.value === 'recommend') palette.value = recommendedPalette(style.value)
   if (purposeChoice.value === 'recommend') purpose.value = recommendedPurpose()
   if (!material.value) {
     const recommendation = recommendedMaterial()
@@ -607,14 +600,20 @@ async function confirmDirection() {
     }
     material.value = recommendation.name
   }
-  addMessage('user', `${style.value} · ${palette.value} · ${purpose.value}`)
-  await saveEvent('summary', 'creative_direction_confirmed', { productType: selectedProduct.value?.name, material: material.value, style: style.value, palette: palette.value, purpose: purpose.value, styleChoice: styleChoice.value, paletteChoice: paletteChoice.value, purposeChoice: purposeChoice.value, inspirationText: inspirationText.value.trim() })
+  addMessage('user', `${style.value} · ${purpose.value}`)
+  await saveEvent('summary', 'creative_direction_confirmed', { productType: selectedProduct.value?.name, material: material.value, style: style.value, purpose: purpose.value, styleChoice: styleChoice.value, purposeChoice: purposeChoice.value, inspirationText: inspirationText.value.trim() })
   addMessage('assistant', '方案整理好了。确认后我会调用现有生图服务，并把成图与完整参数绑定到这次会话。')
   phase.value = 'summary'
 }
 function editDirection() { phase.value = 'style' }
 async function generateProductImage() {
   if (busy.value || !selectedProduct.value || !material.value) return
+  if (!aiPolicyConfirmed.value) {
+    const confirmed = await confirmCreativePolicy('ai-output')
+    if (!confirmed) return
+    aiPolicyConfirmed.value = true
+    await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'ai-output', policyVersion: CREATIVE_POLICY_VERSION })
+  }
   busy.value = true
   busyMessage.value = '正在生成产品视觉并保存到作品库，请稍候…'
   try {
@@ -752,6 +751,12 @@ async function generateMultiView() {
     uni.showToast({ title: '当前产品图未保存成功，请先重新生成产品图', icon: 'none' })
     return
   }
+  if (!aiPolicyConfirmed.value) {
+    const confirmed = await confirmCreativePolicy('ai-output')
+    if (!confirmed) return
+    aiPolicyConfirmed.value = true
+    await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'ai-output', policyVersion: CREATIVE_POLICY_VERSION })
+  }
   busy.value = true
   busyMessage.value = '正在依次生成正面、左侧、背面和右侧，请稍候…'
   try {
@@ -770,6 +775,12 @@ async function generateModel() {
   if (!generatedAssetId.value) {
     uni.showToast({ title: '当前产品图未保存成功，请先重新生成产品图', icon: 'none' })
     return
+  }
+  if (!threeDimensionalPolicyConfirmed.value) {
+    const confirmed = await confirmCreativePolicy('three-dimensional')
+    if (!confirmed) return
+    threeDimensionalPolicyConfirmed.value = true
+    await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'three-dimensional', policyVersion: CREATIVE_POLICY_VERSION })
   }
   busy.value = true
   busyMessage.value = '正在提交 3D 建模任务，请稍候…'
@@ -817,4 +828,5 @@ onUnmounted(() => stopModelPolling())
 .category-entry-grid{display:grid;grid-template-columns:1fr 1fr;gap:10rpx;margin-top:15rpx}.category-entry{display:grid;grid-template-columns:44rpx minmax(0,1fr) 15rpx;align-items:center;gap:8rpx;min-height:112rpx;padding:12rpx;border:1rpx solid #dfd6ca;border-radius:15rpx;background:#fffefa}.category-entry:active{background:#f1f5ef}.category-entry-mark{display:grid;place-items:center;width:42rpx;height:42rpx;border-radius:12rpx;background:#e7f0e8;color:#567665;font-family:"Songti SC","STSong",serif;font-size:23rpx;font-weight:800}.category-entry view{display:flex;min-width:0;flex-direction:column;gap:5rpx}.category-entry view text:first-child{overflow:hidden;color:#4d433b;font-size:17rpx;font-weight:850;text-overflow:ellipsis;white-space:nowrap}.category-entry view text:last-child{color:#97887b;font-size:12rpx}.category-entry>text:last-child{color:#aa7a61;font-size:27rpx}.catalog-result-title{display:block;margin:16rpx 2rpx 0;color:#6a5c4e;font-size:18rpx;font-weight:850}
 .recommendation-card{border-color:#a8beab;background:#f0f7ef}.recommendation-mark{display:grid;place-items:center;width:32rpx;height:32rpx;border-radius:10rpx;background:#5d806b;color:#fff;font-size:18rpx;font-weight:850}.recommendation-pill{border-color:#8cad98;background:#edf5ed;color:#4f715d;font-weight:850}
 .refinement-panel{margin-top:16rpx;padding:15rpx;border:1rpx solid #d8c9b7;border-radius:15rpx;background:#f8f3eb}.refinement-panel>text:first-child{display:block;color:#5c5044;font-size:19rpx;font-weight:850}.refinement-input{min-height:130rpx;margin-top:10rpx;font-size:18rpx}.refinement-panel .dark-button{height:64rpx;margin:0;font-size:17rpx}
+.food-direction-note{display:block;margin-top:14rpx;padding:12rpx;border-left:4rpx solid #b37b4d;border-radius:0 10rpx 10rpx 0;background:#fbf2e5;color:#795b42;font-size:16rpx;line-height:1.55}
 </style>

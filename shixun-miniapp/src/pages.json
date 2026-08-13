@@ -9,6 +9,7 @@
     { "path": "pages/selection/index", "style": { "navigationBarTitleText": "灵感选品", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/commercial/index", "style": { "navigationBarTitleText": "商品化申请", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/purpose/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/professional/index", "style": { "navigationBarTitleText": "专业创作", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/create/index", "style": { "navigationBarTitleText": "AI 创作", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/style-lab/index", "style": { "navigationBarTitleText": "灵感风格工作台", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/works/index", "style": { "navigationBarTitleText": "我的作品", "navigationBarBackgroundColor": "#f7f3ed" } },

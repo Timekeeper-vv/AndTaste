@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
+import com.example.shixun.service.ProductPromptPolicy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
@@ -597,10 +598,12 @@ public class CreativeAiController {
                 + "The prompt must preserve the user's subject and practical use, avoid abstract adjectives alone, and describe concrete geometry, silhouette, materials, surface details, topology and production-ready 3D asset qualities. "
                 + "Always include clean topology, watertight mesh, no floating parts, ultra-detailed 3D asset, sharp geometry, 8k PBR textures, professional product visualization. Preserve every <<3D_CRAFT_LOCK>> instruction from the user exactly in meaning: flat color, vector-style decorative artwork, simple shapes, thick outlines, no graphic gradients, sticker/decal-ready artwork and orthographic reference view. These rules apply to artwork, not to natural PBR reflections of the chosen material. "
                 + "Negative prompt should include low poly, blurry, untextured blank surface, deformed, asymmetric, noisy mesh, broken topology, floating parts. "
-                + "Selected template: " + tripo3dTemplateName(template) + ". Template rules: " + tripo3dTemplateInstruction(template);
+                + "Selected template: " + tripo3dTemplateName(template) + ". Template rules: " + tripo3dTemplateInstruction(template) + ". "
+                + ProductPromptPolicy.optimizerRules(req.productCategory, req.material);
         String content = callChat(system, req.prompt.trim()).trim();
         String optimized;
-        String negative = "low poly, blurry, untextured blank surface, deformed, asymmetric, noisy mesh, broken topology, floating parts, melted details, plastic look";
+        String negative = "low poly, blurry, untextured blank surface, deformed, asymmetric, noisy mesh, broken topology, floating parts, melted details, plastic look, "
+                + ProductPromptPolicy.negative(req.productCategory, req.material);
         String usageTips = tripo3dTemplateTips(template);
         try {
             String json = content;
@@ -682,7 +685,8 @@ public class CreativeAiController {
                 + "Follow the same structure: clear photographic subject, specific environment, warm cinematic lighting, exact visible text when provided, brand/profile/logo placement when relevant, detailed product or interface contents, realistic background objects, premium composition, shallow depth of field, tactile materials, sharp focal details, official and trustworthy visual tone. "
                 + "Preserve the user's actual product, place, cultural theme, brand elements, materials, colors, label text, audience, and use case. If the user provides Chinese product/region names, translate them naturally into English unless they are meant to appear as printed text. "
                 + "For packaging or product concepts, describe the package shape, paper/plastic/metal/ceramic texture, typography, illustration style, net weight or label copy if supplied, countertop/tabletop/studio setting, lens, depth of field, and commercial product-shot quality. "
-                + "Keep it concise but rich, within 900 English words. Target provider: " + (blank(provider) ? "general" : provider) + ".";
+                + "Keep it concise but rich, within 900 English words. Target provider: " + (blank(provider) ? "general" : provider) + ". "
+                + ProductPromptPolicy.optimizerRules(req.productCategory, req.material);
         String optimized=callChat(system,sourcePrompt).trim();
         int maxPromptLength = "imagen".equalsIgnoreCase(nullToEmpty(req.provider)) ? 1800 : ("jimeng".equalsIgnoreCase(nullToEmpty(req.provider)) ? 760 : 1024);
         if(optimized.length()>maxPromptLength)optimized=optimized.substring(0,maxPromptLength);
@@ -715,7 +719,7 @@ public class CreativeAiController {
         assertCompliantPrompt(req.prompt, req.productCategory);
         Map<String, Object> style = style(req.styleId);
         String finalPrompt = buildPrompt(enforceMaterialConstraint(req.prompt, req.productCategory, req.material), style, req.scene, req.productType);
-        String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
+        String negative = mergeNegative(mergeNegative(req.negativePrompt, (String) style.get("negativePrompt")), ProductPromptPolicy.negative(req.productCategory, req.material));
         String jobNo = no("AIG");
         Long jobId = createJob(jobNo, "text_to_image", "siliconflow", imageModel, req.styleId, null, finalPrompt, negative, "running", null, null);
         assignJobOwner(jobId, ownerUserId);
@@ -976,14 +980,15 @@ public class CreativeAiController {
         Long ownerUserId = authenticatedUserId();
         if(blank(replicateApiKey) || replicateApiKey.contains("YOUR_")) throw new IllegalStateException("未配置 Replicate API Key：请在 shixun/application-local.properties 配置 replicate.api.key");
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
-        String prompt = req.prompt.trim();
+        String prompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
         if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
         String aspect = Set.of("1:1","16:9","9:16","4:3","3:4").contains(nullToEmpty(req.imagenAspectRatio)) ? req.imagenAspectRatio : "1:1";
         String size = Set.of("1K","2K").contains(nullToEmpty(req.imagenImageSize)) ? req.imagenImageSize : "1K";
         String format = Set.of("png","jpg").contains(nullToEmpty(req.imagenOutputFormat).toLowerCase(Locale.ROOT)) ? req.imagenOutputFormat.toLowerCase(Locale.ROOT) : "png";
-        String imagenPrompt = buildImagenPrompt(prompt);
+        String imagenPrompt = buildImagenPrompt(prompt + "\n" + ProductPromptPolicy.optimizerRules(req.productCategory, req.material));
         String jobNo = no("IMG");
-        Long jobId = createJob(jobNo, "text_to_image", "replicate", replicateImagenModel, req.styleId, null, prompt, req.negativePrompt, "running", null, size + " " + aspect);
+        String imagenNegative = ProductPromptPolicy.negative(req.productCategory, req.material);
+        Long jobId = createJob(jobNo, "text_to_image", "replicate", replicateImagenModel, req.styleId, null, prompt, imagenNegative, "running", null, size + " " + aspect);
         assignJobOwner(jobId, ownerUserId);
         try {
             JsonNode prediction = createImagenPrediction(imagenPrompt, aspect, size, format);
@@ -1005,7 +1010,7 @@ public class CreativeAiController {
             meta.put("promptForImagen", imagenPrompt);
             meta.put("createdByUserId", ownerUserId);
             if (currentConsumerUserIdOrNull() != null) meta.put("consumerWork", true);
-            Long assetId = createAsset("Google Imagen 4 2D创意图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, format, "Google Imagen 4,Replicate,2D创意生图,AI生成", meta);
+            Long assetId = createAsset("Google Imagen 4 2D创意图", "image", "ai_generated", localImage, localImage, prompt, imagenNegative, req.styleId, null, format, "Google Imagen 4,Replicate,2D创意生图,AI生成", meta);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, prediction.path("id").asText(""), jobId);
             Map<String,Object> out = new LinkedHashMap<>();
             out.put("jobId", jobId);
@@ -1050,10 +1055,11 @@ public class CreativeAiController {
         Long ownerUserId = authenticatedUserId();
         if(blank(modaoApiKey) || !modaoApiKey.startsWith("modao_")) throw new IllegalStateException("未配置墨刀令牌 modao.api.key，请在 shixun/application-local.properties 配置");
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成设计提示词");
-        String prompt = req.prompt.trim();
+        String prompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
         if(prompt.length() > 2000) prompt = prompt.substring(0, 2000);
         String jobNo = no("MDA");
-        Long jobId = createJob(jobNo, "text_to_image", "modao", "modao-generate-image", req.styleId, null, prompt, req.negativePrompt, "running", null, req.imageSize);
+        String modaoNegative = ProductPromptPolicy.negative(req.productCategory, req.material);
+        Long jobId = createJob(jobNo, "text_to_image", "modao", "modao-generate-image", req.styleId, null, prompt, modaoNegative, "running", null, req.imageSize);
         assignJobOwner(jobId, ownerUserId);
         try {
             Map<String,Object> generated = modaoGenerateImage(prompt, "生成1024x1024文创产品视觉图，适合电商主图/产品海报截图。画面必须有清晰主体、商业级构图、丰富质感，不要生成后台界面。");
@@ -1072,7 +1078,7 @@ public class CreativeAiController {
             meta.put("tool", "generate_image");
             meta.put("createdByUserId", ownerUserId);
             if (currentConsumerUserIdOrNull() != null) meta.put("consumerWork", true);
-            Long assetId = createAsset("墨刀AI 2D设计图", "image", "ai_generated", localImage, localImage, prompt, req.negativePrompt, req.styleId, null, "png", "墨刀,2D创意生图,AI生成", meta);
+            Long assetId = createAsset("墨刀AI 2D设计图", "image", "ai_generated", localImage, localImage, prompt, modaoNegative, req.styleId, null, "png", "墨刀,2D创意生图,AI生成", meta);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,external_task_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, blank(key)?"modao-generate-image":key, jobId);
             Map<String,Object> out = new LinkedHashMap<>();
             out.put("jobId", jobId);
@@ -1135,14 +1141,16 @@ public class CreativeAiController {
         if(blank(tripoApiKey) || tripoApiKey.contains("YOUR_")) throw new IllegalStateException("未配置Tripo API Key");
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
         if(req.prompt.trim().length()>1024) throw new IllegalArgumentException("Tripo生图提示词不能超过1024个字符");
+        String tripoPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
         String model=Set.of("seedream_v5","seedream_v4","banana","banana_pro","banana2","chat_image_1","chat_image_1.5","chat_image_2").contains(req.tripoImageModel)?req.tripoImageModel:"seedream_v5";
-        Map<String,Object> body=new LinkedHashMap<>(); body.put("prompt",req.prompt.trim()); body.put("model",model);
+        Map<String,Object> body=new LinkedHashMap<>(); body.put("prompt",tripoPrompt.length() > 1024 ? tripoPrompt.substring(0, 1024) : tripoPrompt); body.put("model",model);
         if(!blank(req.tripoTemplate)) body.put("template",req.tripoTemplate.trim());
         if(Boolean.TRUE.equals(req.tPose)) body.put("t_pose",true);
         if(Boolean.TRUE.equals(req.sketchToRender)) body.put("sketch_to_render",true);
         String raw=tripoJson("POST","/generation/text-to-image",mapper.writeValueAsString(body)); JsonNode root=mapper.readTree(raw); ensureTripoOk(root,raw);
         String taskId=root.path("data").path("task_id").asText(""); if(blank(taskId))throw new IllegalStateException("Tripo文本生图未返回task_id："+raw);
-        String jobNo=no("T2D"); Long jobId=createJob(jobNo,"text_to_image","tripo",model,req.styleId,null,req.prompt,req.negativePrompt,"running",null,req.imageSize);
+        String tripoNegative = mergeNegative(req.negativePrompt, ProductPromptPolicy.negative(req.productCategory, req.material));
+        String jobNo=no("T2D"); Long jobId=createJob(jobNo,"text_to_image","tripo",model,req.styleId,null,tripoPrompt,tripoNegative,"running",null,req.imageSize);
         assignJobOwner(jobId, ownerUserId);
         jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?",taskId,jobId);
         return Map.of("jobId",jobId,"jobNo",jobNo,"taskId",taskId,"status","running","progress",0,"provider","tripo","model",model,"message","Tripo文本生图任务已提交");
@@ -2234,12 +2242,33 @@ public class CreativeAiController {
     // The API boundary enforces the chosen physical material too, so a future
     // client cannot accidentally turn material selection back into display-only UI.
     private String enforceMaterialConstraint(String prompt, String productCategory, String material) {
+        return ProductPromptPolicy.enforce(prompt, productCategory, material);
+    }
+
+    /**
+     * Food selections need a stronger guard than a generic material lock. Without
+     * it, image models often interpret a cultural motif as an enamel badge or a
+     * metal ornament merely placed in a gift box, which is unsafe for a food SKU.
+     */
+    private boolean isEdibleFoodProduct(String productCategory, String material) {
+        String context = (nullToEmpty(productCategory) + " " + nullToEmpty(material)).toLowerCase(Locale.ROOT);
+        return context.contains("food") || context.contains("食品") || context.contains("食用")
+                || context.contains("曲奇") || context.contains("饼干") || context.contains("糕点")
+                || context.contains("月饼") || context.contains("咖啡") || context.contains("饮品")
+                || context.contains("茶") || context.contains("巧克力") || context.contains("糖果");
+    }
+
+    private String enforceEdibleFoodConstraint(String prompt, String productCategory, String material) {
         String base = nullToEmpty(prompt).trim();
-        if (blank(material) || base.contains("<<MATERIAL_LOCK>>")) return base;
-        String category = blank(productCategory) ? "cultural creative product" : productCategory.trim();
-        return base + "\n<<MATERIAL_LOCK>>Primary product material is " + material.trim()
-                + " for this " + category
-                + ". This is mandatory: render authentic material texture, surface finish, edge treatment, and realistic light response; do not substitute another primary material.<</MATERIAL_LOCK>>";
+        if (base.contains("<<EDIBLE_FOOD_LOCK>>")) return base;
+        String category = blank(productCategory) ? "edible cultural creative food" : productCategory.trim();
+        String ingredient = blank(material) ? "food-grade edible ingredients" : material.trim();
+        // Keep room for the immutable food lock under the provider's 800-character prompt limit.
+        if (base.length() > 360) base = base.substring(0, 360);
+        return base + "\n<<EDIBLE_FOOD_LOCK>>This is a real, clearly edible " + category + ", made from " + ingredient + ". "
+                + "Render the cultural motif as a baked cookie or pastry shape, food-safe icing, embossed dough pattern, edible color printing, or chocolate decoration. "
+                + "Show convincing baked golden edges, porous biscuit crumb, realistic cookie thickness, slight oven browning, and an edible serving or sealed food-gift-box presentation. "
+                + "It must be instantly recognizable as food that can be eaten, not a souvenir. Never render metal, gold plating, enamel, jewelry, badge, keychain, toy, plastic, resin, ceramic, stone, lacquer, or a decorative object placed in a box.<</EDIBLE_FOOD_LOCK>>";
     }
 
     // The design constraint is kept at the API boundary as well as in the UI. This
@@ -3725,19 +3754,33 @@ public class CreativeAiController {
         String category = nullToEmpty(String.valueOf(body.getOrDefault("productCategory", "")));
         String material = nullToEmpty(String.valueOf(body.getOrDefault("material", "")));
         String prompt = nullToEmpty(String.valueOf(body.getOrDefault("prompt", "")));
+        ProductPromptPolicy.Profile productPolicy = ProductPromptPolicy.resolve(category, material);
         List<String> issues = new ArrayList<>();
         List<String> suggestions = new ArrayList<>();
         int score = 92;
         String all = (category + " " + material + " " + prompt).toLowerCase(Locale.ROOT);
+        if (productPolicy.edible()) {
+            suggestions.add("食品类必须由生产方确认食品级原料、配料/过敏原、净含量、保质期、包装和冷链条件；AI提示词不能替代食品合规审核。 ");
+            if (all.contains("金属") || all.contains("合金") || all.contains("塑料") || all.contains("树脂") || all.contains("徽章")) {
+                score -= 25;
+                issues.add("食品产品描述混入了非食品材质或饰品结构，可能导致生成结果不可食用。 ");
+            }
+        }
         if (all.contains("细线") || all.contains("极细") || all.contains("发丝") || all.contains("thin line")) { score -= 14; issues.add("存在过细线条风险，量产时易断裂或丢失细节。"); suggestions.add("将关键线条加粗，并在打样图上标注最小线宽。 "); }
         if (all.contains("悬空") || all.contains("floating") || all.contains("漂浮")) { score -= 14; issues.add("存在悬空/细连接结构，运输和开模风险较高。"); suggestions.add("增加底座、支撑或改成独立分件。 "); }
         if (all.contains("倒扣") || all.contains("undercut")) { score -= 12; issues.add("描述包含倒扣结构，可能需要滑块或调整分件。"); suggestions.add("在打样前由工艺人员确认拔模方向与分型线。 "); }
         if (material.contains("毛绒")) { suggestions.add("毛绒建议使用刺绣五官和独立布料裁片，避免把复杂图案直接做成长毛印花。 "); }
         if (material.contains("PVC") || material.contains("搪胶") || material.contains("PPC") || material.contains("硬塑")) { suggestions.add("注塑/搪胶件建议预留合理壁厚、圆角与分件位；该结果仅为系统初筛。 "); }
         if (category.contains("冰箱贴")) suggestions.add("冰箱贴请在背面预留平整磁铁位，并避免过薄边缘。 ");
+        if (productPolicy.key().equals("metal")) suggestions.add("金属类请在生产图中明确厚度、圆角、分型线和背面连接结构，再由工厂确认模具与表面处理。 ");
+        if (productPolicy.key().equals("paper")) suggestions.add("纸品请确认成品尺寸、出血、纸张克重、折线、覆膜和印刷色差，避免把平面稿直接当成结构模型。 ");
+        if (productPolicy.key().equals("canvas")) suggestions.add("帆布/纺织品请确认裁片、缝线、印花安全边距、提手或拉链结构，最终以打样实物确认。 ");
+        if (productPolicy.key().equals("tableware")) suggestions.add("杯具/餐具请确认食品接触面、釉面/搪瓷工艺、容积、壁厚和耐热要求。 ");
         if (issues.isEmpty()) issues.add("未识别到明显的文字描述风险，仍需以3D结构、尺寸和真实打样为准。 ");
         String level = score >= 85 ? "可进入打样准备" : score >= 65 ? "建议工艺复核" : "建议先修改方案";
-        return Map.of("score", Math.max(35, score), "level", level, "issues", issues, "suggestions", suggestions, "disclaimer", "这是基于文字描述的生产可行性初筛，不构成报价、质检承诺或正式工艺结论；量产前须由工厂/人工专业人员确认。");
+        return Map.of("score", Math.max(35, score), "level", level, "issues", issues, "suggestions", suggestions,
+                "productPolicy", productPolicy.key(), "productRules", productPolicy.positiveLock(),
+                "disclaimer", "这是基于文字描述的生产可行性初筛，不构成报价、质检承诺或正式工艺结论；量产前须由工厂/人工专业人员确认。");
     }
 
     @PostMapping("/consumer/copyright-consultations")

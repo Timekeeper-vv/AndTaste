@@ -81,6 +81,7 @@ import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import { getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
+import { confirmCreativePolicy } from '../../utils/compliance'
 import { getSession, requireSession } from '../../utils/session'
 import { statusText } from '../../utils/format'
 
@@ -92,6 +93,7 @@ const loading = ref(true)
 const submittingId = ref<number | null>(null)
 const downloadingModelId = ref('')
 const DESKTOP_MODEL_URL = 'https://www.zhijiansk.com/'
+const threeDimensionalPolicyConfirmed = ref(false)
 
 const assetJobMap = computed(() => {
   const result: Record<string, any> = {}
@@ -229,11 +231,15 @@ async function refresh(notify = false) {
   }
 }
 
-function preview(asset: any) {
+async function preview(asset: any) {
+  if (!threeDimensionalPolicyConfirmed.value && !(await confirmCreativePolicy('three-dimensional'))) return
+  threeDimensionalPolicyConfirmed.value = true
   showDesktopModelNotice('preview')
 }
 
-function openMaterialLab(_asset?: any) {
+async function openMaterialLab(_asset?: any) {
+  if (!threeDimensionalPolicyConfirmed.value && !(await confirmCreativePolicy('three-dimensional'))) return
+  threeDimensionalPolicyConfirmed.value = true
   showDesktopModelNotice('material')
 }
 

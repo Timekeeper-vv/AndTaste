@@ -20,10 +20,13 @@ function parsePayload(data: any) {
 
 function uploadFailureMessage(error: any) {
   const raw = String(error?.errMsg || error?.message || error || '')
-  if (/url not in domain list|合法域名|not in domain/i.test(raw)) return '上传域名未配置，请在微信公众平台添加 https://zhijiansk.com 到 uploadFile 合法域名'
+  if (/url not in domain list|合法域名|not in domain/i.test(raw)) return '上传域名未配置，请在微信公众平台将 https://zhijiansk.com 添加到 uploadFile 合法域名'
   if (/ssl|certificate|cert/i.test(raw)) return '上传服务的 HTTPS 证书校验失败，请检查域名证书配置'
   if (/timeout|timed out/i.test(raw)) return '图片上传超时，请检查网络后重试'
-  return messageOf(error, '上传失败，请检查服务地址和网络连接')
+  if (/401|unauthorized|请先登录|登录已过期/i.test(raw)) return '登录已过期，请重新登录后再上传'
+  if (/413|request entity too large|file too large/i.test(raw)) return '图片文件过大，请选择 100MB 以内的 JPG、PNG 或 WEBP 图片'
+  if (/dns|network|fail|connect|refused/i.test(raw)) return '无法连接上传服务，请确认微信后台已将 https://zhijiansk.com 同时添加到 request、uploadFile 和 downloadFile 合法域名'
+  return `图片上传失败：${raw || '微信未返回具体原因'}`
 }
 
 export class ApiError extends Error {
@@ -71,13 +74,14 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return data as T
 }
 
-export async function uploadFile<T>(path: string, filePath: string, name = 'file'): Promise<T> {
+export async function uploadFile<T>(path: string, filePath: string, name = 'file', formData?: Record<string, string>): Promise<T> {
   const session = getSession()
   let response: UniApp.UploadFileSuccessCallbackResult
   try {
     response = await uni.uploadFile({
       url: apiUrl(path), filePath, name,
       timeout: 120000,
+      formData,
       header: session?.token ? { Authorization: `Bearer ${session.token}` } : {},
     })
   } catch (error: any) {
