@@ -1,11 +1,25 @@
 -- 微信小程序虚拟支付扩展。积分充值使用官方代币充值能力，实物打样费仍使用。
 -- 普通微信支付；session_key 只保存 AES-GCM 密文，绝不返回给客户端。
 
-ALTER TABLE wechat_user_binding
-    ADD COLUMN IF NOT EXISTS session_key_ciphertext TEXT NULL COMMENT '微信临时 session_key 的 AES-GCM 密文';
+-- MySQL 8.0.46 does not support ADD COLUMN IF NOT EXISTS. Check metadata so
+-- the migration can safely resume if an earlier attempt added either column.
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'wechat_user_binding' AND column_name = 'session_key_ciphertext'),
+    'SELECT 1',
+    'ALTER TABLE wechat_user_binding ADD COLUMN session_key_ciphertext TEXT NULL COMMENT ''微信临时 session_key 的 AES-GCM 密文'''
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
-ALTER TABLE wechat_user_binding
-    ADD COLUMN IF NOT EXISTS session_key_updated_at DATETIME NULL COMMENT 'session_key 最近刷新时间';
+SET @sql := IF(
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'wechat_user_binding' AND column_name = 'session_key_updated_at'),
+    'SELECT 1',
+    'ALTER TABLE wechat_user_binding ADD COLUMN session_key_updated_at DATETIME NULL COMMENT ''session_key 最近刷新时间'''
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 CREATE TABLE IF NOT EXISTS payment_virtual_order (
     order_no VARCHAR(64) NOT NULL PRIMARY KEY,
