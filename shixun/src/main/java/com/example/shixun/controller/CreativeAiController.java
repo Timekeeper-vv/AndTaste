@@ -805,7 +805,7 @@ public class CreativeAiController {
                     .build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalStateException("火山引擎 Seedream 多视图生成失败（" + labels.get(view) + "）HTTP " + response.statusCode());
+                throw new IllegalStateException(arkHttpError(response, labels.get(view)));
             }
             String remoteUrl = extractImageUrl(mapper.readTree(response.body()));
             if (blank(remoteUrl)) throw new IllegalStateException("火山引擎 Seedream 未返回" + labels.get(view) + "图地址");
@@ -844,6 +844,26 @@ public class CreativeAiController {
     private boolean hasJimengSignatureCredentials() {
         return !blank(jimengAccessKeyId) && !blank(jimengSecretAccessKey)
                 && !jimengAccessKeyId.contains("YOUR_") && !jimengSecretAccessKey.contains("YOUR_");
+    }
+
+    private String arkHttpError(HttpResponse<String> response, String viewLabel) {
+        String requestId = response.headers().firstValue("x-request-id").orElse("").trim();
+        String providerCode = "";
+        String providerMessage = "";
+        try {
+            JsonNode root = mapper.readTree(response.body());
+            providerCode = firstNonBlank(root.path("error").path("code").asText(""), root.path("code").asText(""));
+            providerMessage = firstNonBlank(root.path("error").path("message").asText(""), root.path("message").asText(""));
+        } catch (Exception ignored) {
+            providerMessage = response.body() == null ? "" : response.body().trim();
+        }
+        if (providerMessage.length() > 360) providerMessage = providerMessage.substring(0, 360);
+        StringBuilder message = new StringBuilder("火山引擎 Seedream 多视图生成失败（")
+                .append(viewLabel).append("）HTTP ").append(response.statusCode());
+        if (!blank(providerCode)) message.append(" · ").append(providerCode);
+        if (!blank(providerMessage)) message.append(" · ").append(providerMessage);
+        if (!blank(requestId)) message.append(" · 请求编号 ").append(requestId);
+        return message.toString();
     }
 
     @PostMapping("/image-to-image")
