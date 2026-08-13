@@ -17,6 +17,9 @@ const policies: Record<CreativePolicyKey, { title: string; content: string }> = 
   },
 }
 
+/** 供原生页内确认层读取，避免部分微信环境未展示 showModal 时静默取消。 */
+export function getCreativePolicy(key: CreativePolicyKey) { return policies[key] }
+
 export function confirmCreativePolicy(key: CreativePolicyKey): Promise<boolean> {
   const policy = policies[key]
   return new Promise(resolve => {

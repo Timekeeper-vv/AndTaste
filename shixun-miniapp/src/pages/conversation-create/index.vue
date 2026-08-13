@@ -33,6 +33,15 @@
 
     <view v-if="busy" class="loading-bar"><text>{{ busyMessage }}</text></view>
     <view class="bottom-actions"><button @tap="goWorks">作品库</button><button @tap="restart">重新开始</button></view>
+
+    <view v-if="policyDialog" class="policy-mask" @tap="resolvePolicyDialog(false)">
+      <view class="policy-dialog" @tap.stop>
+        <view class="policy-dialog-head"><text>AI生成提示</text><text>提交前确认</text></view>
+        <text class="policy-dialog-title">{{ activePolicy.title }}</text>
+        <scroll-view class="policy-dialog-copy" scroll-y><text>{{ activePolicy.content }}</text></scroll-view>
+        <view class="policy-dialog-actions"><button class="policy-cancel" @tap="resolvePolicyDialog(false)">暂不继续</button><button class="policy-confirm" @tap="resolvePolicyDialog(true)">我已阅读并继续</button></view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -58,7 +67,7 @@ import {
   type SeedreamMultiViewImage,
 } from '../../api/creative'
 import { apiUrl } from '../../api/client'
-import { confirmCreativePolicy, CREATIVE_POLICY_VERSION } from '../../utils/compliance'
+import { CREATIVE_POLICY_VERSION, getCreativePolicy, type CreativePolicyKey } from '../../utils/compliance'
 import { requireSession } from '../../utils/session'
 
 type Phase = 'mode' | 'product' | 'inspiration' | 'image' | 'material' | 'style' | 'summary' | 'result' | 'multiview' | 'model'
@@ -112,6 +121,7 @@ const modelRefreshing = ref(false)
 const referencePolicyConfirmed = ref(false)
 const aiPolicyConfirmed = ref(false)
 const threeDimensionalPolicyConfirmed = ref(false)
+const policyDialog = ref<{ key: CreativePolicyKey; resolve: (confirmed: boolean) => void } | null>(null)
 let modelPollTimer: ReturnType<typeof setTimeout> | null = null
 let modelPollVersion = 0
 
@@ -152,6 +162,7 @@ const isModelTaskTerminal = computed(() => isModelTaskSucceeded.value || isModel
 const modelTaskTitle = computed(() => isModelTaskSucceeded.value ? '3D 模型已经生成' : isModelTaskFailed.value ? '3D 建模未完成' : '3D 建模正在生成')
 const modelTaskDescription = computed(() => isModelTaskSucceeded.value ? '3D 原型已保存到作品库' : isModelTaskFailed.value ? '本次 3D 建模失败，可回到产品图重新提交' : '正在从产品图生成立体原型')
 const modelTaskDetail = computed(() => isModelTaskSucceeded.value ? '可以在作品库查看模型、评审并申请打样。' : isModelTaskFailed.value ? '失败原因已保留。检查产品图和提示词后可以再次发起建模。' : '本页面会自动刷新进度，离开后也会继续在作品库保存。')
+const activePolicy = computed(() => getCreativePolicy(policyDialog.value?.key || 'ai-output'))
 
 function addMessage(role: Message['role'], text: string) {
   messages.value.push({ id: ++messageId, role, text })
@@ -161,6 +172,19 @@ function goBack() { uni.navigateBack() }
 function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
 function openCommercial() { uni.navigateTo({ url: `/pages/commercial/index${generatedAssetId.value ? `?assetId=${generatedAssetId.value}` : ''}` }) }
 function selectedModeTitle() { return modeOptions.find(item => item.key === mode.value)?.title || '' }
+
+function confirmCreativePolicyInPage(key: CreativePolicyKey): Promise<boolean> {
+  // Some iOS/DevTools combinations do not render uni.showModal after a long
+  // scroll interaction. Use a page-owned layer for the creation flow so the
+  // user always sees the required consent action.
+  if (policyDialog.value) return Promise.resolve(false)
+  return new Promise(resolve => { policyDialog.value = { key, resolve } })
+}
+function resolvePolicyDialog(confirmed: boolean) {
+  const dialog = policyDialog.value
+  policyDialog.value = null
+  dialog?.resolve(confirmed)
+}
 
 function productMark(name: string, category: string) {
   if (name.includes('冰箱贴')) return '贴'
@@ -483,7 +507,7 @@ async function pickInspirationImage() {
     return
   }
   if (!referencePolicyConfirmed.value) {
-    const confirmed = await confirmCreativePolicy('reference-materials')
+    const confirmed = await confirmCreativePolicyInPage('reference-materials')
     if (!confirmed) return
     referencePolicyConfirmed.value = true
     await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'reference-materials', policyVersion: CREATIVE_POLICY_VERSION })
@@ -617,7 +641,7 @@ async function generateProductImage() {
     return
   }
   if (!aiPolicyConfirmed.value) {
-    const confirmed = await confirmCreativePolicy('ai-output')
+    const confirmed = await confirmCreativePolicyInPage('ai-output')
     if (!confirmed) {
       uni.showToast({ title: '已取消本次 AI 生成', icon: 'none' })
       return
@@ -786,7 +810,7 @@ async function generateMultiView() {
     return
   }
   if (!aiPolicyConfirmed.value) {
-    const confirmed = await confirmCreativePolicy('ai-output')
+    const confirmed = await confirmCreativePolicyInPage('ai-output')
     if (!confirmed) return
     aiPolicyConfirmed.value = true
     await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'ai-output', policyVersion: CREATIVE_POLICY_VERSION })
@@ -811,7 +835,7 @@ async function generateModel() {
     return
   }
   if (!threeDimensionalPolicyConfirmed.value) {
-    const confirmed = await confirmCreativePolicy('three-dimensional')
+    const confirmed = await confirmCreativePolicyInPage('three-dimensional')
     if (!confirmed) return
     threeDimensionalPolicyConfirmed.value = true
     await saveEvent('compliance', 'policy_notice_confirmed', { policyKey: 'three-dimensional', policyVersion: CREATIVE_POLICY_VERSION })
@@ -853,7 +877,7 @@ onMounted(async () => {
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
   if (phase.value === 'model' && modelTask.value && !isModelTaskTerminal.value) void scheduleModelPolling(true)
 })
-onUnmounted(() => stopModelPolling())
+onUnmounted(() => { resolvePolicyDialog(false); stopModelPolling() })
 </script>
 
 <style scoped lang="scss">
@@ -863,4 +887,5 @@ onUnmounted(() => stopModelPolling())
 .recommendation-card{border-color:#a8beab;background:#f0f7ef}.recommendation-mark{display:grid;place-items:center;width:32rpx;height:32rpx;border-radius:10rpx;background:#5d806b;color:#fff;font-size:18rpx;font-weight:850}.recommendation-pill{border-color:#8cad98;background:#edf5ed;color:#4f715d;font-weight:850}
 .refinement-panel{margin-top:16rpx;padding:15rpx;border:1rpx solid #d8c9b7;border-radius:15rpx;background:#f8f3eb}.refinement-panel>text:first-child{display:block;color:#5c5044;font-size:19rpx;font-weight:850}.refinement-input{min-height:130rpx;margin-top:10rpx;font-size:18rpx}.refinement-panel .dark-button{height:64rpx;margin:0;font-size:17rpx}
 .food-direction-note{display:block;margin-top:14rpx;padding:12rpx;border-left:4rpx solid #b37b4d;border-radius:0 10rpx 10rpx 0;background:#fbf2e5;color:#795b42;font-size:16rpx;line-height:1.55}
+.policy-mask{position:fixed;z-index:20;inset:0;display:flex;align-items:center;justify-content:center;padding:38rpx;background:rgba(24,29,26,.58);box-sizing:border-box}.policy-dialog{width:100%;max-height:80vh;overflow:hidden;border-radius:18rpx;background:#fffdfa;box-shadow:0 20rpx 50rpx rgba(25,31,27,.3)}.policy-dialog-head{display:flex;align-items:center;justify-content:space-between;padding:22rpx 22rpx 13rpx;border-bottom:1rpx solid #ece4d9}.policy-dialog-head text:first-child{color:#3d3831;font-size:24rpx;font-weight:850}.policy-dialog-head text:last-child{color:#a36e57;font-size:14rpx}.policy-dialog-title{display:block;padding:18rpx 22rpx 7rpx;color:#332e29;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:850}.policy-dialog-copy{box-sizing:border-box;width:100%;height:270rpx;padding:0 22rpx 18rpx}.policy-dialog-copy text{color:#6f665c;font-size:17rpx;line-height:1.7}.policy-dialog-actions{display:flex;gap:10rpx;padding:14rpx 22rpx calc(18rpx + env(safe-area-inset-bottom));border-top:1rpx solid #eee7de;background:#fffdfa}.policy-dialog-actions button{flex:1;height:78rpx;margin:0;border-radius:10rpx;font-size:18rpx;font-weight:850}.policy-dialog-actions button::after{border:0}.policy-cancel{border:1rpx solid #ded5c9;background:#f7f3ed;color:#827568}.policy-confirm{background:#3f3933;color:#fff}
 </style>
