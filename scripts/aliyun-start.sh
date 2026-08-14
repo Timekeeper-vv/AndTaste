@@ -100,6 +100,11 @@ write_config(){
   [ -n "$JIMENG_API_KEY" ] || JIMENG_API_KEY="$(existing_prop "jimeng.api.key" || true)"
   [ -n "$JIMENG_ACCESS_KEY_ID" ] || JIMENG_ACCESS_KEY_ID="$(existing_prop "jimeng.access-key-id" || true)"
   [ -n "$JIMENG_SECRET_ACCESS_KEY" ] || JIMENG_SECRET_ACCESS_KEY="$(existing_prop "jimeng.secret-access-key" || true)"
+  # Older deployments may have stored the Ark bearer key under JIMENG_API_KEY.
+  # Reuse only Vx-prefixed Ark keys; never mistake the CV API's AK/SK pair for a bearer key.
+  if [ -z "$VOLCENGINE_ARK_API_KEY" ] && [[ "$JIMENG_API_KEY" == Vx* ]]; then
+    VOLCENGINE_ARK_API_KEY="$JIMENG_API_KEY"
+  fi
   [ -n "$MODAO_API_KEY" ] || MODAO_API_KEY="$(existing_prop "modao.api.key" || true)"
   cat > "$BACKEND_DIR/application-local.properties" <<CFG
 server.address=$SERVER_ADDRESS
