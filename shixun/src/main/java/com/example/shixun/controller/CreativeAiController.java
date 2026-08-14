@@ -984,8 +984,12 @@ public class CreativeAiController {
     private IllegalStateException arkImageHttpError(int status, String raw) {
         try {
             JsonNode root = mapper.readTree(raw);
+            String errorCode = root.path("error").path("code").asText("");
             String detail = firstNonBlank(root.path("error").path("message").asText(""), root.path("message").asText(""), root.path("error").asText(""));
             if (status == 401 || status == 403) return new IllegalStateException("火山方舟 API Key 无效、模型未开通或无调用权限：" + detail);
+            if ("SetLimitExceeded".equalsIgnoreCase(errorCode) || detail.contains("Safe Experience Mode")) {
+                return new IllegalStateException("火山方舟模型已因安全体验模式额度用尽而暂停。请在方舟控制台的模型开通页面提高额度或关闭安全体验模式后重试。");
+            }
             if (status == 429) return new IllegalStateException("火山方舟模型正在排队或触发调用频率限制，请稍后重试：" + detail);
             return new IllegalStateException("火山方舟生图接口失败 HTTP " + status + "：" + detail);
         } catch (Exception ignored) {
