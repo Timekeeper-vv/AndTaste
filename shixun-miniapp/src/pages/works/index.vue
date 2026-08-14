@@ -154,7 +154,7 @@ const source = (asset: any) => {
 const jobNo = (job: any) => job?.jobNo || `任务 #${job?.id || '-'}`
 const jobTypeText = (type?: string) => ({ text_to_image: '文生图', image_to_3d: '图生 3D', text_to_3d: '文生 3D' }[String(type || '')] || 'AI 创作')
 const jobIcon = (type?: string) => String(type || '').includes('3d') ? '3D' : 'AI'
-const jobTitle = (job: any) => job?.title || `${jobTypeText(job?.jobType)}任务`
+const jobTitle = (job: any) => job?.title || job?.productName || `${jobTypeText(job?.jobType)}任务`
 const requestTypeText = (type?: string) => type === 'bulk' ? '批量生产申请' : '打样申请'
 const canSubmitReview = (asset: any) => {
   if (!['image', 'model'].includes(asset.assetType) || isGenerating(assetDisplayStatus(asset))) return false

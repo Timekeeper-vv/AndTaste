@@ -12,3 +12,98 @@ CREATE TABLE user (
     last_login_at TIMESTAMP NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'active'
 );
+
+CREATE TABLE brand_style_profile (
+    id BIGINT PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    description VARCHAR(500),
+    base_prompt VARCHAR(2000),
+    negative_prompt VARCHAR(2000),
+    palette VARCHAR(500),
+    cultural_guardrails VARCHAR(2000),
+    enabled TINYINT NOT NULL DEFAULT 1
+);
+
+INSERT INTO brand_style_profile (
+    id, name, base_prompt, negative_prompt, cultural_guardrails, enabled
+) VALUES (
+    1, '测试风格', 'premium cultural creative product', 'low quality, watermark',
+    'use only original and authorized cultural elements', 1
+);
+
+CREATE TABLE digital_asset (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    asset_no VARCHAR(80) NOT NULL UNIQUE,
+    title VARCHAR(200) NOT NULL,
+    asset_type VARCHAR(30) NOT NULL,
+    source_type VARCHAR(30),
+    file_url VARCHAR(1000),
+    preview_url VARCHAR(1000),
+    prompt CLOB,
+    negative_prompt CLOB,
+    style_id BIGINT,
+    parent_asset_id BIGINT,
+    format VARCHAR(30),
+    tags VARCHAR(1000),
+    metadata_json CLOB,
+    status VARCHAR(30),
+    created_by BIGINT,
+    created_at TIMESTAMP NULL,
+    updated_at TIMESTAMP NULL
+);
+
+CREATE TABLE ai_generation_job (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    job_no VARCHAR(80) NOT NULL UNIQUE,
+    job_type VARCHAR(30) NOT NULL,
+    provider VARCHAR(50) NOT NULL,
+    model_name VARCHAR(120),
+    style_id BIGINT,
+    input_asset_id BIGINT,
+    output_asset_id BIGINT,
+    product_key VARCHAR(80),
+    product_name VARCHAR(160),
+    product_material VARCHAR(500),
+    prompt CLOB,
+    negative_prompt CLOB,
+    status VARCHAR(30) NOT NULL,
+    progress INT NOT NULL DEFAULT 0,
+    attempt_count INT NOT NULL DEFAULT 0,
+    error_message CLOB,
+    export_formats VARCHAR(120),
+    request_payload_json JSON,
+    external_task_id VARCHAR(160),
+    created_by BIGINT,
+    credit_transaction_id BIGINT,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    created_at TIMESTAMP NULL,
+    updated_at TIMESTAMP NULL
+);
+
+CREATE TABLE consumer_credit_account (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL UNIQUE,
+    balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+    frozen_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+    total_recharged DECIMAL(12,2) NOT NULL DEFAULT 0,
+    total_consumed DECIMAL(12,2) NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE consumer_credit_transaction (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    transaction_no VARCHAR(80) NOT NULL UNIQUE,
+    user_id BIGINT NOT NULL,
+    job_id BIGINT,
+    asset_id BIGINT,
+    biz_type VARCHAR(50) NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    direction VARCHAR(30) NOT NULL,
+    status VARCHAR(30) NOT NULL,
+    balance_before DECIMAL(12,2),
+    balance_after DECIMAL(12,2),
+    remark VARCHAR(2000),
+    operator VARCHAR(100),
+    created_at TIMESTAMP NULL
+);

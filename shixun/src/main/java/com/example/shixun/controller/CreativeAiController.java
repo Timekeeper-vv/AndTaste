@@ -6,6 +6,7 @@ import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
 import com.example.shixun.service.ProductPromptPolicy;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestAttributes;
@@ -49,6 +51,9 @@ import java.time.LocalDateTime;
 import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -60,7 +65,12 @@ public class CreativeAiController {
     private final TransactionTemplate creditTransactions;
     private final ObjectMapper mapper;
     private final JwtService jwtService;
+    private final ThreadPoolTaskExecutor arkImageGenerationExecutor;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).followRedirects(HttpClient.Redirect.NORMAL).build();
+    private final Object arkQueueSubmissionLock = new Object();
+    private final Set<Long> activeArkImageJobs = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean arkQueueRecovered = new AtomicBoolean(false);
+    private final AtomicBoolean arkQueueTableVerified = new AtomicBoolean(false);
 
     @Value("${siliconflow.api.key:}")
     private String siliconflowApiKey;
@@ -150,6 +160,15 @@ public class CreativeAiController {
     @Value("${volcengine.ark.seedream.image.model:${VOLCENGINE_ARK_SEEDREAM_IMAGE_MODEL:doubao-seedream-5-0-pro-260628}}")
     private String volcengineArkSeedreamImageModel;
 
+    @Value("${volcengine.ark.queue.concurrency:1}")
+    private int arkQueueConcurrency;
+
+    @Value("${volcengine.ark.queue.retry-attempts:3}")
+    private int arkQueueRetryAttempts;
+
+    @Value("${volcengine.ark.queue.retry-delay-seconds:4}")
+    private long arkQueueRetryDelaySeconds;
+
     // 使用已在 Ark 控制台开通的 Seedream 接入点名称；可通过环境变量覆盖。
     @Value("${volcengine.ark.seedream.multiview.model:${VOLCENGINE_ARK_SEEDREAM_MULTIVIEW_MODEL:doubao-seedream-5-0-260128}}")
     private String volcengineArkSeedreamMultiviewModel;
@@ -176,11 +195,14 @@ public class CreativeAiController {
     @Value("${creative.asset.private-root:${CREATIVE_ASSET_PRIVATE_ROOT:}}")
     private String creativePrivateAssetRoot;
 
-    public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper, JwtService jwtService, PlatformTransactionManager transactionManager) {
+    public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper, JwtService jwtService,
+                                PlatformTransactionManager transactionManager,
+                                @Qualifier("arkImageGenerationExecutor") ThreadPoolTaskExecutor arkImageGenerationExecutor) {
         this.jdbc = jdbc;
         this.creditTransactions = new TransactionTemplate(transactionManager);
         this.mapper = mapper;
         this.jwtService = jwtService;
+        this.arkImageGenerationExecutor = arkImageGenerationExecutor;
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
@@ -904,55 +926,302 @@ public class CreativeAiController {
         String size = Set.of("1K", "2K").contains(nullToEmpty(req.imagenImageSize)) ? req.imagenImageSize : "2K";
         String format = "jpg".equalsIgnoreCase(nullToEmpty(req.imagenOutputFormat)) ? "jpg" : "png";
         String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
-        Long creditTxId = consumerUserId == null ? null : reserveConsumerCredit(consumerUserId, "image2d", consumerCreditCost("image2d"), "C端火山方舟生图预扣");
-        String jobNo = no("ARK");
-        Long jobId = createJob(jobNo, "text_to_image", "volcengine_ark", volcengineArkSeedreamImageModel, req.styleId, null, finalPrompt, negative, "running", null, size);
-        storeJobProductIdentity(jobId, req.productKey, req.productCategory, req.material);
-        assignJobOwner(jobId, ownerUserId);
-        linkCreditTransaction(creditTxId, jobId, null);
+        synchronized (arkQueueSubmissionLock) {
+            List<Map<String, Object>> active = jdbc.queryForList(
+                    "SELECT id,prompt,product_key productKey FROM ai_generation_job " +
+                            "WHERE created_by=? AND provider='volcengine_ark' AND job_type='text_to_image' " +
+                            "AND status IN ('queued','running') AND output_asset_id IS NULL ORDER BY id LIMIT 1",
+                    ownerUserId);
+            if (!active.isEmpty()) {
+                Map<String, Object> existing = active.get(0);
+                boolean sameRequest = finalPrompt.equals(str(existing.get("prompt")))
+                        && Objects.equals(nullToEmpty(req.productKey), nullToEmpty(str(existing.get("productKey"))));
+                if (!sameRequest) {
+                    throw new IllegalStateException("你已有一项图片正在排队或生成，请等待完成后再提交新作品");
+                }
+                Map<String, Object> response = arkImageJobResponse(((Number) existing.get("id")).longValue());
+                response.put("reused", true);
+                return response;
+            }
 
+            Long creditTxId = consumerUserId == null ? null : reserveConsumerCredit(
+                    consumerUserId, "image2d", consumerCreditCost("image2d"), "C端火山方舟生图预扣");
+            String jobNo = no("ARK");
+            Map<String, Object> requestPayload = new LinkedHashMap<>();
+            requestPayload.put("title", req.title);
+            requestPayload.put("requestedFormat", format);
+            Long jobId;
+            try {
+                jobId = createArkQueuedJob(jobNo, req.styleId, finalPrompt, negative, size,
+                        req.productKey, req.productCategory, req.material, ownerUserId, creditTxId, requestPayload);
+                linkCreditTransaction(creditTxId, jobId, null);
+            } catch (Exception e) {
+                refundConsumerCredit(creditTxId, safeMessage(e));
+                throw e;
+            }
+            return arkImageJobResponse(jobId);
+        }
+    }
+
+    @GetMapping("/ark/image-jobs/{jobId}")
+    public Map<String, Object> arkImageJob(@PathVariable Long jobId) {
+        requireJobAccess(jobId);
+        return arkImageJobResponse(jobId);
+    }
+
+    @Scheduled(fixedDelayString = "${volcengine.ark.queue.dispatch-interval-ms:1000}")
+    public void dispatchArkImageQueue() {
+        if (!arkQueueTableVerified.get()) {
+            if (!arkQueueTableAvailable()) return;
+            arkQueueTableVerified.set(true);
+        }
+        if (arkQueueRecovered.compareAndSet(false, true)) {
+            jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
+                            "error_message='服务重启后已自动恢复排队' WHERE provider='volcengine_ark' " +
+                            "AND job_type='text_to_image' AND status='running' AND output_asset_id IS NULL");
+        }
+        int concurrency = normalizedArkQueueConcurrency();
+        int available = concurrency - activeArkImageJobs.size();
+        if (available <= 0) return;
+        List<Long> queued = jdbc.queryForList(
+                "SELECT id FROM ai_generation_job WHERE provider='volcengine_ark' " +
+                        "AND job_type='text_to_image' AND status='queued' AND output_asset_id IS NULL " +
+                        "ORDER BY id LIMIT " + available,
+                Long.class);
+        for (Long jobId : queued) {
+            int claimed = jdbc.update("UPDATE ai_generation_job SET status='running',progress=10," +
+                            "started_at=COALESCE(started_at,NOW()),error_message=NULL " +
+                            "WHERE id=? AND status='queued'", jobId);
+            if (claimed != 1 || !activeArkImageJobs.add(jobId)) continue;
+            try {
+                arkImageGenerationExecutor.execute(() -> {
+                    try {
+                        processArkImageJob(jobId);
+                    } finally {
+                        activeArkImageJobs.remove(jobId);
+                    }
+                });
+            } catch (RuntimeException e) {
+                activeArkImageJobs.remove(jobId);
+                jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
+                        "error_message='生成执行器繁忙，已自动重新排队' WHERE id=? AND status='running'", jobId);
+            }
+        }
+    }
+
+    private boolean arkQueueTableAvailable() {
         try {
-            String remoteImage = extractImageUrl(createArkTextImage(finalPrompt, size));
+            Integer count = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.tables WHERE LOWER(table_name)=LOWER(?)",
+                    Integer.class, "ai_generation_job");
+            return count != null && count > 0;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void processArkImageJob(Long jobId) {
+        Map<String, Object> job;
+        try {
+            job = jdbc.queryForMap("SELECT id,job_no jobNo,model_name modelName,style_id styleId," +
+                            "prompt,negative_prompt negativePrompt,export_formats exportFormats," +
+                            "product_key productKey,product_name productName,product_material productMaterial," +
+                            "created_by createdBy,credit_transaction_id creditTransactionId," +
+                            "request_payload_json requestPayloadJson,attempt_count attemptCount,status " +
+                            "FROM ai_generation_job WHERE id=?", jobId);
+        } catch (Exception e) {
+            return;
+        }
+        if (!"running".equals(str(job.get("status")))) return;
+        Long creditTxId = numberAsLong(job.get("creditTransactionId"));
+        Long ownerUserId = numberAsLong(job.get("createdBy"));
+        try {
+            if (blank(resolvedArkApiKey())) throw new IllegalStateException("未配置火山方舟 Ark API Key");
+            int attempts = job.get("attemptCount") instanceof Number ? ((Number) job.get("attemptCount")).intValue() : 0;
+            int maxAttempts = Math.max(1, Math.min(arkQueueRetryAttempts, 6));
+            JsonNode generated = null;
+            while (attempts < maxAttempts) {
+                attempts++;
+                jdbc.update("UPDATE ai_generation_job SET attempt_count=?,progress=20,error_message=NULL WHERE id=?", attempts, jobId);
+                try {
+                    generated = createArkTextImage(str(job.get("prompt")), normalizedArkImageSize(job.get("exportFormats")));
+                    break;
+                } catch (ArkRateLimitException e) {
+                    if (attempts >= maxAttempts) throw e;
+                    long delaySeconds = Math.max(1, Math.min(arkQueueRetryDelaySeconds, 30)) * attempts;
+                    jdbc.update("UPDATE ai_generation_job SET progress=10,error_message=? WHERE id=?",
+                            "模型限流，" + delaySeconds + " 秒后自动重试（" + attempts + "/" + maxAttempts + "）", jobId);
+                    try {
+                        TimeUnit.SECONDS.sleep(delaySeconds);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
+                                "error_message='服务停止，任务已自动重新排队' WHERE id=? AND status='running'", jobId);
+                        return;
+                    }
+                }
+            }
+            if (generated == null) throw new IllegalStateException("火山方舟未返回图片结果");
+
+            jdbc.update("UPDATE ai_generation_job SET progress=70,error_message=NULL WHERE id=?", jobId);
+            String remoteImage = extractImageUrl(generated);
+            String requestedFormat = requestPayloadText(job.get("requestPayloadJson"), "requestedFormat");
+            String format = normalizedArkOutputFormat(generated, requestedFormat);
             String localImage = saveRemoteImage(remoteImage, "ark-seedream-", "." + format);
+            jdbc.update("UPDATE ai_generation_job SET progress=85 WHERE id=?", jobId);
+
             Map<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("provider", "volcengine_ark");
-            metadata.put("model", volcengineArkSeedreamImageModel);
+            metadata.put("model", str(job.get("modelName")));
             metadata.put("remoteImage", remoteImage);
-            metadata.put("imageSize", size);
+            metadata.put("imageSize", normalizedArkImageSize(job.get("exportFormats")));
             metadata.put("watermark", true);
             metadata.put("aiGenerated", true);
-            addProductIdentity(metadata, req.productKey, req.productCategory, req.material);
+            addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")), str(job.get("productMaterial")));
             if (ownerUserId != null) {
                 metadata.put("createdByUserId", ownerUserId);
                 if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
             }
-            Long assetId = createAsset(req.title == null || req.title.isBlank() ? "之间智造AI效果图-" + jobNo : req.title,
-                    "image", "ai_generated", localImage, localImage, finalPrompt, negative, req.styleId, null, format,
+            String requestedTitle = requestPayloadText(job.get("requestPayloadJson"), "title");
+            String title = blank(requestedTitle) ? "之间智造AI效果图-" + str(job.get("jobNo")) : requestedTitle.trim();
+            Long styleId = numberAsLong(job.get("styleId"));
+            Long assetId = createAsset(title, "image", "ai_generated", localImage, localImage,
+                    str(job.get("prompt")), str(job.get("negativePrompt")), styleId, null, format,
                     "AI生成,火山方舟,豆包Seedream,文创生图", metadata);
-            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, jobId);
-            completeConsumerCredit(creditTxId, jobId, assetId);
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("jobId", jobId);
-            out.put("jobNo", jobNo);
-            out.put("provider", "volcengine_ark");
-            out.put("model", volcengineArkSeedreamImageModel);
-            out.put("status", "succeeded");
-            out.put("progress", 100);
+            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100," +
+                    "error_message=NULL,finished_at=NOW() WHERE id=?", assetId, jobId);
+            try {
+                completeConsumerCredit(creditTxId, jobId, assetId);
+            } catch (Exception creditError) {
+                jdbc.update("UPDATE ai_generation_job SET error_message=? WHERE id=?",
+                        "作品已生成，积分结算待核对：" + safeMessage(creditError), jobId);
+            }
+        } catch (Exception e) {
+            String error = safeMessage(e);
+            jdbc.update("UPDATE ai_generation_job SET status='failed',progress=0,error_message=?,finished_at=NOW() " +
+                    "WHERE id=? AND status<>'succeeded'", error, jobId);
+            try {
+                refundConsumerCredit(creditTxId, error);
+            } catch (Exception refundError) {
+                jdbc.update("UPDATE ai_generation_job SET error_message=? WHERE id=?",
+                        error + "；积分退回待核对：" + safeMessage(refundError), jobId);
+            }
+        }
+    }
+
+    private Long createArkQueuedJob(String jobNo, Long styleId, String prompt, String negative, String size,
+                                    String productKey, String productName, String material, Long ownerUserId,
+                                    Long creditTxId, Map<String, Object> requestPayload) throws Exception {
+        KeyHolder kh = new GeneratedKeyHolder();
+        String payloadJson = mapper.writeValueAsString(requestPayload == null ? Map.of() : requestPayload);
+        jdbc.update(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                    "INSERT INTO ai_generation_job (job_no,job_type,provider,model_name,style_id," +
+                            "product_key,product_name,product_material,prompt,negative_prompt,status,progress," +
+                            "error_message,export_formats,created_by,credit_transaction_id,request_payload_json,attempt_count) " +
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1, jobNo); ps.setString(2, "text_to_image"); ps.setString(3, "volcengine_ark");
+            ps.setString(4, volcengineArkSeedreamImageModel);
+            if (styleId == null) ps.setNull(5, java.sql.Types.BIGINT); else ps.setLong(5, styleId);
+            ps.setString(6, blank(productKey) ? null : productKey.trim());
+            ps.setString(7, blank(productName) ? null : productName.trim());
+            ps.setString(8, blank(material) ? null : material.trim());
+            ps.setString(9, prompt); ps.setString(10, negative); ps.setString(11, "queued"); ps.setInt(12, 0);
+            ps.setNull(13, java.sql.Types.LONGVARCHAR); ps.setString(14, size);
+            if (ownerUserId == null) ps.setNull(15, java.sql.Types.BIGINT); else ps.setLong(15, ownerUserId);
+            if (creditTxId == null) ps.setNull(16, java.sql.Types.BIGINT); else ps.setLong(16, creditTxId);
+            ps.setString(17, payloadJson); ps.setInt(18, 0);
+            return ps;
+        }, kh);
+        return Objects.requireNonNull(kh.getKey()).longValue();
+    }
+
+    private Map<String, Object> arkImageJobResponse(Long jobId) {
+        Map<String, Object> job = jdbc.queryForMap(
+                "SELECT id,job_no jobNo,provider,model_name modelName,output_asset_id outputAssetId," +
+                        "product_key productKey,product_name productName,product_material productMaterial," +
+                        "status,progress,attempt_count attemptCount,error_message errorMessage," +
+                        "created_by createdBy,created_at createdAt,started_at startedAt,finished_at finishedAt " +
+                        "FROM ai_generation_job WHERE id=? AND provider='volcengine_ark' AND job_type='text_to_image'",
+                jobId);
+        Map<String, Object> out = new LinkedHashMap<>();
+        String status = str(job.get("status"));
+        out.put("jobId", jobId);
+        out.put("jobNo", job.get("jobNo"));
+        out.put("provider", job.get("provider"));
+        out.put("model", job.get("modelName"));
+        out.put("productKey", job.get("productKey"));
+        out.put("productName", job.get("productName"));
+        out.put("productMaterial", job.get("productMaterial"));
+        out.put("status", status);
+        out.put("progress", job.get("progress"));
+        out.put("attemptCount", job.get("attemptCount"));
+        out.put("errorMessage", job.get("errorMessage"));
+        out.put("createdAt", job.get("createdAt"));
+        out.put("startedAt", job.get("startedAt"));
+        out.put("finishedAt", job.get("finishedAt"));
+        out.put("source", "火山方舟 · Doubao-Seedream-5.0-pro");
+        out.put("queueConcurrency", normalizedArkQueueConcurrency());
+        if ("queued".equals(status)) {
+            Integer position = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM ai_generation_job WHERE provider='volcengine_ark' " +
+                            "AND job_type='text_to_image' AND status='queued' AND id<=?", Integer.class, jobId);
+            out.put("queuePosition", position == null ? 1 : position);
+            out.put("message", "已进入图片生成队列，轮到后会自动开始");
+        } else if ("running".equals(status)) {
+            out.put("queuePosition", 0);
+            out.put("message", "之间大模型正在生成产品图");
+        } else if ("failed".equals(status)) {
+            out.put("queuePosition", 0);
+            out.put("message", blank(str(job.get("errorMessage"))) ? "图片生成失败" : str(job.get("errorMessage")));
+        } else if ("succeeded".equals(status) && job.get("outputAssetId") instanceof Number) {
+            Long assetId = ((Number) job.get("outputAssetId")).longValue();
             out.put("assetId", assetId);
             out.put("id", assetId);
             out.put("assetType", "image");
             out.put("sourceType", "ai_generated");
             out.put("assetStatus", "draft");
-            out.put("source", "火山方舟 · Doubao-Seedream-5.0-pro");
             out.put("message", "AI 产品图已生成并保存到作品库。");
             addSignedAssetFields(out, assetId, "image");
-            if (consumerUserId != null) out.put("creditAccount", creditAccountMap(consumerUserId));
-            return out;
-        } catch (Exception e) {
-            jdbc.update("UPDATE ai_generation_job SET status='failed',error_message=? WHERE id=?", safeMessage(e), jobId);
-            refundConsumerCredit(creditTxId, safeMessage(e));
-            throw new IllegalStateException("火山方舟 Doubao-Seedream-5.0-pro 生图失败：" + safeMessage(e), e);
         }
+        Long ownerUserId = numberAsLong(job.get("createdBy"));
+        if (ownerUserId != null && hasPersistedRole(ownerUserId, "user")) {
+            out.put("creditAccount", creditAccountMap(ownerUserId));
+        }
+        return out;
+    }
+
+    private int normalizedArkQueueConcurrency() {
+        return Math.max(1, Math.min(arkQueueConcurrency, 16));
+    }
+
+    private String normalizedArkImageSize(Object value) {
+        String size = str(value);
+        return Set.of("1K", "2K").contains(size) ? size : "2K";
+    }
+
+    private String normalizedArkOutputFormat(JsonNode generated, String requestedFormat) {
+        String actual = generated.path("data").path(0).path("output_format").asText("").toLowerCase(Locale.ROOT);
+        if ("jpeg".equals(actual)) actual = "jpg";
+        if (Set.of("jpg", "png", "webp").contains(actual)) return actual;
+        return "jpg".equalsIgnoreCase(requestedFormat) ? "jpg" : "png";
+    }
+
+    private String requestPayloadText(Object rawPayload, String field) {
+        if (rawPayload == null || blank(field)) return "";
+        try {
+            String json = rawPayload instanceof byte[]
+                    ? new String((byte[]) rawPayload, StandardCharsets.UTF_8)
+                    : String.valueOf(rawPayload);
+            return mapper.readTree(json).path(field).asText("");
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private Long numberAsLong(Object value) {
+        return value instanceof Number ? ((Number) value).longValue() : null;
     }
 
     private JsonNode createArkTextImage(String prompt, String size) throws Exception {
@@ -990,10 +1259,16 @@ public class CreativeAiController {
             if ("SetLimitExceeded".equalsIgnoreCase(errorCode) || detail.contains("Safe Experience Mode")) {
                 return new IllegalStateException("火山方舟模型已因安全体验模式额度用尽而暂停。请在方舟控制台的模型开通页面提高额度或关闭安全体验模式后重试。");
             }
-            if (status == 429) return new IllegalStateException("火山方舟模型正在排队或触发调用频率限制，请稍后重试：" + detail);
+            if (status == 429) return new ArkRateLimitException("火山方舟模型触发调用频率限制：" + detail);
             return new IllegalStateException("火山方舟生图接口失败 HTTP " + status + "：" + detail);
         } catch (Exception ignored) {
             return new IllegalStateException("火山方舟生图接口失败 HTTP " + status + "：" + raw);
+        }
+    }
+
+    private static final class ArkRateLimitException extends IllegalStateException {
+        private ArkRateLimitException(String message) {
+            super(message);
         }
     }
 
@@ -2350,7 +2625,11 @@ public class CreativeAiController {
 
     @GetMapping("/jobs")
     public List<Map<String, Object>> jobs() {
-        String cols = "id, job_no jobNo, job_type jobType, provider, model_name modelName, input_asset_id inputAssetId, output_asset_id outputAssetId, external_task_id externalTaskId, status, progress, error_message errorMessage, export_formats exportFormats, created_by createdBy, created_at createdAt";
+        String cols = "id, job_no jobNo, job_type jobType, provider, model_name modelName, " +
+                "input_asset_id inputAssetId, output_asset_id outputAssetId, external_task_id externalTaskId, " +
+                "product_key productKey, product_name productName, product_material productMaterial, " +
+                "status, progress, attempt_count attemptCount, error_message errorMessage, export_formats exportFormats, " +
+                "created_by createdBy, created_at createdAt, started_at startedAt, finished_at finishedAt";
         JwtService.Claims principal = authenticatedPrincipal();
         if (isCreativeAdmin(principal)) {
             return jdbc.queryForList("SELECT " + cols + " FROM ai_generation_job ORDER BY id DESC LIMIT 100");

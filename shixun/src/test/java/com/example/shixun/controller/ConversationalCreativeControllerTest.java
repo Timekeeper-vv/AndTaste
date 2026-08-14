@@ -112,6 +112,78 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void editingProductClearsProductAndMaterialWithoutLosingInspiration() {
+        controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
+
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("type", "edit");
+        edit.put("value", "product");
+        Map<String, Object> result = controller.chat(1L, Map.of("action", edit), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertMissingKeys(brief, "productKey", "productName", "material");
+        assertThat(brief.get("generationConfirmed")).isEqualTo(false);
+        assertThat(String.valueOf(brief.get("inspiration"))).contains("祥云");
+        assertThat(result.get("stage")).isEqualTo("need_product");
+
+        Map<?, ?> restoredBrief = (Map<?, ?>) controller.chat(1L, Map.of(), claims).get("brief");
+        assertMissingKeys(restoredBrief, "productKey", "productName", "material");
+        assertThat(String.valueOf(restoredBrief.get("inspiration"))).contains("祥云");
+        assertThat(jdbc.queryForObject("SELECT product_type FROM creative_conversation_session WHERE id=1", String.class)).isNull();
+        assertThat(jdbc.queryForObject("SELECT material FROM creative_conversation_session WHERE id=1", String.class)).isNull();
+    }
+
+    @Test
+    void editingInspirationKeepsProductAndMaterialButRemovesPreviousSource() {
+        controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
+
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("type", "edit");
+        edit.put("value", "inspiration");
+        Map<String, Object> result = controller.chat(1L, Map.of("action", edit), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("productKey")).isEqualTo("souvenir-alloy-magnet");
+        assertThat(brief.get("material")).isEqualTo("合金");
+        assertMissingKeys(brief, "mode", "inspiration", "inspirationSource", "referenceAssetId");
+        assertThat(brief.get("generationConfirmed")).isEqualTo(false);
+        assertThat(result.get("stage")).isEqualTo("need_inspiration");
+    }
+
+    @Test
+    void editingMaterialKeepsProductAndInspiration() {
+        controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
+
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("type", "edit");
+        edit.put("value", "material");
+        Map<String, Object> result = controller.chat(1L, Map.of("action", edit), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("productKey")).isEqualTo("souvenir-alloy-magnet");
+        assertThat(String.valueOf(brief.get("inspiration"))).contains("祥云");
+        assertMissingKeys(brief, "material", "materialRecommended");
+        assertThat(brief.get("generationConfirmed")).isEqualTo(false);
+        assertThat(result.get("stage")).isEqualTo("need_material");
+    }
+
+    @Test
+    void editingRejectsUnknownTargetWithoutChangingBrief() {
+        controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
+        Map<?, ?> before = (Map<?, ?>) controller.chat(1L, Map.of(), claims).get("brief");
+
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("type", "edit");
+        edit.put("value", "unknown");
+
+        assertThatThrownBy(() -> controller.chat(1L, Map.of("action", edit), claims))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("修改目标无效");
+        Map<?, ?> after = (Map<?, ?>) controller.chat(1L, Map.of(), claims).get("brief");
+        assertThat(after).isEqualTo(before);
+    }
+
+    @Test
     void imageActionRejectsAnAssetOwnedByAnotherUser() {
         Map<String, Object> imageAction = new LinkedHashMap<>();
         imageAction.put("type", "image");
@@ -185,6 +257,10 @@ class ConversationalCreativeControllerTest {
         jdbc.execute("CREATE TABLE selection_category (id BIGINT AUTO_INCREMENT PRIMARY KEY, category_key VARCHAR(60), name VARCHAR(80), enabled INT, review_status VARCHAR(30))");
         jdbc.execute("CREATE TABLE selection_option (id BIGINT AUTO_INCREMENT PRIMARY KEY, option_key VARCHAR(80), category_key VARCHAR(60), name VARCHAR(120), subtitle VARCHAR(200), description VARCHAR(500), material VARCHAR(500), process VARCHAR(1000), tags VARCHAR(1000), enabled INT, review_status VARCHAR(30), sort_order INT)");
         jdbc.execute("CREATE TABLE digital_asset (id BIGINT AUTO_INCREMENT PRIMARY KEY, created_by BIGINT)");
+    }
+
+    private void assertMissingKeys(Map<?, ?> values, String... keys) {
+        for (String key : keys) assertThat(values.containsKey(key)).as("missing key %s", key).isFalse();
     }
 
     private void seedUserAndSession() {

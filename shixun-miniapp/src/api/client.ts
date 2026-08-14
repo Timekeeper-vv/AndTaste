@@ -98,13 +98,57 @@ export async function uploadFile<T>(path: string, filePath: string, name = 'file
   return data as T
 }
 
+export type ArkImageJobProgress = {
+  jobId?: number
+  status?: 'queued' | 'running' | 'succeeded' | 'failed' | string
+  progress?: number
+  queuePosition?: number
+  message?: string
+  errorMessage?: string
+  [key: string]: any
+}
+
+const wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))
+
+export const getArkImageJob = (jobId: number | string) => request<ArkImageJobProgress>(
+  `/api/creative/ai/ark/image-jobs/${encodeURIComponent(String(jobId))}`,
+  { timeout: 30000 },
+)
+
 /**
- * 生图接口单独保留在基础客户端上，避免页面依赖较大的 creative API 模块。
- * 方舟生图可能持续较长时间，小程序端必须显式设置足够的等待时间。
+ * Ark/Seedream is account-limited. The API returns a durable job immediately;
+ * the client follows that job instead of holding one long HTTP request open.
  */
-export const createTextToImage = (body: any) => request<any>('/api/creative/ai/ark/text-to-image', {
-  method: 'POST', data: body, timeout: 240000, header: { 'content-type': 'application/json' },
-})
+export async function waitForArkImageJob(initial: ArkImageJobProgress, onProgress?: (job: ArkImageJobProgress) => void) {
+  let job = initial
+  let transientFailures = 0
+  const deadline = Date.now() + 45 * 60 * 1000
+  onProgress?.(job)
+  while (job.status === 'queued' || job.status === 'running') {
+    if (!job.jobId) throw new Error('生图任务编号缺失，请重新提交')
+    if (Date.now() >= deadline) throw new Error('任务仍在后台排队，已停止等待；请稍后到作品库查看生成结果')
+    await wait(job.status === 'queued' ? 1800 : 2200)
+    try {
+      job = await getArkImageJob(job.jobId)
+      transientFailures = 0
+      onProgress?.(job)
+    } catch (error) {
+      transientFailures += 1
+      if (transientFailures >= 3) throw error
+      await wait(1200 * transientFailures)
+    }
+  }
+  if (job.status === 'failed') throw new Error(job.errorMessage || job.message || '图片生成失败')
+  if (job.status !== 'succeeded') throw new Error(job.message || '图片生成状态异常，请稍后到作品库查看')
+  return job
+}
+
+export async function createTextToImage(body: any, onProgress?: (job: ArkImageJobProgress) => void) {
+  const queued = await request<ArkImageJobProgress>('/api/creative/ai/ark/text-to-image', {
+    method: 'POST', data: body, timeout: 30000, header: { 'content-type': 'application/json' },
+  })
+  return waitForArkImageJob(queued, onProgress)
+}
 
 export const createReferenceToImage = (body: any) => request<any>('/api/creative/ai/image-to-image', {
   method: 'POST', data: body, timeout: 240000, header: { 'content-type': 'application/json' },

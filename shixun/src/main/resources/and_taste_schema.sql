@@ -283,15 +283,26 @@ CREATE TABLE IF NOT EXISTS ai_generation_job (
     prompt TEXT,
     negative_prompt TEXT,
     status VARCHAR(30) NOT NULL DEFAULT 'pending' COMMENT 'pending/running/succeeded/failed',
+    attempt_count INT NOT NULL DEFAULT 0,
     error_message TEXT,
     export_formats VARCHAR(120) COMMENT 'OBJ,STL,GLB等',
+    request_payload_json JSON NULL,
     created_by BIGINT NULL,
+    credit_transaction_id BIGINT NULL,
+    product_key VARCHAR(80) NULL,
+    product_name VARCHAR(160) NULL,
+    product_material VARCHAR(500) NULL,
+    started_at DATETIME NULL,
+    finished_at DATETIME NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_job_style FOREIGN KEY (style_id) REFERENCES brand_style_profile(id),
     CONSTRAINT fk_job_input_asset FOREIGN KEY (input_asset_id) REFERENCES digital_asset(id),
     CONSTRAINT fk_job_output_asset FOREIGN KEY (output_asset_id) REFERENCES digital_asset(id)
 ) COMMENT='AI生成任务记录';
+
+CREATE INDEX idx_ai_job_provider_queue ON ai_generation_job(provider, job_type, status, id);
+CREATE INDEX idx_ai_job_owner_queue ON ai_generation_job(created_by, provider, job_type, status);
 
 UPDATE digital_asset SET source_type='upload' WHERE file_url LIKE '/uploads/%';
 

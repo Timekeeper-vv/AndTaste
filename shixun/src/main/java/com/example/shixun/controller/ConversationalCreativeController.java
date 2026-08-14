@@ -39,7 +39,8 @@ import java.util.Set;
 @RequestMapping("/api/creative/ai/conversations")
 public class ConversationalCreativeController {
     private static final Set<String> MODES = Set.of("template", "text", "image");
-    private static final Set<String> CHAT_ACTIONS = Set.of("product", "category", "material", "template", "image", "text", "confirm_generate", "add_detail");
+    private static final Set<String> CHAT_ACTIONS = Set.of("product", "category", "material", "template", "image", "text", "confirm_generate", "add_detail", "edit");
+    private static final Set<String> EDIT_TARGETS = Set.of("product", "inspiration", "material");
     private static final Set<String> STEPS = Set.of("welcome", "chat", "mode", "product", "inspiration", "material", "style", "summary", "image", "multiview", "model", "commercial", "compliance", "navigation");
     private static final int MAX_PAYLOAD_LENGTH = 12000;
 
@@ -81,7 +82,7 @@ public class ConversationalCreativeController {
     public List<Map<String, Object>> mine(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         long userId = requireConsumer(principal);
-        return jdbc.queryForList("SELECT id,session_no sessionNo,mode,product_type productType,material,status,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE user_id=? ORDER BY updated_at DESC LIMIT 30", userId);
+        return jdbc.queryForList("SELECT id,session_no sessionNo,mode,product_type productType,material,status,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE user_id=? ORDER BY updated_at DESC,id DESC LIMIT 30", userId);
     }
 
     @GetMapping("/{id}")
@@ -130,7 +131,8 @@ public class ConversationalCreativeController {
         List<Map<String, Object>> catalog = catalogOptions(text(brief.get("categoryKey")), message, 120);
         if (!confirmationText) applyLocalHints(brief, message, action, catalog, userId);
         applyGenerationConfirmationState(brief, action, message);
-        PlannerDecision decision = (isGenerationConfirmationAction(action) || confirmationText)
+        String editTarget = "edit".equals(text(action.get("type"))) ? text(action.get("value")) : null;
+        PlannerDecision decision = (isGenerationConfirmationAction(action) || confirmationText || editTarget != null)
                 ? new PlannerDecision("", Map.of())
                 : planTurn(message, action, brief, catalog);
         applyDecision(brief, decision, userId);
@@ -159,6 +161,12 @@ public class ConversationalCreativeController {
         if (blank(reply)) reply = fallbackReply(brief, catalog, ready);
         if (addingDetail) {
             reply = "好的，请在下方补充想保留、想加强或需要避免的内容；我更新方案后会再请你确认。";
+        } else if ("product".equals(editTarget)) {
+            reply = "好的，之前的灵感会继续保留。请重新选择想落地的产品。";
+        } else if ("inspiration".equals(editTarget)) {
+            reply = "好的，产品和材质会继续保留。请重新描述灵感，或上传一张新的参考图。";
+        } else if ("material".equals(editTarget)) {
+            reply = "好的，请重新选择材质；不确定时可以继续让我推荐。";
         } else if (confirmationRequired) {
             reply = "我已经整理好产品、灵感和材质。生成图片前，还有需要补充的吗？没有的话点击“没有补充，开始生成”。";
         } else if (ready && (isGenerationConfirmationAction(action) || confirmationText)) {
@@ -213,7 +221,14 @@ public class ConversationalCreativeController {
                 String mode = text(payload.get("mode"));
                 if (mode != null && MODES.contains(mode)) brief.put("mode", mode);
             }
-            if ("chat_state".equals(eventType)) mergeMap(brief, parseObject(String.valueOf(row.get("payload_json"))));
+            if ("chat_state".equals(eventType)) {
+                // chat_state is a complete snapshot. Replace older legacy
+                // fields here, while still allowing newer legacy events to be
+                // applied in their actual event order.
+                brief.clear();
+                mergeMap(brief, parseObject(String.valueOf(row.get("payload_json"))));
+                continue;
+            }
             if ("product_selected".equals(eventType)) {
                 Map<String, Object> payload = parseObject(String.valueOf(row.get("payload_json")));
                 copyNonBlank(brief, payload, "productKey", "categoryKey", "categoryName");
@@ -286,6 +301,19 @@ public class ConversationalCreativeController {
                 brief.put("inspiration", "以用户上传的参考图片主体、构图和可识别细节为创作依据。");
                 brief.put("inspirationSource", "image");
             }
+        } else if ("edit".equals(type)) {
+            if ("product".equals(value)) {
+                clearProductSelection(brief);
+                brief.remove("categoryKey");
+            } else if ("inspiration".equals(value)) {
+                brief.remove("mode");
+                brief.remove("inspiration");
+                brief.remove("inspirationSource");
+                brief.remove("referenceAssetId");
+            } else if ("material".equals(value)) {
+                brief.remove("material");
+                brief.remove("materialRecommended");
+            }
         }
         if ("text".equals(type)) brief.put("mode", "text");
     }
@@ -295,9 +323,17 @@ public class ConversationalCreativeController {
         Map<String, Object> action = toStringMap(source);
         String type = text(action.get("type"));
         if (type == null || !CHAT_ACTIONS.contains(type.toLowerCase(Locale.ROOT))) return Map.of();
+        String normalizedType = type.toLowerCase(Locale.ROOT);
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("type", type.toLowerCase(Locale.ROOT));
+        result.put("type", normalizedType);
         String value = limit(text(action.get("value")), 240);
+        if ("edit".equals(normalizedType)) {
+            String normalizedTarget = value == null ? null : value.toLowerCase(Locale.ROOT);
+            if (normalizedTarget == null || !EDIT_TARGETS.contains(normalizedTarget)) {
+                throw new IllegalArgumentException("修改目标无效");
+            }
+            value = normalizedTarget;
+        }
         String label = limit(text(action.get("label")), 120);
         if (value != null) result.put("value", value);
         if (label != null) result.put("label", label);
@@ -565,7 +601,7 @@ public class ConversationalCreativeController {
             return;
         }
         if ("add_detail".equals(type) || !blank(message)
-                || (type != null && Set.of("product", "category", "material", "template", "image", "text").contains(type))) {
+                || (type != null && Set.of("product", "category", "material", "template", "image", "text", "edit").contains(type))) {
             brief.put("generationConfirmed", false);
         }
     }
@@ -683,6 +719,11 @@ public class ConversationalCreativeController {
         String mode = text(values.get("mode"));
         String productType = firstText(values, "productType", "product", "productName");
         String material = firstText(values, "material", "materialName");
+        if ("chat".equals(step)) {
+            jdbc.update("UPDATE creative_conversation_session SET mode=?,product_type=?,material=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+                    mode, productType, material, id, userId);
+            return;
+        }
         String status = "image".equals(step) || "model".equals(step) ? "completed" : null;
         jdbc.update("UPDATE creative_conversation_session SET mode=COALESCE(?,mode),product_type=COALESCE(?,product_type),material=COALESCE(?,material),status=COALESCE(?,status),updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
                 mode, productType, material, status, id, userId);

@@ -33,23 +33,23 @@
         </view>
       </view>
 
-      <view v-if="phase === 'result'" class="output-surface">
+      <view v-if="phase === 'result'" id="result-output" class="output-surface">
         <view class="output-header"><view><text class="surface-kicker">IMAGE OUTPUT</text><text class="surface-title">产品视觉已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>已保存</text></view></view>
-        <view class="visual-frame"><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view class="visual-badge">AI 生成</view></view>
+        <view class="visual-frame"><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFit" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view class="visual-badge">AI 生成</view></view>
         <view class="output-info"><view><text>{{ selectedProduct?.name || '文创产品' }}</text><text>{{ material || '材质待定' }} · {{ mode === 'image' ? '参考图改造' : '文字生图' }}</text></view><text class="output-open" @tap="previewImage">查看大图 ›</text></view>
         <view v-if="refiningImage" class="refinement-panel"><view class="refinement-heading"><view><text class="surface-kicker">REFINE THIS IMAGE</text><text>告诉我哪里不满意</text></view><text class="refinement-close" @tap="cancelRefinement">×</text></view><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：保留主体和构图，把边缘改得更简洁，去掉文字。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view></view>
         <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成三视图</text><text>补全结构视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="openCommercial"><view class="action-icon gold">样</view><view><text>申请打样 / 商品化</text><text>提交给运营报价</text></view><text class="action-arrow">›</text></view></view>
       </view>
 
-      <view v-if="phase === 'multiview'" class="output-surface">
+      <view v-if="phase === 'multiview'" id="multiview-output" class="output-surface">
         <view class="output-header"><view><text class="surface-kicker">MULTI-VIEW OUTPUT</text><text class="surface-title">三视图已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>3 张已保存</text></view></view>
         <text class="surface-note">正面、侧面和背面将保持同一产品主体，可直接交给 3D 建模。</text>
-        <view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFill" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><view class="view-label"><text>{{ item.label }}</text><text>已生成</text></view></view></view>
+        <view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFit" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><view class="view-label"><text>{{ item.label }}</text><text>已生成</text></view></view></view>
         <button class="dark-button full-button" :loading="busy" @tap="generateModel">用三视图生成 3D 模型 <text>›</text></button>
         <button class="outline-button full-button" @tap="openCommercial">先申请打样 / 商品化</button>
       </view>
 
-      <view v-if="phase === 'model'" class="output-surface">
+      <view v-if="phase === 'model'" id="model-output" class="output-surface">
         <view class="output-header"><view><text class="surface-kicker">3D PROTOTYPE</text><text class="surface-title">{{ modelTaskTitle }}</text></view><view class="model-state" :class="{ done: isModelTaskSucceeded, failed: isModelTaskFailed }">{{ isModelTaskSucceeded ? '完成' : isModelTaskFailed ? '失败' : '处理中' }}</view></view>
         <view class="model-summary"><view class="model-mark">3D</view><view><text>{{ modelTaskDescription }}</text><text>{{ modelTaskDetail }}</text></view></view>
         <view v-if="modelTask" class="model-progress"><view class="progress-row"><text>建模进度</text><text>{{ normalizedModelProgress }}%</text></view><view class="model-progress-track"><view class="model-progress-value" :style="{ width: `${normalizedModelProgress}%` }" /></view></view>
@@ -72,7 +72,7 @@
       <view class="composer-footer"><text>AI 生成内容 · 请在商业使用前人工复核</text><text>{{ chatInput.length }}/1200</text></view>
     </view>
 
-    <view class="bottom-actions"><button v-if="canGoPrevious" :disabled="busy || saving" @tap="goPreviousStep"><text>‹</text>上一步</button><button @tap="goWorks"><text>▣</text>作品库</button><button class="restart-action" @tap="restart"><text>＋</text>重新开始</button></view>
+    <view class="bottom-actions"><button v-if="canGoPrevious" :disabled="busy || saving || chatSending" @tap="goPreviousStep"><text>‹</text>{{ previousActionLabel }}</button><button @tap="goWorks"><text>▣</text>作品库</button><button class="restart-action" @tap="restart"><text>＋</text>重新开始</button></view>
 
     <view v-if="policyDialog" class="policy-mask" @tap="resolvePolicyDialog(false)">
       <view class="policy-dialog" @tap.stop>
@@ -86,14 +86,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { onHide, onLoad, onUnload } from '@dcloudio/uni-app'
 import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import { getSelectionOptions, type SelectionOption } from '../../api/selection'
 import {
   createConversation,
   createModel,
   createSeedreamMultiView,
+  getAssetPreviewAccess,
   getConversation,
   getConversations,
   getTripoModelTask,
@@ -106,12 +107,13 @@ import {
   type ConversationQuickReply,
   type SeedreamMultiViewImage,
 } from '../../api/creative'
-import { apiUrl, createReferenceToImage, createTextToImage } from '../../api/client'
+import { apiUrl, createReferenceToImage, createTextToImage, getArkImageJob, waitForArkImageJob } from '../../api/client'
 import { CREATIVE_POLICY_VERSION, getCreativePolicy, type CreativePolicyKey } from '../../utils/compliance'
 import { requireSession } from '../../utils/session'
 
 type Phase = 'mode' | 'product' | 'inspiration' | 'image' | 'material' | 'result' | 'multiview' | 'model'
 type Mode = 'template' | 'text' | 'image'
+type EditableBriefField = 'product' | 'inspiration' | 'material'
 interface Message { id: number; role: 'assistant' | 'user'; text: string }
 interface ProductOption { key: string; name: string; mark: string; desc: string; process: string; categoryKey: string; categoryName: string; materials: MaterialOption[] }
 interface MaterialOption { name: string; note: string; color: string }
@@ -128,18 +130,17 @@ const productCategory = ref('')
 const catalogLoading = ref(false)
 
 const phase = ref<Phase>('mode')
-const canGoPrevious = computed(() => phase.value !== 'mode' && !busy.value && !saving.value)
 const mode = ref<Mode | ''>('')
 const selectedProduct = ref<ProductOption | null>(null)
 const material = ref('')
 const materialChoice = ref<'recommend' | string>('recommend')
-const style = ref('国潮')
-const purpose = ref('景区伴手礼')
 const inspirationText = ref('')
 const referencePath = ref('')
 const referenceAssetId = ref<number | null>(null)
 const sessionId = ref<number | null>(null)
 const generatedAssetId = ref<number | null>(null)
+const pendingImageJobId = ref<number | null>(null)
+const pendingGenerationPrompt = ref('')
 const previewUrl = ref('')
 const multiviewImages = ref<SeedreamMultiViewImage[]>([])
 const modelInputMode = ref<'single' | 'multiview'>('single')
@@ -171,6 +172,26 @@ const threeDimensionalPolicyConfirmed = ref(false)
 const policyDialog = ref<{ key: CreativePolicyKey; resolve: (confirmed: boolean) => void } | null>(null)
 let modelPollTimer: ReturnType<typeof setTimeout> | null = null
 let modelPollVersion = 0
+let draftSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+const previousEditTarget = computed<EditableBriefField | null>(() => {
+  if (phase.value === 'result') return selectedProduct.value ? 'material' : null
+  if (phase.value === 'multiview' || phase.value === 'model') return null
+  if (!selectedProduct.value || chatStage.value === 'need_product') return null
+  if (chatStage.value === 'need_inspiration') return 'product'
+  if (chatStage.value === 'need_material') return 'inspiration'
+  if (['confirm_before_image', 'need_additional_detail', 'ready_for_image', 'image_ready'].includes(chatStage.value)) return 'material'
+  if (material.value) return 'material'
+  if (inspirationText.value || referenceAssetId.value) return 'inspiration'
+  return 'product'
+})
+const previousActionLabel = computed(() => {
+  if (phase.value === 'model') return multiviewImages.value.length >= 3 ? '返回三视图' : '返回产品图'
+  if (phase.value === 'multiview') return '返回产品图'
+  return ({ product: '修改产品', inspiration: '修改灵感', material: '修改材质' } as Record<EditableBriefField, string>)[previousEditTarget.value || 'product']
+})
+const canGoPrevious = computed(() => !busy.value && !saving.value && !chatSending.value
+  && (phase.value === 'multiview' || phase.value === 'model' || Boolean(previousEditTarget.value)))
 
 const currentMaterials = computed(() => selectedProduct.value?.materials || [])
 const categoryLabels: Record<string, string> = { food: '食品饮品', stationery: '文具纸品', souvenir: '景区文创', accessory: '饰品挂件', craft: '工艺收藏', daily: '日用生活', tableware: '餐饮器物', toy: '潮玩玩具', apparel: '服饰配件', precious: '贵金属' }
@@ -200,7 +221,7 @@ const isFoodProduct = computed(() => selectedProduct.value?.categoryKey === 'foo
 const prompt = computed(() => {
   const product = selectedProduct.value?.name || '文创产品'
   const source = inspirationText.value.trim() || `为${product}设计一套具有文化辨识度、适合量产打样的产品视觉`
-  return `${source}。产品：${product}；材质：${material.value}；风格：${style.value}；配色由系统按产品和风格自动协调；用途：${purpose.value}。请考虑清晰轮廓、可生产结构、合理尺寸和适合商品展示的构图。`
+  return `${source}。产品：${product}；材质：${material.value}。视觉气质与配色只依据用户灵感和产品形态协调，不强行套用固定风格或用途。请考虑清晰轮廓、可生产结构、合理尺寸和适合商品展示的构图。`
 })
 const normalizedModelProgress = computed(() => Math.max(0, Math.min(100, Number(modelTask.value?.progress) || 0)))
 const isModelTaskSucceeded = computed(() => modelTask.value?.status === 'succeeded')
@@ -248,8 +269,15 @@ function quickReplyMark(type: string) {
 }
 
 function addMessage(role: Message['role'], text: string) {
-  messages.value.push({ id: ++messageId, role, text })
-  void nextTick(() => { scrollIntoView.value = `message-${messageId}` })
+  const id = ++messageId
+  messages.value.push({ id, role, text })
+  void nextTick(() => { scrollIntoView.value = `message-${id}` })
+  return id
+}
+async function scrollToSection(id: 'result-output' | 'multiview-output' | 'model-output' | 'bottom-anchor') {
+  scrollIntoView.value = ''
+  await nextTick()
+  scrollIntoView.value = id
 }
 function setChatThinking(active: boolean, label = '正在理解你的想法') {
   chatThinking.value = active
@@ -300,13 +328,17 @@ function setInitialChatReplies() {
 function applyChatBrief(brief: Record<string, any> | undefined) {
   if (!brief) return
   const product = productByValue(brief.productName, brief.productKey)
-  if (product) selectedProduct.value = product
-  if (brief.mode) mode.value = String(brief.mode) as Mode
-  if (brief.inspiration && brief.inspirationSource !== 'image') inspirationText.value = String(brief.inspiration)
-  if (brief.referenceAssetId) referenceAssetId.value = Number(brief.referenceAssetId) || referenceAssetId.value
+  selectedProduct.value = product
+  mode.value = ['template', 'text', 'image'].includes(String(brief.mode || '')) ? String(brief.mode) as Mode : ''
+  inspirationText.value = brief.inspiration && brief.inspirationSource !== 'image' ? String(brief.inspiration) : ''
+  referenceAssetId.value = Number(brief.referenceAssetId) > 0 ? Number(brief.referenceAssetId) : null
+  if (!referenceAssetId.value) referencePath.value = ''
   if (brief.material) {
     material.value = String(brief.material)
     materialChoice.value = brief.materialRecommended ? 'recommend' : material.value
+  } else {
+    material.value = ''
+    materialChoice.value = 'recommend'
   }
 }
 
@@ -360,14 +392,17 @@ async function submitChatInput() {
   const value = chatInput.value.trim()
   if (!value || busy.value || chatSending.value) return
   chatInput.value = ''
-  await sendChatTurn(value)
+  const sent = await sendChatTurn(value)
+  if (sent && !chatInput.value.trim()) clearChatDraft()
+  else if (!chatInput.value.trim()) chatInput.value = value
 }
 
 async function sendChatTurn(message: string, action?: { type: string; value?: string; label?: string }) {
-  if (!(await ensureSession()) || !sessionId.value || chatSending.value) return
+  if (!(await ensureSession()) || !sessionId.value || chatSending.value) return false
   const visibleMessage = message.trim()
   const displayMessage = visibleMessage || String(action?.label || '').trim()
-  if (displayMessage) addMessage('user', displayMessage)
+  const optimisticMessageId = displayMessage ? addMessage('user', displayMessage) : null
+  let succeeded = false
   chatSending.value = true
   setChatThinking(true, thinkingLabelFor(action, visibleMessage))
   try {
@@ -376,6 +411,7 @@ async function sendChatTurn(message: string, action?: { type: string; value?: st
     chatStage.value = String(result.stage || 'understanding')
     chatQuickReplies.value = Array.isArray(result.quickReplies) ? result.quickReplies : []
     if (result.assistantText) addMessage('assistant', result.assistantText)
+    succeeded = true
     // Let the assistant reply settle in the transcript before showing the
     // separate, longer-running image-generation status.
     setChatThinking(false)
@@ -402,25 +438,35 @@ async function sendChatTurn(message: string, action?: { type: string; value?: st
     }
   } catch (error: any) {
     setChatThinking(false)
+    if (optimisticMessageId) messages.value = messages.value.filter(item => item.id !== optimisticMessageId)
     uni.showModal({ title: '对话暂时中断', content: error?.message || '请稍后重试，当前已输入内容会保留。', showCancel: false })
   } finally {
     setChatThinking(false)
     chatSending.value = false
   }
+  return succeeded
 }
 
 async function goPreviousStep() {
   if (!canGoPrevious.value) return
   const from = phase.value
-  const to = previousPhase(from)
-  if (!to) return
-  phase.value = to
-  addMessage('assistant', '已回到上一步，之前填写和上传的内容都已保留，可以继续修改。')
-  try {
+  if (from === 'multiview' || from === 'model') {
+    const to = previousPhase(from)
+    if (!to) return
+    phase.value = to
+    addMessage('assistant', '已返回上一步，现有作品和生成记录不会删除。')
     await saveEvent('navigation', 'previous_step', { from, to })
-  } catch {
-    // Local progress remains available even if the audit event cannot be saved.
+    await scrollToSection(to === 'multiview' ? 'multiview-output' : 'result-output')
+    return
   }
+  const target = previousEditTarget.value
+  if (!target) return
+  const label = ({ product: '修改产品', inspiration: '修改灵感', material: '修改材质' } as Record<EditableBriefField, string>)[target]
+  const edited = await sendChatTurn('', { type: 'edit', value: target, label })
+  if (!edited) return
+  if (generatedAssetId.value) clearGeneratedOutputForNewDirection()
+  phase.value = 'mode'
+  await saveEvent('navigation', 'previous_step', { from, to: target })
 }
 
 function previousPhase(current: Phase): Phase | null {
@@ -527,6 +573,84 @@ function productByValue(productType?: string, productKey?: string) {
   return productOptions.value.find(item => item.key === productKey || item.name === productType) || null
 }
 
+function chatDraftStorageKey() {
+  return sessionId.value ? `conversation-create:draft:${sessionId.value}` : ''
+}
+
+function persistChatDraft() {
+  if (draftSaveTimer) clearTimeout(draftSaveTimer)
+  draftSaveTimer = null
+  const key = chatDraftStorageKey()
+  if (!key) return
+  try {
+    if (chatInput.value) uni.setStorageSync(key, { value: chatInput.value, updatedAt: Date.now() })
+    else uni.removeStorageSync(key)
+  } catch {
+    // A storage quota issue must not block the conversation itself.
+  }
+}
+
+function scheduleChatDraftSave() {
+  if (draftSaveTimer) clearTimeout(draftSaveTimer)
+  draftSaveTimer = setTimeout(persistChatDraft, 300)
+}
+
+function restoreChatDraft() {
+  const key = chatDraftStorageKey()
+  if (!key || chatInput.value) return
+  try {
+    const saved = uni.getStorageSync(key)
+    const value = typeof saved === 'string' ? saved : String(saved?.value || '')
+    if (value) chatInput.value = value
+  } catch {
+    // Ignore a malformed or unavailable local draft.
+  }
+}
+
+function clearChatDraft() {
+  if (draftSaveTimer) clearTimeout(draftSaveTimer)
+  draftSaveTimer = null
+  const key = chatDraftStorageKey()
+  if (!key) return
+  try { uni.removeStorageSync(key) } catch { /* local storage is best-effort */ }
+}
+
+function clearGeneratedOutputForNewDirection() {
+  stopModelPolling()
+  generatedAssetId.value = null
+  pendingImageJobId.value = null
+  pendingGenerationPrompt.value = ''
+  previewUrl.value = ''
+  multiviewImages.value = []
+  modelInputMode.value = 'single'
+  modelTask.value = null
+  refiningImage.value = false
+  refinementNote.value = ''
+}
+
+function editableTarget(value: unknown): EditableBriefField | null {
+  const target = String(value || '')
+  return ['product', 'inspiration', 'material'].includes(target) ? target as EditableBriefField : null
+}
+
+async function freshAssetPreview(assetId: number) {
+  if (!Number.isFinite(assetId) || assetId <= 0) return ''
+  try { return imageUrl(await getAssetPreviewAccess(assetId)) } catch { return '' }
+}
+
+async function refreshRestoredPreviews() {
+  if (generatedAssetId.value) {
+    const fresh = await freshAssetPreview(generatedAssetId.value)
+    if (fresh) previewUrl.value = fresh
+  }
+  if (multiviewImages.value.length) {
+    multiviewImages.value = await Promise.all(multiviewImages.value.map(async item => {
+      const fresh = await freshAssetPreview(Number(item.assetId))
+      return fresh ? { ...item, previewUrl: fresh } : item
+    }))
+  }
+}
+
 function resetViewState() {
   stopModelPolling()
   phase.value = 'mode'
@@ -534,12 +658,12 @@ function resetViewState() {
   selectedProduct.value = null
   material.value = ''
   materialChoice.value = 'recommend'
-  style.value = '国潮'
-  purpose.value = '景区伴手礼'
   inspirationText.value = ''
   referencePath.value = ''
   referenceAssetId.value = null
   generatedAssetId.value = null
+  pendingImageJobId.value = null
+  pendingGenerationPrompt.value = ''
   previewUrl.value = ''
   multiviewImages.value = []
   modelInputMode.value = 'single'
@@ -584,11 +708,19 @@ function restoreEvent(event: any) {
     case 'purpose_selected':
     case 'creative_direction_confirmed':
     case 'creative_direction_auto_confirmed':
-      if (payload.style) style.value = String(payload.style)
-      if (payload.purpose) purpose.value = String(payload.purpose)
       if (payload.inspirationText) inspirationText.value = String(payload.inspirationText)
       break
+    case 'image_generation_queued':
+      pendingImageJobId.value = Number(payload.jobId) || pendingImageJobId.value
+      pendingGenerationPrompt.value = String(payload.prompt || pendingGenerationPrompt.value)
+      break
+    case 'image_generation_failed':
+      pendingImageJobId.value = null
+      pendingGenerationPrompt.value = ''
+      break
     case 'image_generated':
+      pendingImageJobId.value = null
+      pendingGenerationPrompt.value = ''
       generatedAssetId.value = Number(payload.generatedAssetId) || generatedAssetId.value
       previewUrl.value = imageUrl({ previewUrl: payload.previewUrl })
       break
@@ -612,6 +744,12 @@ function restoreEvent(event: any) {
       break
     case 'chat_state':
       applyChatBrief(payload)
+      break
+    case 'chat_user_message':
+      if (payload.action?.type === 'edit' && editableTarget(payload.action?.value)) clearGeneratedOutputForNewDirection()
+      break
+    case 'previous_step':
+      if (editableTarget(payload.to)) clearGeneratedOutputForNewDirection()
       break
     default:
       break
@@ -658,6 +796,12 @@ function restoreMessages(events: any[]) {
         break
       case 'creative_direction_auto_confirmed':
         addMessage('assistant', `我会根据你的灵感自动匹配${payload.material || material.value}，现在直接生成产品图。`)
+        break
+      case 'image_generation_queued':
+        addMessage('assistant', '产品图已进入生成队列。离开当前页面也会继续生成，完成后会自动保存到作品库。')
+        break
+      case 'image_generation_failed':
+        addMessage('assistant', `产品图本次没有生成成功。${payload.errorMessage || '可以调整描述后重新提交。'}`)
         break
       case 'image_generated':
         addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
@@ -710,12 +854,23 @@ function restorePhase(events: any[]) {
       case 'material_selected': phase.value = 'material'; break
       case 'creative_direction_confirmed':
       case 'creative_direction_auto_confirmed': phase.value = 'material'; break
+      case 'image_generation_queued': phase.value = 'material'; break
+      case 'image_generation_failed': phase.value = 'material'; break
       case 'image_generated': phase.value = 'result'; break
       case 'image_refined': phase.value = 'result'; break
       case 'multiview_generated': phase.value = 'multiview'; break
       case 'model_submitted': phase.value = 'model'; break
       case 'model_completed': phase.value = 'model'; break
       case 'model_failed': phase.value = 'model'; break
+      case 'chat_user_message':
+        if (event?.payload?.action?.type === 'edit' && editableTarget(event.payload.action?.value)) phase.value = 'mode'
+        break
+      case 'previous_step': {
+        const destination = String(event?.payload?.to || '')
+        if (editableTarget(destination)) phase.value = 'mode'
+        else if (destination === 'result' || destination === 'multiview' || destination === 'model') phase.value = destination
+        break
+      }
       case 'chat_assistant_message':
         if (event?.payload?.stage) chatStage.value = String(event.payload.stage)
         if (!generatedAssetId.value && (event?.payload?.generationConfirmationRequired || (event?.payload?.readyToGenerate && event?.payload?.generationConfirmed !== true))) {
@@ -742,6 +897,7 @@ async function restoreLatestSession() {
     for (const event of events) restoreEvent(event)
     restoreMessages(events)
     restorePhase(events)
+    await refreshRestoredPreviews()
     return Boolean(sessionId.value)
   } catch (error) {
     // A session may belong to an old deployment or have been removed. Do not
@@ -823,8 +979,6 @@ async function submitTextInspiration() {
   }
   material.value = recommendation.name
   materialChoice.value = 'recommend'
-  style.value = recommendedStyle()
-  purpose.value = recommendedPurpose()
   await saveEvent('material', 'material_selected', { productType: selectedProduct.value?.name, material: recommendation.name, materialNote: recommendation.note, recommended: true, autoSelected: true })
   addMessage('assistant', `我会根据你的灵感自动匹配${recommendation.name}，现在直接生成产品图。`)
   await generateProductImage()
@@ -917,27 +1071,40 @@ async function chooseRecommendedMaterial() {
 }
 
 async function generateImageAfterMaterialSelection() {
-  style.value = recommendedStyle()
-  purpose.value = recommendedPurpose()
   addMessage('assistant', '材质已确认，现在直接生成产品图。')
   await generateProductImage()
 }
-function recommendedStyle() {
-  const context = `${selectedProduct.value?.name || ''} ${inspirationText.value}`
-  if (/亲子|儿童|宝宝|卡通/.test(context)) return '亲子卡通'
-  if (/敦煌|飞天|壁画/.test(context)) return '敦煌'
-  if (/山水|江南|水墨|园林/.test(context)) return '青绿山水'
-  if (/简约|极简|现代|科技/.test(context)) return '现代极简'
-  return '国潮'
+
+function updateImageQueueMessage(job: { status?: string; queuePosition?: number }) {
+  if (job.status === 'queued') {
+    busyMessage.value = job.queuePosition && job.queuePosition > 0
+      ? `已进入生成队列，前面还有 ${job.queuePosition - 1} 项任务…`
+      : '已进入生成队列，马上开始…'
+  } else if (job.status === 'running') {
+    busyMessage.value = '之间大模型正在生成产品视觉，请稍候…'
+  }
 }
-function recommendedPurpose() {
-  const context = `${selectedProduct.value?.name || ''} ${inspirationText.value}`
-  if (/博物馆|文物|展馆/.test(context)) return '博物馆文创'
-  if (/企业|品牌|活动|客户/.test(context)) return '企业礼赠'
-  if (/亲子|儿童|宝宝/.test(context)) return '亲子纪念'
-  if (/收藏|纪念/.test(context)) return '个人收藏'
-  return '景区伴手礼'
+
+async function completeGeneratedProductImage(result: any, generationPrompt: string) {
+  if (!selectedProduct.value) throw new Error('当前产品信息已失效，请重新选择产品')
+  const assetId = Number(result?.assetId || result?.id)
+  if (!Number.isFinite(assetId) || assetId <= 0) throw new Error('产品图没有保存成功，请重新生成')
+  pendingImageJobId.value = null
+  pendingGenerationPrompt.value = ''
+  generatedAssetId.value = assetId
+  previewUrl.value = imageUrl(result)
+  await saveEvent('image', 'image_generated', { jobId: result?.jobId, productType: selectedProduct.value.name, material: material.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
+  addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
+  chatStage.value = 'image_ready'
+  chatQuickReplies.value = [
+    { label: '满意，生成三视图', type: 'multiview', value: '' },
+    { label: '不满意，告诉我怎么改', type: 'refine', value: '' },
+    { label: '直接申请打样 / 商品化', type: 'commercial', value: '' },
+  ]
+  phase.value = 'result'
+  await scrollToSection('result-output')
 }
+
 async function generateProductImage() {
   if (busy.value) {
     uni.showToast({ title: '图片正在生成，请不要重复提交', icon: 'none' })
@@ -958,6 +1125,7 @@ async function generateProductImage() {
   }
   busy.value = true
   busyMessage.value = '正在保存创作参数…'
+  let queueEventPromise: Promise<void> | null = null
   try {
     await saveEvent('summary', 'generation_started', { productType: selectedProduct.value.name, material: material.value, prompt: prompt.value })
     let generationPrompt = prompt.value
@@ -979,27 +1147,61 @@ async function generateProductImage() {
       busyMessage.value = '正在依据参考图生成产品视觉，预计需要 1-3 分钟…'
       result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value })
     } else {
-      busyMessage.value = '正在调用之间大模型生成产品视觉，预计需要 1-3 分钟…'
-      result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, scene: purpose.value, productType: selectedProduct.value.name, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value })
+      busyMessage.value = '正在提交之间大模型生成任务…'
+      result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, productType: selectedProduct.value.name, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value }, (job) => {
+        updateImageQueueMessage(job)
+        const jobId = Number(job.jobId)
+        if (Number.isFinite(jobId) && jobId > 0 && pendingImageJobId.value !== jobId) {
+          pendingImageJobId.value = jobId
+          pendingGenerationPrompt.value = generationPrompt
+          queueEventPromise = saveEvent('image', 'image_generation_queued', {
+            jobId,
+            productType: selectedProduct.value?.name,
+            material: material.value,
+            prompt: generationPrompt,
+          })
+        }
+      })
     }
-    const assetId = Number(result?.assetId || result?.id)
-    if (!Number.isFinite(assetId) || assetId <= 0) throw new Error('产品图没有保存成功，请重新生成')
-    generatedAssetId.value = assetId
-    previewUrl.value = imageUrl(result)
-    await saveEvent('image', 'image_generated', { productType: selectedProduct.value.name, material: material.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
-    addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
-    chatStage.value = 'image_ready'
-    chatQuickReplies.value = [
-      { label: '满意，生成三视图', type: 'multiview', value: '' },
-      { label: '不满意，告诉我怎么改', type: 'refine', value: '' },
-      { label: '直接申请打样 / 商品化', type: 'commercial', value: '' },
-    ]
-    phase.value = 'result'
+    if (queueEventPromise) await queueEventPromise
+    await completeGeneratedProductImage(result, generationPrompt)
   } catch (error: any) {
     const message = generationFailureMessage(error)
     uni.showModal({ title: '产品图未生成', content: message, showCancel: false })
   }
   finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
+}
+
+async function resumePendingImageGeneration() {
+  const jobId = pendingImageJobId.value
+  if (!jobId || generatedAssetId.value || busy.value) return
+  busy.value = true
+  busyMessage.value = '正在恢复上次的图片生成进度…'
+  try {
+    let job = await getArkImageJob(jobId)
+    updateImageQueueMessage(job)
+    if (job.status === 'queued' || job.status === 'running') {
+      job = await waitForArkImageJob(job, updateImageQueueMessage)
+    }
+    await completeGeneratedProductImage(job, pendingGenerationPrompt.value || prompt.value)
+  } catch (error: any) {
+    let failedJob: any = null
+    try {
+      const latest = await getArkImageJob(jobId)
+      if (latest.status === 'failed') failedJob = latest
+    } catch {
+      // Keep the pending job attached when the network itself is unavailable.
+    }
+    if (failedJob) {
+      pendingImageJobId.value = null
+      pendingGenerationPrompt.value = ''
+      await saveEvent('image', 'image_generation_failed', { jobId, errorMessage: failedJob.errorMessage || failedJob.message || '图片生成失败' })
+    }
+    uni.showModal({ title: failedJob ? '产品图未生成' : '生成进度暂时无法读取', content: generationFailureMessage(failedJob || error), showCancel: false })
+  } finally {
+    busy.value = false
+    busyMessage.value = '正在保存创作过程并调用 AI，请稍候…'
+  }
 }
 
 function generationFailureMessage(error: any) {
@@ -1061,6 +1263,7 @@ async function regenerateWithRefinement() {
     addMessage('user', `补充修改：${note}`)
     addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
     cancelRefinement()
+    await scrollToSection('result-output')
   } catch (error: any) {
     uni.showToast({ title: error?.message || '重新生成失败，请稍后重试', icon: 'none' })
   } finally {
@@ -1104,6 +1307,7 @@ async function refreshModelTask() {
         { label: '申请打样 / 商品化', type: 'commercial', value: '' },
         { label: '查看我的作品', type: 'works', value: '' },
       ]
+      if (phase.value === 'model') await scrollToSection('model-output')
     } else if (modelTask.value.status === 'failed' && previousStatus !== 'failed') {
       await saveEvent('model', 'model_failed', { modelJobId: modelTask.value.jobId, status: 'failed', progress: modelTask.value.progress, errorMessage: modelTask.value.errorMessage })
       addMessage('assistant', '3D 建模没有完成，失败原因已保存。可以检查产品图后重新提交。')
@@ -1155,6 +1359,7 @@ async function generateMultiView() {
       { label: '先申请打样 / 商品化', type: 'commercial', value: '' },
     ]
     phase.value = 'multiview'
+    await scrollToSection('multiview-output')
   } catch (error: any) { uni.showToast({ title: error?.message || '四视图生成失败', icon: 'none' }) }
   finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
 }
@@ -1188,6 +1393,7 @@ async function generateModel() {
     chatStage.value = 'model_running'
     chatQuickReplies.value = [{ label: '查看我的作品', type: 'works', value: '' }]
     phase.value = 'model'
+    await scrollToSection('model-output')
     void scheduleModelPolling(true)
   } catch (error: any) { uni.showToast({ title: error?.message || '3D 任务提交失败', icon: 'none' }) }
   finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
@@ -1201,9 +1407,14 @@ function restart() {
     title: '重新开始创作',
     content: '当前进度会保留在创作记录中，并为你新建一份空白创作。',
     confirmText: '重新开始',
-    success: result => { if (result.confirm) uni.redirectTo({ url: '/pages/conversation-create/index?new=1' }) },
+    success: result => {
+      if (!result.confirm) return
+      persistChatDraft()
+      uni.redirectTo({ url: '/pages/conversation-create/index?new=1' })
+    },
   })
 }
+watch(chatInput, scheduleChatDraftSave)
 onLoad(options => { forceNewSession.value = String(options?.new || '') === '1' })
 onMounted(async () => {
   if (!requireSession()) return
@@ -1211,12 +1422,19 @@ onMounted(async () => {
   if (!chatQuickReplies.value.length) setInitialChatReplies()
   await loadProductCatalog()
   if (!(await ensureSession())) return
+  restoreChatDraft()
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
   if (awaitingGenerationConfirmation.value && !chatQuickReplies.value.length) setGenerationConfirmationReplies()
   if (!chatQuickReplies.value.length && chatStage.value !== 'need_additional_detail') setInitialChatReplies()
+  if (pendingImageJobId.value && !generatedAssetId.value) void resumePendingImageGeneration()
   if (phase.value === 'model' && modelTask.value && !isModelTaskTerminal.value) void scheduleModelPolling(true)
+  if (phase.value === 'result') await scrollToSection('result-output')
+  else if (phase.value === 'multiview') await scrollToSection('multiview-output')
+  else if (phase.value === 'model') await scrollToSection('model-output')
 })
-onUnmounted(() => { resolvePolicyDialog(false); stopModelPolling() })
+onHide(persistChatDraft)
+onUnload(persistChatDraft)
+onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPolling() })
 </script>
 
 <style scoped lang="scss">

@@ -1244,6 +1244,45 @@ function useDoubaoMultiViewFor3d() {
   modelForm.mode = 'multiview_to_model'; switchTab('model')
   emit('alert', '已把 Doubao 正/左/后/右图带入多视图 3D 建模', 'success')
 }
+
+const waitForArkImageJob = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))
+
+async function submitArkImageAndWait(payload: Record<string, any>) {
+  const submit = await fetch('/api/creative/ai/ark/text-to-image', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  })
+  if (!submit.ok) { const err = await submit.json().catch(() => null); throw new Error(err?.message || `HTTP ${submit.status}`) }
+  let job: any = await submit.json()
+  const deadline = Date.now() + 45 * 60 * 1000
+  let transientFailures = 0
+  const updateStage = (current: any) => {
+    if (current.status === 'queued') {
+      const ahead = Math.max(0, Number(current.queuePosition || 1) - 1)
+      setStage(ahead > 0 ? `已进入生成队列，前面还有 ${ahead} 项任务` : '已进入生成队列，马上开始', 'generate')
+    } else if (current.status === 'running') {
+      setStage('之间大模型正在生成图片，请稍候', 'generate')
+    }
+  }
+  updateStage(job)
+  while (job.status === 'queued' || job.status === 'running') {
+    if (!job.jobId) throw new Error('生图任务编号缺失，请重新提交')
+    if (Date.now() >= deadline) throw new Error('任务仍在后台排队，已停止等待；请稍后到作品库查看生成结果')
+    await waitForArkImageJob(job.status === 'queued' ? 1800 : 2200)
+    try {
+      const poll = await fetch(`/api/creative/ai/ark/image-jobs/${job.jobId}`, { cache: 'no-store' })
+      if (!poll.ok) { const err = await poll.json().catch(() => null); throw new Error(err?.message || `HTTP ${poll.status}`) }
+      job = await poll.json(); transientFailures = 0; updateStage(job)
+    } catch (error) {
+      transientFailures += 1
+      if (transientFailures >= 3) throw error
+      await waitForArkImageJob(1200 * transientFailures)
+    }
+  }
+  if (job.status === 'failed') throw new Error(job.errorMessage || job.message || '图片生成失败')
+  if (job.status !== 'succeeded') throw new Error(job.message || '图片生成状态异常，请稍后到作品库查看')
+  return job
+}
+
 async function generateImage() {
   if (!imageForm.rawPrompt.trim()) { emit('alert', '先写一句你想做什么产品', 'error'); return }
   if (imageForm.generationMode === 'multiview' && !doubaoReferenceAssetId.value) { emit('alert', '请先上传一张产品参考图，再生成正/左/后/右视图', 'error'); return }
@@ -1258,9 +1297,14 @@ async function generateImage() {
     const endpoint = imageForm.generationMode === 'image_to_image' ? '/api/creative/ai/image-to-image' : '/api/creative/ai/ark/text-to-image'
     const finalImagePrompt = withMaterialConstraint(imageForm.prompt || imageForm.rawPrompt)
     const payload = imageForm.generationMode === 'image_to_image' ? { title: `图文结合 · ${productProfile.value.label}`, prompt: finalImagePrompt, inputAssetId: imageForm.inputAssetId, productCategory: productProfile.value.label, material: selectedMaterial.value } : { provider: 'ark', rawPrompt: withMaterialConstraint(imageForm.rawPrompt), prompt: finalImagePrompt, productCategory: productProfile.value.label, material: selectedMaterial.value, imagenAspectRatio: imageForm.imagenAspectRatio, imagenImageSize: imageForm.imagenImageSize, imagenOutputFormat: imageForm.imagenOutputFormat }
-    const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-    if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }
-    const d = await r.json(); if (d.creditAccount) creditAccount.value = d.creditAccount; imageResult.value = await secureAssetResult(d, 'image')
+    const d = imageForm.generationMode === 'single'
+      ? await submitArkImageAndWait(payload)
+      : await (async () => {
+        const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }
+        return r.json()
+      })()
+    if (d.creditAccount) creditAccount.value = d.creditAccount; imageResult.value = await secureAssetResult(d, 'image')
     setStage('正在保存作品', 'save'); await prepareAssetPreview(d.assetId, 'image'); await load(); await nextTick(); imageAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' }); phase.value = 'done'
     emit('alert', `图片已保存，可${reviewSubmitText.value}`, 'success')
   } catch (e: any) {

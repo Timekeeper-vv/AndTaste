@@ -153,6 +153,7 @@ interface ManualMultiViewAsset {
 const mode = ref<CreateMode>('image')
 const loading = ref(false)
 const loadingAction = ref<LoadingAction>('creation')
+const generationProgressMessage = ref('正在生成，请稍候…')
 const referencePath = ref('')
 const referenceAssetId = ref<number | null>(null)
 const selectedPatternId = ref('taotie')
@@ -286,7 +287,7 @@ const generateButtonLabel = computed(() => {
   if (loading.value) {
     if (loadingAction.value === 'multiview') return '正在基于原图生成四个视图…'
     if (loadingAction.value === 'model') return '正在提交多视图 3D 任务…'
-    return '正在生成，请稍候…'
+    return generationProgressMessage.value
   }
   if (isMultiViewMode.value) {
     if (multiViewSource.value === 'manual') return canSubmitMultiView.value ? manualMultiViewModelButtonLabel.value : '先上传正面图与另一个角度'
@@ -592,6 +593,13 @@ async function generate() {
         productType: selectedProductCategory.value.label,
         productCategory: selectedProductCategory.value.label,
         material: form.material,
+      }, (job) => {
+        if (job.status === 'queued') {
+          const ahead = Number(job.queuePosition || 1) - 1
+          generationProgressMessage.value = ahead > 0 ? `已进入队列，前面还有 ${ahead} 项任务…` : '已进入队列，马上开始…'
+        } else if (job.status === 'running') {
+          generationProgressMessage.value = '之间大模型正在生成产品图，请稍候…'
+        }
       })
     } else if (mode.value === 'reference') {
       const inputAssetId = await ensureReferenceAsset()
@@ -636,6 +644,7 @@ async function generate() {
   } finally {
     loading.value = false
     loadingAction.value = 'creation'
+    generationProgressMessage.value = '正在生成，请稍候…'
   }
 }
 
