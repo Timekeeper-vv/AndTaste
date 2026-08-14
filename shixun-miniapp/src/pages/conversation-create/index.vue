@@ -758,6 +758,9 @@ async function uploadInspirationImage(path: string) {
     referenceAssetId.value = id
     await saveEvent('inspiration', 'image_inspiration_uploaded', { productType: selectedProduct.value?.name, inputAssetId: id, fileType: 'image' })
     uni.showToast({ title: '图片已留存', icon: 'success' })
+    // The upload is complete before the chat turn starts. Release the upload
+    // lock so a ready image conversation can enter the normal generation path.
+    busy.value = false
     await sendChatTurn('我已上传灵感图片', { type: 'image', value: String(id), label: '已上传灵感图片' })
   } catch (error: any) {
     referencePath.value = ''
