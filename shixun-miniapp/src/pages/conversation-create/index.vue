@@ -1,65 +1,82 @@
 <template>
   <view class="page chat-experience">
-    <view class="topbar"><view @tap="goBack" class="back">‹</view><view><text class="eyebrow">CONVERSATIONAL STUDIO</text><text class="top-title">对话式创作</text></view><view class="topbar-actions"><button v-if="canGoPrevious" class="previous-button" :disabled="busy || saving" @tap="goPreviousStep">上一步</button><text class="save-state">{{ saving ? '保存中' : '已留存' }}</text></view></view>
-
     <scroll-view class="chat" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
-      <view class="intro-line"><text>每一步都会变成你的创作档案，后面可继续生图、四视图、3D 和商品化。</text></view>
-      <AiGeneratedNotice class="ai-disclosure" compact description="对话建议、提示词和后续生成的图片、四视图、3D 原型均可能由人工智能生成，仅供创作参考，需经人工复核后再用于商业场景。" />
+      <view class="workspace-intro">
+        <view class="workspace-intro-top"><view class="online-mark"><view class="online-dot" /><text>AI 工作台</text></view><text class="workspace-ref">{{ sessionId ? `项目 ${sessionId}` : '新项目' }}</text></view>
+        <text class="workspace-title">把灵感说出来，剩下的交给我</text>
+        <text class="workspace-subtitle">我会帮你整理产品方向、生成视觉，并继续推进三视图、3D 和打样。</text>
+        <view v-if="selectedProduct || material" class="brief-strip">
+          <view v-if="selectedProduct" class="brief-chip"><text>产品</text><text>{{ selectedProduct.name }}</text></view>
+          <view v-if="material" class="brief-chip"><text>材质</text><text>{{ material }}</text></view>
+          <view v-if="mode" class="brief-chip muted"><text>{{ mode === 'image' ? '参考图' : '文字灵感' }}</text></view>
+        </view>
+      </view>
+
+      <AiGeneratedNotice class="ai-disclosure" compact description="对话建议、提示词和后续生成的图片、三视图、3D 原型均可能由人工智能生成，仅供创作参考，商业使用前请人工复核。" />
+
       <view v-for="item in messages" :id="`message-${item.id}`" :key="item.id" class="message-row" :class="item.role">
-        <view v-if="item.role === 'assistant'" class="avatar">之</view>
-        <view class="bubble"><text>{{ item.text }}</text></view>
+        <view v-if="item.role === 'assistant'" class="message-avatar assistant-avatar">之</view>
+        <view class="message-content">
+          <view class="message-meta"><text>{{ item.role === 'assistant' ? '之间智造' : '我' }}</text><text v-if="item.role === 'assistant'">AI 助手</text></view>
+          <view class="bubble"><text>{{ item.text }}</text></view>
+        </view>
+        <view v-if="item.role === 'user'" class="message-avatar user-avatar">我</view>
       </view>
 
       <view v-if="chatThinking" id="chat-thinking" class="thinking-row" aria-label="之间正在思考">
-        <view class="avatar thinking-avatar">之</view>
-        <view class="thinking-bubble">
-          <view class="thinking-title-row">
-            <text class="thinking-title">之间正在思考</text>
-            <view class="thinking-dots" aria-hidden="true">
-              <view class="thinking-dot" />
-              <view class="thinking-dot" />
-              <view class="thinking-dot" />
-            </view>
+        <view class="message-avatar assistant-avatar thinking-avatar">之</view>
+        <view class="thinking-content">
+          <view class="thinking-bubble">
+            <view class="thinking-title-row"><text class="thinking-title">之间正在思考</text><view class="thinking-dots" aria-hidden="true"><view class="thinking-dot" /><view class="thinking-dot" /><view class="thinking-dot" /></view></view>
+            <text class="thinking-detail">{{ thinkingLabel }}</text>
           </view>
-          <text class="thinking-detail">{{ thinkingLabel }}</text>
         </view>
       </view>
 
-      <view v-if="chatExperience" class="chat-command-panel">
-        <text class="chat-stage-label">{{ chatStageLabel }}</text>
-        <view v-if="chatQuickReplies.length" class="quick-reply-list">
-          <button v-for="item in chatQuickReplies" :key="`${item.type}-${item.value}-${item.label}`" class="quick-reply" :disabled="busy || chatSending" @tap="handleQuickReply(item)">{{ item.label }}</button>
-        </view>
-        <view class="chat-input-row">
-          <button class="chat-upload-button" :disabled="busy || chatSending" @tap="pickInspirationImage">＋</button>
-          <input v-model="chatInput" class="chat-input" maxlength="1200" confirm-type="send" placeholder="告诉我你的想法…" @confirm="submitChatInput" />
-          <button class="chat-send-button" :disabled="!chatInput.trim() || busy || chatSending" @tap="submitChatInput">发送</button>
-        </view>
+      <view v-if="phase === 'result'" class="output-surface">
+        <view class="output-header"><view><text class="surface-kicker">IMAGE OUTPUT</text><text class="surface-title">产品视觉已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>已保存</text></view></view>
+        <view class="visual-frame"><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view class="visual-badge">AI 生成</view></view>
+        <view class="output-info"><view><text>{{ selectedProduct?.name || '文创产品' }}</text><text>{{ material || '材质待定' }} · {{ mode === 'image' ? '参考图改造' : '文字生图' }}</text></view><text class="output-open" @tap="previewImage">查看大图 ›</text></view>
+        <view v-if="refiningImage" class="refinement-panel"><view class="refinement-heading"><view><text class="surface-kicker">REFINE THIS IMAGE</text><text>告诉我哪里不满意</text></view><text class="refinement-close" @tap="cancelRefinement">×</text></view><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：保留主体和构图，把边缘改得更简洁，去掉文字。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view></view>
+        <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成三视图</text><text>补全结构视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="openCommercial"><view class="action-icon gold">样</view><view><text>申请打样 / 商品化</text><text>提交给运营报价</text></view><text class="action-arrow">›</text></view></view>
       </view>
 
-      <view v-if="phase === 'mode'" class="choice-panel"><text class="choice-title">你想从哪种方式开始？</text><view class="choice-grid"><view v-for="item in modeOptions" :key="item.key" class="choice-card" @tap="chooseMode(item.key)"><text class="choice-mark">{{ item.mark }}</text><view><text>{{ item.title }}</text><text>{{ item.desc }}</text></view><text class="choice-arrow">›</text></view></view></view>
+      <view v-if="phase === 'multiview'" class="output-surface">
+        <view class="output-header"><view><text class="surface-kicker">MULTI-VIEW OUTPUT</text><text class="surface-title">三视图已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>3 张已保存</text></view></view>
+        <text class="surface-note">正面、侧面和背面将保持同一产品主体，可直接交给 3D 建模。</text>
+        <view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFill" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><view class="view-label"><text>{{ item.label }}</text><text>已生成</text></view></view></view>
+        <button class="dark-button full-button" :loading="busy" @tap="generateModel">用三视图生成 3D 模型 <text>›</text></button>
+        <button class="outline-button full-button" @tap="openCommercial">先申请打样 / 商品化</button>
+      </view>
 
-      <view v-if="phase === 'product'" class="choice-panel"><text class="choice-title">先选要落地的产品类别</text><text class="choice-note">先确定品类，再选具体产品、材质和工艺。价格、工期仅作方向参考，正式生产前会重新报价。</text><view class="catalog-tools"><input class="catalog-search" :value="productKeyword" maxlength="30" placeholder="搜索：书签、冰箱贴、冰淇淋、马克杯…" @input="updateProductKeyword" /><scroll-view scroll-x class="catalog-categories" :show-scrollbar="false"><view><text class="catalog-category" :class="{ active: !productCategory }" @tap="productCategory = ''">全部分类</text><text v-for="item in productCatalogCategories" :key="item.key" class="catalog-category" :class="{ active: productCategory === item.key }" @tap="productCategory = item.key">{{ item.name }}</text></view></scroll-view><text class="catalog-count">{{ productCategory || productKeyword.trim() ? `${filteredProductOptions.length} 个可制作方案` : '请选择一个产品类别' }}</text></view><view v-if="catalogLoading" class="catalog-empty">正在读取选品手册…</view><view v-else-if="!productCategory && !productKeyword.trim()" class="category-entry-grid"><view v-for="item in productCatalogCategories" :key="item.key" class="category-entry" @tap="productCategory = item.key"><text class="category-entry-mark">{{ categoryMark(item.key) }}</text><view><text>{{ item.name }}</text><text>{{ productCountForCategory(item.key) }} 个产品方向</text></view><text>›</text></view></view><view v-else-if="!filteredProductOptions.length" class="catalog-empty">没有找到匹配商品，换个关键词或品类试试。</view><view v-else><text class="catalog-result-title">{{ productCategoryName || '搜索结果' }}</text><view class="product-grid"><view v-for="item in filteredProductOptions" :key="item.key" class="product-card" @tap="chooseProduct(item)"><text class="product-mark">{{ item.mark }}</text><text class="product-category-name">{{ item.categoryName }}</text><text class="product-name">{{ item.name }}</text><text class="product-desc">{{ item.desc }}</text><text class="product-process">{{ item.materials[0].name }} · {{ item.process }}</text></view></view></view></view>
+      <view v-if="phase === 'model'" class="output-surface">
+        <view class="output-header"><view><text class="surface-kicker">3D PROTOTYPE</text><text class="surface-title">{{ modelTaskTitle }}</text></view><view class="model-state" :class="{ done: isModelTaskSucceeded, failed: isModelTaskFailed }">{{ isModelTaskSucceeded ? '完成' : isModelTaskFailed ? '失败' : '处理中' }}</view></view>
+        <view class="model-summary"><view class="model-mark">3D</view><view><text>{{ modelTaskDescription }}</text><text>{{ modelTaskDetail }}</text></view></view>
+        <view v-if="modelTask" class="model-progress"><view class="progress-row"><text>建模进度</text><text>{{ normalizedModelProgress }}%</text></view><view class="model-progress-track"><view class="model-progress-value" :style="{ width: `${normalizedModelProgress}%` }" /></view></view>
+        <text v-if="modelTask?.errorMessage" class="model-error">{{ modelTask.errorMessage }}</text>
+        <button v-if="modelTask && !isModelTaskTerminal" class="outline-button full-button" :loading="modelRefreshing" @tap="refreshModelTask">刷新进度</button>
+        <button v-if="isModelTaskFailed" class="dark-button full-button" :loading="busy" @tap="generateModel">重新提交 3D 建模</button>
+        <button class="dark-button full-button" @tap="goWorks">{{ isModelTaskSucceeded ? '查看已完成的 3D 作品' : '查看我的作品' }}</button>
+        <button class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button>
+      </view>
 
-      <view v-if="phase === 'inspiration'" class="input-panel"><text class="choice-title">说说你的已有灵感</text><text class="choice-note">可以写文化主题、故事、想做的造型、使用场景，越具体越容易落地。提交后系统会自动推荐适合的材质并直接生成产品图。</text><textarea v-model="inspirationText" maxlength="1200" auto-height class="text-input" placeholder="例如：把家乡古城的城墙和祥云结合，做成适合游客带走的合金冰箱贴。" /><view class="input-foot"><text>{{ inspirationText.length }}/1200</text><button class="dark-button" :disabled="!inspirationText.trim() || busy" @tap="submitTextInspiration">直接生成产品图</button></view></view>
-
-      <view v-if="phase === 'image'" class="input-panel"><text class="choice-title">上传你的灵感图片</text><text class="choice-note">可以是草图、照片、纹样或你有权使用的参考图。生成时系统会自动识别主体、场景、配色、构图和需去除的界面元素，再保真转成产品视觉。</text><view class="image-picker" :class="{ ready: referencePath }" @tap="pickInspirationImage"><image v-if="referencePath" :src="referencePath" mode="aspectFill" /><view v-else><text>+</text><text>选择一张图片</text></view></view><button class="dark-button full-button" :disabled="!referenceAssetId || busy" @tap="submitImageInspiration">{{ referenceAssetId ? '继续选择工艺' : '先上传图片' }}</button></view>
-
-      <view v-if="phase === 'material'" class="choice-panel"><text class="choice-title">你希望它用什么材质？</text><text class="choice-note">材质会同步进入生图、三视图、3D 和后续生产提示词。</text><view class="material-grid"><view class="material-card recommendation-card" :class="{ active: materialChoice === 'recommend' }" @tap="chooseRecommendedMaterial"><text class="recommendation-mark">荐</text><view><text>你帮我推荐</text><text>按产品结构和量产工艺选择</text></view><text v-if="materialChoice === 'recommend'" class="check">✓</text></view><view v-for="item in currentMaterials" :key="item.name" class="material-card" :class="{ active: materialChoice === item.name }" @tap="chooseMaterial(item)"><view class="swatch" :style="{ background: item.color }" /><view><text>{{ item.name }}</text><text>{{ item.note }}</text></view><text v-if="materialChoice === item.name" class="check">✓</text></view></view></view>
-
-      <view v-if="phase === 'result'" class="result-panel"><text class="result-kicker">PRODUCT VISUAL READY</text><text class="choice-title">产品视觉已经完成</text><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFill" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view v-if="refiningImage" class="refinement-panel"><text>告诉我哪里不满意</text><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：把主图改得更简洁，保留祥云，去掉文字，做成圆形冰箱贴构图。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view><button class="link-button" @tap="cancelRefinement">返回当前方案</button></view><template v-else><text class="result-tip">当前是一张产品图。可以直接单图建模，或先补全三视图再做更完整的多视图建模。</text><view class="next-grid"><view class="next-card" @tap="startRefinement"><text>改</text><view><text>不满意，补充要求重生成</text><text>基于当前图片生成新的方案</text></view><text>›</text></view><view class="next-card" @tap="generateMultiView"><text>观</text><view><text>生成三视图</text><text>补全正面、侧面和背面后再建模</text></view><text>›</text></view><view class="next-card" @tap="generateModel"><text>形</text><view><text>用单张产品图生成 3D</text><text>直接交给 Tripo 单图建模</text></view><text>›</text></view><view class="next-card" @tap="openCommercial"><text>做</text><view><text>申请打样 / 商品化</text><text>把创作提交给运营报价</text></view><text>›</text></view></view></template></view>
-
-      <view v-if="phase === 'multiview'" class="result-panel"><text class="result-kicker">TURNAROUND VIEW</text><text class="choice-title">三视图已保存</text><text class="result-tip">已保存正面、侧面和背面。本次会把三张图一起交给 Tripo 多视图建模。</text><view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFill" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><text>{{ item.label }}</text></view></view><button class="dark-button full-button" :loading="busy" @tap="generateModel">用三视图生成 3D 模型</button><button class="outline-button full-button" @tap="openCommercial">先申请打样 / 商品化</button></view>
-
-      <view v-if="phase === 'model'" class="result-panel"><text class="result-kicker">3D PROTOTYPE</text><text class="choice-title">{{ modelTaskTitle }}</text><view class="model-success"><text>3D</text><view><text>{{ modelTaskDescription }}</text><text>{{ modelTaskDetail }}</text></view></view><view v-if="modelTask" class="model-progress"><view><text>建模进度</text><text>{{ normalizedModelProgress }}%</text></view><view class="model-progress-track"><view class="model-progress-value" :style="{ width: `${normalizedModelProgress}%` }" /></view></view><text v-if="modelTask?.errorMessage" class="model-error">{{ modelTask.errorMessage }}</text><button v-if="modelTask && !isModelTaskTerminal" class="outline-button full-button" :loading="modelRefreshing" @tap="refreshModelTask">刷新进度</button><button v-if="isModelTaskFailed" class="dark-button full-button" :loading="busy" @tap="generateModel">重新提交 3D 建模</button><button class="dark-button full-button" @tap="goWorks">{{ isModelTaskSucceeded ? '查看已完成的 3D 作品' : '查看我的作品' }}</button><button class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button></view>
+      <view id="bottom-anchor" class="bottom-anchor" />
     </scroll-view>
 
-    <view v-if="busy" class="loading-bar"><view class="loading-spinner" aria-hidden="true" /><text>{{ busyMessage }}</text></view>
-    <view class="bottom-actions"><button v-if="canGoPrevious" :disabled="busy || saving" @tap="goPreviousStep">上一步</button><button @tap="goWorks">作品库</button><button @tap="restart">重新开始</button></view>
+    <view v-if="busy" class="loading-bar"><view class="loading-spinner" aria-hidden="true" /><view><text class="loading-title">之间正在处理</text><text>{{ busyMessage }}</text></view></view>
+
+    <view class="composer-dock">
+      <view class="composer-context"><view class="context-live" /><text>{{ chatStageLabel }}</text><text v-if="selectedProduct" class="context-product">· {{ selectedProduct.name }}</text><text v-if="chatSending" class="context-working">处理中</text></view>
+      <scroll-view v-if="chatQuickReplies.length" scroll-x class="quick-reply-list" :show-scrollbar="false"><view class="quick-reply-track"><view v-for="item in chatQuickReplies" :key="`${item.type}-${item.value}-${item.label}`" class="quick-reply" :class="{ confirm: item.type === 'confirm_generate', secondary: item.type === 'add_detail', disabled: busy || chatSending }" :aria-label="item.label" @tap="handleQuickReply(item)"><text class="quick-reply-mark">{{ quickReplyMark(item.type) }}</text><text>{{ item.label }}</text></view></view></scroll-view>
+      <view class="chat-input-row"><button class="chat-upload-button" :disabled="busy || chatSending" aria-label="上传灵感图片" @tap="pickInspirationImage">＋</button><input v-model="chatInput" class="chat-input" maxlength="1200" confirm-type="send" placeholder="描述你的灵感，或直接回答上面的问题" @confirm="submitChatInput" /><button class="chat-send-button" :class="{ ready: chatInput.trim() }" :disabled="!chatInput.trim() || busy || chatSending" aria-label="发送" @tap="submitChatInput">↑</button></view>
+      <view class="composer-footer"><text>AI 生成内容 · 请在商业使用前人工复核</text><text>{{ chatInput.length }}/1200</text></view>
+    </view>
+
+    <view class="bottom-actions"><button v-if="canGoPrevious" :disabled="busy || saving" @tap="goPreviousStep"><text>‹</text>上一步</button><button @tap="goWorks"><text>▣</text>作品库</button><button class="restart-action" @tap="restart"><text>＋</text>重新开始</button></view>
 
     <view v-if="policyDialog" class="policy-mask" @tap="resolvePolicyDialog(false)">
       <view class="policy-dialog" @tap.stop>
-        <view class="policy-dialog-head"><text>AI生成提示</text><text>提交前确认</text></view>
+        <view class="policy-dialog-head"><view><text class="surface-kicker">BEFORE YOU CREATE</text><text>AI生成提示</text></view><text>提交前确认</text></view>
         <text class="policy-dialog-title">{{ activePolicy.title }}</text>
         <scroll-view class="policy-dialog-copy" scroll-y><text>{{ activePolicy.content }}</text></scroll-view>
         <view class="policy-dialog-actions"><button class="policy-cancel" @tap="resolvePolicyDialog(false)">暂不继续</button><button class="policy-confirm" @tap="resolvePolicyDialog(true)">我已阅读并继续</button></view>
@@ -212,6 +229,23 @@ const chatStageLabel = computed(() => ({
   model_running: '3D 原型正在生成',
   model_ready: '3D 原型已完成，可以申请打样',
 }[chatStage.value] || '告诉我你的创作想法'))
+function quickReplyMark(type: string) {
+  return ({
+    category: '类',
+    product: '选',
+    material: '材',
+    upload: '图',
+    text: '写',
+    template: '例',
+    confirm_generate: '出',
+    add_detail: '改',
+    multiview: '观',
+    model: '3D',
+    refine: '改',
+    commercial: '样',
+    works: '作',
+  } as Record<string, string>)[type] || '→'
+}
 
 function addMessage(role: Message['role'], text: string) {
   messages.value.push({ id: ++messageId, role, text })
@@ -374,8 +408,6 @@ async function sendChatTurn(message: string, action?: { type: string; value?: st
     chatSending.value = false
   }
 }
-
-function goBack() { uni.navigateBack() }
 
 async function goPreviousStep() {
   if (!canGoPrevious.value) return
@@ -1175,6 +1207,8 @@ function restart() {
 onLoad(options => { forceNewSession.value = String(options?.new || '') === '1' })
 onMounted(async () => {
   if (!requireSession()) return
+  if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
+  if (!chatQuickReplies.value.length) setInitialChatReplies()
   await loadProductCatalog()
   if (!(await ensureSession())) return
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
@@ -1196,4 +1230,214 @@ onUnmounted(() => { resolvePolicyDialog(false); stopModelPolling() })
 .topbar-actions{display:flex;align-items:center;gap:10rpx}.previous-button{height:46rpx;margin:0;padding:0 12rpx;border:1rpx solid #bfd0c1;border-radius:9rpx;background:#f3f8f3;color:#527463;font-size:14rpx;line-height:46rpx}.previous-button::after{border:0}.previous-button[disabled],.bottom-actions button[disabled]{opacity:.55}
 .chat-experience .choice-panel,.chat-experience .input-panel{display:none}.chat-command-panel{margin:18rpx 0 24rpx;padding:15rpx;border:1rpx solid #dfd5c9;border-radius:18rpx;background:rgba(255,253,249,.94);box-shadow:0 8rpx 20rpx rgba(79,60,41,.05)}.chat-stage-label{display:block;color:#837568;font-size:15rpx;line-height:1.4}.quick-reply-list{display:flex;flex-wrap:wrap;gap:8rpx;margin-top:12rpx}.quick-reply{height:62rpx;margin:0;padding:0 14rpx;border:1rpx solid #a9c1ad;border-radius:13rpx;background:#eff6ef;color:#4f705e;font-size:16rpx;line-height:62rpx}.quick-reply::after{border:0}.quick-reply[disabled]{opacity:.5}.chat-input-row{display:flex;align-items:center;gap:8rpx;margin-top:12rpx}.chat-upload-button,.chat-send-button{flex:0 0 auto;height:66rpx;margin:0;border-radius:12rpx;font-size:17rpx;line-height:66rpx}.chat-upload-button{width:66rpx;padding:0;border:1rpx solid #d5c9bc;background:#faf6ef;color:#806f61;font-size:30rpx}.chat-send-button{padding:0 15rpx;background:#3f3933;color:#fff}.chat-input{flex:1;box-sizing:border-box;height:66rpx;padding:0 13rpx;border:1rpx solid #d9cec1;border-radius:12rpx;background:#fbf9f5;color:#443b33;font-size:18rpx}.chat-send-button::after,.chat-upload-button::after{border:0}.chat-send-button[disabled]{opacity:.45}
 .thinking-row{display:flex;align-items:flex-start;gap:9rpx;margin:17rpx 0 18rpx;animation:thinking-enter .24s ease-out}.thinking-avatar{animation:thinking-breathe 1.8s ease-in-out infinite;box-shadow:0 0 0 6rpx rgba(94,124,109,.08)}.thinking-bubble{max-width:78%;padding:13rpx 16rpx;border:1rpx solid #d4e0d5;border-radius:17rpx 17rpx 17rpx 7rpx;background:#f8fcf8;box-shadow:0 7rpx 17rpx rgba(73,102,81,.07)}.thinking-title-row{display:flex;align-items:center;gap:9rpx}.thinking-title{color:#4d705c;font-size:19rpx;font-weight:850}.thinking-detail{display:block;margin-top:5rpx;color:#8a9b8d;font-size:15rpx;line-height:1.4}.thinking-dots{display:flex;align-items:center;gap:4rpx;height:22rpx}.thinking-dot{width:7rpx;height:7rpx;border-radius:50%;background:#6e967c;animation:thinking-dot-bounce 1.25s ease-in-out infinite}.thinking-dot:nth-child(2){animation-delay:.16s}.thinking-dot:nth-child(3){animation-delay:.32s}.quick-reply[disabled],.chat-upload-button[disabled],.chat-send-button[disabled]{opacity:.72;filter:none}.quick-reply[disabled]{border-color:#c4d5c6;background:#f1f7f1;color:#779180}.chat-upload-button[disabled]{border-color:#d9d5cc;background:#f6f4ef;color:#998f83}.chat-send-button[disabled]{background:#7b877f;color:#fff}.dark-button[disabled]{opacity:.72;background:#68746d;color:#fff}.loading-bar{display:flex;align-items:center;justify-content:center;gap:9rpx}.loading-spinner{width:22rpx;height:22rpx;border:3rpx solid #e8d8c7;border-top-color:#ad7e5d;border-radius:50%;animation:loading-spin .8s linear infinite}@keyframes thinking-enter{from{opacity:0;transform:translateY(8rpx)}to{opacity:1;transform:translateY(0)}}@keyframes thinking-breathe{0%,100%{transform:translateY(0);box-shadow:0 0 0 6rpx rgba(94,124,109,.08)}50%{transform:translateY(-2rpx);box-shadow:0 0 0 10rpx rgba(94,124,109,.03)}}@keyframes thinking-dot-bounce{0%,60%,100%{opacity:.35;transform:translateY(0) scale(.85)}30%{opacity:1;transform:translateY(-4rpx) scale(1)}}@keyframes loading-spin{to{transform:rotate(360deg)}}
+</style>
+
+<style scoped lang="scss">
+/* The conversation page is a focused workspace: the transcript stays clear,
+ * while the composer and project state remain available at the edges. */
+.page.chat-experience {
+  --ink: #26332d;
+  --ink-soft: #738079;
+  --line: #e2e8e3;
+  --paper: #f5f7f5;
+  --surface: #ffffff;
+  --green: #3f6958;
+  --green-soft: #e9f2ec;
+  --orange: #c76f53;
+  --orange-soft: #fff0e9;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding-bottom: calc(118rpx + env(safe-area-inset-bottom));
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.workspace-intro-top,
+.output-header,
+.output-info,
+.composer-context,
+.composer-footer,
+.refinement-heading,
+.progress-row {
+  display: flex;
+  align-items: center;
+}
+
+.surface-kicker {
+  display: block;
+  color: #84938b;
+  font-size: 11rpx;
+  font-weight: 900;
+  letter-spacing: 1.8rpx;
+}
+
+.chat {
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 24rpx 28rpx calc(296rpx + env(safe-area-inset-bottom));
+}
+.workspace-intro { margin: 6rpx 0 18rpx; }
+.workspace-intro-top { justify-content: space-between; gap: 10rpx; }
+.online-mark { display: flex; align-items: center; gap: 7rpx; color: var(--green); font-size: 13rpx; font-weight: 850; }
+.online-dot { width: 10rpx; height: 10rpx; border-radius: 50%; background: #6faa82; box-shadow: 0 0 0 5rpx rgba(111, 170, 130, .12); }
+.workspace-ref { overflow: hidden; color: #a0aaa4; font-size: 12rpx; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-title { display: block; margin-top: 13rpx; color: var(--ink); font-family: "Songti SC", "STSong", serif; font-size: 35rpx; font-weight: 800; line-height: 1.25; }
+.workspace-subtitle { display: block; max-width: 630rpx; margin-top: 7rpx; color: var(--ink-soft); font-size: 15rpx; line-height: 1.5; }
+.brief-strip { display: flex; flex-wrap: wrap; gap: 7rpx; margin-top: 13rpx; }
+.brief-chip { display: inline-flex; align-items: center; gap: 6rpx; padding: 6rpx 9rpx; border: 1rpx solid #cdded2; border-radius: 8rpx; background: #edf5ef; color: var(--green); font-size: 12rpx; }
+.brief-chip text:first-child { color: #8ca296; }
+.brief-chip.muted { border-color: #e2e7e3; background: #fff; color: #84918a; }
+.ai-disclosure { margin: 0 0 22rpx; }
+
+.message-row { display: flex; align-items: flex-start; gap: 10rpx; margin: 20rpx 0; }
+.message-row.user { justify-content: flex-end; }
+.message-avatar { display: grid; place-items: center; flex: 0 0 46rpx; width: 46rpx; height: 46rpx; border-radius: 14rpx; font-family: "Songti SC", "STSong", serif; font-size: 22rpx; font-weight: 850; }
+.assistant-avatar { background: var(--green); color: #fff; box-shadow: 0 5rpx 12rpx rgba(54, 93, 74, .18); }
+.user-avatar { background: #f7e5dc; color: #a45d48; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; font-size: 16rpx; }
+.message-content { display: flex; min-width: 0; max-width: 78%; flex-direction: column; align-items: flex-start; }
+.user .message-content { align-items: flex-end; }
+.message-meta { display: flex; align-items: center; gap: 7rpx; margin: 0 4rpx 6rpx; color: #849089; font-size: 12rpx; }
+.message-meta text:last-child { color: #a5afa9; }
+.bubble { max-width: 100%; box-sizing: border-box; padding: 14rpx 16rpx; border: 1rpx solid #e1e8e2; border-radius: 7rpx 16rpx 16rpx 16rpx; background: var(--surface); box-shadow: 0 6rpx 17rpx rgba(51, 72, 60, .045); }
+.bubble text { color: #46534b; font-size: 18rpx; line-height: 1.65; }
+.user .bubble { border-color: #c3d5c8; border-radius: 16rpx 7rpx 16rpx 16rpx; background: #e8f2eb; }
+.user .bubble text { color: #436052; }
+
+.thinking-row { display: flex; align-items: flex-start; gap: 10rpx; margin: 20rpx 0; animation: thinking-enter .24s ease-out; }
+.thinking-content { display: flex; min-width: 0; max-width: 78%; flex-direction: column; }
+.thinking-bubble { padding: 13rpx 16rpx; border: 1rpx solid #d7e5da; border-radius: 7rpx 16rpx 16rpx 16rpx; background: #f9fcf9; box-shadow: 0 7rpx 17rpx rgba(62, 103, 76, .07); }
+.thinking-title-row { display: flex; align-items: center; gap: 10rpx; }
+.thinking-title { color: var(--green); font-size: 17rpx; font-weight: 850; }
+.thinking-detail { display: block; margin-top: 5rpx; color: #91a097; font-size: 14rpx; line-height: 1.4; }
+.thinking-dots { display: flex; align-items: center; gap: 4rpx; height: 22rpx; }
+.thinking-dot { width: 7rpx; height: 7rpx; border-radius: 50%; background: #78a58a; animation: thinking-dot-bounce 1.25s ease-in-out infinite; }
+.thinking-dot:nth-child(2) { animation-delay: .16s; }
+.thinking-dot:nth-child(3) { animation-delay: .32s; }
+
+.output-surface { margin: 24rpx 0 20rpx; padding: 18rpx; border: 1rpx solid #dce6df; border-radius: 18rpx; background: #fff; box-shadow: 0 12rpx 28rpx rgba(42, 67, 53, .07); }
+.output-header { justify-content: space-between; gap: 12rpx; }
+.surface-title { display: block; margin-top: 5rpx; color: var(--ink); font-size: 25rpx; font-weight: 850; }
+.output-status { display: flex; align-items: center; gap: 5rpx; color: #6f8d7b; font-size: 12rpx; }
+.status-check { display: grid; place-items: center; width: 25rpx; height: 25rpx; border-radius: 50%; background: #e6f1e9; color: var(--green); font-size: 15rpx; font-weight: 900; }
+.visual-frame { position: relative; overflow: hidden; margin-top: 16rpx; border-radius: 13rpx; background: #edf0ed; }
+.result-image { display: block; width: 100%; height: 420rpx; background: #edf0ed; }
+.visual-badge { position: absolute; top: 12rpx; left: 12rpx; padding: 5rpx 8rpx; border: 1rpx solid rgba(255, 255, 255, .7); border-radius: 6rpx; background: rgba(35, 53, 43, .7); color: #fff; font-size: 11rpx; font-weight: 800; }
+.result-placeholder { display: flex; align-items: center; justify-content: center; height: 420rpx; flex-direction: column; gap: 8rpx; background: #e9f0eb; color: #5c7a68; }
+.result-placeholder text:first-child { font-family: "Songti SC", "STSong", serif; font-size: 58rpx; }
+.result-placeholder text:last-child { font-size: 14rpx; }
+.output-info { justify-content: space-between; gap: 10rpx; padding: 13rpx 2rpx 3rpx; }
+.output-info view { display: flex; min-width: 0; flex-direction: column; gap: 4rpx; }
+.output-info view text:first-child { overflow: hidden; color: var(--ink); font-size: 18rpx; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.output-info view text:last-child { color: #8b9890; font-size: 13rpx; }
+.output-open { flex: 0 0 auto; color: var(--orange); font-size: 13rpx; font-weight: 800; }
+.output-actions { display: grid; gap: 8rpx; margin-top: 13rpx; }
+.output-action { display: grid; grid-template-columns: 44rpx minmax(0, 1fr) 18rpx; align-items: center; gap: 10rpx; min-height: 66rpx; padding: 10rpx 11rpx; border: 1rpx solid #e2e9e3; border-radius: 12rpx; background: #fbfcfb; }
+.output-action.primary { border-color: #b7d0be; background: #f0f7f1; }
+.output-action:active { background: #edf3ee; }
+.action-icon { display: grid; place-items: center; width: 42rpx; height: 42rpx; border-radius: 12rpx; background: #dcebe0; color: var(--green); font-family: "Songti SC", "STSong", serif; font-size: 21rpx; font-weight: 850; }
+.action-icon.warm { background: var(--orange-soft); color: var(--orange); }
+.action-icon.dark { background: #e9ecea; color: #44534b; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; font-size: 14rpx; }
+.action-icon.gold { background: #f9f0dd; color: #a17a3e; }
+.output-action view:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 3rpx; }
+.output-action view:nth-child(2) text:first-child { color: #3d4c43; font-size: 17rpx; font-weight: 850; }
+.output-action view:nth-child(2) text:last-child { color: #8b9890; font-size: 13rpx; }
+.action-arrow { color: #a8b3ac; font-size: 28rpx; }
+.surface-note { display: block; margin-top: 10rpx; color: #7f8d84; font-size: 14rpx; line-height: 1.5; }
+
+.view-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9rpx; margin-top: 15rpx; }
+.view-card { overflow: hidden; border: 1rpx solid #e0e8e1; border-radius: 12rpx; background: #fbfcfb; }
+.view-card image, .view-placeholder { display: block; width: 100%; height: 184rpx; background: #edf1ed; }
+.view-placeholder { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 5rpx; color: #829189; font-size: 13rpx; }
+.view-label { display: flex; align-items: center; justify-content: space-between; gap: 5rpx; padding: 8rpx 9rpx; }
+.view-label text:first-child { color: #4d5e53; font-size: 14rpx; font-weight: 850; }
+.view-label text:last-child { color: #8aa493; font-size: 11rpx; }
+.full-button { width: 100%; }
+.dark-button, .outline-button { height: 68rpx; margin-top: 12rpx; border-radius: 11rpx; font-size: 17rpx; font-weight: 850; line-height: 68rpx; }
+.dark-button { background: #354b40; color: #fff; }
+.outline-button { border: 1rpx solid #b9cec0; background: #f8fbf8; color: #557464; }
+.dark-button::after, .outline-button::after, .link-button::after { border: 0; }
+.dark-button[disabled] { opacity: .55; }
+.dark-button text { margin-left: 5rpx; font-size: 25rpx; line-height: 1; }
+
+.model-summary { display: flex; align-items: center; gap: 13rpx; margin-top: 17rpx; padding: 14rpx; border-radius: 13rpx; background: #edf5ef; }
+.model-mark { display: grid; place-items: center; flex: 0 0 62rpx; width: 62rpx; height: 62rpx; border-radius: 17rpx; background: var(--green); color: #fff; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; font-size: 18rpx; font-weight: 900; }
+.model-summary view:last-child { display: flex; min-width: 0; flex-direction: column; gap: 5rpx; }
+.model-summary view:last-child text:first-child { color: #4d6b59; font-size: 16rpx; font-weight: 850; }
+.model-summary view:last-child text:last-child { color: #83958a; font-size: 13rpx; line-height: 1.4; }
+.model-state { padding: 5rpx 8rpx; border-radius: 7rpx; background: #edf2ed; color: #6a8273; font-size: 12rpx; font-weight: 850; }
+.model-state.done { background: #e5f2e8; color: #4f8463; }
+.model-state.failed { background: #fff0ec; color: #ad5d4a; }
+.model-progress { margin-top: 13rpx; padding: 13rpx; border: 1rpx solid #e0e9e1; border-radius: 12rpx; background: #fbfdfb; }
+.progress-row { justify-content: space-between; color: #587161; font-size: 13rpx; font-weight: 850; }
+.model-progress-track { height: 9rpx; margin-top: 10rpx; overflow: hidden; border-radius: 99rpx; background: #e1ebe3; }
+.model-progress-value { height: 100%; border-radius: inherit; background: #67947a; transition: width .35s ease; }
+.model-error { display: block; margin-top: 11rpx; padding: 10rpx; border-radius: 10rpx; background: #fff0ec; color: #a75948; font-size: 13rpx; line-height: 1.45; }
+
+.refinement-panel { margin-top: 14rpx; padding: 14rpx; border: 1rpx solid #ead7ce; border-radius: 13rpx; background: #fff9f6; }
+.refinement-heading { justify-content: space-between; gap: 10rpx; }
+.refinement-heading view { display: flex; flex-direction: column; gap: 5rpx; }
+.refinement-heading view text:last-child { color: #684e45; font-size: 17rpx; font-weight: 850; }
+.refinement-close { color: #aa806e; font-size: 28rpx; }
+.text-input { width: 100%; min-height: 132rpx; box-sizing: border-box; margin-top: 12rpx; padding: 12rpx; border: 1rpx solid #e5d4cc; border-radius: 10rpx; background: #fff; color: #493f3b; font-size: 17rpx; line-height: 1.55; }
+.input-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 9rpx; color: #a08f86; font-size: 12rpx; }
+.refinement-panel .dark-button { height: 58rpx; margin: 0; padding: 0 13rpx; font-size: 15rpx; line-height: 58rpx; }
+
+.composer-dock { position: fixed; z-index: 25; right: 0; bottom: calc(88rpx + env(safe-area-inset-bottom)); left: 0; box-sizing: border-box; padding: 13rpx 22rpx 9rpx; border-top: 1rpx solid #dfe7e1; background: rgba(255, 255, 255, .97); box-shadow: 0 -10rpx 24rpx rgba(44, 62, 51, .07); backdrop-filter: blur(18rpx); }
+.composer-context { min-width: 0; gap: 7rpx; color: #6f8076; font-size: 13rpx; }
+.context-live { width: 9rpx; height: 9rpx; border-radius: 50%; background: #70a481; }
+.context-product { overflow: hidden; max-width: 260rpx; color: #96a29b; text-overflow: ellipsis; white-space: nowrap; }
+.context-working { margin-left: auto; color: var(--orange); font-size: 12rpx; }
+.quick-reply-list { width: 100%; margin-top: 10rpx; white-space: nowrap; }
+.quick-reply-track { display: flex; gap: 8rpx; }
+.quick-reply { display: inline-flex; align-items: center; gap: 6rpx; flex: 0 0 auto; height: 50rpx; padding: 0 11rpx; border: 1rpx solid #d8e5db; border-radius: 10rpx; background: #f6faf7; color: #527062; font-size: 14rpx; line-height: 50rpx; }
+.quick-reply.confirm { border-color: #9fc3a9; background: #eaf5ed; color: #3f7052; font-weight: 850; }
+.quick-reply.secondary { border-color: #e6d5ca; background: #fff9f5; color: #9b6b57; }
+.quick-reply.disabled { opacity: .55; }
+.quick-reply:active { opacity: .75; }
+.quick-reply-mark { display: inline-grid; place-items: center; width: 25rpx; height: 25rpx; border-radius: 7rpx; background: #dcebe0; color: #4e7860; font-size: 11rpx; font-weight: 900; line-height: 25rpx; }
+.quick-reply.confirm .quick-reply-mark { background: #4f8563; color: #fff; }
+.quick-reply.secondary .quick-reply-mark { background: #f3dfd3; color: #a66751; }
+.chat-input-row { display: flex; align-items: center; gap: 8rpx; margin-top: 10rpx; }
+.chat-upload-button, .chat-send-button { flex: 0 0 auto; height: 62rpx; margin: 0; border-radius: 12rpx; line-height: 62rpx; }
+.chat-upload-button { width: 62rpx; padding: 0; border: 1rpx solid #d9e2db; background: #f8faf8; color: #658073; font-size: 28rpx; }
+.chat-send-button { width: 62rpx; padding: 0; background: #dfe7e1; color: #91a099; font-size: 27rpx; font-weight: 900; }
+.chat-send-button.ready { background: var(--green); color: #fff; }
+.chat-input { flex: 1; min-width: 0; height: 62rpx; box-sizing: border-box; padding: 0 15rpx; border: 1rpx solid #d9e2db; border-radius: 12rpx; background: #f8faf8; color: #3e4c44; font-size: 16rpx; }
+.chat-input:focus { border-color: #9cbea7; background: #fff; }
+.chat-send-button::after, .chat-upload-button::after { border: 0; }
+.chat-send-button[disabled], .chat-upload-button[disabled] { opacity: .65; }
+.composer-footer { justify-content: space-between; gap: 8rpx; margin-top: 7rpx; color: #a2ada6; font-size: 10rpx; }
+.composer-footer text:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.loading-bar { position: fixed; z-index: 27; right: 22rpx; bottom: calc(238rpx + env(safe-area-inset-bottom)); left: 22rpx; display: flex; align-items: center; justify-content: center; gap: 9rpx; box-sizing: border-box; min-height: 52rpx; padding: 8rpx 13rpx; border: 1rpx solid #efd6c8; border-radius: 11rpx; background: #fff8f4; color: #9e6b58; font-size: 12rpx; box-shadow: 0 8rpx 19rpx rgba(111, 71, 54, .1); }
+.loading-bar view:last-child { display: flex; min-width: 0; flex-direction: column; gap: 2rpx; }
+.loading-title { color: #875541; font-size: 13rpx; font-weight: 850; }
+.loading-spinner { width: 19rpx; height: 19rpx; border: 3rpx solid #f1dcd2; border-top-color: var(--orange); border-radius: 50%; animation: loading-spin .8s linear infinite; }
+
+.bottom-actions { position: fixed; z-index: 28; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: space-around; box-sizing: border-box; min-height: 88rpx; padding: 9rpx 24rpx calc(9rpx + env(safe-area-inset-bottom)); border-top: 1rpx solid #dfe7e1; background: rgba(248, 250, 248, .98); backdrop-filter: blur(18rpx); }
+.bottom-actions button { display: flex; align-items: center; justify-content: center; gap: 5rpx; min-width: 132rpx; height: 52rpx; margin: 0; padding: 0 11rpx; border: 1rpx solid transparent; border-radius: 10rpx; background: transparent; color: #74827a; font-size: 14rpx; line-height: 52rpx; }
+.bottom-actions button text { font-size: 21rpx; line-height: 1; }
+.bottom-actions button::after { border: 0; }
+.bottom-actions button:active { background: #edf3ee; }
+.bottom-actions button[disabled] { opacity: .45; }
+.bottom-actions .restart-action { border-color: #ead8ce; color: #a16b56; background: #fffaf7; }
+
+.policy-mask { position: fixed; z-index: 50; inset: 0; display: flex; align-items: center; justify-content: center; padding: 32rpx; box-sizing: border-box; background: rgba(31, 44, 36, .62); }
+.policy-dialog { width: 100%; max-height: 80vh; overflow: hidden; border: 1rpx solid #dce6df; border-radius: 17rpx; background: #fff; box-shadow: 0 22rpx 55rpx rgba(22, 38, 29, .3); }
+.policy-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10rpx; padding: 18rpx 20rpx 14rpx; border-bottom: 1rpx solid #e8eee9; }
+.policy-dialog-head view { display: flex; flex-direction: column; gap: 5rpx; }
+.policy-dialog-head view text:last-child { color: var(--ink); font-size: 22rpx; font-weight: 850; }
+.policy-dialog-head>text { color: var(--orange); font-size: 12rpx; }
+.policy-dialog-title { display: block; padding: 16rpx 20rpx 7rpx; color: var(--ink); font-size: 25rpx; font-weight: 850; }
+.policy-dialog-copy { width: 100%; height: 270rpx; box-sizing: border-box; padding: 0 20rpx 16rpx; }
+.policy-dialog-copy text { color: #69776f; font-size: 15rpx; line-height: 1.7; }
+.policy-dialog-actions { display: flex; gap: 9rpx; padding: 13rpx 20rpx calc(16rpx + env(safe-area-inset-bottom)); border-top: 1rpx solid #e8eee9; background: #fbfcfb; }
+.policy-dialog-actions button { flex: 1; height: 66rpx; margin: 0; border-radius: 10rpx; font-size: 16rpx; font-weight: 850; line-height: 66rpx; }
+.policy-dialog-actions button::after { border: 0; }
+.policy-cancel { border: 1rpx solid #dce5de; background: #fff; color: #7c8982; }
+.policy-confirm { background: #354b40; color: #fff; }
+
+@keyframes thinking-enter { from { opacity: 0; transform: translateY(8rpx); } to { opacity: 1; transform: translateY(0); } }
+@keyframes thinking-dot-bounce { 0%, 60%, 100% { opacity: .35; transform: translateY(0) scale(.85); } 30% { opacity: 1; transform: translateY(-4rpx) scale(1); } }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
 </style>
