@@ -10,6 +10,21 @@
         <view class="bubble"><text>{{ item.text }}</text></view>
       </view>
 
+      <view v-if="chatThinking" id="chat-thinking" class="thinking-row" aria-label="之间正在思考">
+        <view class="avatar thinking-avatar">之</view>
+        <view class="thinking-bubble">
+          <view class="thinking-title-row">
+            <text class="thinking-title">之间正在思考</text>
+            <view class="thinking-dots" aria-hidden="true">
+              <view class="thinking-dot" />
+              <view class="thinking-dot" />
+              <view class="thinking-dot" />
+            </view>
+          </view>
+          <text class="thinking-detail">{{ thinkingLabel }}</text>
+        </view>
+      </view>
+
       <view v-if="chatExperience" class="chat-command-panel">
         <text class="chat-stage-label">{{ chatStageLabel }}</text>
         <view v-if="chatQuickReplies.length" class="quick-reply-list">
@@ -39,7 +54,7 @@
       <view v-if="phase === 'model'" class="result-panel"><text class="result-kicker">3D PROTOTYPE</text><text class="choice-title">{{ modelTaskTitle }}</text><view class="model-success"><text>3D</text><view><text>{{ modelTaskDescription }}</text><text>{{ modelTaskDetail }}</text></view></view><view v-if="modelTask" class="model-progress"><view><text>建模进度</text><text>{{ normalizedModelProgress }}%</text></view><view class="model-progress-track"><view class="model-progress-value" :style="{ width: `${normalizedModelProgress}%` }" /></view></view><text v-if="modelTask?.errorMessage" class="model-error">{{ modelTask.errorMessage }}</text><button v-if="modelTask && !isModelTaskTerminal" class="outline-button full-button" :loading="modelRefreshing" @tap="refreshModelTask">刷新进度</button><button v-if="isModelTaskFailed" class="dark-button full-button" :loading="busy" @tap="generateModel">重新提交 3D 建模</button><button class="dark-button full-button" @tap="goWorks">{{ isModelTaskSucceeded ? '查看已完成的 3D 作品' : '查看我的作品' }}</button><button class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button></view>
     </scroll-view>
 
-    <view v-if="busy" class="loading-bar"><text>{{ busyMessage }}</text></view>
+    <view v-if="busy" class="loading-bar"><view class="loading-spinner" aria-hidden="true" /><text>{{ busyMessage }}</text></view>
     <view class="bottom-actions"><button v-if="canGoPrevious" :disabled="busy || saving" @tap="goPreviousStep">上一步</button><button @tap="goWorks">作品库</button><button @tap="restart">重新开始</button></view>
 
     <view v-if="policyDialog" class="policy-mask" @tap="resolvePolicyDialog(false)">
@@ -127,6 +142,8 @@ const chatExperience = true
 const chatInput = ref('')
 const chatQuickReplies = ref<ConversationQuickReply[]>([])
 const chatSending = ref(false)
+const chatThinking = ref(false)
+const thinkingLabel = ref('正在理解你的想法')
 const chatStage = ref('need_product')
 const autoGenerationInFlight = ref(false)
 const modelRefreshing = ref(false)
@@ -196,6 +213,20 @@ const chatStageLabel = computed(() => ({
 function addMessage(role: Message['role'], text: string) {
   messages.value.push({ id: ++messageId, role, text })
   void nextTick(() => { scrollIntoView.value = `message-${messageId}` })
+}
+function setChatThinking(active: boolean, label = '正在理解你的想法') {
+  chatThinking.value = active
+  if (active) {
+    thinkingLabel.value = label
+    void nextTick(() => { if (chatThinking.value) scrollIntoView.value = 'chat-thinking' })
+  }
+}
+function thinkingLabelFor(action?: { type: string; value?: string; label?: string }, message = '') {
+  const type = String(action?.type || '')
+  if (type === 'category' || type === 'product') return '正在整理产品方向'
+  if (type === 'material' || type === 'recommend_material') return '正在匹配材质与生产工艺'
+  if (type === 'upload' || /图片|照片|草图|参考图/.test(message)) return '正在读取参考图片和主体特征'
+  return '正在理解你的想法'
 }
 function setInitialChatReplies() {
   if (productOptions.value.length) {
@@ -285,12 +316,16 @@ async function sendChatTurn(message: string, action?: { type: string; value?: st
   const displayMessage = visibleMessage || String(action?.label || '').trim()
   if (displayMessage) addMessage('user', displayMessage)
   chatSending.value = true
+  setChatThinking(true, thinkingLabelFor(action, visibleMessage))
   try {
     const result = await sendConversationChat(sessionId.value, { message: visibleMessage, action })
     applyChatBrief(result.brief)
     chatStage.value = String(result.stage || 'understanding')
     chatQuickReplies.value = Array.isArray(result.quickReplies) ? result.quickReplies : []
     if (result.assistantText) addMessage('assistant', result.assistantText)
+    // Let the assistant reply settle in the transcript before showing the
+    // separate, longer-running image-generation status.
+    setChatThinking(false)
     if (result.readyToGenerate && !generatedAssetId.value && phase.value !== 'result' && !autoGenerationInFlight.value) {
       autoGenerationInFlight.value = true
       try {
@@ -300,8 +335,10 @@ async function sendChatTurn(message: string, action?: { type: string; value?: st
       }
     }
   } catch (error: any) {
+    setChatThinking(false)
     uni.showModal({ title: '对话暂时中断', content: error?.message || '请稍后重试，当前已输入内容会保留。', showCancel: false })
   } finally {
+    setChatThinking(false)
     chatSending.value = false
   }
 }
@@ -453,6 +490,7 @@ function resetViewState() {
   chatQuickReplies.value = []
   chatStage.value = 'need_product'
   chatInput.value = ''
+  setChatThinking(false)
   autoGenerationInFlight.value = false
 }
 
@@ -1111,4 +1149,5 @@ onUnmounted(() => { resolvePolicyDialog(false); stopModelPolling() })
 .policy-mask{position:fixed;z-index:20;inset:0;display:flex;align-items:center;justify-content:center;padding:38rpx;background:rgba(24,29,26,.58);box-sizing:border-box}.policy-dialog{width:100%;max-height:80vh;overflow:hidden;border-radius:18rpx;background:#fffdfa;box-shadow:0 20rpx 50rpx rgba(25,31,27,.3)}.policy-dialog-head{display:flex;align-items:center;justify-content:space-between;padding:22rpx 22rpx 13rpx;border-bottom:1rpx solid #ece4d9}.policy-dialog-head text:first-child{color:#3d3831;font-size:24rpx;font-weight:850}.policy-dialog-head text:last-child{color:#a36e57;font-size:14rpx}.policy-dialog-title{display:block;padding:18rpx 22rpx 7rpx;color:#332e29;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:850}.policy-dialog-copy{box-sizing:border-box;width:100%;height:270rpx;padding:0 22rpx 18rpx}.policy-dialog-copy text{color:#6f665c;font-size:17rpx;line-height:1.7}.policy-dialog-actions{display:flex;gap:10rpx;padding:14rpx 22rpx calc(18rpx + env(safe-area-inset-bottom));border-top:1rpx solid #eee7de;background:#fffdfa}.policy-dialog-actions button{flex:1;height:78rpx;margin:0;border-radius:10rpx;font-size:18rpx;font-weight:850}.policy-dialog-actions button::after{border:0}.policy-cancel{border:1rpx solid #ded5c9;background:#f7f3ed;color:#827568}.policy-confirm{background:#3f3933;color:#fff}
 .topbar-actions{display:flex;align-items:center;gap:10rpx}.previous-button{height:46rpx;margin:0;padding:0 12rpx;border:1rpx solid #bfd0c1;border-radius:9rpx;background:#f3f8f3;color:#527463;font-size:14rpx;line-height:46rpx}.previous-button::after{border:0}.previous-button[disabled],.bottom-actions button[disabled]{opacity:.55}
 .chat-experience .choice-panel,.chat-experience .input-panel{display:none}.chat-command-panel{margin:18rpx 0 24rpx;padding:15rpx;border:1rpx solid #dfd5c9;border-radius:18rpx;background:rgba(255,253,249,.94);box-shadow:0 8rpx 20rpx rgba(79,60,41,.05)}.chat-stage-label{display:block;color:#837568;font-size:15rpx;line-height:1.4}.quick-reply-list{display:flex;flex-wrap:wrap;gap:8rpx;margin-top:12rpx}.quick-reply{height:62rpx;margin:0;padding:0 14rpx;border:1rpx solid #a9c1ad;border-radius:13rpx;background:#eff6ef;color:#4f705e;font-size:16rpx;line-height:62rpx}.quick-reply::after{border:0}.quick-reply[disabled]{opacity:.5}.chat-input-row{display:flex;align-items:center;gap:8rpx;margin-top:12rpx}.chat-upload-button,.chat-send-button{flex:0 0 auto;height:66rpx;margin:0;border-radius:12rpx;font-size:17rpx;line-height:66rpx}.chat-upload-button{width:66rpx;padding:0;border:1rpx solid #d5c9bc;background:#faf6ef;color:#806f61;font-size:30rpx}.chat-send-button{padding:0 15rpx;background:#3f3933;color:#fff}.chat-input{flex:1;box-sizing:border-box;height:66rpx;padding:0 13rpx;border:1rpx solid #d9cec1;border-radius:12rpx;background:#fbf9f5;color:#443b33;font-size:18rpx}.chat-send-button::after,.chat-upload-button::after{border:0}.chat-send-button[disabled]{opacity:.45}
+.thinking-row{display:flex;align-items:flex-start;gap:9rpx;margin:17rpx 0 18rpx;animation:thinking-enter .24s ease-out}.thinking-avatar{animation:thinking-breathe 1.8s ease-in-out infinite;box-shadow:0 0 0 6rpx rgba(94,124,109,.08)}.thinking-bubble{max-width:78%;padding:13rpx 16rpx;border:1rpx solid #d4e0d5;border-radius:17rpx 17rpx 17rpx 7rpx;background:#f8fcf8;box-shadow:0 7rpx 17rpx rgba(73,102,81,.07)}.thinking-title-row{display:flex;align-items:center;gap:9rpx}.thinking-title{color:#4d705c;font-size:19rpx;font-weight:850}.thinking-detail{display:block;margin-top:5rpx;color:#8a9b8d;font-size:15rpx;line-height:1.4}.thinking-dots{display:flex;align-items:center;gap:4rpx;height:22rpx}.thinking-dot{width:7rpx;height:7rpx;border-radius:50%;background:#6e967c;animation:thinking-dot-bounce 1.25s ease-in-out infinite}.thinking-dot:nth-child(2){animation-delay:.16s}.thinking-dot:nth-child(3){animation-delay:.32s}.quick-reply[disabled],.chat-upload-button[disabled],.chat-send-button[disabled]{opacity:.72;filter:none}.quick-reply[disabled]{border-color:#c4d5c6;background:#f1f7f1;color:#779180}.chat-upload-button[disabled]{border-color:#d9d5cc;background:#f6f4ef;color:#998f83}.chat-send-button[disabled]{background:#7b877f;color:#fff}.dark-button[disabled]{opacity:.72;background:#68746d;color:#fff}.loading-bar{display:flex;align-items:center;justify-content:center;gap:9rpx}.loading-spinner{width:22rpx;height:22rpx;border:3rpx solid #e8d8c7;border-top-color:#ad7e5d;border-radius:50%;animation:loading-spin .8s linear infinite}@keyframes thinking-enter{from{opacity:0;transform:translateY(8rpx)}to{opacity:1;transform:translateY(0)}}@keyframes thinking-breathe{0%,100%{transform:translateY(0);box-shadow:0 0 0 6rpx rgba(94,124,109,.08)}50%{transform:translateY(-2rpx);box-shadow:0 0 0 10rpx rgba(94,124,109,.03)}}@keyframes thinking-dot-bounce{0%,60%,100%{opacity:.35;transform:translateY(0) scale(.85)}30%{opacity:1;transform:translateY(-4rpx) scale(1)}}@keyframes loading-spin{to{transform:rotate(360deg)}}
 </style>
