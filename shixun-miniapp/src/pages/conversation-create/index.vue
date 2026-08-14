@@ -1,5 +1,5 @@
 <template>
-  <view class="page">
+  <view class="page chat-experience">
     <view class="topbar"><view @tap="goBack" class="back">‹</view><view><text class="eyebrow">CONVERSATIONAL STUDIO</text><text class="top-title">对话式创作</text></view><view class="topbar-actions"><button v-if="canGoPrevious" class="previous-button" :disabled="busy || saving" @tap="goPreviousStep">上一步</button><text class="save-state">{{ saving ? '保存中' : '已留存' }}</text></view></view>
 
     <scroll-view class="chat" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
@@ -8,6 +8,18 @@
       <view v-for="item in messages" :id="`message-${item.id}`" :key="item.id" class="message-row" :class="item.role">
         <view v-if="item.role === 'assistant'" class="avatar">之</view>
         <view class="bubble"><text>{{ item.text }}</text></view>
+      </view>
+
+      <view v-if="chatExperience" class="chat-command-panel">
+        <text class="chat-stage-label">{{ chatStageLabel }}</text>
+        <view v-if="chatQuickReplies.length" class="quick-reply-list">
+          <button v-for="item in chatQuickReplies" :key="`${item.type}-${item.value}-${item.label}`" class="quick-reply" :disabled="busy || chatSending" @tap="handleQuickReply(item)">{{ item.label }}</button>
+        </view>
+        <view class="chat-input-row">
+          <button class="chat-upload-button" :disabled="busy || chatSending" @tap="pickInspirationImage">＋</button>
+          <input v-model="chatInput" class="chat-input" maxlength="1200" confirm-type="send" placeholder="告诉我你的想法…" @confirm="submitChatInput" />
+          <button class="chat-send-button" :disabled="!chatInput.trim() || busy || chatSending" @tap="submitChatInput">发送</button>
+        </view>
       </view>
 
       <view v-if="phase === 'mode'" class="choice-panel"><text class="choice-title">你想从哪种方式开始？</text><view class="choice-grid"><view v-for="item in modeOptions" :key="item.key" class="choice-card" @tap="chooseMode(item.key)"><text class="choice-mark">{{ item.mark }}</text><view><text>{{ item.title }}</text><text>{{ item.desc }}</text></view><text class="choice-arrow">›</text></view></view></view>
@@ -56,8 +68,10 @@ import {
   optimizeImageEditPrompt,
   optimizeImagePrompt,
   saveConversationEvent,
+  sendConversationChat,
   uploadReference,
   type ConversationSession,
+  type ConversationQuickReply,
   type SeedreamMultiViewImage,
 } from '../../api/creative'
 import { apiUrl, createReferenceToImage, createTextToImage } from '../../api/client'
@@ -109,6 +123,12 @@ const scrollIntoView = ref('bottom-anchor')
 let messageId = 0
 let sessionPromise: Promise<boolean> | null = null
 const forceNewSession = ref(false)
+const chatExperience = true
+const chatInput = ref('')
+const chatQuickReplies = ref<ConversationQuickReply[]>([])
+const chatSending = ref(false)
+const chatStage = ref('need_product')
+const autoGenerationInFlight = ref(false)
 const modelRefreshing = ref(false)
 const referencePolicyConfirmed = ref(false)
 const aiPolicyConfirmed = ref(false)
@@ -160,11 +180,132 @@ const modelInputLabel = computed(() => modelInputMode.value === 'multiview' ? '�
 const modelTaskDescription = computed(() => isModelTaskSucceeded.value ? `${modelInputLabel.value}的 3D 原型已保存到作品库` : isModelTaskFailed.value ? `本次${modelInputLabel.value}失败，可回到产品图重新提交` : `正在进行${modelInputLabel.value}`)
 const modelTaskDetail = computed(() => isModelTaskSucceeded.value ? '可以在作品库查看模型、评审并申请打样。' : isModelTaskFailed.value ? '失败原因已保留。检查产品图或三视图后可以再次发起建模。' : '本页面会自动刷新进度，离开后也会继续在作品库保存。')
 const activePolicy = computed(() => getCreativePolicy(policyDialog.value?.key || 'ai-output'))
+const chatStageLabel = computed(() => ({
+  need_product: '先告诉我想做什么产品',
+  need_inspiration: '再说说你的灵感，或上传参考图',
+  need_material: '最后确认材质，不确定可以让我推荐',
+  understanding: '我正在整理你的创作方向',
+  ready_for_image: '信息已足够，准备生成产品图',
+  template_unavailable: '没有灵感示例功能正在开发中',
+  image_ready: '产品图已完成，可以继续落地',
+  multiview_ready: '三视图已完成，可以生成 3D',
+  model_running: '3D 原型正在生成',
+  model_ready: '3D 原型已完成，可以申请打样',
+}[chatStage.value] || '告诉我你的创作想法'))
 
 function addMessage(role: Message['role'], text: string) {
   messages.value.push({ id: ++messageId, role, text })
   void nextTick(() => { scrollIntoView.value = `message-${messageId}` })
 }
+function setInitialChatReplies() {
+  if (productOptions.value.length) {
+    const seen = new Set<string>()
+    const categories = productOptions.value
+      .filter(item => seen.has(item.categoryKey) ? false : (seen.add(item.categoryKey), true))
+      .slice(0, 7)
+      .map(item => ({ label: item.categoryName, type: 'category', value: item.categoryKey }))
+    chatQuickReplies.value = [
+      ...categories,
+      { label: '没有灵感（看看示例）', type: 'template', value: '' },
+    ]
+  } else {
+    chatQuickReplies.value = [
+      { label: '我有一个想法', type: 'text', value: '' },
+      { label: '上传灵感图片', type: 'upload', value: '' },
+      { label: '没有灵感（看看示例）', type: 'template', value: '' },
+    ]
+  }
+}
+
+function applyChatBrief(brief: Record<string, any> | undefined) {
+  if (!brief) return
+  const product = productByValue(brief.productName, brief.productKey)
+  if (product) selectedProduct.value = product
+  if (brief.mode) mode.value = String(brief.mode) as Mode
+  if (brief.inspiration && brief.inspirationSource !== 'image') inspirationText.value = String(brief.inspiration)
+  if (brief.referenceAssetId) referenceAssetId.value = Number(brief.referenceAssetId) || referenceAssetId.value
+  if (brief.material) {
+    material.value = String(brief.material)
+    materialChoice.value = brief.materialRecommended ? 'recommend' : material.value
+  }
+}
+
+async function handleQuickReply(item: ConversationQuickReply) {
+  if (busy.value || chatSending.value) return
+  const type = String(item.type || '')
+  if (type === 'upload') {
+    await pickInspirationImage()
+    return
+  }
+  if (type === 'multiview') {
+    await generateMultiView()
+    return
+  }
+  if (type === 'model') {
+    await generateModel()
+    return
+  }
+  if (type === 'commercial') {
+    openCommercial()
+    return
+  }
+  if (type === 'works') {
+    goWorks()
+    return
+  }
+  if (type === 'refine') {
+    startRefinement()
+    return
+  }
+  if (type === 'template') {
+    showTemplateDeveloping()
+    return
+  }
+  if (type === 'text' && !String(item.value || '').trim()) {
+    uni.showToast({ title: '请在下方输入框告诉我你的想法', icon: 'none' })
+    return
+  }
+  const label = String(item.label || item.value || '').trim()
+  // Keep structured selections out of the free-text slot. Otherwise a
+  // product/material button can be misread as the user's inspiration.
+  const message = type === 'text' ? label : ''
+  await sendChatTurn(message, { type, value: String(item.value || ''), label })
+}
+
+async function submitChatInput() {
+  const value = chatInput.value.trim()
+  if (!value || busy.value || chatSending.value) return
+  chatInput.value = ''
+  await sendChatTurn(value)
+}
+
+async function sendChatTurn(message: string, action?: { type: string; value?: string; label?: string }) {
+  if (!(await ensureSession()) || !sessionId.value || chatSending.value) return
+  const visibleMessage = message.trim()
+  const displayMessage = visibleMessage || String(action?.label || '').trim()
+  if (displayMessage) addMessage('user', displayMessage)
+  chatSending.value = true
+  try {
+    const result = await sendConversationChat(sessionId.value, { message: visibleMessage, action })
+    applyChatBrief(result.brief)
+    chatStage.value = String(result.stage || 'understanding')
+    chatQuickReplies.value = Array.isArray(result.quickReplies) ? result.quickReplies : []
+    if (result.assistantText) addMessage('assistant', result.assistantText)
+    if (result.readyToGenerate && !generatedAssetId.value && phase.value !== 'result' && !autoGenerationInFlight.value) {
+      autoGenerationInFlight.value = true
+      try {
+        await generateProductImage()
+      } finally {
+        autoGenerationInFlight.value = false
+      }
+    }
+  } catch (error: any) {
+    uni.showModal({ title: '对话暂时中断', content: error?.message || '请稍后重试，当前已输入内容会保留。', showCancel: false })
+  } finally {
+    chatSending.value = false
+  }
+}
+
 function goBack() { uni.navigateBack() }
 
 async function goPreviousStep() {
@@ -204,6 +345,13 @@ function openCommercial() {
   uni.navigateTo({ url: `/pages/commercial/index${query ? `?${query}` : ''}` })
 }
 function selectedModeTitle() { return modeOptions.find(item => item.key === mode.value)?.title || '' }
+function showTemplateDeveloping() {
+  uni.showModal({
+    title: '功能开发中',
+    content: '没有灵感示例功能正在开发，敬请期待。你也可以先使用文字或图片灵感开始创作。',
+    showCancel: false,
+  })
+}
 
 function confirmCreativePolicyInPage(key: CreativePolicyKey): Promise<boolean> {
   // Some iOS/DevTools combinations do not render uni.showModal after a long
@@ -258,6 +406,7 @@ async function loadProductCatalog() {
   try {
     const options = await getSelectionOptions({ size: 300 })
     productOptions.value = (Array.isArray(options) ? options : []).map(productFromSelection)
+    if (!messages.value.length) setInitialChatReplies()
   } catch (error: any) {
     uni.showToast({ title: error?.message || '选品目录暂不可用，请稍后重试', icon: 'none' })
   } finally {
@@ -301,6 +450,10 @@ function resetViewState() {
   threeDimensionalPolicyConfirmed.value = false
   messages.value = []
   messageId = 0
+  chatQuickReplies.value = []
+  chatStage.value = 'need_product'
+  chatInput.value = ''
+  autoGenerationInFlight.value = false
 }
 
 function restoreEvent(event: any) {
@@ -354,6 +507,9 @@ function restoreEvent(event: any) {
     case 'model_failed':
       setModelTask({ ...payload, status: 'failed' })
       break
+    case 'chat_state':
+      applyChatBrief(payload)
+      break
     default:
       break
   }
@@ -363,7 +519,14 @@ function restoreMessages(events: any[]) {
   messages.value = []
   messageId = 0
   addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
+  const hasChatTranscript = events.some(event => ['chat_user_message', 'chat_assistant_message'].includes(String(event?.eventType || '')))
+  const legacyConversationEvents = new Set([
+    'mode_selected', 'product_selected', 'text_inspiration_submitted',
+    'image_inspiration_uploaded', 'image_inspiration_confirmed',
+    'material_selected', 'creative_direction_confirmed', 'creative_direction_auto_confirmed',
+  ])
   for (const event of events) {
+    if (hasChatTranscript && legacyConversationEvents.has(String(event?.eventType || ''))) continue
     const payload = event?.payload || {}
     switch (String(event?.eventType || '')) {
       case 'mode_selected':
@@ -412,6 +575,14 @@ function restoreMessages(events: any[]) {
       case 'model_failed':
         addMessage('assistant', '3D 建模没有完成，失败原因已保存。可以检查产品图后重新提交。')
         break
+      case 'chat_user_message':
+        if (payload.message) addMessage('user', String(payload.message))
+        else if (payload.action?.label) addMessage('user', String(payload.action.label))
+        break
+      case 'chat_assistant_message':
+        if (payload.text) addMessage('assistant', String(payload.text))
+        if (Array.isArray(payload.quickReplies)) chatQuickReplies.value = payload.quickReplies
+        break
       default:
         break
     }
@@ -436,6 +607,9 @@ function restorePhase(events: any[]) {
       case 'model_submitted': phase.value = 'model'; break
       case 'model_completed': phase.value = 'model'; break
       case 'model_failed': phase.value = 'model'; break
+      case 'chat_assistant_message':
+        if (event?.payload?.readyToGenerate) chatStage.value = 'ready_for_image'
+        break
       default: break
     }
   }
@@ -497,7 +671,7 @@ async function saveEvent(step: string, eventType: string, payload: Record<string
 async function chooseMode(value: Mode) {
   if (busy.value) return
   if (value === 'template') {
-    uni.showModal({ title: '功能开发中', content: '没有灵感示例功能正在开发，敬请期待。你也可以先使用文字或图片灵感开始创作。', showCancel: false })
+    showTemplateDeveloping()
     return
   }
   mode.value = value
@@ -584,6 +758,7 @@ async function uploadInspirationImage(path: string) {
     referenceAssetId.value = id
     await saveEvent('inspiration', 'image_inspiration_uploaded', { productType: selectedProduct.value?.name, inputAssetId: id, fileType: 'image' })
     uni.showToast({ title: '图片已留存', icon: 'success' })
+    await sendChatTurn('我已上传灵感图片', { type: 'image', value: String(id), label: '已上传灵感图片' })
   } catch (error: any) {
     referencePath.value = ''
     const message = error?.message || '图片上传失败'
@@ -695,6 +870,12 @@ async function generateProductImage() {
     previewUrl.value = imageUrl(result)
     await saveEvent('image', 'image_generated', { productType: selectedProduct.value.name, material: material.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
     addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
+    chatStage.value = 'image_ready'
+    chatQuickReplies.value = [
+      { label: '满意，生成三视图', type: 'multiview', value: '' },
+      { label: '不满意，告诉我怎么改', type: 'refine', value: '' },
+      { label: '直接申请打样 / 商品化', type: 'commercial', value: '' },
+    ]
     phase.value = 'result'
   } catch (error: any) {
     const message = generationFailureMessage(error)
@@ -800,6 +981,11 @@ async function refreshModelTask() {
     if (modelTask.value.status === 'succeeded' && previousStatus !== 'succeeded') {
       await saveEvent('model', 'model_completed', { modelJobId: modelTask.value.jobId, assetId: modelTask.value.assetId, status: 'succeeded', progress: 100, previewUrl: modelTask.value.previewUrl })
       addMessage('assistant', '3D 模型已经生成并保存到作品库，可以继续评审、申请打样或提交商品化报价。')
+      chatStage.value = 'model_ready'
+      chatQuickReplies.value = [
+        { label: '申请打样 / 商品化', type: 'commercial', value: '' },
+        { label: '查看我的作品', type: 'works', value: '' },
+      ]
     } else if (modelTask.value.status === 'failed' && previousStatus !== 'failed') {
       await saveEvent('model', 'model_failed', { modelJobId: modelTask.value.jobId, status: 'failed', progress: modelTask.value.progress, errorMessage: modelTask.value.errorMessage })
       addMessage('assistant', '3D 建模没有完成，失败原因已保存。可以检查产品图后重新提交。')
@@ -845,6 +1031,11 @@ async function generateMultiView() {
     if (!hasCompleteThreeViews.value) throw new Error('三视图没有完整返回正面、侧面和背面，请稍后重试')
     await saveEvent('multiview', 'multiview_generated', { inputAssetId: generatedAssetId.value, images: multiviewImages.value.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })) })
     addMessage('assistant', '正面、侧面和背面都已保存。现在可以把三张图一起交给 Tripo 多视图建模，结构会比单张图更完整。')
+    chatStage.value = 'multiview_ready'
+    chatQuickReplies.value = [
+      { label: '用三视图生成 3D', type: 'model', value: '' },
+      { label: '先申请打样 / 商品化', type: 'commercial', value: '' },
+    ]
     phase.value = 'multiview'
   } catch (error: any) { uni.showToast({ title: error?.message || '四视图生成失败', icon: 'none' }) }
   finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
@@ -876,6 +1067,8 @@ async function generateModel() {
     setModelTask({ jobId, status: result?.status, progress: result?.progress, assetId: result?.assetId })
     await saveEvent('model', 'model_submitted', { inputAssetId: generatedAssetId.value, multiview: useMultiview, inputMode: modelInputMode.value, modelJobId: jobId, modelAssetId: result?.assetId, status: modelTask.value?.status || 'running', progress: modelTask.value?.progress || 0, productType: selectedProduct.value?.name, material: material.value })
     addMessage('assistant', `${modelInputLabel.value}任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。`)
+    chatStage.value = 'model_running'
+    chatQuickReplies.value = [{ label: '查看我的作品', type: 'works', value: '' }]
     phase.value = 'model'
     void scheduleModelPolling(true)
   } catch (error: any) { uni.showToast({ title: error?.message || '3D 任务提交失败', icon: 'none' }) }
@@ -899,6 +1092,7 @@ onMounted(async () => {
   await loadProductCatalog()
   if (!(await ensureSession())) return
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
+  if (!chatQuickReplies.value.length) setInitialChatReplies()
   if (phase.value === 'model' && modelTask.value && !isModelTaskTerminal.value) void scheduleModelPolling(true)
 })
 onUnmounted(() => { resolvePolicyDialog(false); stopModelPolling() })
@@ -913,4 +1107,5 @@ onUnmounted(() => { resolvePolicyDialog(false); stopModelPolling() })
 .food-direction-note{display:block;margin-top:14rpx;padding:12rpx;border-left:4rpx solid #b37b4d;border-radius:0 10rpx 10rpx 0;background:#fbf2e5;color:#795b42;font-size:16rpx;line-height:1.55}
 .policy-mask{position:fixed;z-index:20;inset:0;display:flex;align-items:center;justify-content:center;padding:38rpx;background:rgba(24,29,26,.58);box-sizing:border-box}.policy-dialog{width:100%;max-height:80vh;overflow:hidden;border-radius:18rpx;background:#fffdfa;box-shadow:0 20rpx 50rpx rgba(25,31,27,.3)}.policy-dialog-head{display:flex;align-items:center;justify-content:space-between;padding:22rpx 22rpx 13rpx;border-bottom:1rpx solid #ece4d9}.policy-dialog-head text:first-child{color:#3d3831;font-size:24rpx;font-weight:850}.policy-dialog-head text:last-child{color:#a36e57;font-size:14rpx}.policy-dialog-title{display:block;padding:18rpx 22rpx 7rpx;color:#332e29;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:850}.policy-dialog-copy{box-sizing:border-box;width:100%;height:270rpx;padding:0 22rpx 18rpx}.policy-dialog-copy text{color:#6f665c;font-size:17rpx;line-height:1.7}.policy-dialog-actions{display:flex;gap:10rpx;padding:14rpx 22rpx calc(18rpx + env(safe-area-inset-bottom));border-top:1rpx solid #eee7de;background:#fffdfa}.policy-dialog-actions button{flex:1;height:78rpx;margin:0;border-radius:10rpx;font-size:18rpx;font-weight:850}.policy-dialog-actions button::after{border:0}.policy-cancel{border:1rpx solid #ded5c9;background:#f7f3ed;color:#827568}.policy-confirm{background:#3f3933;color:#fff}
 .topbar-actions{display:flex;align-items:center;gap:10rpx}.previous-button{height:46rpx;margin:0;padding:0 12rpx;border:1rpx solid #bfd0c1;border-radius:9rpx;background:#f3f8f3;color:#527463;font-size:14rpx;line-height:46rpx}.previous-button::after{border:0}.previous-button[disabled],.bottom-actions button[disabled]{opacity:.55}
+.chat-experience .choice-panel,.chat-experience .input-panel{display:none}.chat-command-panel{margin:18rpx 0 24rpx;padding:15rpx;border:1rpx solid #dfd5c9;border-radius:18rpx;background:rgba(255,253,249,.94);box-shadow:0 8rpx 20rpx rgba(79,60,41,.05)}.chat-stage-label{display:block;color:#837568;font-size:15rpx;line-height:1.4}.quick-reply-list{display:flex;flex-wrap:wrap;gap:8rpx;margin-top:12rpx}.quick-reply{height:62rpx;margin:0;padding:0 14rpx;border:1rpx solid #a9c1ad;border-radius:13rpx;background:#eff6ef;color:#4f705e;font-size:16rpx;line-height:62rpx}.quick-reply::after{border:0}.quick-reply[disabled]{opacity:.5}.chat-input-row{display:flex;align-items:center;gap:8rpx;margin-top:12rpx}.chat-upload-button,.chat-send-button{flex:0 0 auto;height:66rpx;margin:0;border-radius:12rpx;font-size:17rpx;line-height:66rpx}.chat-upload-button{width:66rpx;padding:0;border:1rpx solid #d5c9bc;background:#faf6ef;color:#806f61;font-size:30rpx}.chat-send-button{padding:0 15rpx;background:#3f3933;color:#fff}.chat-input{flex:1;box-sizing:border-box;height:66rpx;padding:0 13rpx;border:1rpx solid #d9cec1;border-radius:12rpx;background:#fbf9f5;color:#443b33;font-size:18rpx}.chat-send-button::after,.chat-upload-button::after{border:0}.chat-send-button[disabled]{opacity:.45}
 </style>

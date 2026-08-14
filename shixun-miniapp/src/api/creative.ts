@@ -28,6 +28,30 @@ export const saveConversationEvent = (id: number | string, body: { step: string;
   { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
 )
 
+export interface ConversationQuickReply {
+  label: string
+  type: 'product' | 'category' | 'material' | 'template' | 'upload' | 'text' | string
+  value?: string
+}
+
+export interface ConversationChatResult {
+  assistantText: string
+  quickReplies?: ConversationQuickReply[]
+  readyToGenerate?: boolean
+  stage?: string
+  chatModel?: string
+  brief?: Record<string, any>
+  session?: ConversationSession
+}
+
+export const sendConversationChat = (id: number | string, body: {
+  message?: string
+  action?: { type: string; value?: string; label?: string }
+}) => request<ConversationChatResult>(
+  `/api/creative/ai/conversations/${encodeURIComponent(String(id))}/chat`,
+  { method: 'POST', data: body, timeout: 45000, header: { 'content-type': 'application/json' } },
+)
+
 /**
  * 这里的接口全部通过 client.ts 自动携带的 Bearer Token 识别当前用户。
  * 不要再从小程序提交 currentUserId、role 之类可以被篡改的身份参数。
