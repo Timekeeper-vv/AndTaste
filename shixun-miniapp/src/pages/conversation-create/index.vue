@@ -144,6 +144,7 @@ const chatQuickReplies = ref<ConversationQuickReply[]>([])
 const chatSending = ref(false)
 const chatThinking = ref(false)
 const thinkingLabel = ref('正在理解你的想法')
+const awaitingGenerationConfirmation = ref(false)
 const chatStage = ref('need_product')
 const autoGenerationInFlight = ref(false)
 const modelRefreshing = ref(false)
@@ -202,6 +203,8 @@ const chatStageLabel = computed(() => ({
   need_inspiration: '再说说你的灵感，或上传参考图',
   need_material: '最后确认材质，不确定可以让我推荐',
   understanding: '我正在整理你的创作方向',
+  confirm_before_image: '生成前确认一下，还有需要补充的吗？',
+  need_additional_detail: '请补充你想保留、加强或避免的内容',
   ready_for_image: '信息已足够，准备生成产品图',
   template_unavailable: '没有灵感示例功能正在开发中',
   image_ready: '产品图已完成，可以继续落地',
@@ -227,6 +230,18 @@ function thinkingLabelFor(action?: { type: string; value?: string; label?: strin
   if (type === 'material' || type === 'recommend_material') return '正在匹配材质与生产工艺'
   if (type === 'upload' || /图片|照片|草图|参考图/.test(message)) return '正在读取参考图片和主体特征'
   return '正在理解你的想法'
+}
+function setGenerationConfirmationReplies() {
+  chatQuickReplies.value = [
+    { label: '没有补充，开始生成', type: 'confirm_generate', value: 'confirm' },
+    { label: '我还要补充', type: 'add_detail', value: '' },
+  ]
+}
+function isGenerationConfirmationText(message: string) {
+  const value = message.trim()
+  return Boolean(value) && (/.*(没有|无|不需要|不用).*(补充|修改|添加|意见).*/.test(value)
+    || /.*(直接|开始|确认).*(生成|出图).*/.test(value)
+    || /^(没有|无|就这样)$/.test(value))
 }
 function setInitialChatReplies() {
   if (productOptions.value.length) {
@@ -292,6 +307,10 @@ async function handleQuickReply(item: ConversationQuickReply) {
     showTemplateDeveloping()
     return
   }
+  if (type === 'confirm_generate' || type === 'add_detail') {
+    await sendChatTurn('', { type, value: String(item.value || ''), label: String(item.label || '') })
+    return
+  }
   if (type === 'text' && !String(item.value || '').trim()) {
     uni.showToast({ title: '请在下方输入框告诉我你的想法', icon: 'none' })
     return
@@ -326,13 +345,26 @@ async function sendChatTurn(message: string, action?: { type: string; value?: st
     // Let the assistant reply settle in the transcript before showing the
     // separate, longer-running image-generation status.
     setChatThinking(false)
-    if (result.readyToGenerate && !generatedAssetId.value && phase.value !== 'result' && !autoGenerationInFlight.value) {
+    const explicitlyConfirmed = action?.type === 'confirm_generate' || isGenerationConfirmationText(visibleMessage)
+    const additionalDetailRequired = result.stage === 'need_additional_detail'
+    const confirmationRequired = !additionalDetailRequired && (Boolean(result.generationConfirmationRequired) || result.stage === 'confirm_before_image')
+    awaitingGenerationConfirmation.value = confirmationRequired
+    if (confirmationRequired && !chatQuickReplies.value.length) setGenerationConfirmationReplies()
+    if (result.readyToGenerate && explicitlyConfirmed && !generatedAssetId.value && phase.value !== 'result' && !autoGenerationInFlight.value) {
+      awaitingGenerationConfirmation.value = false
       autoGenerationInFlight.value = true
       try {
         await generateProductImage()
       } finally {
         autoGenerationInFlight.value = false
       }
+    } else if (result.readyToGenerate && !explicitlyConfirmed && !generatedAssetId.value && phase.value !== 'result') {
+      // Keep a hard client-side guard when an older server response still
+      // reports ready=true without a user confirmation action.
+      awaitingGenerationConfirmation.value = true
+      chatStage.value = 'confirm_before_image'
+      setGenerationConfirmationReplies()
+      addMessage('assistant', '生成前确认一下，还有需要补充的吗？没有的话点击“没有补充，开始生成”。')
     }
   } catch (error: any) {
     setChatThinking(false)
@@ -490,6 +522,7 @@ function resetViewState() {
   chatQuickReplies.value = []
   chatStage.value = 'need_product'
   chatInput.value = ''
+  awaitingGenerationConfirmation.value = false
   setChatThinking(false)
   autoGenerationInFlight.value = false
 }
@@ -620,6 +653,12 @@ function restoreMessages(events: any[]) {
       case 'chat_assistant_message':
         if (payload.text) addMessage('assistant', String(payload.text))
         if (Array.isArray(payload.quickReplies)) chatQuickReplies.value = payload.quickReplies
+        if (payload.stage) chatStage.value = String(payload.stage)
+        if (!generatedAssetId.value && (payload.generationConfirmationRequired || (payload.readyToGenerate && payload.generationConfirmed !== true))) {
+          awaitingGenerationConfirmation.value = true
+          chatStage.value = 'confirm_before_image'
+          if (!chatQuickReplies.value.length) setGenerationConfirmationReplies()
+        }
         break
       default:
         break
@@ -646,7 +685,13 @@ function restorePhase(events: any[]) {
       case 'model_completed': phase.value = 'model'; break
       case 'model_failed': phase.value = 'model'; break
       case 'chat_assistant_message':
-        if (event?.payload?.readyToGenerate) chatStage.value = 'ready_for_image'
+        if (event?.payload?.stage) chatStage.value = String(event.payload.stage)
+        if (!generatedAssetId.value && (event?.payload?.generationConfirmationRequired || (event?.payload?.readyToGenerate && event?.payload?.generationConfirmed !== true))) {
+          chatStage.value = 'confirm_before_image'
+          awaitingGenerationConfirmation.value = true
+        } else if (event?.payload?.readyToGenerate) {
+          chatStage.value = 'ready_for_image'
+        }
         break
       default: break
     }
@@ -1133,7 +1178,8 @@ onMounted(async () => {
   await loadProductCatalog()
   if (!(await ensureSession())) return
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
-  if (!chatQuickReplies.value.length) setInitialChatReplies()
+  if (awaitingGenerationConfirmation.value && !chatQuickReplies.value.length) setGenerationConfirmationReplies()
+  if (!chatQuickReplies.value.length && chatStage.value !== 'need_additional_detail') setInitialChatReplies()
   if (phase.value === 'model' && modelTask.value && !isModelTaskTerminal.value) void scheduleModelPolling(true)
 })
 onUnmounted(() => { resolvePolicyDialog(false); stopModelPolling() })

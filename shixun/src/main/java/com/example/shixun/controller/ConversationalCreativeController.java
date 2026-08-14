@@ -39,7 +39,7 @@ import java.util.Set;
 @RequestMapping("/api/creative/ai/conversations")
 public class ConversationalCreativeController {
     private static final Set<String> MODES = Set.of("template", "text", "image");
-    private static final Set<String> CHAT_ACTIONS = Set.of("product", "category", "material", "template", "image", "text");
+    private static final Set<String> CHAT_ACTIONS = Set.of("product", "category", "material", "template", "image", "text", "confirm_generate", "add_detail");
     private static final Set<String> STEPS = Set.of("welcome", "chat", "mode", "product", "inspiration", "material", "style", "summary", "image", "multiview", "model", "commercial", "compliance", "navigation");
     private static final int MAX_PAYLOAD_LENGTH = 12000;
 
@@ -124,11 +124,15 @@ public class ConversationalCreativeController {
         String message = limit(text(input.get("message")), 1200);
         Map<String, Object> action = normalizeAction(input.get("action"));
         Map<String, Object> brief = currentBrief(id, userId);
+        boolean confirmationText = isGenerationConfirmationMessage(message);
         applyAction(brief, action, message, userId);
 
         List<Map<String, Object>> catalog = catalogOptions(text(brief.get("categoryKey")), message, 120);
-        applyLocalHints(brief, message, action, catalog, userId);
-        PlannerDecision decision = planTurn(message, action, brief, catalog);
+        if (!confirmationText) applyLocalHints(brief, message, action, catalog, userId);
+        applyGenerationConfirmationState(brief, action, message);
+        PlannerDecision decision = (isGenerationConfirmationAction(action) || confirmationText)
+                ? new PlannerDecision("", Map.of())
+                : planTurn(message, action, brief, catalog);
         applyDecision(brief, decision, userId);
         // A structured button is authoritative. The language model may phrase
         // the next question as text mode, but it must not undo an explicit
@@ -136,14 +140,30 @@ public class ConversationalCreativeController {
         applyAction(brief, action, null, userId);
         normalizeBrief(brief, userId);
 
+        applyGenerationConfirmationState(brief, action, message);
         boolean templateUnavailable = "template".equals(text(brief.get("mode")));
-        boolean ready = !templateUnavailable && hasRequiredBrief(brief);
+        boolean complete = !templateUnavailable && hasRequiredBrief(brief);
+        boolean ready = complete && isTrue(brief.get("generationConfirmed"));
+        boolean addingDetail = complete && "add_detail".equals(text(action.get("type")));
+        boolean confirmationRequired = complete && !ready && !addingDetail;
         List<Map<String, Object>> quickReplies = templateUnavailable
                 ? templateQuickReplies()
-                : quickReplies(brief, catalog, ready);
+                : addingDetail ? List.of() : quickReplies(brief, catalog, complete, ready);
+        String stage = templateUnavailable ? "template_unavailable"
+                : ready ? "ready_for_image"
+                : addingDetail ? "need_additional_detail"
+                : confirmationRequired ? "confirm_before_image"
+                : missingStage(brief);
         String reply = decision.reply;
         if (templateUnavailable) reply = "没有灵感示例功能正在开发中，你可以先用文字描述或上传一张灵感图片开始创作。";
         if (blank(reply)) reply = fallbackReply(brief, catalog, ready);
+        if (addingDetail) {
+            reply = "好的，请在下方补充想保留、想加强或需要避免的内容；我更新方案后会再请你确认。";
+        } else if (confirmationRequired) {
+            reply = "我已经整理好产品、灵感和材质。生成图片前，还有需要补充的吗？没有的话点击“没有补充，开始生成”。";
+        } else if (ready && (isGenerationConfirmationAction(action) || confirmationText)) {
+            reply = "好的，我按当前方案开始生成产品图。";
+        }
         if (message != null || !action.isEmpty()) {
             saveEvent(id, userId, "chat", "chat_user_message", Map.of(
                     "message", message == null ? "" : message,
@@ -154,6 +174,9 @@ public class ConversationalCreativeController {
                 "text", reply,
                 "quickReplies", quickReplies,
                 "readyToGenerate", ready,
+                "generationConfirmationRequired", confirmationRequired,
+                "generationConfirmed", isTrue(brief.get("generationConfirmed")),
+                "stage", stage,
                 "brief", new LinkedHashMap<>(brief),
                 "chatModel", siliconFlow.modelName()));
         saveEvent(id, userId, "chat", "chat_state", brief);
@@ -163,8 +186,9 @@ public class ConversationalCreativeController {
         result.put("assistantText", reply);
         result.put("quickReplies", quickReplies);
         result.put("readyToGenerate", ready);
+        result.put("generationConfirmationRequired", confirmationRequired);
         result.put("brief", brief);
-        result.put("stage", templateUnavailable ? "template_unavailable" : ready ? "ready_for_image" : missingStage(brief));
+        result.put("stage", stage);
         result.put("chatModel", siliconFlow.modelName());
         result.put("session", getOwnedSession(id, userId));
         return result;
@@ -481,9 +505,15 @@ public class ConversationalCreativeController {
         return "材质不确定也没关系，我会根据产品结构和量产工艺帮你推荐。";
     }
 
-    private List<Map<String, Object>> quickReplies(Map<String, Object> brief, List<Map<String, Object>> catalog, boolean ready) {
+    private List<Map<String, Object>> quickReplies(Map<String, Object> brief, List<Map<String, Object>> catalog,
+                                                   boolean complete, boolean ready) {
         List<Map<String, Object>> result = new ArrayList<>();
         if (ready) return result;
+        if (complete) {
+            result.add(reply("没有补充，开始生成", "confirm_generate", "confirm"));
+            result.add(reply("我还要补充", "add_detail", ""));
+            return result;
+        }
         if (blank(text(brief.get("productKey")))) {
             if (!blank(text(brief.get("categoryKey")))) {
                 for (Map<String, Object> row : catalog) {
@@ -516,6 +546,32 @@ public class ConversationalCreativeController {
             if (material != null) for (String item : material.split("[,，/]")) if (!blank(item)) result.add(reply(item.trim(), "material", item.trim()));
         }
         return result;
+    }
+
+    private boolean isGenerationConfirmationAction(Map<String, Object> action) {
+        return "confirm_generate".equals(text(action.get("type")));
+    }
+
+    private boolean isGenerationConfirmationMessage(String message) {
+        if (blank(message)) return false;
+        String value = message.trim();
+        return value.matches(".*(没有|无|不需要|不用).*(补充|修改|添加|意见).*|.*(直接|开始|确认).*(生成|出图).*|^(没有|无|就这样)$");
+    }
+
+    private void applyGenerationConfirmationState(Map<String, Object> brief, Map<String, Object> action, String message) {
+        String type = text(action.get("type"));
+        if (isGenerationConfirmationAction(action) || isGenerationConfirmationMessage(message)) {
+            brief.put("generationConfirmed", true);
+            return;
+        }
+        if ("add_detail".equals(type) || !blank(message)
+                || (type != null && Set.of("product", "category", "material", "template", "image", "text").contains(type))) {
+            brief.put("generationConfirmed", false);
+        }
+    }
+
+    private boolean isTrue(Object value) {
+        return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value)) || "1".equals(String.valueOf(value));
     }
 
     private Map<String, Object> reply(String label, String type, String value) {

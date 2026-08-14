@@ -30,7 +30,7 @@ export const saveConversationEvent = (id: number | string, body: { step: string;
 
 export interface ConversationQuickReply {
   label: string
-  type: 'product' | 'category' | 'material' | 'template' | 'upload' | 'text' | string
+  type: 'product' | 'category' | 'material' | 'template' | 'upload' | 'text' | 'confirm_generate' | 'add_detail' | string
   value?: string
 }
 
@@ -38,6 +38,7 @@ export interface ConversationChatResult {
   assistantText: string
   quickReplies?: ConversationQuickReply[]
   readyToGenerate?: boolean
+  generationConfirmationRequired?: boolean
   stage?: string
   chatModel?: string
   brief?: Record<string, any>

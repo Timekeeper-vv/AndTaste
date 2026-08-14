@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,7 +51,9 @@ class ConversationalCreativeControllerTest {
                 "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"
         ), claims);
 
-        assertThat(result.get("readyToGenerate")).isEqualTo(true);
+        assertThat(result.get("readyToGenerate")).isEqualTo(false);
+        assertThat(result.get("generationConfirmationRequired")).isEqualTo(true);
+        assertThat(result.get("quickReplies").toString()).contains("没有补充，开始生成");
         Map<?, ?> brief = (Map<?, ?>) result.get("brief");
         assertThat(brief.get("productKey")).isEqualTo("souvenir-alloy-magnet");
         assertThat(brief.get("material")).isEqualTo("合金");
@@ -59,6 +62,13 @@ class ConversationalCreativeControllerTest {
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM creative_conversation_event WHERE session_id=1 AND event_type='chat_state'",
                 Integer.class)).isEqualTo(1);
+
+        Map<String, Object> confirmation = new LinkedHashMap<>();
+        confirmation.put("type", "confirm_generate");
+        confirmation.put("value", "confirm");
+        Map<String, Object> confirmed = controller.chat(1L, Map.of("action", confirmation), claims);
+        assertThat(confirmed.get("readyToGenerate")).isEqualTo(true);
+        assertThat(confirmed.get("generationConfirmationRequired")).isEqualTo(false);
     }
 
     @Test
@@ -77,6 +87,28 @@ class ConversationalCreativeControllerTest {
         assertThat(secondBrief.get("material")).isEqualTo("合金");
         assertThat(secondBrief.get("inspiration")).isNull();
         assertThat(second.get("readyToGenerate")).isEqualTo(false);
+    }
+
+    @Test
+    void additionalInputClearsPreviousGenerationConfirmation() {
+        controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
+        Map<String, Object> confirmation = new LinkedHashMap<>();
+        confirmation.put("type", "confirm_generate");
+        confirmation.put("value", "confirm");
+        Map<String, Object> confirmed = controller.chat(1L, Map.of("action", confirmation), claims);
+        assertThat(confirmed.get("readyToGenerate")).isEqualTo(true);
+
+        Map<String, Object> requestMoreDetail = new LinkedHashMap<>();
+        requestMoreDetail.put("type", "add_detail");
+        Map<String, Object> awaitingDetail = controller.chat(1L, Map.of("action", requestMoreDetail), claims);
+        assertThat(awaitingDetail.get("readyToGenerate")).isEqualTo(false);
+        assertThat(awaitingDetail.get("stage")).isEqualTo("need_additional_detail");
+        assertThat((List<?>) awaitingDetail.get("quickReplies")).isEmpty();
+
+        Map<String, Object> changed = controller.chat(1L, Map.of("message", "再补充一只飞鸟，整体更简洁"), claims);
+        assertThat(changed.get("readyToGenerate")).isEqualTo(false);
+        assertThat(changed.get("generationConfirmationRequired")).isEqualTo(true);
+        assertThat(((Map<?, ?>) changed.get("brief")).get("generationConfirmed")).isEqualTo(false);
     }
 
     @Test
@@ -121,7 +153,8 @@ class ConversationalCreativeControllerTest {
         assertThat(brief.get("inspiration")).isEqualTo("祥云和古城墙");
         assertThat(brief.get("material")).isEqualTo("合金");
         assertThat(brief.get("mode")).isEqualTo("text");
-        assertThat(result.get("readyToGenerate")).isEqualTo(true);
+        assertThat(result.get("readyToGenerate")).isEqualTo(false);
+        assertThat(result.get("generationConfirmationRequired")).isEqualTo(true);
     }
 
     @Test
@@ -141,7 +174,8 @@ class ConversationalCreativeControllerTest {
         Map<?, ?> brief = (Map<?, ?>) result.get("brief");
         assertThat(brief.get("referenceAssetId")).isEqualTo(7L);
         assertThat(brief.get("inspirationSource")).isEqualTo("image");
-        assertThat(result.get("readyToGenerate")).isEqualTo(true);
+        assertThat(result.get("readyToGenerate")).isEqualTo(false);
+        assertThat(result.get("generationConfirmationRequired")).isEqualTo(true);
     }
 
     private void createSchema() {
