@@ -100,9 +100,9 @@ export async function uploadFile<T>(path: string, filePath: string, name = 'file
 
 /**
  * 生图接口单独保留在基础客户端上，避免页面依赖较大的 creative API 模块。
- * 即梦同步任务可能持续数分钟，小程序端必须显式设置足够的等待时间。
+ * 方舟生图可能持续较长时间，小程序端必须显式设置足够的等待时间。
  */
-export const createTextToImage = (body: any) => request<any>('/api/creative/ai/jimeng/text-to-image', {
+export const createTextToImage = (body: any) => request<any>('/api/creative/ai/ark/text-to-image', {
   method: 'POST', data: body, timeout: 240000, header: { 'content-type': 'application/json' },
 })
 

@@ -147,6 +147,9 @@ public class CreativeAiController {
     @Value("${volcengine.ark.images.base-url:https://ark.cn-beijing.volces.com/api/v3/images/generations}")
     private String volcengineArkImagesUrl;
 
+    @Value("${volcengine.ark.seedream.image.model:${VOLCENGINE_ARK_SEEDREAM_IMAGE_MODEL:doubao-seedream-5-0-pro-260628}}")
+    private String volcengineArkSeedreamImageModel;
+
     // 使用已在 Ark 控制台开通的 Seedream 接入点名称；可通过环境变量覆盖。
     @Value("${volcengine.ark.seedream.multiview.model:${VOLCENGINE_ARK_SEEDREAM_MULTIVIEW_MODEL:doubao-seedream-5-0-260128}}")
     private String volcengineArkSeedreamMultiviewModel;
@@ -867,6 +870,127 @@ public class CreativeAiController {
         if (!blank(volcengineArkApiKey) && !volcengineArkApiKey.contains("YOUR_")) return volcengineArkApiKey;
         if (!blank(jimengApiKey) && jimengApiKey.trim().startsWith("Vx")) return jimengApiKey;
         return "";
+    }
+
+    @GetMapping("/ark/config")
+    public Map<String, Object> arkImageConfig() {
+        boolean configured = !blank(resolvedArkApiKey());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("configured", configured);
+        result.put("provider", "Volcengine Ark");
+        result.put("displayName", "Doubao-Seedream-5.0-pro");
+        result.put("model", volcengineArkSeedreamImageModel);
+        result.put("apiVersion", "OpenAI-compatible Images API v3");
+        result.put("imageSizes", List.of("1K", "2K"));
+        result.put("watermarkEnabled", true);
+        result.put("message", configured
+                ? "用户端文生图使用火山方舟 Doubao-Seedream-5.0-pro，生成内容会保留 AI 标识并保存到作品库。"
+                : "未配置火山方舟 Ark API Key。请在服务器 .env 配置 VOLCENGINE_ARK_API_KEY。");
+        return result;
+    }
+
+    @PostMapping("/ark/text-to-image")
+    public Map<String, Object> arkTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
+        Long ownerUserId = authenticatedUserId();
+        Long consumerUserId = currentConsumerUserIdOrNull();
+        assertCompliantPrompt(req.prompt, req.productCategory);
+        if (blank(resolvedArkApiKey())) throw new IllegalStateException("未配置火山方舟 Ark API Key，请联系平台管理员完成 VOLCENGINE_ARK_API_KEY 配置");
+        if (blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
+
+        String prompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        Map<String, Object> style = style(req.styleId);
+        String finalPrompt = buildPrompt(prompt, style, req.scene, req.productType);
+        if (finalPrompt.length() > 3500) finalPrompt = finalPrompt.substring(0, 3500);
+        String size = Set.of("1K", "2K").contains(nullToEmpty(req.imagenImageSize)) ? req.imagenImageSize : "2K";
+        String format = "jpg".equalsIgnoreCase(nullToEmpty(req.imagenOutputFormat)) ? "jpg" : "png";
+        String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
+        Long creditTxId = consumerUserId == null ? null : reserveConsumerCredit(consumerUserId, "image2d", consumerCreditCost("image2d"), "C端火山方舟生图预扣");
+        String jobNo = no("ARK");
+        Long jobId = createJob(jobNo, "text_to_image", "volcengine_ark", volcengineArkSeedreamImageModel, req.styleId, null, finalPrompt, negative, "running", null, size);
+        storeJobProductIdentity(jobId, req.productKey, req.productCategory, req.material);
+        assignJobOwner(jobId, ownerUserId);
+        linkCreditTransaction(creditTxId, jobId, null);
+
+        try {
+            String remoteImage = extractImageUrl(createArkTextImage(finalPrompt, size));
+            String localImage = saveRemoteImage(remoteImage, "ark-seedream-", "." + format);
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("provider", "volcengine_ark");
+            metadata.put("model", volcengineArkSeedreamImageModel);
+            metadata.put("remoteImage", remoteImage);
+            metadata.put("imageSize", size);
+            metadata.put("watermark", true);
+            metadata.put("aiGenerated", true);
+            addProductIdentity(metadata, req.productKey, req.productCategory, req.material);
+            if (ownerUserId != null) {
+                metadata.put("createdByUserId", ownerUserId);
+                if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
+            }
+            Long assetId = createAsset(req.title == null || req.title.isBlank() ? "之间智造AI效果图-" + jobNo : req.title,
+                    "image", "ai_generated", localImage, localImage, finalPrompt, negative, req.styleId, null, format,
+                    "AI生成,火山方舟,豆包Seedream,文创生图", metadata);
+            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?", assetId, jobId);
+            completeConsumerCredit(creditTxId, jobId, assetId);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("jobId", jobId);
+            out.put("jobNo", jobNo);
+            out.put("provider", "volcengine_ark");
+            out.put("model", volcengineArkSeedreamImageModel);
+            out.put("status", "succeeded");
+            out.put("progress", 100);
+            out.put("assetId", assetId);
+            out.put("id", assetId);
+            out.put("assetType", "image");
+            out.put("sourceType", "ai_generated");
+            out.put("assetStatus", "draft");
+            out.put("source", "火山方舟 · Doubao-Seedream-5.0-pro");
+            out.put("message", "AI 产品图已生成并保存到作品库。");
+            addSignedAssetFields(out, assetId, "image");
+            if (consumerUserId != null) out.put("creditAccount", creditAccountMap(consumerUserId));
+            return out;
+        } catch (Exception e) {
+            jdbc.update("UPDATE ai_generation_job SET status='failed',error_message=? WHERE id=?", safeMessage(e), jobId);
+            refundConsumerCredit(creditTxId, safeMessage(e));
+            throw new IllegalStateException("火山方舟 Doubao-Seedream-5.0-pro 生图失败：" + safeMessage(e), e);
+        }
+    }
+
+    private JsonNode createArkTextImage(String prompt, String size) throws Exception {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("model", volcengineArkSeedreamImageModel);
+        payload.put("prompt", prompt);
+        payload.put("response_format", "url");
+        payload.put("size", size);
+        payload.put("stream", false);
+        payload.put("watermark", true);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(volcengineArkImagesUrl))
+                .timeout(Duration.ofSeconds(150))
+                .header("Authorization", "Bearer " + resolvedArkApiKey())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
+                .build();
+        try {
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) throw arkImageHttpError(response.statusCode(), response.body());
+            return mapper.readTree(response.body());
+        } catch (HttpTimeoutException e) {
+            throw new IllegalStateException("火山方舟生图请求超时，请稍后重试", e);
+        } catch (IOException e) {
+            throw new IllegalStateException("无法连接火山方舟生图服务：" + safeMessage(e), e);
+        }
+    }
+
+    private IllegalStateException arkImageHttpError(int status, String raw) {
+        try {
+            JsonNode root = mapper.readTree(raw);
+            String detail = firstNonBlank(root.path("error").path("message").asText(""), root.path("message").asText(""), root.path("error").asText(""));
+            if (status == 401 || status == 403) return new IllegalStateException("火山方舟 API Key 无效、模型未开通或无调用权限：" + detail);
+            if (status == 429) return new IllegalStateException("火山方舟模型正在排队或触发调用频率限制，请稍后重试：" + detail);
+            return new IllegalStateException("火山方舟生图接口失败 HTTP " + status + "：" + detail);
+        } catch (Exception ignored) {
+            return new IllegalStateException("火山方舟生图接口失败 HTTP " + status + "：" + raw);
+        }
     }
 
     private boolean hasJimengSignatureCredentials() {
