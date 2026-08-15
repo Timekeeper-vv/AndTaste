@@ -60,7 +60,7 @@
           </view>
 
           <view class="project-info">
-            <view class="project-meta"><text>{{ project.request ? requestTypeText(project.request.requestType) : assetProjectText(project.asset) }}</text><text class="status" :class="project.state.tone">{{ project.state.label }}</text></view>
+            <view class="project-meta"><text>{{ projectKindText(project) }}</text><text class="status" :class="project.state.tone">{{ project.state.label }}</text></view>
             <text class="project-title">{{ project.title }}</text>
             <text class="project-no">{{ project.no }} · {{ formatDate(project.updatedAt) }}</text>
             <view class="current-stage"><text>当前节点</text><text>{{ currentStageLabel(project) }}</text></view>
@@ -74,7 +74,7 @@
         </view>
 
         <view class="timeline" :aria-label="`当前进度：${currentStageLabel(project)}`">
-          <view v-for="(step, index) in steps" :key="step" class="timeline-step" :class="{ done: index < project.state.index, active: index === project.state.index }">
+          <view v-for="(step, index) in projectSteps(project)" :key="step" class="timeline-step" :class="{ done: index < project.state.index, active: index === project.state.index }">
             <view class="timeline-mark"><text>{{ index + 1 }}</text></view><text>{{ step }}</text>
           </view>
         </view>
@@ -91,6 +91,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
+import { acceptCommercialQuote, getCommercialRequests } from '../../api/commercial'
 import { createModel, getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
@@ -99,6 +100,7 @@ import { getSession, requireSession } from '../../utils/session'
 const assets = ref<any[]>([])
 const requests = ref<any[]>([])
 const jobs = ref<any[]>([])
+const commercialRequests = ref<{ quoteRequests: any[]; consignmentApplications: any[] }>({ quoteRequests: [], consignmentApplications: [] })
 const loading = ref(false)
 const actionBusyKey = ref('')
 const securedPreviews = ref<Record<string, string>>({})
@@ -111,8 +113,9 @@ const filters: Array<{ key: ProjectFilter; label: string }> = [
   { key: 'completed', label: '已完成' },
 ]
 
-type ProductAction = 'pay' | 'apply' | 'adjust' | 'submit_image_review' | 'generate_model' | 'retry_model' | 'submit_model_review' | 'resubmit_request' | 'contact' | 'refresh' | ''
+type ProductAction = 'pay' | 'pay_quote' | 'accept_quote' | 'open_commercial' | 'apply' | 'adjust' | 'submit_image_review' | 'generate_model' | 'retry_model' | 'submit_model_review' | 'resubmit_request' | 'contact' | 'refresh' | ''
 type ProjectFilter = 'all' | 'action' | 'progressing' | 'completed'
+type CommercialProjectKind = 'quote' | 'consignment'
 
 interface ProjectState {
   index: number
@@ -127,9 +130,11 @@ interface ProjectState {
 
 interface ProductProject {
   key: string
-  asset: any
+  asset: any | null
   sourceAsset?: any | null
   request: any | null
+  commercialRequest?: any | null
+  commercialKind?: CommercialProjectKind | null
   relatedModelJob?: any | null
   relatedModelAsset?: any | null
   title: string
@@ -157,6 +162,31 @@ const projects = computed(() => {
   })
 
   const rows: ProductProject[] = []
+  const commercialAssetIds = new Set<string>()
+
+  const commercialEntries: Array<{ kind: CommercialProjectKind; request: any }> = [
+    ...commercialRequests.value.quoteRequests.map(request => ({ kind: 'quote' as const, request })),
+    ...commercialRequests.value.consignmentApplications.map(request => ({ kind: 'consignment' as const, request })),
+  ]
+  commercialEntries.forEach(({ kind, request }) => {
+    const requestId = String(request?.id || '')
+    if (!requestId) return
+    const assetId = request?.assetId == null || request?.assetId === '' ? '' : String(request.assetId)
+    if (assetId) commercialAssetIds.add(assetId)
+    const asset = assetId ? assetById.get(assetId) || null : null
+    rows.push({
+      key: `commercial-${kind}-${requestId}`,
+      asset,
+      request: null,
+      commercialRequest: request,
+      commercialKind: kind,
+      title: String(request.productName || asset?.title || '未命名产品'),
+      no: String(request.requestNo || request.applicationNo || `申请 #${requestId}`),
+      updatedAt: String(request.updatedAt || request.createdAt || asset?.updatedAt || asset?.createdAt || ''),
+      state: commercialProjectState(kind, request),
+    })
+  })
+
   newestRequestByAsset.forEach((request, key) => {
     const asset = assetById.get(String(request.assetId)) || { id: request.assetId, title: request.assetTitle, status: 'approved', assetNo: '', assetType: request.assetType || 'model' }
     rows.push({
@@ -180,7 +210,7 @@ const projects = computed(() => {
     })
     .forEach(asset => {
       const key = String(asset.id)
-      if (newestRequestByAsset.has(key)) return
+      if (newestRequestByAsset.has(key) || commercialAssetIds.has(key)) return
       const relatedModelJob = asset.assetType === 'image' ? newestModelJobByInput.get(key) || null : null
       const relatedModelAsset = relatedModelJob ? assetById.get(String(relatedModelJob.outputAssetId || '')) || null : null
       rows.push({
@@ -211,7 +241,7 @@ const filteredProjects = computed(() => projects.value.filter(project => {
 }))
 
 const trackedAssetStatuses = ['review', 'approved', 'rejected']
-const directActions: ProductAction[] = ['pay', 'apply', 'adjust', 'submit_image_review', 'generate_model', 'retry_model', 'submit_model_review', 'resubmit_request']
+const directActions: ProductAction[] = ['pay', 'pay_quote', 'accept_quote', 'open_commercial', 'apply', 'adjust', 'submit_image_review', 'generate_model', 'retry_model', 'submit_model_review', 'resubmit_request']
 
 function timestamp(value: any) {
   const raw = value?.updatedAt || value?.createdAt || value?.reviewedAt || ''
@@ -258,7 +288,17 @@ function projectPreview(project: ProductProject) {
 }
 
 function currentStageLabel(project: ProductProject) {
-  return steps[Math.max(0, Math.min(project.state.index, steps.length - 1))]
+  const projectStepList = projectSteps(project)
+  return projectStepList[Math.max(0, Math.min(project.state.index, projectStepList.length - 1))]
+}
+
+function projectSteps(project: ProductProject) {
+  if (project.commercialKind === 'consignment') return ['创作作品', '版权与作品审核', '渠道审核', '上架准备', '渠道销售']
+  if (project.commercialKind === 'quote') {
+    if (project.commercialRequest?.requestType === 'sample') return ['选择产品', '报价审核', '确认报价', '打样', '生产']
+    return ['选择产品', '报价审核', '确认报价', '生产对接', '交付']
+  }
+  return steps
 }
 
 function projectState(asset: any, request: any | null, relatedModelJob?: any | null, relatedModelAsset?: any | null, sourceAsset?: any | null): ProjectState {
@@ -313,8 +353,81 @@ function projectState(asset: any, request: any | null, relatedModelJob?: any | n
   return { index: 3, tone: 'active', label: '项目审核中', description: '平台正在核对打样或生产资料。需要补充说明时可联系项目顾问。', hint: '等待项目审核', action: 'contact' }
 }
 
+function commercialProjectState(kind: CommercialProjectKind, request: any): ProjectState {
+  const status = String(request?.status || '').toLowerCase()
+  const comment = String(request?.operatorComment || '').trim()
+  if (kind === 'consignment') {
+    const channel = String(request?.channelName || '').trim()
+    const channelText = channel ? `「${channel}」` : '目标渠道'
+    if (status === 'approved') {
+      return { index: 3, tone: 'active', label: '渠道代销审核通过', description: `${channelText}的代销申请已通过，平台正在确认渠道排期、上架资料和供货安排。`, hint: '等待渠道上架安排', action: 'contact' }
+    }
+    if (status === 'need_materials') {
+      return { index: 1, tone: 'warning', label: '需补充代销资料', description: '请按审核意见补充资料后重新提交渠道代销申请。', hint: '等待补充资料', action: 'open_commercial', noticeTitle: '渠道代销审核反馈', notice: comment || '请补充作品版权、授权范围、产品说明或渠道信息后重新提交。' }
+    }
+    if (status === 'rejected') {
+      return { index: 1, tone: 'warning', label: '渠道代销申请未通过', description: '本次渠道代销申请未通过，可根据审核反馈调整后重新提交。', hint: '等待重新提交', action: 'open_commercial', noticeTitle: '渠道代销审核反馈', notice: comment || '本次申请暂不符合渠道、版权或作品质量要求，请调整后重新提交。' }
+    }
+    if (status === 'withdrawn') {
+      return { index: 1, tone: 'complete', label: '渠道代销申请已撤回', description: '该申请已结束。需要再次申请时，可重新选择产品和渠道。', hint: '申请已结束', action: '' }
+    }
+    return { index: 1, tone: 'active', label: '渠道代销审核中', description: `平台正在核对作品版权、产品可行性与${channelText}的匹配情况。`, hint: '等待渠道审核', action: 'refresh' }
+  }
+
+  const paymentStatus = String(request?.samplePaymentStatus || '').toLowerCase()
+  const requestType = String(request?.requestType || '').toLowerCase()
+  if (status === 'quoted') {
+    return { index: 2, tone: 'ready', label: '报价待确认', description: '平台已完成报价，确认后可继续支付打样费或进入生产对接。', hint: '等待确认报价', action: 'accept_quote', noticeTitle: '报价已出具', notice: quoteNotice(request) }
+  }
+  if (status === 'accepted' && requestType === 'sample' && ['unpaid', 'pending', 'manual_review'].includes(paymentStatus)) {
+    return { index: 3, tone: 'warning', label: '待支付打样费', description: '报价已确认，完成打样费支付后会进入打样安排。', hint: paymentStatus === 'manual_review' ? '等待支付核验' : '等待打样费支付', action: paymentStatus === 'manual_review' ? 'refresh' : 'pay_quote' }
+  }
+  if (status === 'accepted' && requestType === 'sample' && paymentStatus === 'paid') {
+    return { index: 3, tone: 'active', label: '打样安排中', description: '打样费已支付，供应链正在安排打样并同步后续进度。', hint: '等待打样结果', action: 'contact' }
+  }
+  if (status === 'accepted') {
+    return { index: 3, tone: 'active', label: '生产对接中', description: '报价已确认，平台正在与您确认生产细节、交期和交付安排。', hint: '等待生产安排', action: 'contact' }
+  }
+  if (status === 'rejected') {
+    return { index: 1, tone: 'warning', label: '报价申请未通过', description: '本次报价或打样申请未通过，可根据反馈调整后重新提交。', hint: '等待重新提交', action: 'open_commercial', noticeTitle: '报价申请反馈', notice: comment || '请根据作品、数量、工艺或版权要求调整后重新提交申请。' }
+  }
+  if (status === 'closed') {
+    return { index: 4, tone: 'complete', label: '项目已关闭', description: '该报价申请已结束。需要再次制作时，可重新提交新的报价申请。', hint: '申请已结束', action: '' }
+  }
+  if (status === 'processing') {
+    return { index: 1, tone: 'active', label: '报价核算中', description: '平台正在结合产品、数量、工艺和供应链条件核算报价。', hint: '等待报价结果', action: 'refresh' }
+  }
+  return { index: 1, tone: 'active', label: '报价申请待处理', description: '申请已提交，平台将根据产品、数量和工艺条件确认报价及后续安排。', hint: '等待平台处理', action: 'refresh' }
+}
+
+function quoteNotice(request: any) {
+  const unit = request?.quotedUnitPrice
+  const total = request?.quotedTotalPrice
+  const lead = String(request?.quotedLeadTime || '').trim()
+  const parts = [
+    unit === null || unit === undefined || unit === '' ? '' : `单价 ¥${Number(unit).toFixed(2)}`,
+    total === null || total === undefined || total === '' ? '' : `总价 ¥${Number(total).toFixed(2)}`,
+    lead ? `交期 ${lead}` : '',
+    String(request?.operatorComment || '').trim(),
+  ].filter(Boolean)
+  return parts.join(' · ') || '请确认报价和交期，确认后即可继续后续安排。'
+}
+
 function requestTypeText(type?: string) {
   return type === 'bulk' ? '批量生产项目' : '打样项目'
+}
+
+function projectKindText(project: ProductProject) {
+  if (project.commercialKind === 'consignment') return '渠道代销申请'
+  if (project.commercialKind === 'quote') return quoteRequestTypeText(project.commercialRequest?.requestType)
+  if (project.request) return requestTypeText(project.request.requestType)
+  return assetProjectText(project.asset)
+}
+
+function quoteRequestTypeText(type?: string) {
+  if (type === 'bulk') return '批量生产报价'
+  if (type === 'personal') return '个人定制报价'
+  return '打样报价申请'
 }
 
 function distributionText(request: any) {
@@ -331,6 +444,15 @@ function assetProjectText(asset: any) {
 }
 
 function projectScopeText(project: ProductProject) {
+  if (project.commercialKind === 'consignment') {
+    const channel = String(project.commercialRequest?.channelName || '').trim()
+    return channel ? `${channel} · 渠道代销` : '渠道代销 · 待确定投放渠道'
+  }
+  if (project.commercialKind === 'quote') {
+    const request = project.commercialRequest
+    const quantity = Number(request?.quantity || 0)
+    return `${quantity > 0 ? `${quantity} 件 · ` : ''}${quoteRequestTypeText(request?.requestType)}`
+  }
   if (project.request) return `${Number(project.request.quantity || 0)} 件 · ${distributionText(project.request)}`
   if (project.state.label === '待提交效果图审核') return '效果图已生成 · 提交审核后进入产品流程'
   if (project.state.label === '待提交 3D 模型审核') return '3D 原型已生成 · 审核通过后可申请打样或生产'
@@ -364,6 +486,21 @@ function goSamplePayment(request?: any) {
   uni.navigateTo({ url: requestId ? `/pages/sample-payment/index?requestId=${encodeURIComponent(requestId)}` : '/pages/sample-payment/index' })
 }
 
+function goCommercialSamplePayment(request?: any) {
+  const quoteId = String(request?.id || '')
+  uni.navigateTo({ url: quoteId ? `/pages/sample-payment/index?quoteId=${encodeURIComponent(quoteId)}` : '/pages/sample-payment/index' })
+}
+
+function openCommercial(project: ProductProject) {
+  const request = project.commercialRequest || {}
+  const query = [
+    request.assetId ? `assetId=${encodeURIComponent(String(request.assetId))}` : '',
+    request.templateCode ? `productKey=${encodeURIComponent(String(request.templateCode))}` : '',
+    request.productName ? `productName=${encodeURIComponent(String(request.productName))}` : '',
+  ].filter(Boolean).join('&')
+  uni.navigateTo({ url: `/pages/commercial/index${query ? `?${query}` : ''}` })
+}
+
 function applyProduction(asset: any) {
   if (!asset?.id) return goWorks()
   if (asset.assetType !== 'model') {
@@ -380,6 +517,9 @@ function goSupport() {
 function actionLabel(action: ProductAction) {
   return ({
     pay: '支付打样费',
+    pay_quote: '支付打样费',
+    accept_quote: '确认并接受报价',
+    open_commercial: '查看反馈并重新提交',
     apply: '申请打样 / 生产',
     adjust: '查看审核反馈并调整作品',
     submit_image_review: '提交效果图审核',
@@ -394,8 +534,30 @@ function actionLabel(action: ProductAction) {
 
 function actionClass(action: ProductAction) {
   return {
-    pay: action === 'pay',
-    secondary: ['adjust', 'contact', 'refresh'].includes(action),
+    pay: action === 'pay' || action === 'pay_quote',
+    secondary: ['adjust', 'contact', 'refresh', 'open_commercial'].includes(action),
+  }
+}
+
+async function acceptQuote(project: ProductProject) {
+  const request = project.commercialRequest
+  const id = Number(request?.id)
+  if (!Number.isFinite(id) || id <= 0) {
+    uni.showToast({ title: '报价记录无效，请刷新后重试', icon: 'none' })
+    return
+  }
+  const nextStep = request?.requestType === 'sample' ? '确认后，打样项目将进入打样费支付环节。' : '确认后，平台将继续与您对接生产和交付安排。'
+  if (!(await confirmAction('确认接受报价', `${quoteNotice(request)}。${nextStep}`, '确认报价'))) return
+
+  actionBusyKey.value = project.key
+  try {
+    const response = await acceptCommercialQuote(id)
+    uni.showToast({ title: response?.message || '报价已接受', icon: 'success' })
+    await loadProjects(false)
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '确认报价失败，请稍后重试', icon: 'none' })
+  } finally {
+    actionBusyKey.value = ''
   }
 }
 
@@ -534,6 +696,9 @@ async function handleProjectAction(project: ProductProject) {
   if (actionBusyKey.value) return
   const action = project.state.action
   if (action === 'pay') return goSamplePayment(project.request)
+  if (action === 'pay_quote') return goCommercialSamplePayment(project.commercialRequest)
+  if (action === 'accept_quote') return acceptQuote(project)
+  if (action === 'open_commercial') return openCommercial(project)
   if (action === 'apply' || action === 'resubmit_request') return applyProduction(project.asset)
   if (action === 'adjust') return goWorks()
   if (action === 'submit_image_review') return submitImageReview(project)
@@ -577,12 +742,18 @@ async function loadProjects(notify = false) {
   if (!requireSession()) return
   loading.value = true
   try {
-    const [assetResult, requestResult, jobResult] = await Promise.allSettled([getAssets(), getProductionRequests(), getJobs()])
+    const [assetResult, requestResult, jobResult, commercialResult] = await Promise.allSettled([getAssets(), getProductionRequests(), getJobs(), getCommercialRequests()])
     if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
     if (requestResult.status === 'fulfilled') requests.value = Array.isArray(requestResult.value) ? requestResult.value : []
     if (jobResult.status === 'fulfilled') jobs.value = Array.isArray(jobResult.value) ? jobResult.value : []
+    if (commercialResult.status === 'fulfilled') {
+      commercialRequests.value = {
+        quoteRequests: Array.isArray(commercialResult.value?.quoteRequests) ? commercialResult.value.quoteRequests : [],
+        consignmentApplications: Array.isArray(commercialResult.value?.consignmentApplications) ? commercialResult.value.consignmentApplications : [],
+      }
+    }
     void hydratePreviews(projects.value)
-    const partialFailure = [assetResult, requestResult, jobResult].some(result => result.status === 'rejected')
+    const partialFailure = [assetResult, requestResult, jobResult, commercialResult].some(result => result.status === 'rejected')
     if (partialFailure) uni.showToast({ title: '部分状态暂未同步，已展示可用数据', icon: 'none' })
     else if (notify) uni.showToast({ title: '项目进度已更新', icon: 'success' })
   } catch (error: any) {

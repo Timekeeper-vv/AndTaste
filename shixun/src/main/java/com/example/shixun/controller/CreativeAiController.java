@@ -4660,7 +4660,11 @@ public class CreativeAiController {
         return Objects.requireNonNull(kh.getKey()).longValue();
     }
 
-    private String no(String prefix) { return prefix + DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(LocalDateTime.now()) + (int)(Math.random()*900+100); }
+    private String no(String prefix) {
+        return prefix
+                + DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS").format(LocalDateTime.now())
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase(Locale.ROOT);
+    }
     private String nullToEmpty(String s) { return s == null ? "" : s; }
 
     private String normalizeModelFormat(String format) {
