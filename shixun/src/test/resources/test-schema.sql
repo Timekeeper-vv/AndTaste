@@ -52,6 +52,37 @@ CREATE TABLE digital_asset (
     updated_at TIMESTAMP NULL
 );
 
+CREATE TABLE channel_directory (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    channel_code VARCHAR(120) NOT NULL UNIQUE,
+    name VARCHAR(200) NOT NULL,
+    province VARCHAR(80),
+    city VARCHAR(80),
+    district VARCHAR(80),
+    channel_type VARCHAR(30) NOT NULL,
+    source_type VARCHAR(50),
+    cooperation_status VARCHAR(50),
+    notes VARCHAR(1000),
+    enabled TINYINT NOT NULL DEFAULT 1
+);
+
+CREATE TABLE consumer_campaign_reward (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    participation_no VARCHAR(80) NOT NULL UNIQUE,
+    user_id BIGINT NOT NULL,
+    campaign_key VARCHAR(80) NOT NULL,
+    asset_id BIGINT NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'pending_review',
+    reward_amount DECIMAL(12,2) NOT NULL,
+    credit_transaction_id BIGINT NULL,
+    reviewed_by VARCHAR(80),
+    reviewed_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, campaign_key),
+    UNIQUE (asset_id)
+);
+
 CREATE TABLE ai_generation_job (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     job_no VARCHAR(80) NOT NULL UNIQUE,
@@ -72,6 +103,7 @@ CREATE TABLE ai_generation_job (
     error_message CLOB,
     export_formats VARCHAR(120),
     request_payload_json JSON,
+    result_payload_json JSON,
     external_task_id VARCHAR(160),
     created_by BIGINT,
     credit_transaction_id BIGINT,

@@ -8,6 +8,7 @@
       <view class="mode-rail"><view v-for="item in modeOptions" :key="item.key" class="mode-tab" :class="{ active: mode === item.key }" @tap="selectMode(item.key)"><text>{{ item.mark }}</text><text>{{ item.short }}</text></view></view>
     </view>
     <AiGeneratedNotice class="ai-disclosure" description="提交后生成的图片、四视图和 3D 原型均为人工智能生成内容。请在展示、销售、打样或生产前完成人工复核、版权核验和工艺确认。" />
+    <view v-if="campaignContext" class="campaign-context"><view><text>PRIORITY CREATOR TASK</text><text>{{ campaignContext.title }}</text><text>面向 {{ campaignContext.targetName }} · {{ campaignContext.collectionStyle }}</text></view><text>通过 +{{ campaignContext.rewardAmount }} 积分</text></view>
 
     <view class="intention-card">
       <view class="intention-top"><view><text>CREATIVE INTENTION</text><text>{{ selectedProductCategory.label }} · {{ form.material }}</text></view><text>创作参数已同步</text></view>
@@ -115,6 +116,7 @@ import {
   getCreditRules,
   optimizeImagePrompt,
   optimizeTripo3dPrompt,
+  type CreatorCampaign,
   type ProductionFeasibilityResult,
   type SeedreamMultiViewImage,
   type Tripo3dPromptTemplate,
@@ -149,6 +151,7 @@ interface ManualMultiViewAsset {
   assetId: number | null
   localPath: string
 }
+type CampaignContext = CreatorCampaign & { sessionId?: number }
 
 const mode = ref<CreateMode>('image')
 const loading = ref(false)
@@ -182,6 +185,7 @@ const imagePromptGuide = ref('')
 const referencePolicyConfirmed = ref(false)
 const aiPolicyConfirmed = ref(false)
 const threeDimensionalPolicyConfirmed = ref(false)
+const campaignContext = ref<CampaignContext | null>(null)
 
 const multiViewSlots: MultiViewSlot[] = [
   { key: 'front', label: '正面', short: '正' },
@@ -285,7 +289,7 @@ const multiViewModelButtonLabel = computed(() => `用 4 视图创建 3D（预扣
 const manualMultiViewModelButtonLabel = computed(() => `用已上传视图创建 3D（预扣 ${imageTo3dCreditLabel.value}）`)
 const generateButtonLabel = computed(() => {
   if (loading.value) {
-    if (loadingAction.value === 'multiview') return '正在基于原图生成四个视图…'
+    if (loadingAction.value === 'multiview') return generationProgressMessage.value === '正在生成，请稍候…' ? '正在基于原图生成四个视图…' : generationProgressMessage.value
     if (loadingAction.value === 'model') return '正在提交多视图 3D 任务…'
     return generationProgressMessage.value
   }
@@ -295,6 +299,19 @@ const generateButtonLabel = computed(() => {
   }
   return `开始生成（${activeMode.value.cost} 积分）`
 })
+
+function updateImageTaskProgress(job: { status?: string; jobType?: string; queuePosition?: number }) {
+  if (job.status === 'queued') {
+    const ahead = Math.max(0, Number(job.queuePosition || 1) - 1)
+    generationProgressMessage.value = ahead > 0 ? `已进入队列，前面还有 ${ahead} 项任务…` : '已进入队列，马上开始…'
+  } else if (job.status === 'running') {
+    generationProgressMessage.value = job.jobType === 'multi_view'
+      ? '正在生成一致的产品多视图，请稍候…'
+      : job.jobType === 'image_to_image'
+        ? '正在依据参考图生成产品视觉，请稍候…'
+        : '之间大模型正在生成产品图，请稍候…'
+  }
+}
 
 function selectMode(next: CreateMode) { mode.value = next; imagePromptGuide.value = '' }
 function applyPattern(pattern: typeof patterns[number]) {
@@ -593,14 +610,7 @@ async function generate() {
         productType: selectedProductCategory.value.label,
         productCategory: selectedProductCategory.value.label,
         material: form.material,
-      }, (job) => {
-        if (job.status === 'queued') {
-          const ahead = Number(job.queuePosition || 1) - 1
-          generationProgressMessage.value = ahead > 0 ? `已进入队列，前面还有 ${ahead} 项任务…` : '已进入队列，马上开始…'
-        } else if (job.status === 'running') {
-          generationProgressMessage.value = '之间大模型正在生成产品图，请稍候…'
-        }
-      })
+      }, updateImageTaskProgress)
     } else if (mode.value === 'reference') {
       const inputAssetId = await ensureReferenceAsset()
       result = await createReferenceToImage({
@@ -609,7 +619,7 @@ async function generate() {
         inputAssetId,
         productCategory: selectedProductCategory.value.label,
         material: form.material,
-      })
+      }, updateImageTaskProgress)
     } else {
       let inputAssetId: number | undefined
       if (mode.value === 'image3d') inputAssetId = await ensureReferenceAsset()
@@ -663,7 +673,7 @@ async function generateMultiView(prompt: string) {
       prompt,
       size: multiViewSize.value,
       watermark: true,
-    })
+    }, updateImageTaskProgress)
     multiViewImages.value = normalizeMultiViewImages(result)
     multiViewMessage.value = result.message || 'AI 已完成四个一致视角，可提交给 Tripo 创建 3D。'
     uni.showToast({ title: '四视图已生成', icon: 'success' })
@@ -674,6 +684,7 @@ async function generateMultiView(prompt: string) {
   } finally {
     loading.value = false
     loadingAction.value = 'creation'
+    generationProgressMessage.value = '正在生成，请稍候…'
   }
 }
 
@@ -738,6 +749,16 @@ onLoad((query: any) => {
   if (draft.material || draft.modelMaterial) restoreProductMaterial(String(draft.material || ''), String(draft.modelMaterial || ''))
   if (draft.pattern?.id && patterns.some(item => item.id === draft.pattern.id)) selectedPatternId.value = draft.pattern.id
   ;(['glaze', 'texture', 'relief'] as FinishKey[]).forEach((key) => { if (Number.isFinite(Number(draft[key]))) finish[key] = Number(draft[key]) })
+  const context = uni.getStorageSync('creation_context') || {}
+  const campaign = context?.campaign
+  if (campaign && typeof campaign === 'object' && typeof campaign.key === 'string' && typeof campaign.promptHint === 'string') {
+    campaignContext.value = campaign as CampaignContext
+    const campaignProductKey = String(campaign.recommendedProductKey || '') as ProductCategoryKey
+    if (productCategories.some(item => item.key === campaignProductKey)) chooseProductCategory(campaignProductKey)
+    const campaignPrefix = `优先征集「${campaign.title}」：`
+    if (!form.prompt.includes(campaignPrefix)) form.prompt = form.prompt ? `${form.prompt}。${campaignPrefix}${campaign.promptHint}` : `${campaignPrefix}${campaign.promptHint}`
+    if (!form.title) form.title = String(campaign.title || '优先征集作品')
+  }
   void loadCreditRules()
 })
 </script>
@@ -761,4 +782,5 @@ onLoad((query: any) => {
 .material-meta{align-items:center}.material-meta>view{min-width:0;flex:1}.material-toggle{flex:0 0 auto;height:50rpx;margin:0;padding:0 11rpx;border:1rpx solid #b9cdbc;border-radius:10rpx;background:#f1f6ef;color:#537363;font-size:14rpx;font-weight:900}.material-toggle::after{border:0}.material-scope-tip{display:block;margin-top:10rpx;padding:10rpx 11rpx;border-left:3rpx solid #b98a6b;border-radius:0 10rpx 10rpx 0;background:#faf3eb;color:#796d62;font-size:14rpx;line-height:1.52}.material-chip{position:relative;padding-right:52rpx}.material-chip .material-recommended,.material-chip .material-cross{position:absolute;right:9rpx;top:9rpx;margin:0!important;padding:4rpx 6rpx;border-radius:99rpx;font-size:11rpx!important;font-weight:900!important;line-height:1.1}.material-chip .material-recommended{color:#557867!important;background:#e4f1e5}.material-chip .material-cross{color:#93735f!important;background:#f4ece4}
 .multiview-source-switch{display:grid;grid-template-columns:1fr 1fr;gap:8rpx;margin-top:13rpx}.multiview-source-switch button{display:flex;min-height:84rpx;flex-direction:column;align-items:flex-start;justify-content:center;gap:4rpx;margin:0;padding:12rpx;border:1rpx solid #ddd7ce;border-radius:13rpx;background:#fffdf9;color:#746b61;text-align:left}.multiview-source-switch button::after{border:0}.multiview-source-switch button text:first-child{font-size:17rpx;font-weight:900}.multiview-source-switch button text:last-child{color:#978c81;font-size:13rpx;line-height:1.4}.multiview-source-switch button.active{border-color:#86a894;background:#eef5ed;color:#4b6c5a;box-shadow:0 6rpx 14rpx rgba(78,109,89,.09)}.multiview-source-switch button.active text:last-child{color:#6d8677}.manual-view-grid{display:grid;grid-template-columns:1fr 1fr;gap:9rpx;margin-top:14rpx}.manual-view-slot{position:relative;min-height:180rpx;overflow:hidden;border:1rpx dashed #cfc8bd;border-radius:15rpx;background:rgba(255,253,249,.74)}.manual-view-slot.ready{border-style:solid;border-color:#9db8a5;background:#f4faf3}.manual-view-slot.uploading{opacity:.68}.manual-view-slot image{display:block;width:100%;height:180rpx;background:#e9ece5}.manual-view-empty{display:flex;height:180rpx;flex-direction:column;align-items:center;justify-content:center;gap:5rpx;color:#7a756c}.manual-view-empty text:first-child{display:grid;place-items:center;width:45rpx;height:45rpx;border-radius:50%;background:#ece7df;color:#627a6d;font-family:"Songti SC","STSong",serif;font-size:25rpx;font-weight:800}.manual-view-empty text:nth-child(2){color:#544c43;font-size:18rpx;font-weight:900}.manual-view-empty text:last-child{color:#978c81;font-size:13rpx}.manual-view-meta{position:absolute;right:0;bottom:0;left:0;display:flex;align-items:center;justify-content:space-between;gap:6rpx;padding:8rpx 9rpx;background:rgba(38,46,40,.68);color:#fff}.manual-view-meta text:first-child{font-size:15rpx;font-weight:900}.manual-view-meta text:last-child{color:rgba(255,255,255,.76);font-size:12rpx}
 .product-rule-tip{display:block;margin-top:11rpx;padding:10rpx 11rpx;border-left:3rpx solid #799887;border-radius:0 10rpx 10rpx 0;background:#f1f6ef;color:#5f7668;font-size:14rpx;line-height:1.55}
+.campaign-context{position:relative;z-index:1;display:flex;align-items:flex-start;justify-content:space-between;gap:12rpx;margin:-8rpx 0 17rpx;padding:14rpx;border:1rpx solid #c6d9c8;border-radius:16rpx;background:#f2f8f2}.campaign-context>view{display:flex;min-width:0;flex:1;flex-direction:column;gap:3rpx}.campaign-context>view text:first-child{color:#658070;font-size:13rpx;font-weight:900;letter-spacing:1.4rpx}.campaign-context>view text:nth-child(2){overflow:hidden;color:#3f594a;font-family:"Songti SC","STSong",serif;font-size:23rpx;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.campaign-context>view text:last-child{overflow:hidden;color:#7a8e81;font-size:15rpx;text-overflow:ellipsis;white-space:nowrap}.campaign-context>text{flex:0 0 auto;padding:6rpx 7rpx;border-radius:8rpx;background:#dcecdf;color:#4f755d;font-size:14rpx;font-weight:850;white-space:nowrap}
 </style>

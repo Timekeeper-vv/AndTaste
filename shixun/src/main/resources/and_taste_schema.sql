@@ -287,6 +287,7 @@ CREATE TABLE IF NOT EXISTS ai_generation_job (
     error_message TEXT,
     export_formats VARCHAR(120) COMMENT 'OBJ,STL,GLB等',
     request_payload_json JSON NULL,
+    result_payload_json JSON NULL,
     created_by BIGINT NULL,
     credit_transaction_id BIGINT NULL,
     product_key VARCHAR(80) NULL,

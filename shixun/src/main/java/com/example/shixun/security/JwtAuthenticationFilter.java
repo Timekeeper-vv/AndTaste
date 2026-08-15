@@ -38,6 +38,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String path = path(request);
         if (!path.startsWith("/api/")) return true;
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) return true;
+        // The login page may show only curated campaign briefs before a user
+        // signs in. Participation, reward history and balances stay protected.
+        if ("GET".equalsIgnoreCase(request.getMethod())
+                && "/api/creative/ai/consumer-rewards/campaigns/public".equals(path)) return true;
         if ("/api/users/login".equals(path)
                 || "/api/users/wechat-login".equals(path)
                 || "/api/users/wechat-phone-login".equals(path)

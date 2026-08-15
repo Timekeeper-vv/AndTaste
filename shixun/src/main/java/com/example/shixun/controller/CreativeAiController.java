@@ -15,6 +15,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -61,15 +62,51 @@ import java.util.zip.ZipOutputStream;
 @RestController
 @RequestMapping("/api/creative/ai")
 public class CreativeAiController {
+    /**
+     * Curated priority calls shown before login. They are platform briefs for
+     * target channels, not assertions that a named institution has purchased,
+     * authorized, or commissioned the work.
+     */
+    private static final List<CampaignDefinition> CREATOR_CAMPAIGNS = List.of(
+            new CampaignDefinition(
+                    "museum_summer_gift_2026", "器物新生 · 城市礼赠", "museum-national", "中国国家博物馆",
+                    "现代东方器物风", List.of("冰箱贴", "金属书签", "礼盒"), "magnet",
+                    "围绕器物轮廓、传统纹样与城市记忆，创作轻量、易携带的当代礼赠文创。",
+                    "以原创器物纹样和城市文化记忆为灵感，采用现代东方的简洁构图，设计一款适合游客带走的轻量礼赠文创；突出清晰轮廓、真实材质、易携带结构和商品陈列感。",
+                    BigDecimal.valueOf(80), "2026-09-30", true),
+            new CampaignDefinition(
+                    "suzhou_garden_stationery_2026", "园林雅物 · 江南文具", "museum-suzhou", "苏州博物馆",
+                    "江南留白与园林几何", List.of("书签", "明信片", "帆布袋"), "stationery",
+                    "用园林窗格、水色、瓦当和留白节奏，做轻盈克制的日常文具与随身文创。",
+                    "以原创江南园林窗格、屋檐线条、水色和留白节奏为灵感，形成克制、清爽、可量产的现代文创视觉；避免直接复制任何馆藏图像、标识或受保护 IP。",
+                    BigDecimal.valueOf(70), "2026-10-15", false),
+            new CampaignDefinition(
+                    "hunan_lacquer_gift_2026", "汉风漆彩 · 旅行伴手礼", "museum-hunan", "湖南博物院",
+                    "朱砂漆彩与云纹新表达", List.of("冰箱贴", "钥匙扣", "礼盒"), "magnet",
+                    "从汉代漆器的色彩、云纹和器形节奏获得启发，做有辨识度的旅行伴手礼。",
+                    "以原创朱砂漆彩、流动云纹和简化器形比例为灵感，设计一款色彩有记忆点、轮廓清晰、适合文旅零售陈列的现代伴手礼；不得复刻具体文物纹样或馆方标识。",
+                    BigDecimal.valueOf(70), "2026-10-31", false),
+            new CampaignDefinition(
+                    "sanxingdui_bronze_collectible_2026", "青铜想象 · 年轻潮玩", "museum-sanxingdui", "三星堆博物馆",
+                    "青铜绿金与几何潮玩", List.of("PVC / 搪胶公仔", "硬塑摆件", "徽章"), "pvc_figure",
+                    "以原创青铜色、几何轮廓和抽象面具感，做适合年轻客群的收藏型文创。",
+                    "以原创青铜绿、金色氧化质感、抽象几何轮廓和未来感陈列结构为灵感，设计一件可量产的年轻潮玩文创；避免复刻具体文物造型、面具图像或馆方标识。",
+                    BigDecimal.valueOf(90), "2026-11-15", false)
+    );
+
     private final JdbcTemplate jdbc;
     private final TransactionTemplate creditTransactions;
     private final ObjectMapper mapper;
     private final JwtService jwtService;
     private final ThreadPoolTaskExecutor arkImageGenerationExecutor;
+    private final ThreadPoolTaskExecutor siliconflowImageGenerationExecutor;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).followRedirects(HttpClient.Redirect.NORMAL).build();
     private final Object arkQueueSubmissionLock = new Object();
+    private final Object siliconflowQueueSubmissionLock = new Object();
     private final Set<Long> activeArkImageJobs = ConcurrentHashMap.newKeySet();
+    private final Set<Long> activeSiliconflowImageJobs = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean arkQueueRecovered = new AtomicBoolean(false);
+    private final AtomicBoolean siliconflowQueueRecovered = new AtomicBoolean(false);
     private final AtomicBoolean arkQueueTableVerified = new AtomicBoolean(false);
 
     @Value("${siliconflow.api.key:}")
@@ -80,6 +117,21 @@ public class CreativeAiController {
 
     @Value("${siliconflow.image.edit.model:Qwen/Qwen-Image-Edit-2509}")
     private String imageEditModel;
+
+    @Value("${siliconflow.images.base-url:https://api.siliconflow.cn/v1/images/generations}")
+    private String siliconflowImagesUrl;
+
+    @Value("${siliconflow.vision.enabled:true}")
+    private boolean siliconflowVisionEnabled;
+
+    @Value("${siliconflow.image.queue.concurrency:2}")
+    private int siliconflowImageQueueConcurrency;
+
+    @Value("${siliconflow.image.queue.retry-attempts:2}")
+    private int siliconflowImageQueueRetryAttempts;
+
+    @Value("${siliconflow.image.queue.retry-delay-seconds:3}")
+    private long siliconflowImageQueueRetryDelaySeconds;
 
     @Value("${siliconflow.chat.model:Qwen/Qwen3-32B}")
     private String chatModel;
@@ -197,12 +249,14 @@ public class CreativeAiController {
 
     public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper, JwtService jwtService,
                                 PlatformTransactionManager transactionManager,
-                                @Qualifier("arkImageGenerationExecutor") ThreadPoolTaskExecutor arkImageGenerationExecutor) {
+                                @Qualifier("arkImageGenerationExecutor") ThreadPoolTaskExecutor arkImageGenerationExecutor,
+                                @Qualifier("siliconflowImageGenerationExecutor") ThreadPoolTaskExecutor siliconflowImageGenerationExecutor) {
         this.jdbc = jdbc;
         this.creditTransactions = new TransactionTemplate(transactionManager);
         this.mapper = mapper;
         this.jwtService = jwtService;
         this.arkImageGenerationExecutor = arkImageGenerationExecutor;
+        this.siliconflowImageGenerationExecutor = siliconflowImageGenerationExecutor;
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
@@ -433,8 +487,18 @@ public class CreativeAiController {
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("missions", missions);
         out.put("campaign", campaignOverview(userId, defaultCampaignKey()));
+        out.put("campaigns", CREATOR_CAMPAIGNS.stream().map(campaign -> campaignOverview(userId, campaign.key())).toList());
         out.put("creditAccount", creditAccountMap(userId));
         return out;
+    }
+
+    /**
+     * Login is intentionally allowed to read only the public campaign briefs.
+     * User participation status and point balances remain behind authentication.
+     */
+    @GetMapping("/consumer-rewards/campaigns/public")
+    public List<Map<String,Object>> publicCreatorCampaigns() {
+        return CREATOR_CAMPAIGNS.stream().map(this::publicCampaignMap).toList();
     }
 
     @GetMapping("/consumer-rewards/history")
@@ -472,23 +536,17 @@ public class CreativeAiController {
     @PostMapping("/consumer-rewards/campaigns/{campaignKey}/participations")
     public Map<String,Object> joinConsumerCampaign(@PathVariable String campaignKey, @RequestBody Map<String,Object> body) {
         Long userId = requireCurrentConsumerUser();
-        if (!defaultCampaignKey().equals(campaignKey)) throw new IllegalArgumentException("活动不存在或已结束");
+        CampaignDefinition campaign = campaignDefinition(campaignKey);
         Long assetId = body != null && body.get("assetId") instanceof Number ? ((Number) body.get("assetId")).longValue() : null;
         if (assetId == null) throw new IllegalArgumentException("请选择要投稿的作品");
         requireAssetAccess(assetId);
-        List<Map<String,Object>> assets = jdbc.queryForList("SELECT id,status,asset_type assetType,created_by createdBy FROM digital_asset WHERE id=? AND created_by=? AND asset_type IN ('image','model') LIMIT 1", assetId, userId);
+        List<Map<String,Object>> assets = jdbc.queryForList("SELECT id,status,asset_type assetType,created_by createdBy,tags FROM digital_asset WHERE id=? AND created_by=? AND asset_type IN ('image','model') LIMIT 1", assetId, userId);
         if (assets.isEmpty()) throw new IllegalArgumentException("仅可投稿本人生成的图片或3D作品");
         if (!"review".equals(String.valueOf(assets.get(0).get("status")))) throw new IllegalStateException("请先把作品提交审核，再参加本期活动");
-        BigDecimal amount = campaignRewardAmount(campaignKey);
-        try {
-            int inserted = jdbc.update("INSERT INTO consumer_campaign_reward (participation_no,user_id,campaign_key,asset_id,status,reward_amount) VALUES (?,?,?,?, 'pending_review',?)", no("CRW"), userId, campaignKey, assetId, amount);
-            if (inserted != 1) throw new IllegalStateException("活动投稿创建失败");
-            jdbc.update("UPDATE digital_asset SET tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=?", ";活动投稿=" + campaignKey, assetId, userId);
-        } catch (Exception e) {
-            List<Map<String,Object>> existing = jdbc.queryForList("SELECT asset_id assetId,status FROM consumer_campaign_reward WHERE user_id=? AND campaign_key=? LIMIT 1", userId, campaignKey);
-            if (!existing.isEmpty()) throw new IllegalStateException("本期活动每人限投稿一件作品，当前投稿正在审核");
-            throw e;
+        if (!campaign.legacyManualParticipation() && !String.valueOf(assets.get(0).get("tags")).contains(";激励任务=" + campaign.key())) {
+            throw new IllegalStateException("请从登录页选择该优先征集任务后，再创作并提交作品审核");
         }
+        createCampaignParticipation(userId, campaign, assetId);
         Map<String,Object> out = campaignOverview(userId, campaignKey);
         out.put("message", "活动投稿已进入审核，通过后系统自动发放积分");
         return out;
@@ -827,6 +885,7 @@ public class CreativeAiController {
         }
         String size = blank(req.size) ? "2K" : req.size.trim();
         if (!Set.of("1K", "2K").contains(size)) throw new IllegalArgumentException("多视图仅支持 1K 或 2K 尺寸");
+        if (Boolean.TRUE.equals(req.queue)) return queueSiliconflowMultiView(req, ownerUserId);
         List<String> views = req.viewCount != null && req.viewCount == 3
                 ? List.of("front", "left", "back")
                 : List.of("front", "left", "back", "right");
@@ -851,7 +910,7 @@ public class CreativeAiController {
             payload.put("guidance_scale", 6);
             payload.put("batch_size", 1);
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api.siliconflow.cn/v1/images/generations"))
+                    .uri(URI.create(siliconflowImagesUrl))
                     .header("Authorization", "Bearer " + siliconflowApiKey.trim())
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
@@ -967,6 +1026,12 @@ public class CreativeAiController {
     public Map<String, Object> arkImageJob(@PathVariable Long jobId) {
         requireJobAccess(jobId);
         return arkImageJobResponse(jobId);
+    }
+
+    @GetMapping("/image-jobs/{jobId}")
+    public Map<String, Object> imageJob(@PathVariable Long jobId) {
+        requireJobAccess(jobId);
+        return imageGenerationJobResponse(jobId);
     }
 
     @Scheduled(fixedDelayString = "${volcengine.ark.queue.dispatch-interval-ms:1000}")
@@ -1098,12 +1163,16 @@ public class CreativeAiController {
             }
         } catch (Exception e) {
             String error = safeMessage(e);
-            jdbc.update("UPDATE ai_generation_job SET status='failed',progress=0,error_message=?,finished_at=NOW() " +
-                    "WHERE id=? AND status<>'succeeded'", error, jobId);
             try {
                 refundConsumerCredit(creditTxId, error);
+                // Do not expose a terminal failure before its reserved credit
+                // is settled. Otherwise a polling client can show a failed
+                // generation while the user's balance is still frozen.
+                jdbc.update("UPDATE ai_generation_job SET status='failed',progress=0,error_message=?,finished_at=NOW() " +
+                        "WHERE id=? AND status<>'succeeded'", error, jobId);
             } catch (Exception refundError) {
-                jdbc.update("UPDATE ai_generation_job SET error_message=? WHERE id=?",
+                jdbc.update("UPDATE ai_generation_job SET status='failed',progress=0,error_message=?,finished_at=NOW() " +
+                                "WHERE id=? AND status<>'succeeded'",
                         error + "；积分退回待核对：" + safeMessage(refundError), jobId);
             }
         }
@@ -1138,19 +1207,32 @@ public class CreativeAiController {
     }
 
     private Map<String, Object> arkImageJobResponse(Long jobId) {
+        Map<String, Object> result = imageGenerationJobResponse(jobId);
+        if (!"volcengine_ark".equals(str(result.get("provider")))) {
+            throw new IllegalArgumentException("该任务不是火山方舟图片任务");
+        }
+        return result;
+    }
+
+    private Map<String, Object> imageGenerationJobResponse(Long jobId) {
         Map<String, Object> job = jdbc.queryForMap(
                 "SELECT id,job_no jobNo,provider,model_name modelName,output_asset_id outputAssetId," +
                         "product_key productKey,product_name productName,product_material productMaterial," +
                         "status,progress,attempt_count attemptCount,error_message errorMessage," +
-                        "created_by createdBy,created_at createdAt,started_at startedAt,finished_at finishedAt " +
-                        "FROM ai_generation_job WHERE id=? AND provider='volcengine_ark' AND job_type='text_to_image'",
+                        "job_type jobType,result_payload_json resultPayloadJson,created_by createdBy," +
+                        "credit_transaction_id creditTransactionId," +
+                        "created_at createdAt,started_at startedAt,finished_at finishedAt " +
+                        "FROM ai_generation_job WHERE id=?",
                 jobId);
         Map<String, Object> out = new LinkedHashMap<>();
         String status = str(job.get("status"));
+        String provider = str(job.get("provider"));
+        String jobType = str(job.get("jobType"));
         out.put("jobId", jobId);
         out.put("jobNo", job.get("jobNo"));
-        out.put("provider", job.get("provider"));
+        out.put("provider", provider);
         out.put("model", job.get("modelName"));
+        out.put("jobType", jobType);
         out.put("productKey", job.get("productKey"));
         out.put("productName", job.get("productName"));
         out.put("productMaterial", job.get("productMaterial"));
@@ -1161,35 +1243,149 @@ public class CreativeAiController {
         out.put("createdAt", job.get("createdAt"));
         out.put("startedAt", job.get("startedAt"));
         out.put("finishedAt", job.get("finishedAt"));
-        out.put("source", "火山方舟 · Doubao-Seedream-5.0-pro");
-        out.put("queueConcurrency", normalizedArkQueueConcurrency());
+        out.put("source", imageJobSource(provider, jobType));
+        out.put("queueConcurrency", imageQueueConcurrency(provider, jobType));
         if ("queued".equals(status)) {
-            Integer position = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM ai_generation_job WHERE provider='volcengine_ark' " +
-                            "AND job_type='text_to_image' AND status='queued' AND id<=?", Integer.class, jobId);
+            Integer position = queuedImageJobPosition(provider, jobType, jobId);
             out.put("queuePosition", position == null ? 1 : position);
-            out.put("message", "已进入图片生成队列，轮到后会自动开始");
+            out.put("message", "已进入图片任务队列，轮到后会自动开始");
         } else if ("running".equals(status)) {
             out.put("queuePosition", 0);
-            out.put("message", "之间大模型正在生成产品图");
+            out.put("message", runningImageJobMessage(provider, jobType));
         } else if ("failed".equals(status)) {
             out.put("queuePosition", 0);
             out.put("message", blank(str(job.get("errorMessage"))) ? "图片生成失败" : str(job.get("errorMessage")));
-        } else if ("succeeded".equals(status) && job.get("outputAssetId") instanceof Number) {
-            Long assetId = ((Number) job.get("outputAssetId")).longValue();
-            out.put("assetId", assetId);
-            out.put("id", assetId);
-            out.put("assetType", "image");
-            out.put("sourceType", "ai_generated");
-            out.put("assetStatus", "draft");
-            out.put("message", "AI 产品图已生成并保存到作品库。");
-            addSignedAssetFields(out, assetId, "image");
+        } else if ("succeeded".equals(status)) {
+            Map<String, Object> resultPayload = jobJsonMap(job.get("resultPayloadJson"));
+            if ("multi_view".equals(jobType)) {
+                List<Map<String, Object>> images = signedMultiViewResultImages(resultPayload);
+                out.put("images", images);
+                out.put("viewCount", images.size());
+                out.put("message", blank(str(resultPayload.get("message")))
+                        ? "AI 多视图已生成并保存到作品库。"
+                        : str(resultPayload.get("message")));
+            } else {
+                Long assetId = numberAsLong(job.get("outputAssetId"));
+                if (assetId != null) {
+                    out.put("assetId", assetId);
+                    out.put("id", assetId);
+                    out.put("assetType", "image");
+                    out.put("sourceType", "ai_generated");
+                    out.put("assetStatus", "draft");
+                    addSignedAssetFields(out, assetId, "image");
+                }
+                copyJobResultValue(resultPayload, out, "referenceAnalysis", "referenceAnalysisSource");
+                out.put("message", blank(str(resultPayload.get("message")))
+                        ? "AI 产品图已生成并保存到作品库。"
+                        : str(resultPayload.get("message")));
+            }
         }
         Long ownerUserId = numberAsLong(job.get("createdBy"));
-        if (ownerUserId != null && hasPersistedRole(ownerUserId, "user")) {
+        if (ownerUserId != null && numberAsLong(job.get("creditTransactionId")) != null && hasPersistedRole(ownerUserId, "user")) {
             out.put("creditAccount", creditAccountMap(ownerUserId));
         }
         return out;
+    }
+
+    private String imageJobSource(String provider, String jobType) {
+        if ("volcengine_ark".equals(provider)) return "火山方舟 · Doubao-Seedream-5.0-pro";
+        if ("siliconflow".equals(provider)) {
+            return "multi_view".equals(jobType) ? "硅基流动 · 多视图生成" : "硅基流动 · 图改图";
+        }
+        return blank(provider) ? "AI 图片任务" : provider;
+    }
+
+    private int imageQueueConcurrency(String provider, String jobType) {
+        if ("volcengine_ark".equals(provider)) return normalizedArkQueueConcurrency();
+        if (isQueuedSiliconflowImageJob(provider, jobType)) return normalizedSiliconflowImageQueueConcurrency();
+        return 0;
+    }
+
+    private String runningImageJobMessage(String provider, String jobType) {
+        if ("multi_view".equals(jobType)) return "正在生成一致的产品多视图";
+        if ("image_to_image".equals(jobType)) return "正在依据参考图生成产品视觉";
+        if ("volcengine_ark".equals(provider)) return "之间大模型正在生成产品图";
+        return "正在生成图片";
+    }
+
+    private Integer queuedImageJobPosition(String provider, String jobType, Long jobId) {
+        if ("volcengine_ark".equals(provider)) {
+            return jdbc.queryForObject("SELECT COUNT(*) FROM ai_generation_job WHERE provider='volcengine_ark' " +
+                    "AND job_type='text_to_image' AND status='queued' AND id<=?", Integer.class, jobId);
+        }
+        if (isQueuedSiliconflowImageJob(provider, jobType)) {
+            return jdbc.queryForObject("SELECT COUNT(*) FROM ai_generation_job WHERE provider='siliconflow' " +
+                    "AND job_type IN ('image_to_image','multi_view') AND status='queued' AND id<=?", Integer.class, jobId);
+        }
+        return 0;
+    }
+
+    private boolean isQueuedSiliconflowImageJob(String provider, String jobType) {
+        return "siliconflow".equals(provider) && Set.of("image_to_image", "multi_view").contains(jobType);
+    }
+
+    private int normalizedSiliconflowImageQueueConcurrency() {
+        return Math.max(1, Math.min(siliconflowImageQueueConcurrency, 8));
+    }
+
+    private Map<String, Object> jobJsonMap(Object raw) {
+        try {
+            JsonNode parsed = storedJsonNode(raw);
+            if (parsed == null || !parsed.isObject()) return new LinkedHashMap<>();
+            Map<String, Object> result = new LinkedHashMap<>();
+            parsed.fields().forEachRemaining(entry -> result.put(entry.getKey(), mapper.convertValue(entry.getValue(), Object.class)));
+            return result;
+        } catch (Exception ignored) {
+            return new LinkedHashMap<>();
+        }
+    }
+
+    /**
+     * MySQL JSON columns normally return an object string. Some JDBC/H2 paths return that JSON as a
+     * JSON string literal instead, so unwrap textual roots before binding a queued request or result.
+     */
+    private JsonNode storedJsonNode(Object raw) throws IOException {
+        if (raw == null) return null;
+        JsonNode node;
+        if (raw instanceof JsonNode jsonNode) {
+            node = jsonNode;
+        } else if (raw instanceof Map<?, ?> || raw instanceof Collection<?>) {
+            node = mapper.valueToTree(raw);
+        } else {
+            String json = raw instanceof byte[] ? new String((byte[]) raw, StandardCharsets.UTF_8) : String.valueOf(raw);
+            if (blank(json) || "null".equalsIgnoreCase(json.trim())) return null;
+            node = mapper.readTree(json);
+        }
+        for (int level = 0; node != null && node.isTextual() && level < 2; level++) {
+            String embeddedJson = node.asText();
+            if (blank(embeddedJson) || "null".equalsIgnoreCase(embeddedJson.trim())) return null;
+            node = mapper.readTree(embeddedJson);
+        }
+        return node;
+    }
+
+    private void copyJobResultValue(Map<String, Object> source, Map<String, Object> target, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value != null && !blank(String.valueOf(value))) target.put(key, value);
+        }
+    }
+
+    private List<Map<String, Object>> signedMultiViewResultImages(Map<String, Object> resultPayload) {
+        Object rawImages = resultPayload.get("images");
+        if (!(rawImages instanceof List<?> rows)) return List.of();
+        List<Map<String, Object>> images = new ArrayList<>();
+        for (Object raw : rows) {
+            if (!(raw instanceof Map<?, ?> source)) continue;
+            Map<String, Object> image = new LinkedHashMap<>();
+            source.forEach((key, value) -> image.put(String.valueOf(key), value));
+            Long assetId = numberAsLong(image.get("assetId"));
+            if (assetId == null || assetId <= 0) continue;
+            image.put("assetId", assetId);
+            addSignedAssetFields(image, assetId, "image");
+            images.add(image);
+        }
+        return images;
     }
 
     private int normalizedArkQueueConcurrency() {
@@ -1211,10 +1407,8 @@ public class CreativeAiController {
     private String requestPayloadText(Object rawPayload, String field) {
         if (rawPayload == null || blank(field)) return "";
         try {
-            String json = rawPayload instanceof byte[]
-                    ? new String((byte[]) rawPayload, StandardCharsets.UTF_8)
-                    : String.valueOf(rawPayload);
-            return mapper.readTree(json).path(field).asText("");
+            JsonNode payload = storedJsonNode(rawPayload);
+            return payload == null ? "" : payload.path(field).asText("");
         } catch (Exception ignored) {
             return "";
         }
@@ -1272,6 +1466,346 @@ public class CreativeAiController {
         }
     }
 
+    private Map<String, Object> queueSiliconflowImageToImage(GenerateImageRequest req, Long ownerUserId) throws Exception {
+        requireSiliconflowImageConfiguration();
+        return enqueueSiliconflowImageJob("image_to_image", "I2Q", req.styleId, req.inputAssetId,
+                req.prompt, req.negativePrompt, req.productKey, req.productCategory, req.material,
+                null, req, ownerUserId);
+    }
+
+    private Map<String, Object> queueSiliconflowMultiView(MultiViewImageRequest req, Long ownerUserId) throws Exception {
+        requireSiliconflowImageConfiguration();
+        String size = blank(req.size) ? "2K" : req.size.trim();
+        return enqueueSiliconflowImageJob("multi_view", "MVQ", null, req.inputAssetId,
+                req.prompt, null, req.productKey, req.productCategory, req.material,
+                size, req, ownerUserId);
+    }
+
+    private void requireSiliconflowImageConfiguration() {
+        if (blank(siliconflowApiKey) || siliconflowApiKey.contains("YOUR_")) {
+            throw new IllegalStateException("未配置 siliconflow.api.key，请联系平台管理员检查图改图服务");
+        }
+    }
+
+    private Map<String, Object> enqueueSiliconflowImageJob(String jobType, String jobPrefix, Long styleId,
+                                                             Long inputAssetId, String prompt, String negative,
+                                                             String productKey, String productName, String material,
+                                                             String exportFormats, Object requestPayload,
+                                                             Long ownerUserId) throws Exception {
+        synchronized (siliconflowQueueSubmissionLock) {
+            List<Map<String, Object>> active = jdbc.queryForList(
+                    "SELECT id,job_type jobType,input_asset_id inputAssetId,prompt FROM ai_generation_job " +
+                            "WHERE created_by=? AND provider='siliconflow' " +
+                            "AND job_type IN ('image_to_image','multi_view') " +
+                            "AND status IN ('queued','running') AND output_asset_id IS NULL ORDER BY id LIMIT 1",
+                    ownerUserId);
+            if (!active.isEmpty()) {
+                Map<String, Object> existing = active.get(0);
+                boolean sameRequest = jobType.equals(str(existing.get("jobType")))
+                        && Objects.equals(inputAssetId, numberAsLong(existing.get("inputAssetId")))
+                        && nullToEmpty(prompt).equals(nullToEmpty(str(existing.get("prompt"))));
+                if (!sameRequest) {
+                    throw new IllegalStateException("你已有一项图改图或多视图任务正在排队或生成，请等待完成后再提交新任务");
+                }
+                Map<String, Object> response = imageGenerationJobResponse(numberAsLong(existing.get("id")));
+                response.put("reused", true);
+                return response;
+            }
+            Long jobId = createQueuedSiliconflowImageJob(no(jobPrefix), jobType, styleId, inputAssetId,
+                    prompt, negative, productKey, productName, material, exportFormats, requestPayload, ownerUserId);
+            return imageGenerationJobResponse(jobId);
+        }
+    }
+
+    private Long createQueuedSiliconflowImageJob(String jobNo, String jobType, Long styleId, Long inputAssetId,
+                                                  String prompt, String negative, String productKey, String productName,
+                                                  String material, String exportFormats, Object requestPayload,
+                                                  Long ownerUserId) throws Exception {
+        KeyHolder kh = new GeneratedKeyHolder();
+        String payloadJson = mapper.writeValueAsString(requestPayload == null ? Map.of() : requestPayload);
+        jdbc.update(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                    "INSERT INTO ai_generation_job (job_no,job_type,provider,model_name,style_id,input_asset_id," +
+                            "product_key,product_name,product_material,prompt,negative_prompt,status,progress," +
+                            "error_message,export_formats,created_by,request_payload_json,attempt_count) " +
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1, jobNo); ps.setString(2, jobType); ps.setString(3, "siliconflow");
+            ps.setString(4, imageEditModel);
+            if (styleId == null) ps.setNull(5, java.sql.Types.BIGINT); else ps.setLong(5, styleId);
+            if (inputAssetId == null) ps.setNull(6, java.sql.Types.BIGINT); else ps.setLong(6, inputAssetId);
+            ps.setString(7, blank(productKey) ? null : productKey.trim());
+            ps.setString(8, blank(productName) ? null : productName.trim());
+            ps.setString(9, blank(material) ? null : material.trim());
+            ps.setString(10, prompt); ps.setString(11, negative); ps.setString(12, "queued"); ps.setInt(13, 0);
+            ps.setNull(14, java.sql.Types.LONGVARCHAR); ps.setString(15, exportFormats);
+            if (ownerUserId == null) ps.setNull(16, java.sql.Types.BIGINT); else ps.setLong(16, ownerUserId);
+            ps.setString(17, payloadJson); ps.setInt(18, 0);
+            return ps;
+        }, kh);
+        return Objects.requireNonNull(kh.getKey()).longValue();
+    }
+
+    @Scheduled(fixedDelayString = "${siliconflow.image.queue.dispatch-interval-ms:1000}")
+    public void dispatchSiliconflowImageQueue() {
+        if (!arkQueueTableVerified.get()) {
+            if (!arkQueueTableAvailable()) return;
+            arkQueueTableVerified.set(true);
+        }
+        if (siliconflowQueueRecovered.compareAndSet(false, true)) {
+            jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
+                            "error_message='服务重启后已自动恢复排队' WHERE provider='siliconflow' " +
+                            "AND job_type IN ('image_to_image','multi_view') AND status='running' AND output_asset_id IS NULL");
+        }
+        int available = normalizedSiliconflowImageQueueConcurrency() - activeSiliconflowImageJobs.size();
+        if (available <= 0) return;
+        List<Long> queued = jdbc.queryForList(
+                "SELECT id FROM ai_generation_job WHERE provider='siliconflow' " +
+                        "AND job_type IN ('image_to_image','multi_view') AND status='queued' " +
+                        "AND output_asset_id IS NULL ORDER BY id LIMIT " + available,
+                Long.class);
+        for (Long jobId : queued) {
+            int claimed = jdbc.update("UPDATE ai_generation_job SET status='running',progress=10," +
+                            "started_at=COALESCE(started_at,NOW()),error_message=NULL WHERE id=? AND status='queued'", jobId);
+            if (claimed != 1 || !activeSiliconflowImageJobs.add(jobId)) continue;
+            try {
+                siliconflowImageGenerationExecutor.execute(() -> {
+                    try {
+                        processSiliconflowImageJob(jobId);
+                    } finally {
+                        activeSiliconflowImageJobs.remove(jobId);
+                    }
+                });
+            } catch (RuntimeException e) {
+                activeSiliconflowImageJobs.remove(jobId);
+                jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
+                        "error_message='生成执行器繁忙，已自动重新排队' WHERE id=? AND status='running'", jobId);
+            }
+        }
+    }
+
+    private void processSiliconflowImageJob(Long jobId) {
+        Map<String, Object> job;
+        try {
+            job = jdbc.queryForMap("SELECT id,job_type jobType,input_asset_id inputAssetId,style_id styleId," +
+                    "prompt,negative_prompt negativePrompt,request_payload_json requestPayloadJson," +
+                    "result_payload_json resultPayloadJson,created_by createdBy,attempt_count attemptCount,status " +
+                    "FROM ai_generation_job WHERE id=?", jobId);
+        } catch (Exception ignored) {
+            return;
+        }
+        if (!"running".equals(str(job.get("status")))) return;
+        try {
+            String jobType = str(job.get("jobType"));
+            int attempts = job.get("attemptCount") instanceof Number ? ((Number) job.get("attemptCount")).intValue() : 0;
+            int maxAttempts = Math.max(1, Math.min(siliconflowImageQueueRetryAttempts, 4));
+            Map<String, Object> result = null;
+            while (attempts < maxAttempts) {
+                attempts++;
+                jdbc.update("UPDATE ai_generation_job SET attempt_count=?,progress=20,error_message=NULL WHERE id=?", attempts, jobId);
+                try {
+                    if ("image_to_image".equals(jobType)) {
+                        GenerateImageRequest request = readQueuedImageRequest(job.get("requestPayloadJson"), GenerateImageRequest.class);
+                        result = generateQueuedImageToImage(job, request);
+                    } else if ("multi_view".equals(jobType)) {
+                        MultiViewImageRequest request = readQueuedImageRequest(job.get("requestPayloadJson"), MultiViewImageRequest.class);
+                        result = generateQueuedMultiView(job, request);
+                    } else {
+                        throw new IllegalStateException("不支持的图片队列任务：" + jobType);
+                    }
+                    break;
+                } catch (SiliconflowRetryableException e) {
+                    if (attempts >= maxAttempts) throw e;
+                    long delaySeconds = Math.max(1, Math.min(siliconflowImageQueueRetryDelaySeconds, 30)) * attempts;
+                    jdbc.update("UPDATE ai_generation_job SET progress=10,error_message=? WHERE id=?",
+                            "服务暂时限流，" + delaySeconds + " 秒后自动重试（" + attempts + "/" + maxAttempts + "）", jobId);
+                    try {
+                        TimeUnit.SECONDS.sleep(delaySeconds);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
+                                "error_message='服务停止，任务已自动重新排队' WHERE id=? AND status='running'", jobId);
+                        return;
+                    }
+                }
+            }
+            if (result == null) throw new IllegalStateException("图像服务未返回生成结果");
+            Long assetId = numberAsLong(result.get("assetId"));
+            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,result_payload_json=?,status='succeeded'," +
+                            "progress=100,error_message=NULL,finished_at=NOW() WHERE id=?",
+                    assetId, mapper.writeValueAsString(result), jobId);
+        } catch (Exception e) {
+            jdbc.update("UPDATE ai_generation_job SET status='failed',progress=0,error_message=?,finished_at=NOW() " +
+                    "WHERE id=? AND status<>'succeeded'", safeMessage(e), jobId);
+        }
+    }
+
+    private <T> T readQueuedImageRequest(Object rawPayload, Class<T> type) throws Exception {
+        JsonNode payload = storedJsonNode(rawPayload);
+        if (payload == null || payload.isNull()) throw new IllegalStateException("图片任务参数丢失，请重新提交");
+        if (!payload.isObject()) throw new IllegalStateException("图片任务参数格式异常，请重新提交");
+        return mapper.treeToValue(payload, type);
+    }
+
+    private Map<String, Object> generateQueuedImageToImage(Map<String, Object> job, GenerateImageRequest req) throws Exception {
+        Long inputAssetId = numberAsLong(job.get("inputAssetId"));
+        if (inputAssetId == null) throw new IllegalStateException("图改图任务缺少参考图");
+        Long ownerUserId = numberAsLong(job.get("createdBy"));
+        Map<String, Object> style = style(req.styleId);
+        String requestedPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        ReferenceImageAnalysis referenceAnalysis = analyzeReferenceImage(inputAssetId, true);
+        boolean refinement = Boolean.TRUE.equals(req.refinement);
+        String finalPrompt = refinement
+                ? buildBalancedRefinementPrompt(requestedPrompt, req.productCategory, req.material, referenceAnalysis.visualBrief, req.refinementNote)
+                : buildReferencePreservingPrompt(buildPrompt(requestedPrompt, style, req.scene, req.productType), req.productCategory, req.material, referenceAnalysis.visualBrief);
+        String negative = mergeNegative(mergeNegative(req.negativePrompt, (String) style.get("negativePrompt")), refinement
+                ? "unrelated subject, unrelated theme, random extra object, duplicate product, unreadable form, low detail, distorted anatomy, broken product structure, text, watermark"
+                : "different subject, unrelated object, replacement design, changed silhouette, changed main composition, changed color palette, lost distinctive details, generic product, random decoration, extra main subject");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("model", imageEditModel);
+        payload.put("prompt", finalPrompt);
+        payload.put("image", readInputImageForSiliconFlow(inputAssetId));
+        payload.put("num_inference_steps", refinement ? 28 : 20);
+        payload.put("guidance_scale", refinement ? 6 : 4);
+        if (!blank(negative)) payload.put("negative_prompt", negative);
+        payload.put("batch_size", 1);
+        if (req.seed != null) payload.put("seed", req.seed);
+        String remoteUrl = extractImageUrl(createSiliconflowImage(payload));
+        String localUrl = saveRemoteImage(remoteUrl, "ai-i2i-", ".png");
+        Long assetId = createAsset(
+                blank(req.title) ? "AI图改图作品" : req.title + "-图改图",
+                "image", "ai_generated", localUrl, localUrl, finalPrompt, negative, req.styleId, inputAssetId, "png",
+                blank(req.tags) ? "图改图,AI生成,之间味道" : req.tags + ",图改图",
+                withProductIdentity(withAssetOwner(referenceImageMetadata(remoteUrl, inputAssetId, referenceAnalysis, refinement), ownerUserId),
+                        req.productKey, req.productCategory, req.material));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("assetId", assetId);
+        result.put("referenceAnalysis", referenceAnalysis.visualBrief);
+        result.put("referenceAnalysisSource", referenceAnalysis.source);
+        result.put("message", "AI 产品图已生成并保存到作品库。");
+        return result;
+    }
+
+    private Map<String, Object> generateQueuedMultiView(Map<String, Object> job, MultiViewImageRequest req) throws Exception {
+        Long jobId = numberAsLong(job.get("id"));
+        Long inputAssetId = numberAsLong(job.get("inputAssetId"));
+        Long ownerUserId = numberAsLong(job.get("createdBy"));
+        if (jobId == null || inputAssetId == null) throw new IllegalStateException("多视图任务缺少参考图");
+        String size = blank(req.size) ? "2K" : req.size.trim();
+        if (!Set.of("1K", "2K").contains(size)) throw new IllegalArgumentException("多视图仅支持 1K 或 2K 尺寸");
+        List<String> views = req.viewCount != null && req.viewCount == 3
+                ? List.of("front", "left", "back")
+                : List.of("front", "left", "back", "right");
+        Map<String, String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
+        List<Map<String, Object>> images = storedMultiViewImages(jobId);
+        Set<String> completedViews = new HashSet<>();
+        for (Map<String, Object> image : images) completedViews.add(str(image.get("view")));
+        String basePrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        String referenceImage = readInputImageForSiliconFlow(inputAssetId);
+        for (String view : views) {
+            if (completedViews.contains(view)) continue;
+            String viewPrompt = "PRODUCT TURNAROUND IMAGE EDIT. Use the supplied reference image as the only source of truth. "
+                    + "Generate exactly one " + view + " view of the SAME product, not a redesign. "
+                    + "Strictly preserve its recognizable identity, silhouette, proportions, colors, material finish, motifs, accessories and all distinctive details. "
+                    + "For unseen surfaces, infer only the minimal structure needed to keep the same product consistent. "
+                    + "Show the full centered product at the same scale on a clean light-neutral studio background. "
+                    + "No collage, no split screen, no extra object, no human, no packaging mockup, no text, no logo, no watermark. "
+                    + "Product direction: " + basePrompt;
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("model", imageEditModel);
+            payload.put("prompt", viewPrompt);
+            payload.put("image", referenceImage);
+            payload.put("negative_prompt", "different product, changed silhouette, changed color palette, collage, split screen, multiple objects, duplicate product, person, hand, text, logo, watermark, cropped object, blurry, distorted product structure");
+            payload.put("num_inference_steps", 28);
+            payload.put("guidance_scale", 6);
+            payload.put("batch_size", 1);
+            String remoteUrl = extractImageUrl(createSiliconflowImage(payload));
+            String localUrl = saveRemoteImage(remoteUrl, "siliconflow-multiview-" + view + "-", ".png");
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("provider", "siliconflow");
+            metadata.put("model", imageEditModel);
+            metadata.put("view", view);
+            metadata.put("remoteUrl", remoteUrl);
+            metadata.put("multiView", true);
+            addProductIdentity(metadata, req.productKey, req.productCategory, req.material);
+            if (ownerUserId != null) {
+                metadata.put("createdByUserId", ownerUserId);
+                if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
+            }
+            Long assetId = createAsset("AI 多视图参考 · " + labels.get(view), "image", "ai_generated", localUrl, localUrl,
+                    viewPrompt, null, null, inputAssetId, "png", "AI生成,多视图,3D参考," + labels.get(view), metadata);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("view", view);
+            item.put("label", labels.get(view));
+            item.put("assetId", assetId);
+            images.add(item);
+            completedViews.add(view);
+            persistImageJobResult(jobId, multiViewResultPayload(images, true));
+        }
+        return multiViewResultPayload(images, false);
+    }
+
+    private List<Map<String, Object>> storedMultiViewImages(Long jobId) {
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT result_payload_json resultPayloadJson FROM ai_generation_job WHERE id=?", jobId);
+        if (rows.isEmpty()) return new ArrayList<>();
+        Object rawImages = jobJsonMap(rows.get(0).get("resultPayloadJson")).get("images");
+        List<Map<String, Object>> images = new ArrayList<>();
+        if (!(rawImages instanceof List<?> source)) return images;
+        for (Object raw : source) {
+            if (!(raw instanceof Map<?, ?> row)) continue;
+            Map<String, Object> image = new LinkedHashMap<>();
+            row.forEach((key, value) -> image.put(String.valueOf(key), value));
+            if (numberAsLong(image.get("assetId")) != null && !blank(str(image.get("view")))) images.add(image);
+        }
+        return images;
+    }
+
+    private Map<String, Object> multiViewResultPayload(List<Map<String, Object>> images, boolean partial) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("images", images);
+        result.put("provider", "siliconflow");
+        result.put("model", imageEditModel);
+        result.put("partial", partial);
+        result.put("message", partial ? "多视图正在生成，已保存完成的视角。" : "AI 图改图已生成 " + images.size() + " 个一致视角，可一键带入 Tripo 多视图建模");
+        return result;
+    }
+
+    private void persistImageJobResult(Long jobId, Map<String, Object> result) throws Exception {
+        jdbc.update("UPDATE ai_generation_job SET result_payload_json=? WHERE id=?", mapper.writeValueAsString(result), jobId);
+    }
+
+    private JsonNode createSiliconflowImage(Map<String, Object> payload) throws Exception {
+        requireSiliconflowImageConfiguration();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(siliconflowImagesUrl))
+                .timeout(Duration.ofSeconds(150))
+                .header("Authorization", "Bearer " + siliconflowApiKey.trim())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
+                .build();
+        try {
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                String message = "硅基流动图片服务 HTTP " + response.statusCode() + "：" + response.body();
+                if (response.statusCode() == 408 || response.statusCode() == 425 || response.statusCode() == 429 || response.statusCode() >= 500) {
+                    throw new SiliconflowRetryableException(message);
+                }
+                throw new IllegalStateException(message);
+            }
+            return mapper.readTree(response.body());
+        } catch (HttpTimeoutException e) {
+            throw new SiliconflowRetryableException("硅基流动图片服务请求超时");
+        } catch (IOException e) {
+            throw new SiliconflowRetryableException("无法连接硅基流动图片服务：" + safeMessage(e));
+        }
+    }
+
+    private static final class SiliconflowRetryableException extends IllegalStateException {
+        private SiliconflowRetryableException(String message) {
+            super(message);
+        }
+    }
+
     private boolean hasJimengSignatureCredentials() {
         return !blank(jimengAccessKeyId) && !blank(jimengSecretAccessKey)
                 && !jimengAccessKeyId.contains("YOUR_") && !jimengSecretAccessKey.contains("YOUR_");
@@ -1283,6 +1817,7 @@ public class CreativeAiController {
         assertCompliantPrompt(req.prompt, req.productCategory);
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先选择一张参考图");
         requireAssetAccess(req.inputAssetId);
+        if (Boolean.TRUE.equals(req.queue)) return queueSiliconflowImageToImage(req, ownerUserId);
         Map<String, Object> style = style(req.styleId);
         String requestedPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
         ReferenceImageAnalysis referenceAnalysis = analyzeReferenceImage(req.inputAssetId);
@@ -1316,7 +1851,7 @@ public class CreativeAiController {
             if (req.seed != null) payload.put("seed", req.seed);
 
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api.siliconflow.cn/v1/images/generations"))
+                    .uri(URI.create(siliconflowImagesUrl))
                     .header("Authorization", "Bearer " + siliconflowApiKey.trim())
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
@@ -2174,17 +2709,40 @@ public class CreativeAiController {
         String purpose=body==null?"":nullToEmpty(body.get("purpose")).trim();
         if(!Set.of("personal","museum_sale").contains(purpose)) purpose="";
         String note=body==null?"":nullToEmpty(body.get("note"));
+        String campaignKey=body==null?"":nullToEmpty(body.get("campaignKey")).trim();
+        CampaignDefinition campaign=blank(campaignKey)?null:campaignDefinition(campaignKey);
         String museumSource="";
+        Map<String,Object> selectedMuseum=null;
         if("museum_sale".equals(purpose)) {
             String museumId=body==null?"":nullToEmpty(body.get("museumId"));
-            Map<String,Object> museum=consumerProductionMuseums().stream().filter(x -> museumId.equals(String.valueOf(x.get("id")))).findFirst()
+            selectedMuseum=consumerProductionMuseums().stream().filter(x -> museumId.equals(String.valueOf(x.get("id")))).findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("博物馆售卖作品必须标明审批博物馆"));
-            museumSource=String.valueOf(museum.get("province")) + String.valueOf(museum.get("city")) + String.valueOf(museum.get("district")) + " · " + String.valueOf(museum.get("name"));
+            museumSource=String.valueOf(selectedMuseum.get("province")) + String.valueOf(selectedMuseum.get("city")) + String.valueOf(selectedMuseum.get("district")) + " · " + String.valueOf(selectedMuseum.get("name"));
         }
-        String auditTag = ";用户提交审核" + (blank(purpose) ? "" : ";用途=" + purpose) + (blank(museumSource) ? "" : ";审批出处=" + museumSource) + (blank(note) ? "" : "-" + note);
-        int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND (asset_type='model' OR COALESCE(source_type,'ai_generated')<>'upload') AND COALESCE(status,'draft')<>'approved'", auditTag, id, userId);
-        if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已审核通过");
-        return Map.of("success",true,"id",id,"status","review","message","作品已提交给审核员");
+        if(campaign!=null) {
+            if(!"museum_sale".equals(purpose)) throw new IllegalArgumentException("优先征集作品须按博物馆售卖方向提交审核");
+            if(selectedMuseum==null || !campaign.channelCode().equals(String.valueOf(selectedMuseum.get("channelCode")))) {
+                throw new IllegalArgumentException("该优先征集任务须选择对应的目标博物馆或景区");
+            }
+        }
+        String auditTag = ";用户提交审核" + (blank(purpose) ? "" : ";用途=" + purpose) + (blank(museumSource) ? "" : ";审批出处=" + museumSource) + (campaign==null ? "" : ";激励任务=" + campaign.key()) + (blank(note) ? "" : "-" + note);
+        CampaignDefinition selectedCampaign=campaign;
+        Map<String,Object> response=creditTransactions.execute(status -> {
+            int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND (asset_type='model' OR COALESCE(source_type,'ai_generated')<>'upload') AND COALESCE(status,'draft')<>'approved'", auditTag, id, userId);
+            if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已审核通过");
+            if(selectedCampaign!=null) createCampaignParticipation(userId, selectedCampaign, id);
+            Map<String,Object> out=new LinkedHashMap<>();
+            out.put("success",true); out.put("id",id); out.put("status","review");
+            if(selectedCampaign!=null) {
+                out.put("campaignKey", selectedCampaign.key());
+                out.put("rewardAmount", selectedCampaign.rewardAmount());
+                out.put("message","作品已提交优先征集审核，通过后积分将自动到账");
+            } else {
+                out.put("message","作品已提交给审核员");
+            }
+            return out;
+        });
+        return response==null?Map.of("success",true,"id",id,"status","review"):response;
     }
 
     @PutMapping("/consumer-assets/{id}/review")
@@ -2218,7 +2776,31 @@ public class CreativeAiController {
                         + "FROM channel_directory "
                         + "WHERE enabled=1 AND channel_type IN ('museum','scenic_spot') "
                         + "ORDER BY province,city,name");
-        return directory.stream().map(this::withChannelRecommendation).toList();
+        return directory.stream().map(this::normalizeChannelDirectoryRow).map(this::withChannelRecommendation).toList();
+    }
+
+    /** JDBC drivers do not agree on the case of unquoted SQL aliases. */
+    private Map<String,Object> normalizeChannelDirectoryRow(Map<String,Object> row) {
+        Map<String,Object> item = new LinkedHashMap<>();
+        item.put("id", mapValueIgnoreCase(row, "id"));
+        item.put("channelCode", mapValueIgnoreCase(row, "channelCode"));
+        item.put("name", mapValueIgnoreCase(row, "name"));
+        item.put("province", mapValueIgnoreCase(row, "province"));
+        item.put("city", mapValueIgnoreCase(row, "city"));
+        item.put("district", mapValueIgnoreCase(row, "district"));
+        item.put("channelType", mapValueIgnoreCase(row, "channelType"));
+        item.put("sourceType", mapValueIgnoreCase(row, "sourceType"));
+        item.put("cooperationStatus", mapValueIgnoreCase(row, "cooperationStatus"));
+        return item;
+    }
+
+    private Object mapValueIgnoreCase(Map<String,Object> row, String key) {
+        if (row.containsKey(key)) return row.get(key);
+        return row.entrySet().stream()
+                .filter(entry -> entry.getKey().equalsIgnoreCase(key))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
     }
 
     private Map<String,Object> withChannelRecommendation(Map<String,Object> channel) {
@@ -3515,12 +4097,16 @@ public class CreativeAiController {
     }
 
     private ReferenceImageAnalysis analyzeReferenceImage(Long assetId) {
+        return analyzeReferenceImage(assetId, false);
+    }
+
+    private ReferenceImageAnalysis analyzeReferenceImage(Long assetId, boolean trustedJob) {
         String fallback = "Preserve every visible non-UI subject, person or object, its recognizable silhouette and proportions, the original scene layout, dominant colors, mood, decorative motifs and all distinguishing details.";
-        if (blank(siliconflowApiKey) || siliconflowApiKey.contains("YOUR_")) {
+        if (!siliconflowVisionEnabled || blank(siliconflowApiKey) || siliconflowApiKey.contains("YOUR_")) {
             return new ReferenceImageAnalysis(fallback, "fallback_no_vision_key");
         }
         try {
-            String image = buildInputImageForSiliconFlow(assetId);
+            String image = trustedJob ? readInputImageForSiliconFlow(assetId) : buildInputImageForSiliconFlow(assetId);
             String system = "You are a precise visual analyst for image-to-image generation. Inspect the supplied reference image. "
                     + "Return ONE concise ENGLISH visual preservation brief, no markdown and no introduction. "
                     + "Describe only what is visibly present: main subject/person/object and distinctive appearance, secondary subjects, setting, dominant colors, composition, atmosphere, motifs, and any UI/screenshot overlays to remove. "
@@ -3595,6 +4181,10 @@ public class CreativeAiController {
 
     private String buildInputImageForSiliconFlow(Long assetId) throws IOException {
         requireAssetAccess(assetId);
+        return readInputImageForSiliconFlow(assetId);
+    }
+
+    private String readInputImageForSiliconFlow(Long assetId) throws IOException {
         Map<String, Object> asset = jdbc.queryForMap("SELECT file_url fileUrl, preview_url previewUrl, format FROM digital_asset WHERE id=?", assetId);
         String url = String.valueOf(asset.get("fileUrl") == null ? asset.get("previewUrl") : asset.get("fileUrl"));
         if (url.startsWith("http://") || url.startsWith("https://")) return url;
@@ -3793,27 +4383,79 @@ public class CreativeAiController {
 
     private String defaultCampaignKey() { return "museum_summer_gift_2026"; }
 
+    private CampaignDefinition campaignDefinition(String campaignKey) {
+        String key = nullToEmpty(campaignKey).trim();
+        return CREATOR_CAMPAIGNS.stream()
+                .filter(campaign -> campaign.key().equals(key))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("活动不存在或已结束"));
+    }
+
     private BigDecimal campaignRewardAmount(String campaignKey) {
-        if (!defaultCampaignKey().equals(campaignKey)) throw new IllegalArgumentException("活动不存在或已结束");
-        return BigDecimal.valueOf(50);
+        return campaignDefinition(campaignKey).rewardAmount();
+    }
+
+    private Map<String,Object> publicCampaignMap(CampaignDefinition campaign) {
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("key", campaign.key());
+        out.put("title", campaign.title());
+        out.put("targetName", campaign.targetName());
+        out.put("channelCode", campaign.channelCode());
+        out.put("collectionStyle", campaign.collectionStyle());
+        out.put("recommendedProducts", campaign.recommendedProducts());
+        out.put("recommendedProductKey", campaign.recommendedProductKey());
+        out.put("brief", campaign.brief());
+        out.put("promptHint", campaign.promptHint());
+        out.put("rewardAmount", campaign.rewardAmount());
+        out.put("deadline", campaign.deadline());
+        out.put("reviewNotice", "投稿作品须先进入人工审核；审核通过后系统自动发放积分，积分不构成现金或销售收益承诺。");
+        out.put("cooperationNotice", "该内容为平台优先征集方向，不代表目标机构已采购、合作、授权或认可具体作品。");
+        return out;
     }
 
     private Map<String,Object> campaignOverview(Long userId, String campaignKey) {
-        if (!defaultCampaignKey().equals(campaignKey)) throw new IllegalArgumentException("活动不存在或已结束");
-        Map<String,Object> out = new LinkedHashMap<>();
-        out.put("key", campaignKey); out.put("title", "东方器物新生 · 夏日伴手礼");
-        out.put("brief", "围绕一座城市、一件馆藏或一种地方工艺，创作适合游客带走的当代伴手礼。");
-        out.put("promptHint", "以一件馆藏器物或地方工艺为灵感，设计一款适合夏日旅行的当代文创伴手礼；突出文化出处、真实材质、易携带结构和商品陈列感。");
-        out.put("rewardAmount", campaignRewardAmount(campaignKey));
-        out.put("deadline", "2026-09-30");
-        out.put("reviewNotice", "投稿须先提交作品审核；审核通过后由系统自动发放积分，积分不构成现金或销售收益承诺。");
-        List<Map<String,Object>> rows = jdbc.queryForList("SELECT c.asset_id assetId,a.title assetTitle,c.status,c.reward_amount rewardAmount,c.reviewed_at reviewedAt,c.created_at createdAt FROM consumer_campaign_reward c LEFT JOIN digital_asset a ON a.id=c.asset_id WHERE c.user_id=? AND c.campaign_key=? LIMIT 1", userId, campaignKey);
+        CampaignDefinition campaign = campaignDefinition(campaignKey);
+        Map<String,Object> out = publicCampaignMap(campaign);
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT c.asset_id assetId,a.title assetTitle,c.status,c.reward_amount rewardAmount,c.reviewed_at reviewedAt,c.created_at createdAt FROM consumer_campaign_reward c LEFT JOIN digital_asset a ON a.id=c.asset_id WHERE c.user_id=? AND c.campaign_key=? LIMIT 1", userId, campaign.key());
         if (rows.isEmpty()) {
             out.put("status", "not_joined");
         } else {
             out.putAll(rows.get(0));
         }
         return out;
+    }
+
+    private void createCampaignParticipation(Long userId, CampaignDefinition campaign, Long assetId) {
+        try {
+            int inserted = jdbc.update("INSERT INTO consumer_campaign_reward (participation_no,user_id,campaign_key,asset_id,status,reward_amount) VALUES (?,?,?,?, 'pending_review',?)", no("CRW"), userId, campaign.key(), assetId, campaign.rewardAmount());
+            if (inserted != 1) throw new IllegalStateException("活动投稿创建失败");
+            jdbc.update("UPDATE digital_asset SET tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=?", ";活动投稿=" + campaign.key(), assetId, userId);
+        } catch (DataIntegrityViolationException error) {
+            List<Map<String,Object>> existing = jdbc.queryForList("SELECT campaign_key campaignKey,asset_id assetId,status FROM consumer_campaign_reward WHERE user_id=? AND (campaign_key=? OR asset_id=?) LIMIT 1", userId, campaign.key(), assetId);
+            if (!existing.isEmpty()) {
+                Map<String,Object> row = existing.get(0);
+                if (campaign.key().equals(String.valueOf(row.get("campaignKey")))) {
+                    throw new IllegalStateException("该优先征集任务已投稿，请勿重复提交");
+                }
+                throw new IllegalStateException("该作品已参加其他优先征集任务，请选择另一件作品");
+            }
+            throw error;
+        }
+    }
+
+    private record CampaignDefinition(
+            String key,
+            String title,
+            String channelCode,
+            String targetName,
+            String collectionStyle,
+            List<String> recommendedProducts,
+            String recommendedProductKey,
+            String brief,
+            String promptHint,
+            BigDecimal rewardAmount,
+            String deadline,
+            boolean legacyManualParticipation) {
     }
 
     private BigDecimal settleCampaignRewardForReview(Long assetId, String assetStatus, String operator) {
@@ -4321,6 +4963,8 @@ public class CreativeAiController {
         public String imagenAspectRatio;
         public String imagenImageSize;
         public String imagenOutputFormat;
+        /** Opt in to the durable image task queue; retained as an opt-in for older clients. */
+        public Boolean queue;
         public Long currentUserId;
     }
     public static class MultiViewImageRequest {
@@ -4333,6 +4977,8 @@ public class CreativeAiController {
         /** Conversational creation uses 3 views; the professional page keeps 4. */
         public Integer viewCount;
         public Boolean watermark;
+        /** Opt in to the durable image task queue; retained as an opt-in for older clients. */
+        public Boolean queue;
         public Long currentUserId;
     }
 

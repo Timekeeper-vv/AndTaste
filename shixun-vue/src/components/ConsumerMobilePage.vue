@@ -1218,13 +1218,16 @@ async function optimizeImagePrompt() {
 }
 
 async function generateDoubaoMultiView() {
-  setStage('Doubao-Seedream-5.0-lite 正在生成正/左/后/右视图', 'generate')
-  const r = await fetch('/api/creative/ai/volcengine/seedream/multiview', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: withMaterialConstraint(imageForm.rawPrompt), inputAssetId: doubaoReferenceAssetId.value, productCategory: productProfile.value.label, material: selectedMaterial.value, size: '2K', watermark: true }),
+  setStage('正在提交多视图生成任务', 'generate')
+  const data = await submitQueuedImageAndWait('/api/creative/ai/volcengine/seedream/multiview', {
+    prompt: withMaterialConstraint(imageForm.rawPrompt),
+    inputAssetId: doubaoReferenceAssetId.value,
+    productCategory: productProfile.value.label,
+    material: selectedMaterial.value,
+    size: '2K',
+    watermark: true,
+    queue: true,
   })
-  if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }
-  const data = await r.json()
   const rawImages = Array.isArray(data.images) ? data.images : []
   doubaoMultiViewResult.value = await Promise.all(rawImages.map(async (item: any) => {
     try { return await secureAssetResult(item, 'image') } catch { return { ...item, previewUrl: '', fileUrl: '' } }
@@ -1247,8 +1250,8 @@ function useDoubaoMultiViewFor3d() {
 
 const waitForArkImageJob = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))
 
-async function submitArkImageAndWait(payload: Record<string, any>) {
-  const submit = await fetch('/api/creative/ai/ark/text-to-image', {
+async function submitQueuedImageAndWait(endpoint: string, payload: Record<string, any>) {
+  const submit = await fetch(endpoint, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   })
   if (!submit.ok) { const err = await submit.json().catch(() => null); throw new Error(err?.message || `HTTP ${submit.status}`) }
@@ -1260,7 +1263,12 @@ async function submitArkImageAndWait(payload: Record<string, any>) {
       const ahead = Math.max(0, Number(current.queuePosition || 1) - 1)
       setStage(ahead > 0 ? `已进入生成队列，前面还有 ${ahead} 项任务` : '已进入生成队列，马上开始', 'generate')
     } else if (current.status === 'running') {
-      setStage('之间大模型正在生成图片，请稍候', 'generate')
+      const message = current.jobType === 'multi_view'
+        ? '正在生成一致的产品多视图，请稍候'
+        : current.jobType === 'image_to_image'
+          ? '正在依据参考图生成产品视觉，请稍候'
+          : '之间大模型正在生成图片，请稍候'
+      setStage(message, 'generate')
     }
   }
   updateStage(job)
@@ -1269,7 +1277,7 @@ async function submitArkImageAndWait(payload: Record<string, any>) {
     if (Date.now() >= deadline) throw new Error('任务仍在后台排队，已停止等待；请稍后到作品库查看生成结果')
     await waitForArkImageJob(job.status === 'queued' ? 1800 : 2200)
     try {
-      const poll = await fetch(`/api/creative/ai/ark/image-jobs/${job.jobId}`, { cache: 'no-store' })
+      const poll = await fetch(`/api/creative/ai/image-jobs/${job.jobId}`, { cache: 'no-store' })
       if (!poll.ok) { const err = await poll.json().catch(() => null); throw new Error(err?.message || `HTTP ${poll.status}`) }
       job = await poll.json(); transientFailures = 0; updateStage(job)
     } catch (error) {
@@ -1281,6 +1289,10 @@ async function submitArkImageAndWait(payload: Record<string, any>) {
   if (job.status === 'failed') throw new Error(job.errorMessage || job.message || '图片生成失败')
   if (job.status !== 'succeeded') throw new Error(job.message || '图片生成状态异常，请稍后到作品库查看')
   return job
+}
+
+async function submitArkImageAndWait(payload: Record<string, any>) {
+  return submitQueuedImageAndWait('/api/creative/ai/ark/text-to-image', payload)
 }
 
 async function generateImage() {
@@ -1299,6 +1311,8 @@ async function generateImage() {
     const payload = imageForm.generationMode === 'image_to_image' ? { title: `图文结合 · ${productProfile.value.label}`, prompt: finalImagePrompt, inputAssetId: imageForm.inputAssetId, productCategory: productProfile.value.label, material: selectedMaterial.value } : { provider: 'ark', rawPrompt: withMaterialConstraint(imageForm.rawPrompt), prompt: finalImagePrompt, productCategory: productProfile.value.label, material: selectedMaterial.value, imagenAspectRatio: imageForm.imagenAspectRatio, imagenImageSize: imageForm.imagenImageSize, imagenOutputFormat: imageForm.imagenOutputFormat }
     const d = imageForm.generationMode === 'single'
       ? await submitArkImageAndWait(payload)
+      : imageForm.generationMode === 'image_to_image'
+        ? await submitQueuedImageAndWait(endpoint, { ...payload, queue: true })
       : await (async () => {
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
         if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }

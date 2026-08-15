@@ -189,7 +189,9 @@ const selectedProduct = computed(() => productCategories.find(item => item.key =
 const recommendedMaterials = computed<MaterialDefinition[]>(() => selectedProduct.value.materialKeys.map(key => materialCatalog[key]))
 const visibleMaterials = computed<MaterialDefinition[]>(() => showAllMaterials.value ? materialList : recommendedMaterials.value)
 const selectedMaterial = computed<MaterialDefinition>(() => materialList.find(item => item.name === atelier.material || item.modelLabel === atelier.modelMaterial) || materialCatalog.ceramic)
-const contextText = computed(() => context.value?.purpose === 'museum_sale' ? `正在为「${context.value.museum?.name || '博物馆'}」创作` : '个人创作工作台')
+const contextText = computed(() => context.value?.campaign?.title
+  ? `优先征集 · ${context.value.campaign.title}`
+  : context.value?.purpose === 'museum_sale' ? `正在为「${context.value.museum?.name || '博物馆'}」创作` : '个人创作工作台')
 const purposeBadge = computed(() => context.value?.purpose === 'museum_sale' ? '博物馆售卖' : '个人创作')
 const isProfessional = computed(() => context.value?.creatorMode === 'professional')
 const creatorModeLabel = computed(() => isProfessional.value ? '专业' : '业余')

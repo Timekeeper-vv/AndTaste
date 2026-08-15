@@ -65,6 +65,13 @@ class ArkImageQueueIntegrationTest {
         registry.add("volcengine.ark.queue.retry-attempts", () -> 3);
         registry.add("volcengine.ark.queue.retry-delay-seconds", () -> 1);
         registry.add("volcengine.ark.queue.dispatch-interval-ms", () -> 50);
+        registry.add("siliconflow.api.key", () -> "test-siliconflow-api-key");
+        registry.add("siliconflow.images.base-url", () -> providerUrl("/api/v3/images/generations"));
+        registry.add("siliconflow.vision.enabled", () -> false);
+        registry.add("siliconflow.image.queue.concurrency", () -> 1);
+        registry.add("siliconflow.image.queue.retry-attempts", () -> 2);
+        registry.add("siliconflow.image.queue.retry-delay-seconds", () -> 1);
+        registry.add("siliconflow.image.queue.dispatch-interval-ms", () -> 50);
         registry.add("creative.asset.private-root", assetRoot::toString);
         registry.add("tripo.poll.initial-delay-ms", () -> 600000);
     }
@@ -122,6 +129,8 @@ class ArkImageQueueIntegrationTest {
                 firstSubmission.path("jobId").asLong())).isEqualTo(2);
         assertThat(jdbc.queryForObject("SELECT format FROM digital_asset WHERE id=(SELECT output_asset_id FROM ai_generation_job WHERE id=?)",
                 String.class, firstSubmission.path("jobId").asLong())).isEqualTo("jpg");
+        assertThat(jdbc.queryForObject("SELECT title FROM digital_asset WHERE id=(SELECT output_asset_id FROM ai_generation_job WHERE id=?)",
+                String.class, firstSubmission.path("jobId").asLong())).isEqualTo("云纹冰箱贴");
         assertCreditSettled(first.id());
         assertCreditSettled(second.id());
 
@@ -146,6 +155,39 @@ class ArkImageQueueIntegrationTest {
                 String.class, failedUser.id())).isEqualTo("refunded");
     }
 
+    @Test
+    void queuesImageEditsAndMultiViewTasksWithDurableResults() throws Exception {
+        rateLimitedResponses.set(0);
+        TestUser editor = createUser("queue-editor");
+        TestUser multiViewUser = createUser("queue-multiview");
+        long editorAsset = createReferenceAsset(editor, "editor-reference.png");
+        long multiViewAsset = createReferenceAsset(multiViewUser, "multiview-reference.png");
+
+        JsonNode edit = postQueuedImageEdit(editor.token(), editorAsset);
+        JsonNode multiView = postQueuedMultiView(multiViewUser.token(), multiViewAsset);
+        assertThat(edit.path("jobType").asText()).isEqualTo("image_to_image");
+        assertThat(multiView.path("jobType").asText()).isEqualTo("multi_view");
+        assertThat(edit.path("assetId").asLong()).isZero();
+
+        try {
+            waitUntil(() -> count("SELECT COUNT(*) FROM ai_generation_job WHERE provider='siliconflow' AND status='succeeded'") == 2,
+                    Duration.ofSeconds(20));
+        } catch (AssertionError error) {
+            throw new AssertionError("SiliconFlow queue did not finish: " + jdbc.queryForList(
+                    "SELECT id,job_type,status,error_message,attempt_count FROM ai_generation_job WHERE provider='siliconflow' ORDER BY id"), error);
+        }
+
+        JsonNode completedEdit = getImageJob(editor.token(), edit.path("jobId").asLong());
+        JsonNode completedViews = getImageJob(multiViewUser.token(), multiView.path("jobId").asLong());
+        assertThat(completedEdit.path("status").asText()).isEqualTo("succeeded");
+        assertThat(completedEdit.path("assetId").asLong()).isPositive();
+        assertThat(completedEdit.path("referenceAnalysis").asText()).isNotBlank();
+        assertThat(completedViews.path("status").asText()).isEqualTo("succeeded");
+        assertThat(completedViews.path("images")).hasSize(3);
+        assertThat(completedViews.path("images").get(0).path("previewUrl").asText()).contains("access_token=");
+        assertThat(maxProviderRequests.get()).isEqualTo(1);
+    }
+
     private JsonNode postJob(String token, String payload) throws Exception {
         String body = mvc.perform(post("/api/creative/ai/ark/text-to-image")
                         .header("Authorization", "Bearer " + token)
@@ -164,12 +206,56 @@ class ArkImageQueueIntegrationTest {
         return mapper.readTree(body);
     }
 
+    private JsonNode getImageJob(String token, long jobId) throws Exception {
+        String body = mvc.perform(get("/api/creative/ai/image-jobs/{jobId}", jobId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return mapper.readTree(body);
+    }
+
+    private JsonNode postQueuedImageEdit(String token, long inputAssetId) throws Exception {
+        String payload = "{\"title\":\"参考图冰箱贴\",\"prompt\":\"保留参考图主体，做成冰箱贴\",\"inputAssetId\":" + inputAssetId +
+                ",\"productKey\":\"magnet\",\"productCategory\":\"冰箱贴\",\"material\":\"PVC\",\"queue\":true}";
+        String body = mvc.perform(post("/api/creative/ai/image-to-image")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(payload))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return mapper.readTree(body);
+    }
+
+    private JsonNode postQueuedMultiView(String token, long inputAssetId) throws Exception {
+        String payload = "{\"prompt\":\"原创云纹冰箱贴\",\"inputAssetId\":" + inputAssetId +
+                ",\"productKey\":\"magnet\",\"productCategory\":\"冰箱贴\",\"material\":\"PVC\",\"viewCount\":3,\"size\":\"1K\",\"queue\":true}";
+        String body = mvc.perform(post("/api/creative/ai/volcengine/seedream/multiview")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(payload))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return mapper.readTree(body);
+    }
+
     private TestUser createUser(String username) {
         jdbc.update("INSERT INTO user (username,password,role,status) VALUES (?,?,?,?)", username, "test-password", "user", "active");
         Long id = jdbc.queryForObject("SELECT id FROM user WHERE username=?", Long.class, username);
         User user = new User(id, username, 20, username + "@test.local", null);
         user.setRole("user");
         return new TestUser(id, jwtService.issue(user));
+    }
+
+    private long createReferenceAsset(TestUser user, String filename) throws IOException {
+        Path generated = assetRoot.resolve("generated");
+        Files.createDirectories(generated);
+        Files.writeString(generated.resolve(filename), "reference-image", StandardCharsets.UTF_8);
+        jdbc.update("INSERT INTO digital_asset (asset_no,title,asset_type,source_type,file_url,preview_url,format,status,created_by,created_at,updated_at) " +
+                        "VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                "AST-" + filename, "参考图", "image", "uploaded", "/generated/" + filename,
+                "/generated/" + filename, "png", "draft", user.id());
+        Long assetId = jdbc.queryForObject("SELECT id FROM digital_asset WHERE asset_no=?", Long.class, "AST-" + filename);
+        return assetId == null ? 0 : assetId;
     }
 
     private void assertCreditSettled(long userId) {

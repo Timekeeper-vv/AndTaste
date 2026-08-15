@@ -1,4 +1,4 @@
-import { request, uploadFile } from './client'
+import { request, uploadFile, waitForImageGenerationJob, type ImageGenerationJobProgress } from './client'
 
 export interface ConversationSession {
   id: number
@@ -61,6 +61,29 @@ export const getMuseums = () => request<any[]>('/api/creative/ai/consumer-produc
 export const getCredits = () => request<any>('/api/creative/ai/consumer-credits/account')
 export const getCreditRules = () => request<any>('/api/creative/ai/consumer-credits/rules')
 export const getRewardOverview = () => request<any>('/api/creative/ai/consumer-rewards/overview')
+
+export interface CreatorCampaign {
+  key: string
+  title: string
+  targetName: string
+  channelCode: string
+  collectionStyle: string
+  recommendedProducts: string[]
+  recommendedProductKey?: string
+  brief: string
+  promptHint: string
+  rewardAmount: number
+  deadline?: string
+  reviewNotice?: string
+  cooperationNotice?: string
+}
+
+/** Login may display campaign briefs before an account is authenticated. */
+export const getPublicCreatorCampaigns = () => request<CreatorCampaign[]>(
+  '/api/creative/ai/consumer-rewards/campaigns/public',
+  { header: { Authorization: '' } },
+)
+
 export const claimRewardMission = (missionKey: string) => request<any>(
   `/api/creative/ai/consumer-rewards/missions/${encodeURIComponent(missionKey)}/claim`,
   { method: 'POST', header: { 'content-type': 'application/json' } },
@@ -229,12 +252,12 @@ export interface SeedreamMultiViewResult {
  * 用一张已上传的参考图真实调用 Doubao Seedream，服务端顺序生成正、左、背、右
  * 四张图，并把每张图都保存为当前用户可访问的资产。它不会伪造本地预览结果。
  */
-export const createSeedreamMultiView = (body: SeedreamMultiViewRequest) => request<SeedreamMultiViewResult>(
-  '/api/creative/ai/volcengine/seedream/multiview',
-  // Four views are generated sequentially to keep the product identity
-  // consistent. Give the native client enough time to receive all four.
-  { method: 'POST', data: body, timeout: 300000, header: { 'content-type': 'application/json' } },
-)
+export async function createSeedreamMultiView(body: SeedreamMultiViewRequest, onProgress?: (job: ImageGenerationJobProgress) => void) {
+  const queued = await request<ImageGenerationJobProgress>('/api/creative/ai/volcengine/seedream/multiview', {
+    method: 'POST', data: { ...body, queue: true }, timeout: 30000, header: { 'content-type': 'application/json' },
+  })
+  return waitForImageGenerationJob(queued, onProgress) as Promise<SeedreamMultiViewResult>
+}
 
 export const createModel = (body: any) => request<any>('/api/creative/ai/tripo/generate', { method: 'POST', data: body, header: { 'content-type': 'application/json' } })
 export const getTripoModelTask = (jobId: number | string) => request<any>(
@@ -314,6 +337,8 @@ export interface ReviewSubmission {
   purpose: 'personal' | 'museum_sale'
   museumId?: string
   note?: string
+  /** Selected from the public creator-task board; server verifies its channel. */
+  campaignKey?: string
 }
 
 export const submitAssetReview = (assetId: number | string, body: ReviewSubmission) => request<any>(

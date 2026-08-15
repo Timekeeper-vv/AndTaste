@@ -22,7 +22,7 @@ export type MaterialKey =
   | 'paper'
   | 'wood'
 
-export type ProductCategoryKey = 'magnet' | 'plush' | 'pvc_figure' | 'hard_plastic' | 'keychain' | 'gift_box'
+export type ProductCategoryKey = 'magnet' | 'stationery' | 'plush' | 'pvc_figure' | 'hard_plastic' | 'keychain' | 'gift_box'
 
 export interface MaterialDefinition {
   key: MaterialKey
@@ -123,6 +123,7 @@ export const materialCatalog: Record<MaterialKey, MaterialDefinition> = {
 
 export const productCategories: ProductCategoryDefinition[] = [
   { key: 'magnet', label: '冰箱贴', short: '轻量纪念品', mark: '贴', description: '背面预留平整磁铁位，适合用清晰轮廓与浅浮雕讲出馆藏故事。', materialKeys: ['pvc', 'tangjiao', 'resin', 'metal', 'ceramic'], defaultTemplate: 'oriental' },
+  { key: 'stationery', label: '文具纸品', short: '书签/明信片', mark: '签', description: '适合书签、明信片与纸质礼赠；图案会按真实裁切边、印刷出血与平面工艺组织。', materialKeys: ['paper', 'metal', 'acrylic', 'wood'], defaultTemplate: 'oriental' },
   { key: 'plush', label: '毛绒玩具', short: '亲子潮玩', mark: '绒', description: '优先保证圆润填充、刺绣五官和可落地的裁片与缝线设计。', materialKeys: ['plush', 'short_plush', 'ultra_plush'], defaultTemplate: 'plush_toy' },
   { key: 'pvc_figure', label: 'PVC / 搪胶公仔', short: '收藏潮玩', mark: '偶', description: '适合角色化设计；生成时会优先考虑圆角、分件和量产涂装区域。', materialKeys: ['pvc', 'tangjiao', 'soft_vinyl', 'resin'], defaultTemplate: 'collectible' },
   { key: 'hard_plastic', label: '硬塑摆件', short: '精密陈列', mark: '塑', description: '针对注塑分件、壁厚、凹槽和浅浮雕细节做更稳妥的建模方向。', materialKeys: ['ppc', 'abs', 'resin'], defaultTemplate: 'ppc_precision' },

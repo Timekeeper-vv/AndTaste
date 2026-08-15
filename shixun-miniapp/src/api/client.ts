@@ -98,8 +98,9 @@ export async function uploadFile<T>(path: string, filePath: string, name = 'file
   return data as T
 }
 
-export type ArkImageJobProgress = {
+export type ImageGenerationJobProgress = {
   jobId?: number
+  jobType?: 'text_to_image' | 'image_to_image' | 'multi_view' | string
   status?: 'queued' | 'running' | 'succeeded' | 'failed' | string
   progress?: number
   queuePosition?: number
@@ -108,18 +109,22 @@ export type ArkImageJobProgress = {
   [key: string]: any
 }
 
+export type ArkImageJobProgress = ImageGenerationJobProgress
+
 const wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))
 
-export const getArkImageJob = (jobId: number | string) => request<ArkImageJobProgress>(
-  `/api/creative/ai/ark/image-jobs/${encodeURIComponent(String(jobId))}`,
+export const getImageGenerationJob = (jobId: number | string) => request<ImageGenerationJobProgress>(
+  `/api/creative/ai/image-jobs/${encodeURIComponent(String(jobId))}`,
   { timeout: 30000 },
 )
+
+export const getArkImageJob = getImageGenerationJob
 
 /**
  * Ark/Seedream is account-limited. The API returns a durable job immediately;
  * the client follows that job instead of holding one long HTTP request open.
  */
-export async function waitForArkImageJob(initial: ArkImageJobProgress, onProgress?: (job: ArkImageJobProgress) => void) {
+export async function waitForImageGenerationJob(initial: ImageGenerationJobProgress, onProgress?: (job: ImageGenerationJobProgress) => void) {
   let job = initial
   let transientFailures = 0
   const deadline = Date.now() + 45 * 60 * 1000
@@ -129,7 +134,7 @@ export async function waitForArkImageJob(initial: ArkImageJobProgress, onProgres
     if (Date.now() >= deadline) throw new Error('任务仍在后台排队，已停止等待；请稍后到作品库查看生成结果')
     await wait(job.status === 'queued' ? 1800 : 2200)
     try {
-      job = await getArkImageJob(job.jobId)
+      job = await getImageGenerationJob(job.jobId)
       transientFailures = 0
       onProgress?.(job)
     } catch (error) {
@@ -143,6 +148,8 @@ export async function waitForArkImageJob(initial: ArkImageJobProgress, onProgres
   return job
 }
 
+export const waitForArkImageJob = waitForImageGenerationJob
+
 export async function createTextToImage(body: any, onProgress?: (job: ArkImageJobProgress) => void) {
   const queued = await request<ArkImageJobProgress>('/api/creative/ai/ark/text-to-image', {
     method: 'POST', data: body, timeout: 30000, header: { 'content-type': 'application/json' },
@@ -150,6 +157,9 @@ export async function createTextToImage(body: any, onProgress?: (job: ArkImageJo
   return waitForArkImageJob(queued, onProgress)
 }
 
-export const createReferenceToImage = (body: any) => request<any>('/api/creative/ai/image-to-image', {
-  method: 'POST', data: body, timeout: 240000, header: { 'content-type': 'application/json' },
-})
+export async function createReferenceToImage(body: any, onProgress?: (job: ImageGenerationJobProgress) => void) {
+  const queued = await request<ImageGenerationJobProgress>('/api/creative/ai/image-to-image', {
+    method: 'POST', data: { ...body, queue: true }, timeout: 30000, header: { 'content-type': 'application/json' },
+  })
+  return waitForImageGenerationJob(queued, onProgress)
+}

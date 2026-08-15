@@ -350,19 +350,32 @@ function submitReview(asset: any) {
   const context = uni.getStorageSync('creation_context') || {}
   const purpose = context.purpose === 'museum_sale' ? 'museum_sale' : 'personal'
   const museumId = context.museum?.id
+  const campaign = context.campaign && typeof context.campaign === 'object' ? context.campaign : null
+  const campaignKey = typeof campaign?.key === 'string' ? campaign.key : ''
   if (purpose === 'museum_sale' && !museumId) {
     uni.showToast({ title: '请先选择服务博物馆后再提交审核', icon: 'none' })
+    return
+  }
+  if (campaignKey && (purpose !== 'museum_sale' || campaign.channelCode !== context.museum?.channelCode)) {
+    uni.showToast({ title: '优先征集任务与当前渠道不一致，请重新选择任务方向', icon: 'none' })
     return
   }
   const destination = purpose === 'museum_sale' ? `博物馆售卖 · ${context.museum?.name || ''}` : '个人创作'
   uni.showModal({
     title: '提交作品审核',
-    content: `将按「${destination}」提交。审核通过后，3D 作品可申请打样或生产。`,
+    content: campaignKey
+      ? `将按「${destination}」投稿「${campaign.title || '优先征集'}」。审核通过后自动获得 ${campaign.rewardAmount || ''} 积分。`
+      : `将按「${destination}」提交。审核通过后，3D 作品可申请打样或生产。`,
     success: async (result) => {
       if (!result.confirm) return
       submittingId.value = asset.id
       try {
-        const response = await submitAssetReview(asset.id, { purpose, museumId })
+        const response = await submitAssetReview(asset.id, { purpose, museumId, ...(campaignKey ? { campaignKey } : {}) })
+        if (campaignKey) {
+          const nextContext = { ...context }
+          delete nextContext.campaign
+          uni.setStorageSync('creation_context', nextContext)
+        }
         uni.showToast({ title: response?.message || '已提交审核', icon: 'success' })
         await refresh(false)
       } catch (error: any) {

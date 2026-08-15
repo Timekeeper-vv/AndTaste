@@ -10,6 +10,10 @@
           <view v-if="material" class="brief-chip"><text>材质</text><text>{{ material }}</text></view>
           <view v-if="mode" class="brief-chip muted"><text>{{ mode === 'image' ? '参考图' : '文字灵感' }}</text></view>
         </view>
+        <view v-if="campaignContext" class="campaign-strip">
+          <view><text>优先征集</text><text>{{ campaignContext.title }}</text><text>面向 {{ campaignContext.targetName }} · {{ campaignContext.collectionStyle }}</text></view>
+          <text>通过 +{{ campaignContext.rewardAmount }} 积分</text>
+        </view>
       </view>
 
       <AiGeneratedNotice class="ai-disclosure" compact description="对话建议、提示词和后续生成的图片、三视图、3D 原型均可能由人工智能生成，仅供创作参考，商业使用前请人工复核。" />
@@ -105,6 +109,7 @@ import {
   uploadReference,
   type ConversationSession,
   type ConversationQuickReply,
+  type CreatorCampaign,
   type SeedreamMultiViewImage,
 } from '../../api/creative'
 import { apiUrl, createReferenceToImage, createTextToImage, getArkImageJob, waitForArkImageJob } from '../../api/client'
@@ -118,6 +123,7 @@ interface Message { id: number; role: 'assistant' | 'user'; text: string }
 interface ProductOption { key: string; name: string; mark: string; desc: string; process: string; categoryKey: string; categoryName: string; materials: MaterialOption[] }
 interface MaterialOption { name: string; note: string; color: string }
 interface ModelTask { jobId: number; status: string; progress: number; assetId?: number | null; previewUrl?: string; errorMessage?: string }
+type CampaignContext = CreatorCampaign & { sessionId?: number }
 
 const modeOptions = [
   { key: 'template' as Mode, mark: '例', title: '没有灵感（看看示例）', desc: '浏览示例并了解创作方式' },
@@ -141,6 +147,9 @@ const sessionId = ref<number | null>(null)
 const generatedAssetId = ref<number | null>(null)
 const pendingImageJobId = ref<number | null>(null)
 const pendingGenerationPrompt = ref('')
+const pendingMultiViewJobId = ref<number | null>(null)
+const pendingMultiViewInputAssetId = ref<number | null>(null)
+const pendingMultiViewPrompt = ref('')
 const previewUrl = ref('')
 const multiviewImages = ref<SeedreamMultiViewImage[]>([])
 const modelInputMode = ref<'single' | 'multiview'>('single')
@@ -170,6 +179,8 @@ const referencePolicyConfirmed = ref(false)
 const aiPolicyConfirmed = ref(false)
 const threeDimensionalPolicyConfirmed = ref(false)
 const policyDialog = ref<{ key: CreativePolicyKey; resolve: (confirmed: boolean) => void } | null>(null)
+const campaignContext = ref<CampaignContext | null>(null)
+const campaignAttached = ref(false)
 let modelPollTimer: ReturnType<typeof setTimeout> | null = null
 let modelPollVersion = 0
 let draftSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -221,7 +232,10 @@ const isFoodProduct = computed(() => selectedProduct.value?.categoryKey === 'foo
 const prompt = computed(() => {
   const product = selectedProduct.value?.name || '文创产品'
   const source = inspirationText.value.trim() || `为${product}设计一套具有文化辨识度、适合量产打样的产品视觉`
-  return `${source}。产品：${product}；材质：${material.value}。视觉气质与配色只依据用户灵感和产品形态协调，不强行套用固定风格或用途。请考虑清晰轮廓、可生产结构、合理尺寸和适合商品展示的构图。`
+  const campaignDirection = campaignContext.value
+    ? `本作品参加平台优先征集「${campaignContext.value.title}」，面向${campaignContext.value.targetName}候选渠道；请重点遵循：${campaignContext.value.promptHint}。`
+    : ''
+  return `${source}。产品：${product}；材质：${material.value}。视觉气质与配色只依据用户灵感和产品形态协调，不强行套用固定风格或用途。请考虑清晰轮廓、可生产结构、合理尺寸和适合商品展示的构图。${campaignDirection}`
 })
 const normalizedModelProgress = computed(() => Math.max(0, Math.min(100, Number(modelTask.value?.progress) || 0)))
 const isModelTaskSucceeded = computed(() => modelTask.value?.status === 'succeeded')
@@ -569,6 +583,35 @@ function categoryMark(categoryKey: string) {
 
 function isNotFound(error: any) { return Number(error?.statusCode) === 404 || /not found|不存在|找不到/i.test(String(error?.message || '')) }
 
+function campaignFromStorage(): CampaignContext | null {
+  const context = uni.getStorageSync('creation_context') || {}
+  const value = context?.campaign
+  if (!value || typeof value !== 'object' || typeof value.key !== 'string' || typeof value.channelCode !== 'string') return null
+  return value as CampaignContext
+}
+
+function bindCampaignSession() {
+  if (!campaignContext.value || !sessionId.value || campaignContext.value.sessionId === sessionId.value) return
+  const context = uni.getStorageSync('creation_context') || {}
+  campaignContext.value = { ...campaignContext.value, sessionId: sessionId.value }
+  uni.setStorageSync('creation_context', { ...context, campaign: campaignContext.value })
+}
+
+async function attachCampaignToConversation() {
+  const campaign = campaignContext.value
+  if (!campaign || campaignAttached.value) return
+  campaignAttached.value = true
+  bindCampaignSession()
+  addMessage('assistant', `已带入「${campaign.title}」。我会把${campaign.collectionStyle}和${campaign.recommendedProducts.join('、')}方向带进后续生成；作品提交审核通过后，${campaign.rewardAmount} 积分会自动到账。`)
+  await saveEvent('campaign', 'campaign_selected', {
+    campaignKey: campaign.key,
+    campaignTitle: campaign.title,
+    channelCode: campaign.channelCode,
+    targetName: campaign.targetName,
+    rewardAmount: campaign.rewardAmount,
+  })
+}
+
 function productByValue(productType?: string, productKey?: string) {
   return productOptions.value.find(item => item.key === productKey || item.name === productType) || null
 }
@@ -620,6 +663,9 @@ function clearGeneratedOutputForNewDirection() {
   generatedAssetId.value = null
   pendingImageJobId.value = null
   pendingGenerationPrompt.value = ''
+  pendingMultiViewJobId.value = null
+  pendingMultiViewInputAssetId.value = null
+  pendingMultiViewPrompt.value = ''
   previewUrl.value = ''
   multiviewImages.value = []
   modelInputMode.value = 'single'
@@ -664,6 +710,9 @@ function resetViewState() {
   generatedAssetId.value = null
   pendingImageJobId.value = null
   pendingGenerationPrompt.value = ''
+  pendingMultiViewJobId.value = null
+  pendingMultiViewInputAssetId.value = null
+  pendingMultiViewPrompt.value = ''
   previewUrl.value = ''
   multiviewImages.value = []
   modelInputMode.value = 'single'
@@ -679,6 +728,7 @@ function resetViewState() {
   chatStage.value = 'need_product'
   chatInput.value = ''
   awaitingGenerationConfirmation.value = false
+  campaignAttached.value = false
   setChatThinking(false)
   autoGenerationInFlight.value = false
 }
@@ -703,6 +753,9 @@ function restoreEvent(event: any) {
     case 'material_selected':
       material.value = String(payload.material || payload.materialName || material.value)
       materialChoice.value = payload.recommended ? 'recommend' : material.value
+      break
+    case 'campaign_selected':
+      campaignAttached.value = true
       break
     case 'style_selected':
     case 'purpose_selected':
@@ -729,7 +782,20 @@ function restoreEvent(event: any) {
       previewUrl.value = imageUrl({ previewUrl: payload.previewUrl })
       refinementNote.value = ''
       break
+    case 'multiview_queued':
+      pendingMultiViewJobId.value = Number(payload.jobId) || pendingMultiViewJobId.value
+      pendingMultiViewInputAssetId.value = Number(payload.inputAssetId) || pendingMultiViewInputAssetId.value
+      pendingMultiViewPrompt.value = String(payload.prompt || pendingMultiViewPrompt.value)
+      break
+    case 'multiview_failed':
+      pendingMultiViewJobId.value = null
+      pendingMultiViewInputAssetId.value = null
+      pendingMultiViewPrompt.value = ''
+      break
     case 'multiview_generated':
+      pendingMultiViewJobId.value = null
+      pendingMultiViewInputAssetId.value = null
+      pendingMultiViewPrompt.value = ''
       multiviewImages.value = Array.isArray(payload.images) ? payload.images : []
       break
     case 'model_submitted':
@@ -810,8 +876,14 @@ function restoreMessages(events: any[]) {
         addMessage('user', `补充修改：${payload.refinementNote || '基于当前图重新生成'}`)
         addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
         break
+      case 'multiview_queued':
+        addMessage('assistant', '三视图已进入生成队列。离开当前页面也会继续生成，完成后会自动保存到作品库。')
+        break
+      case 'multiview_failed':
+        addMessage('assistant', `三视图本次没有生成成功。${payload.errorMessage || '可以稍后重新提交。'}`)
+        break
       case 'multiview_generated':
-        addMessage('assistant', '四个角度都已保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
+        addMessage('assistant', '三视图已经保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
         break
       case 'model_submitted':
         addMessage('assistant', '3D 建模任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。')
@@ -858,6 +930,8 @@ function restorePhase(events: any[]) {
       case 'image_generation_failed': phase.value = 'material'; break
       case 'image_generated': phase.value = 'result'; break
       case 'image_refined': phase.value = 'result'; break
+      case 'multiview_queued': phase.value = 'result'; break
+      case 'multiview_failed': phase.value = 'result'; break
       case 'multiview_generated': phase.value = 'multiview'; break
       case 'model_submitted': phase.value = 'model'; break
       case 'model_completed': phase.value = 'model'; break
@@ -885,12 +959,9 @@ function restorePhase(events: any[]) {
   }
 }
 
-async function restoreLatestSession() {
-  const sessions = await getConversations()
-  const latest = sessions.find(item => String(item.status || 'draft') !== 'archived')
-  if (!latest?.id) return false
+async function restoreSession(sessionToRestore: number | string) {
   try {
-    const detail = await getConversation(latest.id)
+    const detail = await getConversation(sessionToRestore)
     const events = Array.isArray(detail.events) ? detail.events : []
     resetViewState()
     sessionId.value = Number(detail.id)
@@ -907,6 +978,13 @@ async function restoreLatestSession() {
   }
 }
 
+async function restoreLatestSession() {
+  const sessions = await getConversations()
+  const latest = sessions.find(item => String(item.status || 'draft') !== 'archived')
+  if (!latest?.id) return false
+  return restoreSession(latest.id)
+}
+
 async function ensureSession() {
   if (sessionPromise) return sessionPromise
   sessionPromise = (async () => {
@@ -914,7 +992,11 @@ async function ensureSession() {
     if (sessionId.value) return true
     try {
       if (!forceNewSession.value) {
-        try { if (await restoreLatestSession()) return true } catch (error: any) { if (!isNotFound(error)) throw error }
+        try {
+          const campaignSessionId = Number(campaignContext.value?.sessionId) || 0
+          if (campaignSessionId > 0 && await restoreSession(campaignSessionId)) return true
+          if (await restoreLatestSession()) return true
+        } catch (error: any) { if (!isNotFound(error)) throw error }
       }
       const session = await createConversation()
       sessionId.value = Number(session.id)
@@ -1075,13 +1157,17 @@ async function generateImageAfterMaterialSelection() {
   await generateProductImage()
 }
 
-function updateImageQueueMessage(job: { status?: string; queuePosition?: number }) {
+function updateImageQueueMessage(job: { status?: string; jobType?: string; queuePosition?: number }) {
   if (job.status === 'queued') {
     busyMessage.value = job.queuePosition && job.queuePosition > 0
       ? `已进入生成队列，前面还有 ${job.queuePosition - 1} 项任务…`
       : '已进入生成队列，马上开始…'
   } else if (job.status === 'running') {
-    busyMessage.value = '之间大模型正在生成产品视觉，请稍候…'
+    busyMessage.value = job.jobType === 'multi_view'
+      ? '正在生成一致的产品多视图，请稍候…'
+      : job.jobType === 'image_to_image'
+        ? '正在依据参考图生成产品视觉，请稍候…'
+        : '之间大模型正在生成产品视觉，请稍候…'
   }
 }
 
@@ -1145,7 +1231,20 @@ async function generateProductImage() {
     if (mode.value === 'image') {
       if (!referenceAssetId.value) throw new Error('参考图片还没有保存完成，请重新上传后再生成')
       busyMessage.value = '正在依据参考图生成产品视觉，预计需要 1-3 分钟…'
-      result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value })
+      result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value }, (job) => {
+        updateImageQueueMessage(job)
+        const jobId = Number(job.jobId)
+        if (Number.isFinite(jobId) && jobId > 0 && pendingImageJobId.value !== jobId) {
+          pendingImageJobId.value = jobId
+          pendingGenerationPrompt.value = generationPrompt
+          queueEventPromise = saveEvent('image', 'image_generation_queued', {
+            jobId,
+            productType: selectedProduct.value?.name,
+            material: material.value,
+            prompt: generationPrompt,
+          })
+        }
+      })
     } else {
       busyMessage.value = '正在提交之间大模型生成任务…'
       result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, productType: selectedProduct.value.name, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value }, (job) => {
@@ -1253,7 +1352,7 @@ async function regenerateWithRefinement() {
     }
     busyMessage.value = '正在基于当前产品图生成新方案，请稍候…'
     await saveEvent('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, optimizedPrompt: refinementPrompt, productType: selectedProduct.value.name, material: material.value })
-    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value, refinement: true, refinementNote: note })
+    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value, refinement: true, refinementNote: note }, updateImageQueueMessage)
     const newAssetId = Number(result?.assetId || result?.id)
     if (!Number.isFinite(newAssetId) || newAssetId <= 0) throw new Error('修改后的产品图没有保存成功，请重试')
     generatedAssetId.value = newAssetId
@@ -1346,22 +1445,86 @@ async function generateMultiView() {
   }
   busy.value = true
   busyMessage.value = '正在基于当前产品图生成正面、侧面和背面，请稍候…'
+  const inputAssetId = generatedAssetId.value
+  let queueEventPromise: Promise<void> | null = null
   try {
-    await saveEvent('multiview', 'multiview_started', { inputAssetId: generatedAssetId.value, productType: selectedProduct.value?.name, material: material.value })
-    const result = await createSeedreamMultiView({ inputAssetId: generatedAssetId.value, prompt: prompt.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, viewCount: 3, size: '2K', watermark: true })
-    multiviewImages.value = (Array.isArray(result?.images) ? result.images : []).filter(item => Number(item?.assetId) > 0)
-    if (!hasCompleteThreeViews.value) throw new Error('三视图没有完整返回正面、侧面和背面，请稍后重试')
-    await saveEvent('multiview', 'multiview_generated', { inputAssetId: generatedAssetId.value, images: multiviewImages.value.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })) })
-    addMessage('assistant', '正面、侧面和背面都已保存。现在可以把三张图一起交给 Tripo 多视图建模，结构会比单张图更完整。')
-    chatStage.value = 'multiview_ready'
-    chatQuickReplies.value = [
-      { label: '用三视图生成 3D', type: 'model', value: '' },
-      { label: '先申请打样 / 商品化', type: 'commercial', value: '' },
-    ]
-    phase.value = 'multiview'
-    await scrollToSection('multiview-output')
+    await saveEvent('multiview', 'multiview_started', { inputAssetId, productType: selectedProduct.value?.name, material: material.value })
+    const result = await createSeedreamMultiView({ inputAssetId, prompt: prompt.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, viewCount: 3, size: '2K', watermark: true }, (job) => {
+      updateImageQueueMessage(job)
+      const jobId = Number(job.jobId)
+      if (Number.isFinite(jobId) && jobId > 0 && pendingMultiViewJobId.value !== jobId) {
+        pendingMultiViewJobId.value = jobId
+        pendingMultiViewInputAssetId.value = inputAssetId
+        pendingMultiViewPrompt.value = prompt.value
+        queueEventPromise = saveEvent('multiview', 'multiview_queued', {
+          jobId,
+          inputAssetId,
+          prompt: prompt.value,
+          productType: selectedProduct.value?.name,
+          material: material.value,
+        })
+      }
+    })
+    if (queueEventPromise) await queueEventPromise
+    await completeGeneratedMultiView(result, inputAssetId)
   } catch (error: any) { uni.showToast({ title: error?.message || '四视图生成失败', icon: 'none' }) }
   finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
+}
+
+async function completeGeneratedMultiView(result: any, inputAssetId: number) {
+  const images = ((Array.isArray(result?.images) ? result.images : []) as SeedreamMultiViewImage[])
+    .filter(item => Number(item?.assetId) > 0)
+  multiviewImages.value = images
+  if (!hasCompleteThreeViews.value) throw new Error('三视图没有完整返回正面、侧面和背面，请稍后重试')
+  pendingMultiViewJobId.value = null
+  pendingMultiViewInputAssetId.value = null
+  pendingMultiViewPrompt.value = ''
+  await saveEvent('multiview', 'multiview_generated', {
+    jobId: result?.jobId,
+    inputAssetId,
+    images: images.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })),
+  })
+  addMessage('assistant', '正面、侧面和背面都已保存。现在可以把三张图一起交给 Tripo 多视图建模，结构会比单张图更完整。')
+  chatStage.value = 'multiview_ready'
+  chatQuickReplies.value = [
+    { label: '用三视图生成 3D', type: 'model', value: '' },
+    { label: '先申请打样 / 商品化', type: 'commercial', value: '' },
+  ]
+  phase.value = 'multiview'
+  await scrollToSection('multiview-output')
+}
+
+async function resumePendingMultiViewGeneration() {
+  const jobId = pendingMultiViewJobId.value
+  const inputAssetId = pendingMultiViewInputAssetId.value || generatedAssetId.value
+  if (!jobId || !inputAssetId || hasCompleteThreeViews.value || busy.value) return
+  busy.value = true
+  busyMessage.value = '正在恢复上次的三视图生成进度…'
+  try {
+    let job = await getArkImageJob(jobId)
+    updateImageQueueMessage(job)
+    if (job.status === 'queued' || job.status === 'running') job = await waitForArkImageJob(job, updateImageQueueMessage)
+    if (job.status === 'failed') throw new Error(job.errorMessage || job.message || '三视图生成失败')
+    await completeGeneratedMultiView(job, inputAssetId)
+  } catch (error: any) {
+    let failedJob: any = null
+    try {
+      const latest = await getArkImageJob(jobId)
+      if (latest.status === 'failed') failedJob = latest
+    } catch {
+      // Keep the pending job attached when the network itself is unavailable.
+    }
+    if (failedJob) {
+      pendingMultiViewJobId.value = null
+      pendingMultiViewInputAssetId.value = null
+      pendingMultiViewPrompt.value = ''
+      await saveEvent('multiview', 'multiview_failed', { jobId, inputAssetId, errorMessage: failedJob.errorMessage || failedJob.message || '三视图生成失败' })
+    }
+    uni.showModal({ title: failedJob ? '三视图未生成' : '三视图进度暂时无法读取', content: generationFailureMessage(failedJob || error), showCancel: false })
+  } finally {
+    busy.value = false
+    busyMessage.value = '正在保存创作过程并调用 AI，请稍候…'
+  }
 }
 async function generateModel() {
   if (busy.value) return
@@ -1415,7 +1578,11 @@ function restart() {
   })
 }
 watch(chatInput, scheduleChatDraftSave)
-onLoad(options => { forceNewSession.value = String(options?.new || '') === '1' })
+onLoad(options => {
+  campaignContext.value = campaignFromStorage()
+  const campaignNeedsSession = Boolean(campaignContext.value && !Number(campaignContext.value.sessionId))
+  forceNewSession.value = String(options?.new || '') === '1' || campaignNeedsSession
+})
 onMounted(async () => {
   if (!requireSession()) return
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
@@ -1424,9 +1591,11 @@ onMounted(async () => {
   if (!(await ensureSession())) return
   restoreChatDraft()
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
+  await attachCampaignToConversation()
   if (awaitingGenerationConfirmation.value && !chatQuickReplies.value.length) setGenerationConfirmationReplies()
   if (!chatQuickReplies.value.length && chatStage.value !== 'need_additional_detail') setInitialChatReplies()
   if (pendingImageJobId.value && !generatedAssetId.value) void resumePendingImageGeneration()
+  else if (pendingMultiViewJobId.value && !hasCompleteThreeViews.value) void resumePendingMultiViewGeneration()
   if (phase.value === 'model' && modelTask.value && !isModelTaskTerminal.value) void scheduleModelPolling(true)
   if (phase.value === 'result') await scrollToSection('result-output')
   else if (phase.value === 'multiview') await scrollToSection('multiview-output')
@@ -1505,6 +1674,12 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .brief-chip { display: inline-flex; align-items: center; gap: 6rpx; padding: 6rpx 9rpx; border: 1rpx solid #cdded2; border-radius: 8rpx; background: #edf5ef; color: var(--green); font-size: 12rpx; }
 .brief-chip text:first-child { color: #8ca296; }
 .brief-chip.muted { border-color: #e2e7e3; background: #fff; color: #84918a; }
+.campaign-strip { display: flex; align-items: flex-start; justify-content: space-between; gap: 10rpx; margin-top: 13rpx; padding: 10rpx 11rpx; border: 1rpx solid #c7dccb; border-radius: 11rpx; background: #f2f8f2; }
+.campaign-strip>view { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3rpx; }
+.campaign-strip>view text:first-child { color: #66806e; font-size: 11rpx; font-weight: 900; letter-spacing: 1.2rpx; }
+.campaign-strip>view text:nth-child(2) { overflow: hidden; color: #3e5949; font-size: 15rpx; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.campaign-strip>view text:last-child { overflow: hidden; color: #789081; font-size: 11rpx; text-overflow: ellipsis; white-space: nowrap; }
+.campaign-strip>text { flex: 0 0 auto; padding: 5rpx 6rpx; border-radius: 7rpx; background: #dcecdf; color: #4e745c; font-size: 11rpx; font-weight: 850; white-space: nowrap; }
 .ai-disclosure { margin: 0 0 22rpx; }
 
 .message-row { display: flex; align-items: flex-start; gap: 10rpx; margin: 20rpx 0; }
