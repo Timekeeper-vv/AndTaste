@@ -61,12 +61,14 @@ import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { getAssetPreviewAccess, getAssets, getCredits, getProductionRequests } from '../../api/creative'
 import { apiUrl } from '../../api/client'
+import { getCommercialRequests } from '../../api/commercial'
 import { getSession, requireSession } from '../../utils/session'
 
 const user = ref(getSession()?.user)
 const credits = ref(0)
 const assets = ref<any[]>([])
 const productionRequests = ref<any[]>([])
+const commercialRequests = ref<{ quoteRequests: any[]; consignmentApplications: any[] }>({ quoteRequests: [], consignmentApplications: [] })
 const refreshing = ref(false)
 const heroVisualUrl = ref('')
 const context = ref<any>(uni.getStorageSync('creation_context') || {})
@@ -88,17 +90,20 @@ const heroVisualLabel = computed(() => {
 })
 const heroVisualTitle = computed(() => String(latestVisualAsset.value?.title || '让一个想法，成为可被看见的作品'))
 const latestRequest = computed(() => [...productionRequests.value].sort((left, right) => requestTime(right) - requestTime(left))[0] || null)
+const latestCommercialRequest = computed(() => [
+  ...commercialRequests.value.quoteRequests.map(request => ({ ...request, progressKind: 'quote' })),
+  ...commercialRequests.value.consignmentApplications.map(request => ({ ...request, progressKind: 'consignment' })),
+].sort((left, right) => requestTime(right) - requestTime(left))[0] || null)
 const latestTrackedAsset = computed(() => assets.value
   .filter(asset => ['review', 'approved', 'rejected'].includes(String(asset?.status || '').toLowerCase()))
   .sort((left, right) => requestTime(right) - requestTime(left))[0] || null)
 const latestProgressItem = computed(() => {
-  const request = latestRequest.value
-  const asset = latestTrackedAsset.value
-  if (!request) return asset ? { type: 'asset' as const, value: asset } : null
-  if (!asset) return { type: 'request' as const, value: request }
-  return requestTime(request) >= requestTime(asset)
-    ? { type: 'request' as const, value: request }
-    : { type: 'asset' as const, value: asset }
+  const candidates = [
+    latestRequest.value ? { type: 'request' as const, value: latestRequest.value } : null,
+    latestCommercialRequest.value ? { type: 'commercial' as const, value: latestCommercialRequest.value } : null,
+    latestTrackedAsset.value ? { type: 'asset' as const, value: latestTrackedAsset.value } : null,
+  ].filter(Boolean) as Array<{ type: 'request' | 'commercial' | 'asset'; value: any }>
+  return candidates.sort((left, right) => requestTime(right.value) - requestTime(left.value))[0] || null
 })
 const progressState = computed(() => {
   if (!loggedIn.value) return { index: 0, tone: 'neutral', label: '登录后同步', title: '你的第一件产品，从这里开始', description: '登录后可以同步作品审核、打样和生产状态。' }
@@ -113,6 +118,24 @@ const progressState = computed(() => {
     if (status === 'approved' && asset.assetType !== 'model') return { index: 1, tone: 'active', label: '审核已通过', title, description: '图片审核已通过，继续生成 3D 模型后可创建打样或生产项目。' }
     if (status === 'approved') return { index: 2, tone: 'active', label: '可创建项目', title, description: '3D 模型审核已通过，可以创建打样或生产项目。' }
     return { index: 1, tone: 'active', label: '审核中', title, description: '平台正在核对作品内容、版权材料和生产可行性。' }
+  }
+
+  if (item.type === 'commercial') {
+    const request = item.value
+    const status = String(request.status || '').toLowerCase()
+    const title = request.productName || '未命名产品'
+    if (request.progressKind === 'consignment') {
+      if (['rejected', 'need_materials'].includes(status)) return { index: 1, tone: 'warning', label: '需要调整', title, description: request.operatorComment || '渠道申请需要补充资料或调整后重新提交。' }
+      if (status === 'approved') return { index: 2, tone: 'active', label: '渠道审核通过', title, description: '平台正在确认上架资料、渠道排期和供货安排。' }
+      return { index: 1, tone: 'active', label: '渠道审核中', title, description: '平台正在核对版权、作品质量和渠道匹配情况。' }
+    }
+    const paymentStatus = String(request.samplePaymentStatus || '').toLowerCase()
+    if (status === 'quoted') return { index: 2, tone: 'warning', label: '报价待确认', title, description: '报价已出具，确认后可继续支付打样费或进入生产对接。' }
+    if (status === 'accepted' && request.requestType === 'sample' && ['unpaid', 'pending', 'manual_review'].includes(paymentStatus)) return { index: 2, tone: 'warning', label: '待支付打样费', title, description: '报价已确认，完成打样费支付后进入打样安排。' }
+    if (status === 'accepted' && request.requestType === 'sample' && paymentStatus === 'paid') return { index: 2, tone: 'active', label: '打样安排中', title, description: '打样费已支付，供应链正在安排后续流程。' }
+    if (status === 'rejected') return { index: 1, tone: 'warning', label: '需要调整', title, description: request.operatorComment || '本次报价申请未通过，请调整后重新提交。' }
+    if (status === 'accepted') return { index: 2, tone: 'active', label: '生产对接中', title, description: '报价已确认，平台正在确认生产细节和交付安排。' }
+    return { index: 1, tone: 'active', label: '报价审核中', title, description: '平台正在核算产品、数量、工艺和后续安排。' }
   }
 
   const request = item.value
@@ -132,6 +155,10 @@ const progressShortLabel = computed(() => ({
   '待开始': '从创作开始',
   '需要调整': '需要调整',
   '可创建项目': '创建项目',
+  '报价待确认': '待确认报价',
+  '渠道审核通过': '待上架安排',
+  '渠道审核中': '渠道审核中',
+  '报价审核中': '报价审核中',
   '待支付打样费': '待支付',
   '打样安排中': '打样中',
   '审核已通过': '已通过',
@@ -203,14 +230,16 @@ async function refreshHome() {
   refreshing.value = true
   user.value = getSession()?.user
   context.value = uni.getStorageSync('creation_context') || {}
-  const [creditResult, assetResult, requestResult] = await Promise.allSettled([
+  const [creditResult, assetResult, requestResult, commercialResult] = await Promise.allSettled([
     getCredits(),
     getAssets(),
     getProductionRequests(),
+    getCommercialRequests(),
   ])
   if (creditResult.status === 'fulfilled') credits.value = Number(creditResult.value?.balance) || 0
   if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
   if (requestResult.status === 'fulfilled') productionRequests.value = Array.isArray(requestResult.value) ? requestResult.value : []
+  if (commercialResult.status === 'fulfilled') commercialRequests.value = commercialResult.value
   void hydrateHeroVisual()
   refreshing.value = false
 }

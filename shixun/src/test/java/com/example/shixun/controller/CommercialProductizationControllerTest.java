@@ -36,6 +36,7 @@ class CommercialProductizationControllerTest {
     @Test
     void commercialRequestsReturnsCurrentUsersQuoteAndConsignmentRequests() {
         Map<String, Object> result = controller.consumerRequests(consumer);
+        Map<String, Object> compatibilityResult = controller.consumerProductProgress(consumer);
 
         List<Map<String, Object>> quotes = rows(result, "quoteRequests");
         List<Map<String, Object>> consignments = rows(result, "consignmentApplications");
@@ -50,6 +51,8 @@ class CommercialProductizationControllerTest {
         assertThat(summary.get("quoteRequestCount")).isEqualTo(2);
         assertThat(summary.get("consignmentApplicationCount")).isEqualTo(1);
         assertThat(result.get("syncedAt")).isNotNull();
+        assertThat(rows(compatibilityResult, "quoteRequests")).hasSize(2);
+        assertThat(rows(compatibilityResult, "consignmentApplications")).hasSize(1);
     }
 
     @SuppressWarnings("unchecked")

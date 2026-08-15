@@ -213,6 +213,17 @@ public class CommercialProductizationController {
         return consumerRequestPayload(requireConsumer(principal));
     }
 
+    /**
+     * Kept only for already-published mini-program packages. New clients use
+     * /consumer/requests directly, and both URLs deliberately share one payload.
+     */
+    @Deprecated
+    @GetMapping("/consumer/product-progress")
+    public Map<String, Object> consumerProductProgress(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        return consumerRequests(principal);
+    }
+
     private Map<String, Object> consumerRequestPayload(Long userId) {
         List<Map<String, Object>> quoteRequests = jdbc.queryForList(
                 "SELECT r.id,r.request_no requestNo,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.status,"
