@@ -210,10 +210,44 @@ public class CommercialProductizationController {
     @GetMapping("/consumer/requests")
     public Map<String, Object> consumerRequests(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
-        Long userId = requireConsumer(principal);
+        return consumerRequestPayload(requireConsumer(principal));
+    }
+
+    /**
+     * Product progress uses a dedicated read endpoint instead of reconstructing
+     * commercial state from unrelated production requests. The response shape
+     * intentionally matches /consumer/requests so existing clients keep working.
+     */
+    @GetMapping("/consumer/product-progress")
+    public Map<String, Object> consumerProductProgress(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        return consumerRequestPayload(requireConsumer(principal));
+    }
+
+    private Map<String, Object> consumerRequestPayload(Long userId) {
+        List<Map<String, Object>> quoteRequests = jdbc.queryForList(
+                "SELECT r.id,r.request_no requestNo,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.status,"
+                        + "r.quoted_unit_price quotedUnitPrice,r.quoted_total_price quotedTotalPrice,r.quoted_lead_time quotedLeadTime,"
+                        + "r.operator_comment operatorComment,CASE WHEN r.request_type='sample' AND r.status='accepted' "
+                        + "AND r.sample_payment_status='not_required' THEN 'unpaid' ELSE r.sample_payment_status END samplePaymentStatus,"
+                        + "r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,"
+                        + "COALESCE(p.template_code,CONCAT('archived-product-',r.product_template_id)) templateCode,"
+                        + "COALESCE(p.product_name,'历史商品化申请') productName,r.created_at createdAt,r.updated_at updatedAt "
+                        + "FROM creative_quote_request r LEFT JOIN creative_product_template p ON p.id=r.product_template_id "
+                        + "WHERE r.user_id=? ORDER BY r.id DESC LIMIT 100", userId);
+        List<Map<String, Object>> consignmentApplications = jdbc.queryForList(
+                "SELECT a.id,a.application_no applicationNo,a.asset_id assetId,a.channel_id channelId,a.channel_name_snapshot channelName,"
+                        + "a.sales_mode salesMode,a.creator_share_percent creatorSharePercent,a.platform_service_percent platformServicePercent,"
+                        + "a.status,a.operator_comment operatorComment,"
+                        + "COALESCE(p.template_code,CONCAT('archived-product-',a.product_template_id)) templateCode,"
+                        + "COALESCE(p.product_name,'历史商品化申请') productName,a.created_at createdAt,a.updated_at updatedAt "
+                        + "FROM creative_consignment_application a LEFT JOIN creative_product_template p ON p.id=a.product_template_id "
+                        + "WHERE a.user_id=? ORDER BY a.id DESC LIMIT 100", userId);
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("quoteRequests", jdbc.queryForList("SELECT r.id,r.request_no requestNo,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.status,r.quoted_unit_price quotedUnitPrice,r.quoted_total_price quotedTotalPrice,r.quoted_lead_time quotedLeadTime,r.operator_comment operatorComment,CASE WHEN r.request_type='sample' AND r.status='accepted' AND r.sample_payment_status='not_required' THEN 'unpaid' ELSE r.sample_payment_status END samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,p.template_code templateCode,p.product_name productName,r.created_at createdAt,r.updated_at updatedAt FROM creative_quote_request r JOIN creative_product_template p ON p.id=r.product_template_id WHERE r.user_id=? ORDER BY r.id DESC LIMIT 100", userId));
-        out.put("consignmentApplications", jdbc.queryForList("SELECT a.id,a.application_no applicationNo,a.asset_id assetId,a.channel_id channelId,a.channel_name_snapshot channelName,a.sales_mode salesMode,a.creator_share_percent creatorSharePercent,a.platform_service_percent platformServicePercent,a.status,a.operator_comment operatorComment,p.template_code templateCode,p.product_name productName,a.created_at createdAt,a.updated_at updatedAt FROM creative_consignment_application a JOIN creative_product_template p ON p.id=a.product_template_id WHERE a.user_id=? ORDER BY a.id DESC LIMIT 100", userId));
+        out.put("quoteRequests", quoteRequests);
+        out.put("consignmentApplications", consignmentApplications);
+        out.put("summary", Map.of("quoteRequestCount", quoteRequests.size(), "consignmentApplicationCount", consignmentApplications.size()));
+        out.put("syncedAt", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         return out;
     }
 

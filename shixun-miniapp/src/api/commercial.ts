@@ -1,4 +1,5 @@
-import { request } from './client'
+import { ApiError, request } from './client'
+import { getSession } from '../utils/session'
 
 export interface CommercialProduct {
   id: number
@@ -47,6 +48,61 @@ export interface CommercialChannelDirectory {
   provinces: Array<{ province: string; count: number }>
 }
 
+export interface CommercialRequests {
+  quoteRequests: any[]
+  consignmentApplications: any[]
+  summary?: {
+    quoteRequestCount?: number
+    consignmentApplicationCount?: number
+  }
+  syncedAt?: string
+}
+
+export interface CachedCommercialRequests {
+  data: CommercialRequests
+  savedAt: number
+}
+
+const COMMERCIAL_REQUEST_CACHE_PREFIX = 'smart_pig_commercial_requests:'
+const COMMERCIAL_REQUEST_CACHE_MAX_AGE = 30 * 24 * 60 * 60 * 1000
+
+function commercialRequestCacheKey() {
+  const username = getSession()?.user?.username
+  return username ? `${COMMERCIAL_REQUEST_CACHE_PREFIX}${encodeURIComponent(username)}` : ''
+}
+
+function normalizeCommercialRequests(value: any): CommercialRequests {
+  const payload = value && typeof value === 'object' && !Array.isArray(value)
+    && !Array.isArray(value.quoteRequests) && value.data && typeof value.data === 'object'
+    ? value.data
+    : value
+  return {
+    quoteRequests: Array.isArray(payload?.quoteRequests) ? payload.quoteRequests : [],
+    consignmentApplications: Array.isArray(payload?.consignmentApplications) ? payload.consignmentApplications : [],
+    summary: payload?.summary && typeof payload.summary === 'object' ? payload.summary : undefined,
+    syncedAt: typeof payload?.syncedAt === 'string' ? payload.syncedAt : undefined,
+  }
+}
+
+function cacheCommercialRequests(data: CommercialRequests) {
+  const key = commercialRequestCacheKey()
+  if (!key) return data
+  uni.setStorageSync(key, { data, savedAt: Date.now() } satisfies CachedCommercialRequests)
+  return data
+}
+
+/** Returns only a record saved for the currently authenticated mini-program account. */
+export function getCachedCommercialRequests(): CachedCommercialRequests | null {
+  const key = commercialRequestCacheKey()
+  if (!key) return null
+  const cached = uni.getStorageSync(key) as CachedCommercialRequests | undefined
+  if (!cached || typeof cached.savedAt !== 'number' || Date.now() - cached.savedAt > COMMERCIAL_REQUEST_CACHE_MAX_AGE) {
+    if (cached) uni.removeStorageSync(key)
+    return null
+  }
+  return { data: normalizeCommercialRequests(cached.data), savedAt: cached.savedAt }
+}
+
 export const getCommercialProducts = () => request<CommercialProduct[]>('/api/commercial/consumer/products')
 
 export const getCommercialChannels = (keyword?: string) => request<CommercialChannel[]>(`/api/commercial/consumer/channels${keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''}`)
@@ -63,6 +119,24 @@ export const createQuoteRequest = (body: Record<string, unknown>) => request<any
 
 export const createConsignmentApplication = (body: Record<string, unknown>) => request<any>('/api/commercial/consumer/consignment-applications', { method: 'POST', data: body, header: { 'content-type': 'application/json' } })
 
-export const getCommercialRequests = () => request<{ quoteRequests: any[]; consignmentApplications: any[] }>('/api/commercial/consumer/requests')
+export const getCommercialRequests = async () => cacheCommercialRequests(normalizeCommercialRequests(
+  await request<unknown>('/api/commercial/consumer/requests'),
+))
+
+/**
+ * Dedicated product-progress source. Fall back to the established request
+ * endpoint while an older server is being rolled out, but do not hide any
+ * other server failure as an empty project list.
+ */
+export async function getCommercialProductProgress() {
+  try {
+    return cacheCommercialRequests(normalizeCommercialRequests(
+      await request<unknown>('/api/commercial/consumer/product-progress'),
+    ))
+  } catch (error) {
+    if (error instanceof ApiError && error.statusCode === 404) return getCommercialRequests()
+    throw error
+  }
+}
 
 export const acceptCommercialQuote = (id: number) => request<any>(`/api/commercial/consumer/quote-requests/${id}/accept`, { method: 'POST' })

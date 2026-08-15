@@ -10,7 +10,7 @@
     </view>
 
     <view class="workspace-band">
-      <view class="band-top"><text>CREATIVE DELIVERY</text><text>实时同步</text></view>
+      <view class="band-top"><text>CREATIVE DELIVERY</text><text>{{ commercialSyncLabel }}</text></view>
       <view class="band-copy"><text>从作品到产品，<br />每一步都有回应。</text><text>审核、原型、打样与生产，按项目持续推进。</text></view>
       <view class="band-stats">
         <view><text>{{ actionProjectCount }}</text><text>待我处理</text></view>
@@ -32,8 +32,24 @@
       </view>
     </scroll-view>
 
+    <view v-if="commercialSyncState === 'cached' || commercialSyncState === 'failed'" class="commercial-sync-alert" :class="commercialSyncState">
+      <view>
+        <text>{{ commercialSyncState === 'cached' ? '商品化进度暂未连接服务器' : '商品化进度同步失败' }}</text>
+        <text>{{ commercialSyncMessage || (commercialSyncState === 'cached' ? '已显示此账号最近保存的申请记录。' : '不能将这次同步结果当作没有项目。') }}</text>
+      </view>
+      <button size="mini" :loading="loading" @tap="loadProjects(true)">重新同步</button>
+    </view>
+
     <view v-if="loading && !projects.length" class="loading-state">
       <view class="loading-seal"><text>之</text></view><text>正在同步项目进度</text>
+    </view>
+
+    <view v-else-if="!projects.length && commercialSyncState === 'failed'" class="empty-state sync-failed-state">
+      <view class="empty-seal"><text>！</text></view>
+      <text class="empty-title">商品化进度暂未同步</text>
+      <text class="empty-copy">{{ commercialSyncMessage || '当前无法确认商品化申请数据，请重新同步后再查看。' }}</text>
+      <button class="empty-action" :loading="loading" @tap="loadProjects(true)">重新同步</button>
+      <button class="empty-link" @tap="goCommercial">查看商品化申请</button>
     </view>
 
     <view v-else-if="!projects.length" class="empty-state">
@@ -91,7 +107,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
-import { acceptCommercialQuote, getCommercialRequests } from '../../api/commercial'
+import { acceptCommercialQuote, getCachedCommercialRequests, getCommercialProductProgress } from '../../api/commercial'
 import { createModel, getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
@@ -101,6 +117,8 @@ const assets = ref<any[]>([])
 const requests = ref<any[]>([])
 const jobs = ref<any[]>([])
 const commercialRequests = ref<{ quoteRequests: any[]; consignmentApplications: any[] }>({ quoteRequests: [], consignmentApplications: [] })
+const commercialSyncState = ref<'idle' | 'loading' | 'ready' | 'cached' | 'failed'>('idle')
+const commercialSyncMessage = ref('')
 const loading = ref(false)
 const actionBusyKey = ref('')
 const securedPreviews = ref<Record<string, string>>({})
@@ -239,6 +257,13 @@ const filteredProjects = computed(() => projects.value.filter(project => {
   if (activeFilter.value === 'completed') return project.state.tone === 'complete'
   return true
 }))
+const commercialSyncLabel = computed(() => ({
+  idle: '准备同步',
+  loading: '同步中',
+  ready: '已同步',
+  cached: '缓存记录',
+  failed: '等待重试',
+}[commercialSyncState.value]))
 
 const trackedAssetStatuses = ['review', 'approved', 'rejected']
 const directActions: ProductAction[] = ['pay', 'pay_quote', 'accept_quote', 'open_commercial', 'apply', 'adjust', 'submit_image_review', 'generate_model', 'retry_model', 'submit_model_review', 'resubmit_request']
@@ -479,6 +504,10 @@ function formatDate(value?: string) {
 
 function goWorks() {
   uni.navigateTo({ url: '/pages/works/index' })
+}
+
+function goCommercial() {
+  uni.navigateTo({ url: '/pages/commercial/index' })
 }
 
 function goSamplePayment(request?: any) {
@@ -742,26 +771,55 @@ async function loadProjects(notify = false) {
   if (!requireSession()) return
   loading.value = true
   try {
-    const [assetResult, requestResult, jobResult, commercialResult] = await Promise.allSettled([getAssets(), getProductionRequests(), getJobs(), getCommercialRequests()])
+    await loadCommercialProgress()
+    const [assetResult, requestResult, jobResult] = await Promise.allSettled([getAssets(), getProductionRequests(), getJobs()])
     if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
     if (requestResult.status === 'fulfilled') requests.value = Array.isArray(requestResult.value) ? requestResult.value : []
     if (jobResult.status === 'fulfilled') jobs.value = Array.isArray(jobResult.value) ? jobResult.value : []
-    if (commercialResult.status === 'fulfilled') {
-      commercialRequests.value = {
-        quoteRequests: Array.isArray(commercialResult.value?.quoteRequests) ? commercialResult.value.quoteRequests : [],
-        consignmentApplications: Array.isArray(commercialResult.value?.consignmentApplications) ? commercialResult.value.consignmentApplications : [],
-      }
-    }
     void hydratePreviews(projects.value)
-    const partialFailure = [assetResult, requestResult, jobResult, commercialResult].some(result => result.status === 'rejected')
+    const partialFailure = [assetResult, requestResult, jobResult].some(result => result.status === 'rejected')
     if (partialFailure) uni.showToast({ title: '部分状态暂未同步，已展示可用数据', icon: 'none' })
-    else if (notify) uni.showToast({ title: '项目进度已更新', icon: 'success' })
+    else if (notify && commercialSyncState.value === 'ready') uni.showToast({ title: '项目进度已更新', icon: 'success' })
   } catch (error: any) {
     uni.showToast({ title: error?.message || '项目进度加载失败', icon: 'none' })
   } finally {
     loading.value = false
     uni.stopPullDownRefresh()
   }
+}
+
+async function loadCommercialProgress() {
+  commercialSyncState.value = 'loading'
+  commercialSyncMessage.value = ''
+  try {
+    const data = await getCommercialProductProgress()
+    commercialRequests.value = {
+      quoteRequests: data.quoteRequests,
+      consignmentApplications: data.consignmentApplications,
+    }
+    commercialSyncState.value = 'ready'
+  } catch (error: any) {
+    const cached = getCachedCommercialRequests()
+    if (cached) {
+      commercialRequests.value = {
+        quoteRequests: cached.data.quoteRequests,
+        consignmentApplications: cached.data.consignmentApplications,
+      }
+      commercialSyncState.value = 'cached'
+      commercialSyncMessage.value = `服务器暂未返回最新数据，已展示 ${formatCachedAt(cached.savedAt)} 保存的申请记录。`
+      return
+    }
+    commercialRequests.value = { quoteRequests: [], consignmentApplications: [] }
+    commercialSyncState.value = 'failed'
+    commercialSyncMessage.value = error?.message || '服务器未返回商品化申请数据，请重新同步。'
+  }
+}
+
+function formatCachedAt(value: number) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '最近一次'
+  const part = (number: number) => String(number).padStart(2, '0')
+  return `${part(date.getMonth() + 1)}.${part(date.getDate())} ${part(date.getHours())}:${part(date.getMinutes())}`
 }
 
 onShow(() => { if (getSession()) void loadProjects() })
@@ -776,7 +834,9 @@ onPullDownRefresh(() => { if (getSession()) void loadProjects(true); else uni.st
 
 .section-bar{display:flex;align-items:flex-end;justify-content:space-between;gap:20rpx;margin:32rpx 4rpx 14rpx}.section-bar>view{display:flex;flex-direction:column}.section-title{margin-top:4rpx;color:#263a31;font-family:"Songti SC","STSong",serif;font-size:31rpx;font-weight:850}.section-bar>text{padding-bottom:3rpx;color:#8c968e;font-size:18rpx}.filter-scroll{width:calc(100% + 60rpx);margin:0 -30rpx;white-space:nowrap}.filter-row{display:flex;gap:11rpx;padding:2rpx 30rpx 8rpx}.filter-chip{display:flex;align-items:center;gap:8rpx;flex:none;min-height:56rpx;padding:0 15rpx;border:1rpx solid #dce3dc;border-radius:9rpx;background:#fbfcfa;color:#77847c;font-size:19rpx}.filter-chip text:last-child{display:grid;place-items:center;min-width:25rpx;height:25rpx;padding:0 4rpx;border-radius:5rpx;background:#edf1ed;color:#829087;font-size:16rpx;font-weight:850}.filter-chip.active{border-color:#19483b;background:#19483b;color:#fffdf8;font-weight:850}.filter-chip.active text:last-child{background:#e3b46e;color:#153e34}
 
-.loading-state,.empty-state{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:13rpx;min-height:374rpx;margin-top:15rpx;padding:30rpx;box-sizing:border-box;border:1rpx dashed #cbd8cf;border-radius:12rpx;background:#fbfcfa;color:#7f8a81;font-size:22rpx;text-align:center;line-height:1.6}.loading-seal,.empty-seal{display:grid;place-items:center;width:70rpx;height:70rpx;border:1rpx solid #a1bbab;border-radius:11rpx;background:#e9f0e9;color:#416b56;font-family:"Songti SC","STSong",serif;font-size:36rpx;font-weight:850}.loading-seal{animation:seal-breathe 1.5s ease-in-out infinite}.empty-title{color:#34463b;font-family:"Songti SC","STSong",serif;font-size:31rpx;font-weight:850}.empty-copy{max-width:510rpx;color:#879087;font-size:20rpx}.empty-state.compact{min-height:244rpx}.empty-action{height:76rpx;line-height:76rpx;margin-top:8rpx;padding:0 24rpx;border-radius:10rpx;background:#1c503f;color:#fffdf8;font-size:21rpx;font-weight:850}
+.commercial-sync-alert{display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin-top:14rpx;padding:14rpx 15rpx;border:1rpx solid #e5c99c;border-radius:10rpx;background:#fff7e9;color:#7a5a31}.commercial-sync-alert>view{display:flex;min-width:0;flex:1;flex-direction:column;gap:5rpx}.commercial-sync-alert text:first-child{font-size:19rpx;font-weight:900}.commercial-sync-alert text:last-child{color:#9a7a54;font-size:16rpx;line-height:1.45}.commercial-sync-alert button{flex:none;height:52rpx;line-height:50rpx;margin:0;padding:0 12rpx;border:1rpx solid #d6ad76;border-radius:8rpx;background:#fffdf8;color:#7a5a31;font-size:17rpx;font-weight:850}.commercial-sync-alert button::after,.empty-link::after{border:0}.commercial-sync-alert.failed{border-color:#e5b9a5;background:#fff1eb;color:#98553e}.commercial-sync-alert.failed text:last-child{color:#a67361}.commercial-sync-alert.failed button{border-color:#d79a84;color:#98553e}
+
+.loading-state,.empty-state{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:13rpx;min-height:374rpx;margin-top:15rpx;padding:30rpx;box-sizing:border-box;border:1rpx dashed #cbd8cf;border-radius:12rpx;background:#fbfcfa;color:#7f8a81;font-size:22rpx;text-align:center;line-height:1.6}.loading-seal,.empty-seal{display:grid;place-items:center;width:70rpx;height:70rpx;border:1rpx solid #a1bbab;border-radius:11rpx;background:#e9f0e9;color:#416b56;font-family:"Songti SC","STSong",serif;font-size:36rpx;font-weight:850}.loading-seal{animation:seal-breathe 1.5s ease-in-out infinite}.empty-title{color:#34463b;font-family:"Songti SC","STSong",serif;font-size:31rpx;font-weight:850}.empty-copy{max-width:510rpx;color:#879087;font-size:20rpx}.empty-state.compact{min-height:244rpx}.empty-action{height:76rpx;line-height:76rpx;margin-top:8rpx;padding:0 24rpx;border-radius:10rpx;background:#1c503f;color:#fffdf8;font-size:21rpx;font-weight:850}.sync-failed-state{border-color:#e8c4ae;background:#fffaf6}.sync-failed-state .empty-seal{border-color:#dca489;background:#fff0e7;color:#a65e45}.empty-link{height:58rpx;line-height:58rpx;margin:0;padding:0 18rpx;border:1rpx solid #c9d9cc;border-radius:9rpx;background:#fffdf8;color:#557764;font-size:19rpx;font-weight:850}
 
 .project-list{display:flex;flex-direction:column;gap:18rpx;margin-top:14rpx}.project-card{position:relative;overflow:hidden;padding:20rpx;border:1rpx solid #dce3dc;border-radius:12rpx;background:#fbfcfa;box-shadow:0 10rpx 24rpx rgba(38,59,49,.055)}.project-card::before{position:absolute;top:0;bottom:0;left:0;width:5rpx;background:#8ba898;content:""}.project-card.warning::before{background:#d58e4f}.project-card.complete::before{background:#609a72}.project-card.attention{border-color:#cddbd0;box-shadow:0 13rpx 27rpx rgba(35,72,58,.09)}.card-main{display:flex;align-items:stretch;gap:17rpx}.project-cover{position:relative;display:flex;align-items:flex-end;justify-content:flex-start;flex:none;width:174rpx;height:174rpx;overflow:hidden;border-radius:9rpx;background:#7e9b8c}.project-cover.model{background:#7a9195}.cover-image,.cover-shade,.cover-fallback{position:absolute;inset:0;width:100%;height:100%}.cover-image{z-index:1}.cover-shade{z-index:2;background:linear-gradient(180deg,rgba(16,34,27,.03) 38%,rgba(15,42,34,.72) 100%)}.cover-fallback{display:grid;place-items:center;background:#527566;color:#f8f5ec;font-family:"Songti SC","STSong",serif;font-size:39rpx;font-weight:850}.project-cover.model .cover-fallback{background:#657b80}.cover-label{position:relative;z-index:3;margin:0 12rpx 11rpx;color:#fffdf8;font-size:16rpx;font-weight:850}.project-info{display:flex;min-width:0;flex:1;flex-direction:column}.project-meta{display:flex;align-items:center;justify-content:space-between;gap:10rpx}.project-meta>text:first-child{overflow:hidden;min-width:0;flex:1;color:#778f81;font-size:16rpx;font-weight:850;letter-spacing:.5rpx;text-overflow:ellipsis;white-space:nowrap}.status{flex:none;padding:6rpx 8rpx;border-radius:6rpx;background:#e8eee9;color:#587964;font-size:16rpx;font-weight:850}.status.warning{background:#f8ead8;color:#996832}.status.ready{background:#e5f0e6;color:#397057}.status.complete{background:#dceee1;color:#397051}.project-title{overflow:hidden;margin-top:11rpx;color:#2e4036;font-family:"Songti SC","STSong",serif;font-size:28rpx;font-weight:850;line-height:1.3;text-overflow:ellipsis;white-space:nowrap}.project-no{overflow:hidden;margin-top:6rpx;color:#929b93;font-size:16rpx;text-overflow:ellipsis;white-space:nowrap}.current-stage{display:flex;align-items:center;justify-content:space-between;gap:8rpx;margin-top:auto;padding-top:11rpx;border-top:1rpx solid #e5eae5;color:#87928a;font-size:16rpx}.current-stage text:last-child{overflow:hidden;color:#3e715a;font-size:18rpx;font-weight:850;text-overflow:ellipsis;white-space:nowrap}.project-note{display:block;min-height:51rpx;margin-top:17rpx;color:#6f7e74;font-size:20rpx;line-height:1.56}
 
