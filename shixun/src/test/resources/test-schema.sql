@@ -42,6 +42,7 @@ CREATE TABLE digital_asset (
     prompt CLOB,
     negative_prompt CLOB,
     style_id BIGINT,
+    version_no INT NOT NULL DEFAULT 1,
     parent_asset_id BIGINT,
     format VARCHAR(30),
     tags VARCHAR(1000),

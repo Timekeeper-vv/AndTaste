@@ -27,13 +27,44 @@ const paymentOrder = ref<PaymentOrder | null>(null)
 const intent = ref<'awaiting' | 'paid' | 'exception'>('awaiting')
 const hint = ref('微信支付已受理，正在等待官方回调确认，请勿重复支付。')
 const quoteId = ref('')
+const requestId = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 const fee = (value: any) => Number(value || 0).toFixed(2).replace(/\.00$/, '')
 
 function stop() { if (timer) clearInterval(timer); timer = null }
 function close() { stop(); paymentOrder.value = null }
 function loginCode(): Promise<string> { return new Promise((resolve, reject) => { uni.login({ provider: 'weixin', success: (r) => r.code ? resolve(r.code) : reject(new Error('微信登录凭证获取失败')), fail: () => reject(new Error('微信登录失败')) }) }) }
-async function load() { loading.value = true; try { if (quoteId.value) { const data = await getCommercialRequests(); const item = (data?.quoteRequests || []).find((x: any) => String(x.id) === quoteId.value); const paymentStatus = String(item?.samplePaymentStatus || 'unpaid'); requests.value = item && item.status === 'accepted' && ['unpaid', 'pending', 'manual_review'].includes(paymentStatus) ? [{ ...item, requestType: 'sample', status: 'approved', sampleProductName: item.productName, sampleFeeYuan: item.quotedTotalPrice, quotePayment: true }] : [] } else { const [rows, data] = await Promise.all([getProductionRequests(), getCommercialRequests()]); const production = (Array.isArray(rows) ? rows : []).filter((x: any) => x.requestType === 'sample' && x.status === 'approved' && ['unpaid', 'pending'].includes(String(x.samplePaymentStatus || 'unpaid'))); const quotes = (data?.quoteRequests || []).filter((x: any) => x.requestType === 'sample' && x.status === 'accepted' && ['unpaid', 'pending', 'manual_review'].includes(String(x.samplePaymentStatus || 'unpaid'))).map((x: any) => ({ ...x, sampleProductName: x.productName, sampleFeeYuan: x.quotedTotalPrice, quotePayment: true })); requests.value = [...production, ...quotes] } } catch (e: any) { uni.showToast({ title: e.message || '加载失败', icon: 'none' }) } finally { loading.value = false } }
+async function load() {
+  loading.value = true
+  try {
+    if (quoteId.value) {
+      const data = await getCommercialRequests()
+      const item = (data?.quoteRequests || []).find((row: any) => String(row.id) === quoteId.value)
+      const paymentStatus = String(item?.samplePaymentStatus || 'unpaid')
+      requests.value = item && item.status === 'accepted' && ['unpaid', 'pending', 'manual_review'].includes(paymentStatus)
+        ? [{ ...item, requestType: 'sample', status: 'approved', sampleProductName: item.productName, sampleFeeYuan: item.quotedTotalPrice, quotePayment: true }]
+        : []
+      return
+    }
+
+    const [rows, data] = await Promise.all([getProductionRequests(), getCommercialRequests()])
+    const production = (Array.isArray(rows) ? rows : []).filter((item: any) => {
+      const paymentStatus = String(item?.samplePaymentStatus || 'unpaid')
+      return item.requestType === 'sample'
+        && item.status === 'approved'
+        && ['unpaid', 'pending', 'manual_review'].includes(paymentStatus)
+        && (!requestId.value || String(item.id) === requestId.value)
+    })
+    const quotes = requestId.value ? [] : (data?.quoteRequests || [])
+      .filter((item: any) => item.requestType === 'sample' && item.status === 'accepted' && ['unpaid', 'pending', 'manual_review'].includes(String(item.samplePaymentStatus || 'unpaid')))
+      .map((item: any) => ({ ...item, sampleProductName: item.productName, sampleFeeYuan: item.quotedTotalPrice, quotePayment: true }))
+    requests.value = [...production, ...quotes]
+  } catch (error: any) {
+    uni.showToast({ title: error.message || '加载失败', icon: 'none' })
+  } finally {
+    loading.value = false
+  }
+}
 async function pay(item: any) {
   if (payingId.value) return
   payingId.value = item.id
@@ -52,7 +83,10 @@ async function pay(item: any) {
 function startPolling() { stop(); timer = setInterval(() => void refresh(), 2500); void refresh() }
 async function refresh() { if (!paymentOrder.value?.orderNo) return; try { const latest = await getPaymentOrder(paymentOrder.value.orderNo); paymentOrder.value = latest; if (latest.status === 'paid') { stop(); intent.value = 'paid'; hint.value = '打样费已到账，申请已进入生产流程。'; await load() } else if (['payment_exception', 'refund_exception'].includes(String(latest.status))) { stop(); intent.value = 'exception'; hint.value = '支付结果正在与微信官方核对，请勿重复支付。' } } catch {} }
 onShow(() => { if (requireSession()) void load() })
-onLoad((query: any) => { quoteId.value = String(query?.quoteId || '') })
+onLoad((query: any) => {
+  quoteId.value = String(query?.quoteId || '')
+  requestId.value = String(query?.requestId || '')
+})
 onUnload(stop)
 </script>
 

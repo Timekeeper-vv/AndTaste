@@ -130,7 +130,7 @@ class ArkImageQueueIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT format FROM digital_asset WHERE id=(SELECT output_asset_id FROM ai_generation_job WHERE id=?)",
                 String.class, firstSubmission.path("jobId").asLong())).isEqualTo("jpg");
         assertThat(jdbc.queryForObject("SELECT title FROM digital_asset WHERE id=(SELECT output_asset_id FROM ai_generation_job WHERE id=?)",
-                String.class, firstSubmission.path("jobId").asLong())).isEqualTo("云纹冰箱贴");
+                String.class, firstSubmission.path("jobId").asLong())).isEqualTo("之间智造效果图");
         assertCreditSettled(first.id());
         assertCreditSettled(second.id());
 
@@ -182,10 +182,30 @@ class ArkImageQueueIntegrationTest {
         assertThat(completedEdit.path("status").asText()).isEqualTo("succeeded");
         assertThat(completedEdit.path("assetId").asLong()).isPositive();
         assertThat(completedEdit.path("referenceAnalysis").asText()).isNotBlank();
+        assertThat(jdbc.queryForObject("SELECT title FROM digital_asset WHERE id=?", String.class,
+                completedEdit.path("assetId").asLong())).isEqualTo("之间智造效果图");
         assertThat(completedViews.path("status").asText()).isEqualTo("succeeded");
         assertThat(completedViews.path("images")).hasSize(3);
         assertThat(completedViews.path("images").get(0).path("previewUrl").asText()).contains("access_token=");
+        assertThat(count("SELECT COUNT(*) FROM digital_asset WHERE parent_asset_id=" + multiViewAsset +
+                " AND source_type='ai_generated' AND title='之间智造效果图'")).isEqualTo(3);
         assertThat(maxProviderRequests.get()).isEqualTo(1);
+    }
+
+    @Test
+    void presentsLegacyGeneratedImagesWithTheCurrentProductName() throws Exception {
+        TestUser user = createUser("legacy-image-owner");
+        jdbc.update("INSERT INTO digital_asset (asset_no,title,asset_type,source_type,file_url,preview_url,format,status,created_by,created_at,updated_at) " +
+                        "VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                "AST-LEGACY-IMAGE", "AI 多视图参考 · 背面", "image", "ai_generated", "/generated/legacy.png",
+                "/generated/legacy.png", "png", "draft", user.id());
+
+        String body = mvc.perform(get("/api/creative/ai/assets")
+                        .header("Authorization", "Bearer " + user.token()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(mapper.readTree(body).get(0).path("title").asText()).isEqualTo("之间智造效果图");
     }
 
     private JsonNode postJob(String token, String payload) throws Exception {

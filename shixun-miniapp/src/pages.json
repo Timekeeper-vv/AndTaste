@@ -1,6 +1,6 @@
 {
   "pages": [
-    { "path": "pages/home/index", "style": { "navigationBarTitleText": "之间智造", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/home/index", "style": { "navigationBarTitleText": "之间智造", "navigationBarBackgroundColor": "#edf1ec" } },
     { "path": "pages/webview/index", "style": { "navigationStyle": "custom", "disableScroll": true } },
     { "path": "pages/login/index", "style": { "navigationStyle": "custom" } },
     { "path": "pages/web-login/index", "style": { "navigationStyle": "custom" } },
@@ -13,12 +13,14 @@
     { "path": "pages/create/index", "style": { "navigationBarTitleText": "AI 创作", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/style-lab/index", "style": { "navigationBarTitleText": "灵感风格工作台", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/works/index", "style": { "navigationBarTitleText": "我的作品", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/product-progress/index", "style": { "navigationBarTitleText": "产品进度", "navigationBarBackgroundColor": "#f3f5f1", "enablePullDownRefresh": true, "backgroundTextStyle": "dark" } },
     { "path": "pages/review/index", "style": { "navigationBarTitleText": "AI 深度评审", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/market/index", "style": { "navigationBarTitleText": "文创商城", "navigationBarBackgroundColor": "#f7f3ed", "enablePullDownRefresh": true, "backgroundTextStyle": "dark" } },
     { "path": "pages/product/index", "style": { "navigationBarTitleText": "商品详情", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/checkout/index", "style": { "navigationBarTitleText": "确认订单", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/orders/index", "style": { "navigationBarTitleText": "我的商城订单", "navigationBarBackgroundColor": "#f7f3ed", "enablePullDownRefresh": true, "backgroundTextStyle": "dark" } },
     { "path": "pages/production/index", "style": { "navigationBarTitleText": "打样 / 生产申请", "navigationBarBackgroundColor": "#f7f3ed" } },
+    { "path": "pages/sample-payment/index", "style": { "navigationBarTitleText": "打样费支付", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/recharge/index", "style": { "navigationBarTitleText": "积分充值", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/profile/index", "style": { "navigationBarTitleText": "个人中心", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/support/index", "style": { "navigationBarTitleText": "服务与版权咨询", "navigationBarBackgroundColor": "#f7f3ed", "enablePullDownRefresh": true, "backgroundTextStyle": "dark" } },

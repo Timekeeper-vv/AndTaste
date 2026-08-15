@@ -62,6 +62,8 @@ import java.util.zip.ZipOutputStream;
 @RestController
 @RequestMapping("/api/creative/ai")
 public class CreativeAiController {
+    private static final String GENERATED_IMAGE_TITLE = "之间智造效果图";
+
     /**
      * Curated priority calls shown before login. They are platform briefs for
      * target channels, not assertions that a named institution has purchased,
@@ -435,6 +437,11 @@ public class CreativeAiController {
     private void addSignedAssetUrls(List<Map<String,Object>> rows) {
         JwtService.Claims principal = authenticatedPrincipal();
         for (Map<String,Object> row : rows) {
+            if ("image".equals(String.valueOf(row.get("assetType")))
+                    && "ai_generated".equals(String.valueOf(row.get("sourceType")))) {
+                // Legacy rows keep their stored title, but use the current product name in every client response.
+                row.put("title", GENERATED_IMAGE_TITLE);
+            }
             // Asset-list rows use `id` for the digital asset itself, while
             // production-request rows contain both a request `id` and the
             // referenced digital asset `assetId`.  Prefer the explicit asset
@@ -4218,9 +4225,14 @@ public class CreativeAiController {
         String assetNo = no("AST");
         String metaJson = mapper.writeValueAsString(meta == null ? Map.of() : meta);
         String initialStatus = "draft";
+        String effectiveSourceType = blank(sourceType) ? "ai_generated" : sourceType;
+        // Keep every generated image recognizable across all provider paths.
+        String effectiveTitle = "image".equals(type) && "ai_generated".equals(effectiveSourceType)
+                ? GENERATED_IMAGE_TITLE
+                : title;
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("INSERT INTO digital_asset (asset_no,title,asset_type,source_type,file_url,preview_url,prompt,negative_prompt,style_id,parent_asset_id,format,tags,metadata_json,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
-            ps.setString(1, assetNo); ps.setString(2, title); ps.setString(3, type); ps.setString(4, sourceType == null ? "ai_generated" : sourceType); ps.setString(5, fileUrl); ps.setString(6, previewUrl); ps.setString(7, prompt); ps.setString(8, negative); if (styleId == null) ps.setNull(9, java.sql.Types.BIGINT); else ps.setLong(9, styleId); if (parentAssetId == null) ps.setNull(10, java.sql.Types.BIGINT); else ps.setLong(10, parentAssetId); ps.setString(11, format); ps.setString(12, tags); ps.setString(13, metaJson); ps.setString(14, initialStatus);
+            ps.setString(1, assetNo); ps.setString(2, effectiveTitle); ps.setString(3, type); ps.setString(4, effectiveSourceType); ps.setString(5, fileUrl); ps.setString(6, previewUrl); ps.setString(7, prompt); ps.setString(8, negative); if (styleId == null) ps.setNull(9, java.sql.Types.BIGINT); else ps.setLong(9, styleId); if (parentAssetId == null) ps.setNull(10, java.sql.Types.BIGINT); else ps.setLong(10, parentAssetId); ps.setString(11, format); ps.setString(12, tags); ps.setString(13, metaJson); ps.setString(14, initialStatus);
             return ps;
         }, kh);
         Long assetId=Objects.requireNonNull(kh.getKey()).longValue();
