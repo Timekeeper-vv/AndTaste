@@ -1,4 +1,4 @@
-import { ApiError, request } from './client'
+import { request } from './client'
 import { getSession } from '../utils/session'
 
 export interface CommercialProduct {
@@ -122,21 +122,5 @@ export const createConsignmentApplication = (body: Record<string, unknown>) => r
 export const getCommercialRequests = async () => cacheCommercialRequests(normalizeCommercialRequests(
   await request<unknown>('/api/commercial/consumer/requests'),
 ))
-
-/**
- * Dedicated product-progress source. Fall back to the established request
- * endpoint while an older server is being rolled out, but do not hide any
- * other server failure as an empty project list.
- */
-export async function getCommercialProductProgress() {
-  try {
-    return cacheCommercialRequests(normalizeCommercialRequests(
-      await request<unknown>('/api/commercial/consumer/product-progress'),
-    ))
-  } catch (error) {
-    if (error instanceof ApiError && error.statusCode === 404) return getCommercialRequests()
-    throw error
-  }
-}
 
 export const acceptCommercialQuote = (id: number) => request<any>(`/api/commercial/consumer/quote-requests/${id}/accept`, { method: 'POST' })

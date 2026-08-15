@@ -213,17 +213,6 @@ public class CommercialProductizationController {
         return consumerRequestPayload(requireConsumer(principal));
     }
 
-    /**
-     * Product progress uses a dedicated read endpoint instead of reconstructing
-     * commercial state from unrelated production requests. The response shape
-     * intentionally matches /consumer/requests so existing clients keep working.
-     */
-    @GetMapping("/consumer/product-progress")
-    public Map<String, Object> consumerProductProgress(
-            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
-        return consumerRequestPayload(requireConsumer(principal));
-    }
-
     private Map<String, Object> consumerRequestPayload(Long userId) {
         List<Map<String, Object>> quoteRequests = jdbc.queryForList(
                 "SELECT r.id,r.request_no requestNo,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.status,"

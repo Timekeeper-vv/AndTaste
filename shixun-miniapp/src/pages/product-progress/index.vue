@@ -107,7 +107,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
-import { acceptCommercialQuote, getCachedCommercialRequests, getCommercialProductProgress } from '../../api/commercial'
+import { acceptCommercialQuote, getCachedCommercialRequests, getCommercialRequests } from '../../api/commercial'
 import { createModel, getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
@@ -792,7 +792,10 @@ async function loadCommercialProgress() {
   commercialSyncState.value = 'loading'
   commercialSyncMessage.value = ''
   try {
-    const data = await getCommercialProductProgress()
+    // Keep this identical to the "商品化申请" page: one function, one URL and
+    // one account-scoped cache. Product progress must never have its own view
+    // of a consumer's commercial applications.
+    const data = await getCommercialRequests()
     commercialRequests.value = {
       quoteRequests: data.quoteRequests,
       consignmentApplications: data.consignmentApplications,
