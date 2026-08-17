@@ -22,7 +22,16 @@
 
       <view v-if="loading && !assets.length && !jobs.length" class="empty">正在同步作品状态…</view>
 
+      <view v-else-if="syncError && !assets.length && !activeJobs.length" class="sync-error">
+        <text class="sync-error-title">作品暂时未能同步</text>
+        <text class="sync-error-copy">{{ syncError }}</text>
+        <button class="sync-retry" @tap="refresh(true)">重新加载</button>
+      </view>
+
       <view v-else>
+        <view v-if="syncError" class="sync-warning" @tap="refresh(true)">
+          <text>{{ syncError }}</text><text>点击重试 ›</text>
+        </view>
         <view v-if="activeJobs.length" class="section">
           <view class="section-head"><text>生成任务</text><text>{{ activeJobs.length }} 条</text></view>
           <view v-for="job in activeJobs" :key="`job-${job.id}`" class="job-card" :class="job.status">
@@ -93,6 +102,8 @@ const jobs = ref<any[]>([])
 const productionRequests = ref<any[]>([])
 const securedPreviews = ref<Record<string, string>>({})
 const loading = ref(true)
+const syncing = ref(false)
+const syncError = ref('')
 const submittingId = ref<number | null>(null)
 const downloadingModelId = ref('')
 const signedIn = ref(Boolean(getSession()?.token))
@@ -222,19 +233,38 @@ async function refresh(notify = false) {
     uni.stopPullDownRefresh()
     return
   }
+  if (syncing.value) {
+    uni.stopPullDownRefresh()
+    return
+  }
+  syncing.value = true
   loading.value = true
+  syncError.value = ''
   try {
-    const [assetRows, jobRows, requestRows] = await Promise.all([getAssets(), getJobs(), getProductionRequests()])
-    assets.value = Array.isArray(assetRows) ? assetRows : []
-    jobs.value = Array.isArray(jobRows) ? jobRows : []
-    productionRequests.value = Array.isArray(requestRows) ? requestRows : []
+    const [assetResult, jobResult, requestResult] = await Promise.allSettled([
+      getAssets(),
+      getJobs(),
+      getProductionRequests(),
+    ])
+    const failed: string[] = []
+    if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
+    else failed.push('作品')
+    if (jobResult.status === 'fulfilled') jobs.value = Array.isArray(jobResult.value) ? jobResult.value : []
+    else failed.push('生成任务')
+    if (requestResult.status === 'fulfilled') productionRequests.value = Array.isArray(requestResult.value) ? requestResult.value : []
+    else failed.push('商品化状态')
     // 静态 /generated 与 /uploads 在生产环境受保护；只为当前列表前 12 个作品签发短期封面地址。
-    void hydratePreviews(assets.value)
-    if (notify) uni.showToast({ title: '状态已更新', icon: 'success' })
+    if (assetResult.status === 'fulfilled') void hydratePreviews(assets.value)
+    if (failed.length) {
+      syncError.value = `${failed.join('、')}暂时未能同步，请检查网络后重试。`
+      if (notify) uni.showToast({ title: '部分状态未同步', icon: 'none' })
+    } else if (notify) uni.showToast({ title: '状态已更新', icon: 'success' })
   } catch (error: any) {
-    uni.showToast({ title: error.message || '加载作品失败', icon: 'none' })
+    syncError.value = error?.message || '加载作品失败，请检查网络后重试。'
+    if (notify) uni.showToast({ title: '加载作品失败', icon: 'none' })
   } finally {
     loading.value = false
+    syncing.value = false
     uni.stopPullDownRefresh()
   }
 }
@@ -376,6 +406,7 @@ function resetGuestState() {
   jobs.value = []
   productionRequests.value = []
   securedPreviews.value = {}
+  syncError.value = ''
   loading.value = false
 }
 
@@ -453,4 +484,5 @@ onPullDownRefresh(() => {
 <style scoped lang="scss">
 .page{background:radial-gradient(ellipse at 10% 0%,rgba(151,177,163,.17),transparent 29%),linear-gradient(180deg,#faf8f3,#f0e9df)}.title{font-family:"Songti SC","STSong",serif;color:#302b26}.sub{color:#82786d}.refresh{background:#edf3ed;color:#607b6e}.section-head{font-family:"Songti SC","STSong",serif}.asset,.job-card{border:1rpx solid rgba(129,112,93,.13);box-shadow:0 9rpx 21rpx rgba(67,53,37,.055)}.cover{background:#eef2eb}.model,.job-icon{background:linear-gradient(145deg,#5f7f71,#9eb5a8)}.job-card.failed .job-icon{background:linear-gradient(145deg,#865346,#bf765f)}.status{background:#f5ece4;color:#9d5c48}.status.approved,.status.succeeded,.status.paid{background:#e7f1e8;color:#567a67}.status.running,.status.queued,.status.processing{background:#f6f0df;color:#9b7540}.meta,.source,.generation,.progress-text{color:#8c8176}.source{color:#7d9587}.project-entry{background:#edf3ed;color:#5f7a69}.progress-line{background:#ebe5dc}.progress-value{background:linear-gradient(90deg,#a56e58,#6e8b7c)}.actions button{background:#f2f5ef;color:#59776a}.actions .material{background:#dcece2;color:#426d5a}.actions .export{background:#e8edf5;color:#526b85}.actions .production{background:#efe1d5;color:#8c5947}.actions .design-review{background:#eeeaf5;color:#6b5b8b}.create-first{border-radius:17rpx;background:linear-gradient(135deg,#3e3933,#617e71)}.material-summary{display:flex;align-items:center;flex-wrap:wrap;gap:7rpx;margin-top:11rpx}.material-summary text:first-child{padding:3rpx 8rpx;border-radius:8rpx;background:#eef2ec;color:#728578;font-size:16rpx;font-weight:800}.material-summary text:nth-child(2){color:#476c5b;font-size:20rpx;font-weight:850}.material-summary text:last-child{color:#978c80;font-size:17rpx}
 .back-home{margin:4rpx 0 0;border:1rpx solid #d5e0d6;background:#fffdf9;color:#587666;font-size:21rpx}.guest-state{display:flex;align-items:center;flex-direction:column;margin:16rpx 0 36rpx;padding:64rpx 38rpx 48rpx;border:1rpx solid rgba(113,136,120,.22);border-radius:16rpx;background:rgba(255,253,249,.9);box-shadow:0 12rpx 30rpx rgba(67,53,37,.06);text-align:center}.guest-mark{display:grid;place-items:center;width:88rpx;height:88rpx;border-radius:16rpx;background:#edf3ed;color:#567765;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:700}.guest-title{display:block;margin-top:27rpx;color:#37332d;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:700}.guest-copy{display:block;margin-top:13rpx;color:#877d72;font-size:23rpx;line-height:1.7}.guest-login,.guest-browse{width:100%;height:84rpx;line-height:84rpx;margin:32rpx 0 0;border-radius:12rpx;font-size:26rpx;font-weight:800}.guest-login{background:#456a59;color:#fffdf8}.guest-browse{margin-top:16rpx;border:1rpx solid #d7dfd7;background:#fffdfa;color:#557364}
+.sync-error{display:flex;align-items:center;flex-direction:column;margin:20rpx 0;padding:90rpx 42rpx 70rpx;border:1rpx solid #e6d9c9;border-radius:16rpx;background:#fffdf9;text-align:center}.sync-error-title{color:#4c4137;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:700}.sync-error-copy{display:block;margin-top:16rpx;color:#897c70;font-size:23rpx;line-height:1.7}.sync-retry{width:280rpx;height:82rpx;line-height:82rpx;margin-top:30rpx;border-radius:12rpx;background:#456a59;color:#fffdf8;font-size:25rpx;font-weight:800}.sync-warning{display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin:8rpx 0 22rpx;padding:17rpx 18rpx;border:1rpx solid #eadfc9;border-radius:12rpx;background:#fff9ed;color:#88704f;font-size:20rpx;line-height:1.5}.sync-warning text:first-child{min-width:0;flex:1}.sync-warning text:last-child{flex:none;color:#617967;font-weight:800;white-space:nowrap}
 </style>

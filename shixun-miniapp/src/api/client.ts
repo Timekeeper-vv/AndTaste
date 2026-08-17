@@ -47,9 +47,12 @@ export function apiUrl(path: string) {
 
 export type RequestOptions = Omit<UniApp.RequestOptions, 'url'>
 
+const DEFAULT_REQUEST_TIMEOUT = 20000
+
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const session = getSession()
-  const headers: Record<string, string> = { ...(options.header as Record<string, string> || {}) }
+  const { timeout = DEFAULT_REQUEST_TIMEOUT, ...requestOptions } = options
+  const headers: Record<string, string> = { ...(requestOptions.header as Record<string, string> || {}) }
   // Some endpoints (such as public consumer registration) must deliberately
   // remain anonymous even when the device still has a previous session. An
   // explicit empty Authorization header is therefore an opt-out, rather than
@@ -57,7 +60,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (session?.token && !Object.prototype.hasOwnProperty.call(headers, 'Authorization')) headers.Authorization = `Bearer ${session.token}`
   let response: UniApp.RequestSuccessCallbackResult
   try {
-    response = await uni.request({ url: apiUrl(path), ...options, header: headers })
+    response = await uni.request({ url: apiUrl(path), ...requestOptions, timeout, header: headers })
   } catch (error: any) {
     throw new Error(messageOf(error, '网络请求失败，请检查服务地址和网络连接'))
   }
