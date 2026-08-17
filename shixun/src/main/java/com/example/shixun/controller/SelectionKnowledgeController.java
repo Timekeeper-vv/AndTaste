@@ -175,7 +175,17 @@ public class SelectionKnowledgeController {
         String requestNo = no("SDR");
         jdbc.update("INSERT INTO selection_demand_request (request_no,user_id,option_id,asset_id,theme,budget_max,audience,occasion,note) VALUES (?,?,?,?,?,?,?,?,?)",
                 requestNo, userId, option.get("id"), assetId, text(body.get("theme")), decimal(body.get("budgetMax")), text(body.get("audience")), text(body.get("occasion")), limit(text(body.get("note")), 1000));
-        return Map.of("requestNo", requestNo, "optionKey", optionKey, "optionName", option.get("name"), "status", "new", "message", "商品化需求已提交，后续会由运营或设计师跟进");
+        Long demandId = jdbc.queryForObject("SELECT id FROM selection_demand_request WHERE request_no=?", Long.class, requestNo);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", demandId);
+        result.put("requestNo", requestNo);
+        result.put("optionKey", optionKey);
+        result.put("optionName", option.get("name"));
+        result.put("productName", option.get("name"));
+        result.put("assetId", assetId);
+        result.put("status", "new");
+        result.put("message", "商品化需求已提交，后续会由运营或设计师跟进");
+        return result;
     }
 
     @GetMapping("/demands/mine")

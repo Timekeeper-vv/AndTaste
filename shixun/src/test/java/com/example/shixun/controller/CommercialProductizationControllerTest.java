@@ -40,16 +40,21 @@ class CommercialProductizationControllerTest {
 
         List<Map<String, Object>> quotes = rows(result, "quoteRequests");
         List<Map<String, Object>> consignments = rows(result, "consignmentApplications");
+        List<Map<String, Object>> selectionDemands = rows(result, "selectionDemands");
         Map<String, Object> summary = map(result, "summary");
 
         assertThat(quotes).hasSize(2);
         assertThat(consignments).hasSize(1);
+        assertThat(selectionDemands).hasSize(1);
+        assertThat(selectionDemands.get(0).get("requestNo")).isEqualTo("SDR-001");
+        assertThat(selectionDemands.get(0).get("productName")).isEqualTo("文化书签");
         assertThat(quotes).extracting(row -> String.valueOf(row.get("requestNo")))
                 .containsExactly("CQR-002", "CQR-001");
         assertThat(quotes.get(0).get("productName")).isEqualTo("历史商品化申请");
         assertThat(quotes.get(0).get("templateCode")).isEqualTo("archived-product-999");
         assertThat(summary.get("quoteRequestCount")).isEqualTo(2);
         assertThat(summary.get("consignmentApplicationCount")).isEqualTo(1);
+        assertThat(summary.get("selectionDemandCount")).isEqualTo(1);
         assertThat(result.get("syncedAt")).isNotNull();
         assertThat(rows(compatibilityResult, "quoteRequests")).hasSize(2);
         assertThat(rows(compatibilityResult, "consignmentApplications")).hasSize(1);
@@ -79,6 +84,11 @@ class CommercialProductizationControllerTest {
                 + "channel_id BIGINT,channel_name_snapshot VARCHAR(200),sales_mode VARCHAR(30),"
                 + "creator_share_percent DECIMAL(5,2),platform_service_percent DECIMAL(5,2),status VARCHAR(30),"
                 + "operator_comment VARCHAR(1200),created_at TIMESTAMP,updated_at TIMESTAMP)");
+        jdbc.execute("CREATE TABLE selection_option (id BIGINT PRIMARY KEY, option_key VARCHAR(80), name VARCHAR(120))");
+        jdbc.execute("CREATE TABLE selection_demand_request ("
+                + "id BIGINT PRIMARY KEY,request_no VARCHAR(80),user_id BIGINT,option_id BIGINT,asset_id BIGINT,"
+                + "theme VARCHAR(300),budget_max DECIMAL(12,2),audience VARCHAR(200),occasion VARCHAR(100),"
+                + "note VARCHAR(1000),status VARCHAR(30),created_at TIMESTAMP,updated_at TIMESTAMP)");
     }
 
     private void seedData() {
@@ -100,5 +110,10 @@ class CommercialProductizationControllerTest {
         jdbc.update("INSERT INTO creative_consignment_application VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 2L, "CCA-OTHER", 2L, 103L, 10L, 5L, "Other Store", "preorder",
                 new BigDecimal("70"), new BigDecimal("30"), "pending_review", "", now, now);
+        jdbc.update("INSERT INTO selection_option VALUES (1,'stationery-metal-bookmark','文化书签'),(2,'stationery-postcard','明信片')");
+        jdbc.update("INSERT INTO selection_demand_request VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                1L, "SDR-001", 1L, 1L, 101L, "博物馆纹样", null, "游客", "伴手礼", "", "new", now, now);
+        jdbc.update("INSERT INTO selection_demand_request VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                2L, "SDR-OTHER", 2L, 2L, 103L, "城市主题", null, "游客", "伴手礼", "", "new", now, now);
     }
 }

@@ -267,12 +267,45 @@ public class CommercialProductizationController {
                         + "COALESCE(p.product_name,'历史商品化申请') productName,a.created_at createdAt,a.updated_at updatedAt "
                         + "FROM creative_consignment_application a LEFT JOIN creative_product_template p ON p.id=a.product_template_id "
                         + "WHERE a.user_id=? ORDER BY a.id DESC LIMIT 100", userId);
+        List<Map<String, Object>> selectionDemands = selectionDemandRequests(userId);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("quoteRequests", quoteRequests);
         out.put("consignmentApplications", consignmentApplications);
-        out.put("summary", Map.of("quoteRequestCount", quoteRequests.size(), "consignmentApplicationCount", consignmentApplications.size()));
+        out.put("selectionDemands", selectionDemands);
+        out.put("summary", Map.of(
+                "quoteRequestCount", quoteRequests.size(),
+                "consignmentApplicationCount", consignmentApplications.size(),
+                "selectionDemandCount", selectionDemands.size()));
         out.put("syncedAt", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         return out;
+    }
+
+    /**
+     * The selection page has its own lightweight demand form. It is still a
+     * productization request from the user's point of view, so expose it from
+     * the same account-scoped feed as quote and consignment applications.
+     *
+     * The table check keeps the endpoint compatible with databases that were
+     * upgraded from a release before the selection knowledge-base migration.
+     */
+    private List<Map<String, Object>> selectionDemandRequests(Long userId) {
+        if (!tableExists("selection_demand_request") || !tableExists("selection_option")) {
+            return Collections.emptyList();
+        }
+        return jdbc.queryForList(
+                "SELECT d.id,d.request_no requestNo,d.option_id optionId,d.asset_id assetId,"
+                        + "o.option_key optionKey,COALESCE(o.name,'历史选品需求') productName,"
+                        + "COALESCE(o.name,'历史选品需求') optionName,d.theme,d.budget_max budgetMax,"
+                        + "d.audience,d.occasion,d.note,d.status,d.created_at createdAt,d.updated_at updatedAt "
+                        + "FROM selection_demand_request d LEFT JOIN selection_option o ON o.id=d.option_id "
+                        + "WHERE d.user_id=? ORDER BY d.id DESC LIMIT 100", userId);
+    }
+
+    private boolean tableExists(String tableName) {
+        Number count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE LOWER(table_name)=LOWER(?)",
+                new Object[]{tableName}, Number.class);
+        return count != null && count.intValue() > 0;
     }
 
     @PostMapping("/consumer/quote-requests/{id}/accept")

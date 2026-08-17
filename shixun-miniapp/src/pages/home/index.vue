@@ -68,7 +68,7 @@ const user = ref(getSession()?.user)
 const credits = ref(0)
 const assets = ref<any[]>([])
 const productionRequests = ref<any[]>([])
-const commercialRequests = ref<{ quoteRequests: any[]; consignmentApplications: any[] }>({ quoteRequests: [], consignmentApplications: [] })
+const commercialRequests = ref<{ quoteRequests: any[]; consignmentApplications: any[]; selectionDemands: any[] }>({ quoteRequests: [], consignmentApplications: [], selectionDemands: [] })
 const refreshing = ref(false)
 const heroVisualUrl = ref('')
 const context = ref<any>(uni.getStorageSync('creation_context') || {})
@@ -93,6 +93,7 @@ const latestRequest = computed(() => [...productionRequests.value].sort((left, r
 const latestCommercialRequest = computed(() => [
   ...commercialRequests.value.quoteRequests.map(request => ({ ...request, progressKind: 'quote' })),
   ...commercialRequests.value.consignmentApplications.map(request => ({ ...request, progressKind: 'consignment' })),
+  ...commercialRequests.value.selectionDemands.map(request => ({ ...request, progressKind: 'selection' })),
 ].sort((left, right) => requestTime(right) - requestTime(left))[0] || null)
 const latestTrackedAsset = computed(() => assets.value
   .filter(asset => ['review', 'approved', 'rejected'].includes(String(asset?.status || '').toLowerCase()))
@@ -124,6 +125,11 @@ const progressState = computed(() => {
     const request = item.value
     const status = String(request.status || '').toLowerCase()
     const title = request.productName || '未命名产品'
+    if (request.progressKind === 'selection') {
+      if (['rejected', 'returned', 'need_materials'].includes(status)) return { index: 1, tone: 'warning', label: '需要调整', title, description: request.operatorComment || '商品化需求需要补充资料或调整后重新提交。' }
+      if (['approved', 'accepted'].includes(status)) return { index: 2, tone: 'active', label: '需求已通过评估', title, description: '运营正在确认报价、打样条件和后续生产安排。' }
+      return { index: 1, tone: 'active', label: '商品化需求已提交', title, description: '平台正在评估这个产品方向的授权、工艺和生产可行性。' }
+    }
     if (request.progressKind === 'consignment') {
       if (['rejected', 'need_materials'].includes(status)) return { index: 1, tone: 'warning', label: '需要调整', title, description: request.operatorComment || '渠道申请需要补充资料或调整后重新提交。' }
       if (status === 'approved') return { index: 2, tone: 'active', label: '渠道审核通过', title, description: '平台正在确认上架资料、渠道排期和供货安排。' }

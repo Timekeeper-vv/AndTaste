@@ -51,9 +51,11 @@ export interface CommercialChannelDirectory {
 export interface CommercialRequests {
   quoteRequests: any[]
   consignmentApplications: any[]
+  selectionDemands: any[]
   summary?: {
     quoteRequestCount?: number
     consignmentApplicationCount?: number
+    selectionDemandCount?: number
   }
   syncedAt?: string
 }
@@ -86,6 +88,7 @@ function normalizeCommercialRequests(value: any): CommercialRequests {
   return {
     quoteRequests: Array.isArray(payload?.quoteRequests) ? payload.quoteRequests : [],
     consignmentApplications: Array.isArray(payload?.consignmentApplications) ? payload.consignmentApplications : [],
+    selectionDemands: Array.isArray(payload?.selectionDemands) ? payload.selectionDemands : [],
     summary: payload?.summary && typeof payload.summary === 'object' ? payload.summary : undefined,
     syncedAt: typeof payload?.syncedAt === 'string' ? payload.syncedAt : undefined,
   }
@@ -214,7 +217,7 @@ export function getCommercialRequests(options: CommercialRequestFetchOptions = {
 
 /** Merge a successful submission into local state if the follow-up read is delayed. */
 export function rememberCommercialRequest(kind: 'quote' | 'consignment', request: any): CommercialRequests {
-  const cached = getCachedCommercialRequests()?.data || { quoteRequests: [], consignmentApplications: [] }
+  const cached = getCachedCommercialRequests()?.data || { quoteRequests: [], consignmentApplications: [], selectionDemands: [] }
   const key = kind === 'quote' ? 'quoteRequests' : 'consignmentApplications'
   const rows = [...cached[key]]
   const identity = String(request?.id || request?.requestNo || request?.applicationNo || '')

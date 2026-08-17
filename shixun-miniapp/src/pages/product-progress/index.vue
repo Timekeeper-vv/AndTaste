@@ -116,7 +116,7 @@ import { getSession, requireSession } from '../../utils/session'
 const assets = ref<any[]>([])
 const requests = ref<any[]>([])
 const jobs = ref<any[]>([])
-const commercialRequests = ref<{ quoteRequests: any[]; consignmentApplications: any[] }>({ quoteRequests: [], consignmentApplications: [] })
+const commercialRequests = ref<{ quoteRequests: any[]; consignmentApplications: any[]; selectionDemands: any[] }>({ quoteRequests: [], consignmentApplications: [], selectionDemands: [] })
 const commercialSyncState = ref<'idle' | 'loading' | 'ready' | 'cached' | 'failed'>('idle')
 const commercialSyncMessage = ref('')
 const loading = ref(false)
@@ -132,9 +132,9 @@ const filters: Array<{ key: ProjectFilter; label: string }> = [
   { key: 'completed', label: '已完成' },
 ]
 
-type ProductAction = 'pay' | 'pay_quote' | 'accept_quote' | 'open_commercial' | 'apply' | 'adjust' | 'submit_image_review' | 'generate_model' | 'retry_model' | 'submit_model_review' | 'resubmit_request' | 'contact' | 'refresh' | ''
+type ProductAction = 'pay' | 'pay_quote' | 'accept_quote' | 'open_commercial' | 'open_selection' | 'apply' | 'adjust' | 'submit_image_review' | 'generate_model' | 'retry_model' | 'submit_model_review' | 'resubmit_request' | 'contact' | 'refresh' | ''
 type ProjectFilter = 'all' | 'action' | 'progressing' | 'completed'
-type CommercialProjectKind = 'quote' | 'consignment'
+type CommercialProjectKind = 'quote' | 'consignment' | 'selection'
 
 interface ProjectState {
   index: number
@@ -186,6 +186,7 @@ const projects = computed(() => {
   const commercialEntries: Array<{ kind: CommercialProjectKind; request: any }> = [
     ...commercialRequests.value.quoteRequests.map(request => ({ kind: 'quote' as const, request })),
     ...commercialRequests.value.consignmentApplications.map(request => ({ kind: 'consignment' as const, request })),
+    ...commercialRequests.value.selectionDemands.map(request => ({ kind: 'selection' as const, request })),
   ]
   commercialEntries.forEach(({ kind, request }) => {
     const requestId = String(request?.id || '')
@@ -267,7 +268,7 @@ const commercialSyncLabel = computed(() => ({
 }[commercialSyncState.value]))
 
 const trackedAssetStatuses = ['review', 'approved', 'rejected']
-const directActions: ProductAction[] = ['pay', 'pay_quote', 'accept_quote', 'open_commercial', 'apply', 'adjust', 'submit_image_review', 'generate_model', 'retry_model', 'submit_model_review', 'resubmit_request']
+const directActions: ProductAction[] = ['pay', 'pay_quote', 'accept_quote', 'open_commercial', 'open_selection', 'apply', 'adjust', 'submit_image_review', 'generate_model', 'retry_model', 'submit_model_review', 'resubmit_request']
 
 function timestamp(value: any) {
   const raw = value?.updatedAt || value?.createdAt || value?.reviewedAt || ''
@@ -320,6 +321,7 @@ function currentStageLabel(project: ProductProject) {
 
 function projectSteps(project: ProductProject) {
   if (project.commercialKind === 'consignment') return ['创作作品', '版权与作品审核', '渠道审核', '上架准备', '渠道销售']
+  if (project.commercialKind === 'selection') return ['选择方向', '需求已提交', '运营评估', '报价 / 打样', '生产']
   if (project.commercialKind === 'quote') {
     if (project.commercialRequest?.requestType === 'sample') return ['选择产品', '报价审核', '确认报价', '打样', '生产']
     return ['选择产品', '报价审核', '确认报价', '生产对接', '交付']
@@ -382,6 +384,18 @@ function projectState(asset: any, request: any | null, relatedModelJob?: any | n
 function commercialProjectState(kind: CommercialProjectKind, request: any): ProjectState {
   const status = String(request?.status || '').toLowerCase()
   const comment = String(request?.operatorComment || '').trim()
+  if (kind === 'selection') {
+    if (['rejected', 'returned', 'need_materials'].includes(status)) {
+      return { index: 2, tone: 'warning', label: '选品需求需调整', description: '运营已返回这条商品化需求，请根据反馈调整后重新提交。', hint: '等待重新提交', action: 'open_selection', noticeTitle: '商品化需求反馈', notice: comment || '请补充产品方向、文化主题或授权信息后重新提交。' }
+    }
+    if (['approved', 'accepted'].includes(status)) {
+      return { index: 3, tone: 'ready', label: '需求已通过评估', description: '方向评估已完成，运营会继续确认报价、打样条件和生产安排。', hint: '等待报价 / 打样', action: 'contact' }
+    }
+    if (['completed', 'closed', 'withdrawn'].includes(status)) {
+      return { index: 4, tone: 'complete', label: '需求已结束', description: '这条商品化需求已结束，需要继续制作时可以重新提交。', hint: '需求已结束', action: '' }
+    }
+    return { index: 1, tone: 'active', label: '商品化需求已提交', description: '平台已收到你的选品方向，正在进行产品、授权和可生产性评估。', hint: '等待运营评估', action: 'refresh' }
+  }
   if (kind === 'consignment') {
     const channel = String(request?.channelName || '').trim()
     const channelText = channel ? `「${channel}」` : '目标渠道'
@@ -445,6 +459,7 @@ function requestTypeText(type?: string) {
 
 function projectKindText(project: ProductProject) {
   if (project.commercialKind === 'consignment') return '渠道代销申请'
+  if (project.commercialKind === 'selection') return '商品化需求'
   if (project.commercialKind === 'quote') return quoteRequestTypeText(project.commercialRequest?.requestType)
   if (project.request) return requestTypeText(project.request.requestType)
   return assetProjectText(project.asset)
@@ -473,6 +488,9 @@ function projectScopeText(project: ProductProject) {
   if (project.commercialKind === 'consignment') {
     const channel = String(project.commercialRequest?.channelName || '').trim()
     return channel ? `${channel} · 渠道代销` : '渠道代销 · 待确定投放渠道'
+  }
+  if (project.commercialKind === 'selection') {
+    return `${String(project.commercialRequest?.optionName || project.commercialRequest?.productName || '选品方向')} · 商品化需求`
   }
   if (project.commercialKind === 'quote') {
     const request = project.commercialRequest
@@ -509,6 +527,10 @@ function goWorks() {
 
 function goCommercial() {
   uni.navigateTo({ url: '/pages/commercial/index' })
+}
+
+function goSelection() {
+  uni.navigateTo({ url: '/pages/selection/index' })
 }
 
 function goSamplePayment(request?: any) {
@@ -550,6 +572,7 @@ function actionLabel(action: ProductAction) {
     pay_quote: '支付打样费',
     accept_quote: '确认并接受报价',
     open_commercial: '查看反馈并重新提交',
+    open_selection: '查看反馈并重新提交',
     apply: '申请打样 / 生产',
     adjust: '查看审核反馈并调整作品',
     submit_image_review: '提交效果图审核',
@@ -565,7 +588,7 @@ function actionLabel(action: ProductAction) {
 function actionClass(action: ProductAction) {
   return {
     pay: action === 'pay' || action === 'pay_quote',
-    secondary: ['adjust', 'contact', 'refresh', 'open_commercial'].includes(action),
+    secondary: ['adjust', 'contact', 'refresh', 'open_commercial', 'open_selection'].includes(action),
   }
 }
 
@@ -729,6 +752,7 @@ async function handleProjectAction(project: ProductProject) {
   if (action === 'pay_quote') return goCommercialSamplePayment(project.commercialRequest)
   if (action === 'accept_quote') return acceptQuote(project)
   if (action === 'open_commercial') return openCommercial(project)
+  if (action === 'open_selection') return goSelection()
   if (action === 'apply' || action === 'resubmit_request') return applyProduction(project.asset)
   if (action === 'adjust') return goWorks()
   if (action === 'submit_image_review') return submitImageReview(project)
@@ -807,6 +831,7 @@ async function loadCommercialProgress(serial: number) {
     commercialRequests.value = {
       quoteRequests: data.quoteRequests,
       consignmentApplications: data.consignmentApplications,
+      selectionDemands: data.selectionDemands,
     }
     commercialSyncState.value = 'ready'
   } catch (error: any) {
@@ -816,12 +841,13 @@ async function loadCommercialProgress(serial: number) {
       commercialRequests.value = {
         quoteRequests: cached.data.quoteRequests,
         consignmentApplications: cached.data.consignmentApplications,
+        selectionDemands: cached.data.selectionDemands,
       }
       commercialSyncState.value = 'cached'
       commercialSyncMessage.value = `服务器暂未返回最新数据，已展示 ${formatCachedAt(cached.savedAt)} 保存的申请记录。`
       return
     }
-    commercialRequests.value = { quoteRequests: [], consignmentApplications: [] }
+    commercialRequests.value = { quoteRequests: [], consignmentApplications: [], selectionDemands: [] }
     commercialSyncState.value = 'failed'
     commercialSyncMessage.value = error?.message || '服务器未返回商品化申请数据，请重新同步。'
   }
