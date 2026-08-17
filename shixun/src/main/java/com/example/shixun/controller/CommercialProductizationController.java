@@ -250,21 +250,23 @@ public class CommercialProductizationController {
 
     private Map<String, Object> consumerRequestPayload(Long userId) {
         List<Map<String, Object>> quoteRequests = jdbc.queryForList(
-                "SELECT r.id,r.request_no requestNo,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.status,"
-                        + "r.quoted_unit_price quotedUnitPrice,r.quoted_total_price quotedTotalPrice,r.quoted_lead_time quotedLeadTime,"
-                        + "r.operator_comment operatorComment,CASE WHEN r.request_type='sample' AND r.status='accepted' "
-                        + "AND r.sample_payment_status='not_required' THEN 'unpaid' ELSE r.sample_payment_status END samplePaymentStatus,"
-                        + "r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,"
-                        + "COALESCE(p.template_code,CONCAT('archived-product-',r.product_template_id)) templateCode,"
-                        + "COALESCE(p.product_name,'历史商品化申请') productName,r.created_at createdAt,r.updated_at updatedAt "
+                "SELECT r.id AS `id`,r.request_no AS `requestNo`,r.asset_id AS `assetId`,r.request_type AS `requestType`,"
+                        + "r.quantity AS `quantity`,r.purpose AS `purpose`,r.status AS `status`,"
+                        + "r.quoted_unit_price AS `quotedUnitPrice`,r.quoted_total_price AS `quotedTotalPrice`,r.quoted_lead_time AS `quotedLeadTime`,"
+                        + "r.operator_comment AS `operatorComment`,CASE WHEN r.request_type='sample' AND r.status='accepted' "
+                        + "AND r.sample_payment_status='not_required' THEN 'unpaid' ELSE r.sample_payment_status END AS `samplePaymentStatus`,"
+                        + "r.sample_payment_order_no AS `samplePaymentOrderNo`,r.sample_paid_at AS `samplePaidAt`,"
+                        + "COALESCE(p.template_code,CONCAT('archived-product-',r.product_template_id)) AS `templateCode`,"
+                        + "COALESCE(p.product_name,'历史商品化申请') AS `productName`,r.created_at AS `createdAt`,r.updated_at AS `updatedAt` "
                         + "FROM creative_quote_request r LEFT JOIN creative_product_template p ON p.id=r.product_template_id "
                         + "WHERE r.user_id=? ORDER BY r.id DESC LIMIT 100", userId);
         List<Map<String, Object>> consignmentApplications = jdbc.queryForList(
-                "SELECT a.id,a.application_no applicationNo,a.asset_id assetId,a.channel_id channelId,a.channel_name_snapshot channelName,"
-                        + "a.sales_mode salesMode,a.creator_share_percent creatorSharePercent,a.platform_service_percent platformServicePercent,"
-                        + "a.status,a.operator_comment operatorComment,"
-                        + "COALESCE(p.template_code,CONCAT('archived-product-',a.product_template_id)) templateCode,"
-                        + "COALESCE(p.product_name,'历史商品化申请') productName,a.created_at createdAt,a.updated_at updatedAt "
+                "SELECT a.id AS `id`,a.application_no AS `applicationNo`,a.asset_id AS `assetId`,a.channel_id AS `channelId`,"
+                        + "a.channel_name_snapshot AS `channelName`,a.sales_mode AS `salesMode`,"
+                        + "a.creator_share_percent AS `creatorSharePercent`,a.platform_service_percent AS `platformServicePercent`,"
+                        + "a.status AS `status`,a.operator_comment AS `operatorComment`,"
+                        + "COALESCE(p.template_code,CONCAT('archived-product-',a.product_template_id)) AS `templateCode`,"
+                        + "COALESCE(p.product_name,'历史商品化申请') AS `productName`,a.created_at AS `createdAt`,a.updated_at AS `updatedAt` "
                         + "FROM creative_consignment_application a LEFT JOIN creative_product_template p ON p.id=a.product_template_id "
                         + "WHERE a.user_id=? ORDER BY a.id DESC LIMIT 100", userId);
         List<Map<String, Object>> selectionDemands = selectionDemandRequests(userId);
@@ -293,17 +295,23 @@ public class CommercialProductizationController {
             return Collections.emptyList();
         }
         return jdbc.queryForList(
-                "SELECT d.id,d.request_no requestNo,d.option_id optionId,d.asset_id assetId,"
-                        + "o.option_key optionKey,COALESCE(o.name,'历史选品需求') productName,"
-                        + "COALESCE(o.name,'历史选品需求') optionName,d.theme,d.budget_max budgetMax,"
-                        + "d.audience,d.occasion,d.note,d.status,d.created_at createdAt,d.updated_at updatedAt "
+                "SELECT d.id AS `id`,d.request_no AS `requestNo`,d.option_id AS `optionId`,d.asset_id AS `assetId`,"
+                        + "o.option_key AS `optionKey`,COALESCE(o.name,'历史选品需求') AS `productName`,"
+                        + "COALESCE(o.name,'历史选品需求') AS `optionName`,d.theme AS `theme`,d.budget_max AS `budgetMax`,"
+                        + "d.audience AS `audience`,d.occasion AS `occasion`,d.note AS `note`,d.status AS `status`,"
+                        + "d.created_at AS `createdAt`,d.updated_at AS `updatedAt` "
                         + "FROM selection_demand_request d LEFT JOIN selection_option o ON o.id=d.option_id "
                         + "WHERE d.user_id=? ORDER BY d.id DESC LIMIT 100", userId);
     }
 
     private boolean tableExists(String tableName) {
         Number count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE LOWER(table_name)=LOWER(?)",
+                // MySQL reports the active database, while H2's test schema is PUBLIC.
+                // Restricting the lookup still avoids accidentally finding a same-named
+                // table in another MySQL schema without making the endpoint test-only.
+                "SELECT COUNT(*) FROM information_schema.tables "
+                        + "WHERE LOWER(table_name)=LOWER(?) "
+                        + "AND (table_schema=DATABASE() OR UPPER(table_schema)='PUBLIC')",
                 new Object[]{tableName}, Number.class);
         return count != null && count.intValue() > 0;
     }

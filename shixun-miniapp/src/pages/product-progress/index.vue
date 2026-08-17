@@ -134,6 +134,7 @@ const actionBusyKey = ref('')
 const securedPreviews = ref<Record<string, string>>({})
 const activeFilter = ref<ProjectFilter>('all')
 let projectLoadSerial = 0
+const PROJECT_SYNC_TIMEOUT_MS = 15000
 const steps = ['创作', '审核', '3D 原型', '打样', '生产']
 const filters: Array<{ key: ProjectFilter; label: string }> = [
   { key: 'all', label: '全部' },
@@ -837,9 +838,15 @@ async function loadProjects(notify = false) {
   assetSyncMessage.value = ''
   auxiliarySyncMessage.value = ''
   try {
-    await loadCommercialProgress(serial)
-    if (serial !== projectLoadSerial) return
-    const [assetResult, requestResult, jobResult] = await Promise.allSettled([getAssets(), getProductionRequests(), getJobs()])
+    // Artwork must not wait behind the optional commercial-request feed. A
+    // slow query there previously left this page in "同步中" forever and hid
+    // already submitted review assets from the owner.
+    const commercialPromise = loadCommercialProgress(serial)
+    const [assetResult, requestResult, jobResult] = await Promise.allSettled([
+      withDeadline(getAssets(), '作品列表同步超时，请重新同步'),
+      withDeadline(getProductionRequests(), '生产申请同步超时，请重新同步'),
+      withDeadline(getJobs(), '3D 建模状态同步超时，请重新同步'),
+    ])
     if (serial !== projectLoadSerial) return
     if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
     else assetSyncMessage.value = errorMessage(assetResult.reason, '无法读取已提交的作品')
@@ -848,6 +855,12 @@ async function loadProjects(notify = false) {
     if (jobResult.status === 'fulfilled') jobs.value = Array.isArray(jobResult.value) ? jobResult.value : []
     else if (!auxiliarySyncMessage.value) auxiliarySyncMessage.value = errorMessage(jobResult.reason, '3D 建模状态暂未返回')
     void hydratePreviews(projects.value)
+    // Commercial applications are an additional feed. Do not keep the entire
+    // page in its blocking loading state while that optional request is slow:
+    // an already-submitted review asset is sufficient to render a project.
+    void commercialPromise.then(() => {
+      if (serial === projectLoadSerial) void hydratePreviews(projects.value)
+    })
     const partialFailure = [assetResult, requestResult, jobResult].some(result => result.status === 'rejected')
     if (partialFailure) uni.showToast({ title: assetSyncMessage.value ? '作品进度同步失败，请重新同步' : '部分状态暂未同步，已展示可用数据', icon: 'none' })
     else if (notify && commercialSyncState.value === 'ready') uni.showToast({ title: '项目进度已更新', icon: 'success' })
@@ -867,6 +880,16 @@ function errorMessage(error: any, fallback: string) {
   return message || fallback
 }
 
+function withDeadline<T>(request: Promise<T>, timeoutMessage: string, timeout = PROJECT_SYNC_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), timeout)
+    request.then(
+      value => { clearTimeout(timer); resolve(value) },
+      error => { clearTimeout(timer); reject(error) },
+    )
+  })
+}
+
 async function loadCommercialProgress(serial: number) {
   commercialSyncState.value = 'loading'
   commercialSyncMessage.value = ''
@@ -874,7 +897,7 @@ async function loadCommercialProgress(serial: number) {
     // Keep this identical to the "商品化申请" page: one function, one URL and
     // one account-scoped cache. Product progress must never have its own view
     // of a consumer's commercial applications.
-    const data = await getCommercialRequests({ force: true })
+    const data = await withDeadline(getCommercialRequests({ force: true }), '商品化申请同步超时，请重新同步')
     if (serial !== projectLoadSerial) return
     commercialRequests.value = {
       quoteRequests: data.quoteRequests,
