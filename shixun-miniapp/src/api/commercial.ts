@@ -71,6 +71,40 @@ const COMMERCIAL_PENDING_REQUEST_MAX_AGE = 10 * 60 * 1000
 let commercialRequestFetchSerial = 0
 let commercialRequestInFlight: Promise<CommercialRequests> | null = null
 
+const commercialRequestFields = [
+  'id', 'requestNo', 'applicationNo', 'assetId', 'requestType', 'quantity', 'purpose', 'status',
+  'quotedUnitPrice', 'quotedTotalPrice', 'quotedLeadTime', 'operatorComment',
+  'samplePaymentStatus', 'samplePaymentOrderNo', 'samplePaidAt', 'templateCode', 'productName',
+  'channelId', 'channelName', 'salesMode', 'creatorSharePercent', 'platformServicePercent',
+  'optionId', 'optionKey', 'optionName', 'theme', 'budgetMax', 'audience', 'occasion', 'note',
+  'createdAt', 'updatedAt',
+]
+
+function normalizedFieldName(value: string) {
+  return value.replace(/[_-]/g, '').toLowerCase()
+}
+
+/**
+ * Preserve one field shape for both pages even when a proxy, older server, or
+ * JDBC driver changes the casing of SQL column labels. Product progress must
+ * never discard an otherwise valid commercial request because `ID` arrived
+ * instead of `id`.
+ */
+function normalizeCommercialRequestRow(value: any) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const byNormalizedName = new Map(Object.entries(value).map(([key, fieldValue]) => [normalizedFieldName(key), fieldValue]))
+  const normalized: Record<string, any> = { ...value }
+  commercialRequestFields.forEach(field => {
+    const fieldValue = byNormalizedName.get(normalizedFieldName(field))
+    if (fieldValue !== undefined) normalized[field] = fieldValue
+  })
+  return normalized
+}
+
+function normalizeCommercialRequestRows(value: unknown) {
+  return Array.isArray(value) ? value.map(normalizeCommercialRequestRow) : []
+}
+
 function commercialRequestCacheKey() {
   const session = getSession()
   const username = session?.user?.username
@@ -86,9 +120,9 @@ function normalizeCommercialRequests(value: any): CommercialRequests {
     ? value.data
     : value
   return {
-    quoteRequests: Array.isArray(payload?.quoteRequests) ? payload.quoteRequests : [],
-    consignmentApplications: Array.isArray(payload?.consignmentApplications) ? payload.consignmentApplications : [],
-    selectionDemands: Array.isArray(payload?.selectionDemands) ? payload.selectionDemands : [],
+    quoteRequests: normalizeCommercialRequestRows(payload?.quoteRequests),
+    consignmentApplications: normalizeCommercialRequestRows(payload?.consignmentApplications),
+    selectionDemands: normalizeCommercialRequestRows(payload?.selectionDemands),
     summary: payload?.summary && typeof payload.summary === 'object' ? payload.summary : undefined,
     syncedAt: typeof payload?.syncedAt === 'string' ? payload.syncedAt : undefined,
   }
@@ -132,13 +166,14 @@ function mergePendingCommercialRequests(data: CommercialRequests): CommercialReq
   const remaining: typeof pending = []
   pending.forEach(item => {
     const target = item.kind === 'quote' ? quoteRequests : consignmentApplications
-    const identity = requestIdentity(item.request)
-    const index = identity ? target.findIndex(row => sameCommercialRequest(row, item.request)) : -1
+    const request = normalizeCommercialRequestRow(item.request)
+    const identity = requestIdentity(request)
+    const index = identity ? target.findIndex(row => sameCommercialRequest(row, request)) : -1
     if (index >= 0) {
-      target[index] = { ...item.request, ...target[index] }
+      target[index] = { ...request, ...target[index] }
     } else {
-      target.unshift(item.request)
-      remaining.push(item)
+      target.unshift(request)
+      remaining.push({ ...item, request })
     }
   })
   const key = commercialPendingKey()
@@ -220,10 +255,11 @@ export function rememberCommercialRequest(kind: 'quote' | 'consignment', request
   const cached = getCachedCommercialRequests()?.data || { quoteRequests: [], consignmentApplications: [], selectionDemands: [] }
   const key = kind === 'quote' ? 'quoteRequests' : 'consignmentApplications'
   const rows = [...cached[key]]
-  const identity = String(request?.id || request?.requestNo || request?.applicationNo || '')
-  const existingIndex = identity ? rows.findIndex(row => sameCommercialRequest(row, request)) : -1
-  if (existingIndex >= 0) rows[existingIndex] = { ...rows[existingIndex], ...request }
-  else rows.unshift(request)
+  const normalizedRequest = normalizeCommercialRequestRow(request)
+  const identity = requestIdentity(normalizedRequest)
+  const existingIndex = identity ? rows.findIndex(row => sameCommercialRequest(row, normalizedRequest)) : -1
+  if (existingIndex >= 0) rows[existingIndex] = { ...rows[existingIndex], ...normalizedRequest }
+  else rows.unshift(normalizedRequest)
   const merged: CommercialRequests = {
     ...cached,
     [key]: rows,
@@ -232,8 +268,8 @@ export function rememberCommercialRequest(kind: 'quote' | 'consignment', request
   const pendingKey = commercialPendingKey()
   if (pendingKey && identity) {
     const pending = readPendingCommercialRequests()
-      .filter(item => !(item.kind === kind && sameCommercialRequest(item.request, request)))
-    pending.unshift({ kind, request, savedAt: Date.now() })
+      .filter(item => !(item.kind === kind && sameCommercialRequest(item.request, normalizedRequest)))
+    pending.unshift({ kind, request: normalizedRequest, savedAt: Date.now() })
     uni.setStorageSync(pendingKey, pending)
   }
   return merged

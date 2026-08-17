@@ -200,7 +200,9 @@ const projects = computed(() => {
     ...commercialRequests.value.selectionDemands.map(request => ({ kind: 'selection' as const, request })),
   ]
   commercialEntries.forEach(({ kind, request }) => {
-    const requestId = String(request?.id || '')
+    // A legacy response may not expose its numeric id with the expected case.
+    // Its request/application number is still a durable, unique project key.
+    const requestId = commercialRequestIdentity(request)
     if (!requestId) return
     const assetId = request?.assetId == null || request?.assetId === '' ? '' : String(request.assetId)
     if (assetId) commercialAssetIds.add(assetId)
@@ -299,6 +301,10 @@ function timestamp(value: any) {
   const raw = value?.updatedAt || value?.createdAt || value?.reviewedAt || ''
   const parsed = Date.parse(String(raw))
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function commercialRequestIdentity(request: any) {
+  return String(request?.id || request?.requestNo || request?.applicationNo || '').trim()
 }
 
 function isMultiViewReference(asset: any) {
@@ -838,6 +844,16 @@ async function loadProjects(notify = false) {
   assetSyncMessage.value = ''
   auxiliarySyncMessage.value = ''
   try {
+    // The commercial page saves this exact, account-scoped feed. Show it now
+    // instead of waiting for a second network round trip on the progress page.
+    const cachedCommercial = getCachedCommercialRequests()
+    if (cachedCommercial) {
+      commercialRequests.value = {
+        quoteRequests: cachedCommercial.data.quoteRequests,
+        consignmentApplications: cachedCommercial.data.consignmentApplications,
+        selectionDemands: cachedCommercial.data.selectionDemands,
+      }
+    }
     // Artwork must not wait behind the optional commercial-request feed. A
     // slow query there previously left this page in "同步中" forever and hid
     // already submitted review assets from the owner.
