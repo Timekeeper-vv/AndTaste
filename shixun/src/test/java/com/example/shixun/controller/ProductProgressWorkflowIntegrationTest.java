@@ -229,6 +229,12 @@ class ProductProgressWorkflowIntegrationTest {
         assertThat(adminGuidance.size()).isEqualTo(1);
         assertThat(field(adminGuidance.get(0), "id").asLong()).isEqualTo(guidanceId);
         assertThat(field(adminGuidance.get(0), "applicationNo").asText()).isEqualTo(quote.path("requestNo").asText());
+        // Older cached admin bundles sent the generic commercial status `new`.
+        // It must resolve to the first professional-guidance state rather than
+        // fail the whole page with a server error.
+        JsonNode legacyAdminGuidance = request(get("/api/commercial/admin/professional-guidance?status=new"), reviewer.token(), null);
+        assertThat(legacyAdminGuidance.size()).isEqualTo(1);
+        assertThat(field(legacyAdminGuidance.get(0), "id").asLong()).isEqualTo(guidanceId);
         mvc.perform(post("/api/commercial/consumer/professional-guidance")
                         .header("Authorization", "Bearer " + creator.token())
                         .contentType(MediaType.APPLICATION_JSON)

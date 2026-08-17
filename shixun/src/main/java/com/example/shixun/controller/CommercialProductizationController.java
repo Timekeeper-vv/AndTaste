@@ -535,6 +535,10 @@ public class CommercialProductizationController {
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         requireStaff(principal);
         if (!tableExists("commercial_professional_guidance_request")) return Collections.emptyList();
+        // The original commercial review screen used `new` for its first
+        // filter. Keep old cached clients usable while the standalone
+        // guidance screen uses the actual first workflow state, `requested`.
+        if ("new".equals(status)) status = "requested";
         String sql = "SELECT g.id,g.guidance_no guidanceNo,g.application_type applicationType,g.application_id applicationId,"
                 + "g.user_id userId,u.username,g.asset_id assetId,g.product_template_id productTemplateId,g.request_note requestNote,"
                 + "g.status,g.quoted_fee_yuan quotedFeeYuan,g.quoted_lead_time quotedLeadTime,g.operator_comment operatorComment,"
@@ -551,7 +555,7 @@ public class CommercialProductizationController {
                 + "LEFT JOIN creative_consignment_application a ON g.application_type='consignment' AND a.id=g.application_id";
         if ("all".equals(status)) return jdbc.queryForList(sql + " ORDER BY g.id DESC LIMIT 300");
         if (!Set.of("requested", "quoted", "in_progress", "completed", "closed").contains(status)) {
-            throw new IllegalArgumentException("指导工单状态不正确");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "指导工单状态不正确");
         }
         return jdbc.queryForList(sql + " WHERE g.status=? ORDER BY g.id DESC LIMIT 300", status);
     }

@@ -8,7 +8,7 @@ const props = defineProps<{ currentUser: User; initialTab?: Tab; guidanceOnly?: 
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
 
 const tab = ref<Tab>(props.initialTab === 'guidance' || props.initialTab === 'consignments' ? props.initialTab : 'quotes')
-const status = ref('new')
+const status = ref(defaultStatus(tab.value))
 const loading = ref(false)
 const rows = ref<any[]>([])
 const comment = ref('')
