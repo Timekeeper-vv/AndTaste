@@ -270,16 +270,36 @@ public class CommercialProductizationController {
                         + "FROM creative_consignment_application a LEFT JOIN creative_product_template p ON p.id=a.product_template_id "
                         + "WHERE a.user_id=? ORDER BY a.id DESC LIMIT 100", userId);
         List<Map<String, Object>> selectionDemands = selectionDemandRequests(userId);
+        List<Map<String, Object>> guidanceRequests = professionalGuidanceRequests(userId);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("quoteRequests", quoteRequests);
         out.put("consignmentApplications", consignmentApplications);
         out.put("selectionDemands", selectionDemands);
+        out.put("guidanceRequests", guidanceRequests);
         out.put("summary", Map.of(
                 "quoteRequestCount", quoteRequests.size(),
                 "consignmentApplicationCount", consignmentApplications.size(),
-                "selectionDemandCount", selectionDemands.size()));
+                "selectionDemandCount", selectionDemands.size(),
+                "professionalGuidanceCount", guidanceRequests.size()));
         out.put("syncedAt", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         return out;
+    }
+
+    private List<Map<String, Object>> professionalGuidanceRequests(Long userId) {
+        if (!tableExists("commercial_professional_guidance_request")) return Collections.emptyList();
+        return jdbc.queryForList(
+                "SELECT g.id AS `id`,g.guidance_no AS `guidanceNo`,g.application_type AS `applicationType`,"
+                        + "g.application_id AS `applicationId`,g.asset_id AS `assetId`,g.product_template_id AS `productTemplateId`,"
+                        + "g.request_note AS `requestNote`,g.status AS `status`,g.quoted_fee_yuan AS `quotedFeeYuan`,"
+                        + "g.quoted_lead_time AS `quotedLeadTime`,g.operator_comment AS `operatorComment`,"
+                        + "g.guidance_result AS `guidanceResult`,g.payment_status AS `paymentStatus`,"
+                        + "g.payment_order_no AS `paymentOrderNo`,g.paid_at AS `paidAt`,g.quoted_by AS `quotedBy`,"
+                        + "g.quoted_at AS `quotedAt`,g.completed_at AS `completedAt`,"
+                        + "COALESCE(p.template_code,CONCAT('archived-product-',g.product_template_id)) AS `templateCode`,"
+                        + "COALESCE(p.product_name,'历史商品化申请') AS `productName`,g.created_at AS `createdAt`,g.updated_at AS `updatedAt` "
+                        + "FROM commercial_professional_guidance_request g "
+                        + "LEFT JOIN creative_product_template p ON p.id=g.product_template_id "
+                        + "WHERE g.user_id=? ORDER BY g.id DESC LIMIT 100", userId);
     }
 
     /**
@@ -335,6 +355,121 @@ public class CommercialProductizationController {
     private boolean isSampleQuote(Long id) {
         String type = jdbc.queryForObject("SELECT request_type FROM creative_quote_request WHERE id=?", String.class, id);
         return "sample".equals(type);
+    }
+
+    /**
+     * Replaces the artwork on a rejected application with a newly uploaded
+     * local image and returns the same application to its normal review queue.
+     * It deliberately does not create a second commercial application.
+     */
+    @PostMapping("/consumer/application-revisions")
+    @Transactional
+    public Map<String, Object> resubmitApplicationWithLocalImage(
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        Long userId = requireConsumer(principal);
+        if (body == null) throw new IllegalArgumentException("修改图信息不能为空");
+        String applicationType = enumValue(body.get("applicationType"), Set.of("quote", "consignment"), "");
+        Long applicationId = longValue(body.get("applicationId"));
+        Long assetId = longValue(body.get("assetId"));
+        if (applicationId == null || assetId == null) throw new IllegalArgumentException("申请编号和修改图不能为空");
+        requireOwnedLocalImageAsset(assetId, userId);
+
+        String note = limit(text(body.get("note")), 1200);
+        Long previousAssetId;
+        String status;
+        if ("quote".equals(applicationType)) {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT asset_id,product_template_id FROM creative_quote_request "
+                            + "WHERE id=? AND user_id=? AND status='rejected' FOR UPDATE", applicationId, userId);
+            if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "只有已驳回的报价申请可以上传修改图重新提交");
+            if (hasOpenGuidance(applicationType, applicationId, userId)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "当前申请已有专业指导处理中，请先等待指导完成或联系运营关闭该指导单");
+            }
+            previousAssetId = longValue(rows.get(0).get("asset_id"));
+            if (Objects.equals(previousAssetId, assetId)) throw new ResponseStatusException(HttpStatus.CONFLICT, "请上传一张新的本地修改图后再提交");
+            requireAssetProductMatch(assetId, longValue(rows.get(0).get("product_template_id")));
+            jdbc.update("INSERT INTO commercial_application_revision (application_type,application_id,user_id,previous_asset_id,asset_id,note) VALUES ('quote',?,?,?,?,?)",
+                    applicationId, userId, previousAssetId, assetId, note);
+            jdbc.update("UPDATE creative_quote_request SET asset_id=?,status='new',quoted_unit_price=NULL,quoted_total_price=NULL,quoted_lead_time=NULL,operator_comment=NULL,sample_payment_status='not_required',sample_payment_order_no=NULL,sample_paid_at=NULL,reviewed_by=NULL,reviewed_at=NULL WHERE id=? AND user_id=?",
+                    assetId, applicationId, userId);
+            status = "new";
+        } else {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT asset_id,product_template_id FROM creative_consignment_application "
+                            + "WHERE id=? AND user_id=? AND status IN ('rejected','need_materials') FOR UPDATE", applicationId, userId);
+            if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "只有被驳回或要求补材料的代销申请可以上传修改图重新提交");
+            if (hasOpenGuidance(applicationType, applicationId, userId)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "当前申请已有专业指导处理中，请先等待指导完成或联系运营关闭该指导单");
+            }
+            previousAssetId = longValue(rows.get(0).get("asset_id"));
+            if (Objects.equals(previousAssetId, assetId)) throw new ResponseStatusException(HttpStatus.CONFLICT, "请上传一张新的本地修改图后再提交");
+            requireAssetProductMatch(assetId, longValue(rows.get(0).get("product_template_id")));
+            jdbc.update("INSERT INTO commercial_application_revision (application_type,application_id,user_id,previous_asset_id,asset_id,note) VALUES ('consignment',?,?,?,?,?)",
+                    applicationId, userId, previousAssetId, assetId, note);
+            jdbc.update("UPDATE creative_consignment_application SET asset_id=?,status='pending_review',operator_comment=NULL,reviewed_by=NULL,reviewed_at=NULL WHERE id=? AND user_id=?",
+                    assetId, applicationId, userId);
+            status = "pending_review";
+        }
+        audit(applicationType, String.valueOf(applicationId), "resubmitted", principal.username(),
+                blank(note) ? "用户上传本地修改图重新提交" : note);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("applicationType", applicationType);
+        result.put("applicationId", applicationId);
+        result.put("assetId", assetId);
+        result.put("status", status);
+        result.put("message", "本地修改图已上传，申请已重新进入审核队列");
+        return result;
+    }
+
+    @PostMapping("/consumer/professional-guidance")
+    @Transactional
+    public Map<String, Object> createProfessionalGuidanceRequest(
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        Long userId = requireConsumer(principal);
+        if (body == null) throw new IllegalArgumentException("专业指导申请内容不能为空");
+        if (!tableExists("commercial_professional_guidance_request")) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "专业指导服务正在升级，请稍后重试");
+        }
+        String applicationType = enumValue(body.get("applicationType"), Set.of("quote", "consignment"), "");
+        Long applicationId = longValue(body.get("applicationId"));
+        if (applicationId == null) throw new IllegalArgumentException("申请编号不能为空");
+
+        List<Map<String, Object>> applications;
+        if ("quote".equals(applicationType)) {
+            applications = jdbc.queryForList(
+                    "SELECT asset_id,product_template_id FROM creative_quote_request WHERE id=? AND user_id=? AND status='rejected' FOR UPDATE",
+                    applicationId, userId);
+        } else {
+            applications = jdbc.queryForList(
+                    "SELECT asset_id,product_template_id FROM creative_consignment_application WHERE id=? AND user_id=? AND status IN ('rejected','need_materials') FOR UPDATE",
+                    applicationId, userId);
+        }
+        if (applications.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "当前申请无需专业指导或已不在可修订状态");
+        // The source application row is locked above, so a repeated tap cannot
+        // create two active guidance requests for the same rejected application.
+        if (hasOpenGuidance(applicationType, applicationId, userId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "该申请已有专业指导单处理中，请勿重复提交");
+        }
+        Map<String, Object> application = applications.get(0);
+        String guidanceNo = no("CPG");
+        String note = limit(text(body.get("note")), 1200);
+        jdbc.update("INSERT INTO commercial_professional_guidance_request (guidance_no,application_type,application_id,user_id,asset_id,product_template_id,request_note,status,payment_status) VALUES (?,?,?,?,?,?,?,'requested','not_required')",
+                guidanceNo, applicationType, applicationId, userId, longValue(application.get("asset_id")),
+                longValue(application.get("product_template_id")), note);
+        Long guidanceId = jdbc.queryForObject("SELECT id FROM commercial_professional_guidance_request WHERE guidance_no=?", Long.class, guidanceNo);
+        audit(applicationType, String.valueOf(applicationId), "guidance_requested", principal.username(),
+                blank(note) ? "用户申请专业指导" : note);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("id", guidanceId);
+        result.put("guidanceId", guidanceId);
+        result.put("guidanceNo", guidanceNo);
+        result.put("status", "requested");
+        result.put("message", "专业指导申请已提交，运营会先确认服务内容、费用和完成时间");
+        return result;
     }
 
     @GetMapping("/admin/quote-requests")
@@ -394,6 +529,83 @@ public class CommercialProductizationController {
         return Map.of("success", true, "id", id, "status", status);
     }
 
+    @GetMapping("/admin/professional-guidance")
+    public List<Map<String, Object>> adminProfessionalGuidanceRequests(
+            @RequestParam(required = false, defaultValue = "requested") String status,
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireStaff(principal);
+        if (!tableExists("commercial_professional_guidance_request")) return Collections.emptyList();
+        String sql = "SELECT g.id,g.guidance_no guidanceNo,g.application_type applicationType,g.application_id applicationId,"
+                + "g.user_id userId,u.username,g.asset_id assetId,g.product_template_id productTemplateId,g.request_note requestNote,"
+                + "g.status,g.quoted_fee_yuan quotedFeeYuan,g.quoted_lead_time quotedLeadTime,g.operator_comment operatorComment,"
+                + "g.guidance_result guidanceResult,g.payment_status paymentStatus,g.payment_order_no paymentOrderNo,g.paid_at paidAt,"
+                + "g.quoted_by quotedBy,g.quoted_at quotedAt,g.completed_at completedAt,g.created_at createdAt,g.updated_at updatedAt,"
+                + "COALESCE(p.template_code,CONCAT('archived-product-',g.product_template_id)) templateCode,"
+                + "COALESCE(p.product_name,'历史商品化申请') productName,"
+                + "CASE WHEN g.application_type='quote' THEN q.request_no ELSE a.application_no END applicationNo,"
+                + "CASE WHEN g.application_type='quote' THEN q.status ELSE a.status END applicationStatus "
+                + "FROM commercial_professional_guidance_request g "
+                + "JOIN user u ON u.id=g.user_id "
+                + "LEFT JOIN creative_product_template p ON p.id=g.product_template_id "
+                + "LEFT JOIN creative_quote_request q ON g.application_type='quote' AND q.id=g.application_id "
+                + "LEFT JOIN creative_consignment_application a ON g.application_type='consignment' AND a.id=g.application_id";
+        if ("all".equals(status)) return jdbc.queryForList(sql + " ORDER BY g.id DESC LIMIT 300");
+        if (!Set.of("requested", "quoted", "in_progress", "completed", "closed").contains(status)) {
+            throw new IllegalArgumentException("指导工单状态不正确");
+        }
+        return jdbc.queryForList(sql + " WHERE g.status=? ORDER BY g.id DESC LIMIT 300", status);
+    }
+
+    @PutMapping("/admin/professional-guidance/{id}")
+    @Transactional
+    public Map<String, Object> updateProfessionalGuidanceRequest(
+            @PathVariable Long id,
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireStaff(principal);
+        if (body == null) throw new IllegalArgumentException("指导处理内容不能为空");
+        if (!tableExists("commercial_professional_guidance_request")) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "专业指导服务正在升级，请稍后重试");
+        }
+        String nextStatus = enumValue(body.get("status"), Set.of("quoted", "completed", "closed"), "");
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT application_type,application_id,user_id,status,payment_status FROM commercial_professional_guidance_request WHERE id=? FOR UPDATE", id);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业指导申请不存在");
+        Map<String, Object> existing = rows.get(0);
+        String currentStatus = text(existing.get("status"));
+        String paymentStatus = text(existing.get("payment_status"));
+        String comment = limit(text(body.get("operatorComment")), 1200);
+
+        if ("quoted".equals(nextStatus)) {
+            BigDecimal fee = decimal(body.get("quotedFeeYuan"));
+            String lead = limit(text(body.get("quotedLeadTime")), 120);
+            if (fee == null || fee.signum() <= 0 || blank(lead)) {
+                throw new IllegalArgumentException("保存专业指导报价前请填写费用和预计完成时间");
+            }
+            if (!Set.of("requested", "quoted").contains(currentStatus) || !Set.of("not_required", "unpaid").contains(paymentStatus)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "该指导单已进入支付或执行阶段，不能修改报价");
+            }
+            jdbc.update("UPDATE commercial_professional_guidance_request SET status='quoted',quoted_fee_yuan=?,quoted_lead_time=?,operator_comment=?,guidance_result=NULL,payment_status='unpaid',payment_order_no=NULL,paid_at=NULL,quoted_by=?,quoted_at=NOW(),completed_at=NULL WHERE id=?",
+                    fee, lead, comment, principal.username(), id);
+        } else if ("completed".equals(nextStatus)) {
+            String result = limit(text(body.get("guidanceResult")), 3000);
+            if (!"in_progress".equals(currentStatus) || !"paid".equals(paymentStatus)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "只有已支付并进入执行中的专业指导单可以标记完成");
+            }
+            if (blank(result)) throw new IllegalArgumentException("完成专业指导前请填写指导建议");
+            jdbc.update("UPDATE commercial_professional_guidance_request SET status='completed',operator_comment=?,guidance_result=?,completed_at=NOW() WHERE id=?",
+                    comment, result, id);
+        } else {
+            if ("paid".equals(paymentStatus) || "in_progress".equals(currentStatus)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "已支付或执行中的专业指导单不能直接关闭，请先完成指导");
+            }
+            jdbc.update("UPDATE commercial_professional_guidance_request SET status='closed',operator_comment=? WHERE id=?", comment, id);
+        }
+        audit(text(existing.get("application_type")), String.valueOf(existing.get("application_id")),
+                "guidance_" + nextStatus, principal.username(), comment);
+        return Map.of("success", true, "id", id, "status", nextStatus);
+    }
+
     private Map<String, Object> product(Object code) {
         if (blank(code)) throw new IllegalArgumentException("请选择商品方向");
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.id,p.template_code templateCode,p.product_name productName,o.option_key optionKey FROM creative_product_template p LEFT JOIN selection_option o ON o.id=p.selection_option_id WHERE p.template_code=? AND p.published=1 AND p.supply_status <> 'suspended'", String.valueOf(code).trim());
@@ -418,6 +630,15 @@ public class CommercialProductizationController {
         }
     }
 
+    private void requireAssetProductMatch(Long assetId, Long productTemplateId) {
+        if (productTemplateId == null) return;
+        List<Map<String, Object>> products = jdbc.queryForList(
+                "SELECT p.id,p.template_code templateCode,p.product_name productName,o.option_key optionKey "
+                        + "FROM creative_product_template p LEFT JOIN selection_option o ON o.id=p.selection_option_id WHERE p.id=?",
+                productTemplateId);
+        if (!products.isEmpty()) requireAssetProductMatch(assetId, products.get(0));
+    }
+
     private Long requireConsumer(JwtService.Claims principal) {
         if (principal == null || principal.userId() == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
         if (!"user".equals(principal.role())) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅C端用户可使用商品化服务");
@@ -436,6 +657,28 @@ public class CommercialProductizationController {
     private void requireOwnedAsset(Long assetId, Long userId) {
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM digital_asset WHERE id=? AND created_by=?", Integer.class, assetId, userId);
         if (count == null || count == 0) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只能关联自己的创作作品");
+    }
+
+    /** Revisions intentionally accept only a newly uploaded local image. */
+    private void requireOwnedLocalImageAsset(Long assetId, Long userId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT asset_type,source_type FROM digital_asset WHERE id=? AND created_by=?", assetId, userId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只能上传自己的本地修改图");
+        String assetType = text(rows.get(0).get("asset_type"));
+        String sourceType = text(rows.get(0).get("source_type"));
+        if (!"image".equals(assetType)) throw new ResponseStatusException(HttpStatus.CONFLICT, "修改后重新提交只支持图片文件");
+        if (!"upload".equals(sourceType)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "请从本地相册或相机上传修改图后再提交");
+        }
+    }
+
+    private boolean hasOpenGuidance(String applicationType, Long applicationId, Long userId) {
+        if (!tableExists("commercial_professional_guidance_request")) return false;
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM commercial_professional_guidance_request "
+                        + "WHERE application_type=? AND application_id=? AND user_id=? AND status IN ('requested','quoted','in_progress')",
+                Integer.class, applicationType, applicationId, userId);
+        return count != null && count > 0;
     }
 
     private void requireCopyrightConfirmed(Object value) {

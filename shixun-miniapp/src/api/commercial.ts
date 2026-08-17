@@ -52,10 +52,12 @@ export interface CommercialRequests {
   quoteRequests: any[]
   consignmentApplications: any[]
   selectionDemands: any[]
+  guidanceRequests: any[]
   summary?: {
     quoteRequestCount?: number
     consignmentApplicationCount?: number
     selectionDemandCount?: number
+    professionalGuidanceCount?: number
   }
   syncedAt?: string
 }
@@ -77,6 +79,9 @@ const commercialRequestFields = [
   'samplePaymentStatus', 'samplePaymentOrderNo', 'samplePaidAt', 'templateCode', 'productName',
   'channelId', 'channelName', 'salesMode', 'creatorSharePercent', 'platformServicePercent',
   'optionId', 'optionKey', 'optionName', 'theme', 'budgetMax', 'audience', 'occasion', 'note',
+  'guidanceNo', 'applicationType', 'applicationId', 'productTemplateId', 'requestNote',
+  'quotedFeeYuan', 'guidanceResult', 'paymentStatus', 'paymentOrderNo', 'paidAt',
+  'quotedBy', 'quotedAt', 'completedAt',
   'createdAt', 'updatedAt',
 ]
 
@@ -123,6 +128,7 @@ function normalizeCommercialRequests(value: any): CommercialRequests {
     quoteRequests: normalizeCommercialRequestRows(payload?.quoteRequests),
     consignmentApplications: normalizeCommercialRequestRows(payload?.consignmentApplications),
     selectionDemands: normalizeCommercialRequestRows(payload?.selectionDemands),
+    guidanceRequests: normalizeCommercialRequestRows(payload?.guidanceRequests),
     summary: payload?.summary && typeof payload.summary === 'object' ? payload.summary : undefined,
     syncedAt: typeof payload?.syncedAt === 'string' ? payload.syncedAt : undefined,
   }
@@ -219,6 +225,17 @@ export const createQuoteRequest = (body: Record<string, unknown>) => request<any
 
 export const createConsignmentApplication = (body: Record<string, unknown>) => request<any>('/api/commercial/consumer/consignment-applications', { method: 'POST', data: body, header: { 'content-type': 'application/json' } })
 
+/** Uploading is handled separately so resubmission always uses a local image asset. */
+export const resubmitCommercialApplication = (body: { applicationType: 'quote' | 'consignment'; applicationId: number; assetId: number; note?: string }) => request<any>(
+  '/api/commercial/consumer/application-revisions',
+  { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
+)
+
+export const createProfessionalGuidanceRequest = (body: { applicationType: 'quote' | 'consignment'; applicationId: number; note?: string }) => request<any>(
+  '/api/commercial/consumer/professional-guidance',
+  { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
+)
+
 export interface CommercialRequestFetchOptions {
   /** Bypass an older in-flight request and read the current server state. */
   force?: boolean
@@ -252,7 +269,7 @@ export function getCommercialRequests(options: CommercialRequestFetchOptions = {
 
 /** Merge a successful submission into local state if the follow-up read is delayed. */
 export function rememberCommercialRequest(kind: 'quote' | 'consignment', request: any): CommercialRequests {
-  const cached = getCachedCommercialRequests()?.data || { quoteRequests: [], consignmentApplications: [], selectionDemands: [] }
+  const cached = getCachedCommercialRequests()?.data || { quoteRequests: [], consignmentApplications: [], selectionDemands: [], guidanceRequests: [] }
   const key = kind === 'quote' ? 'quoteRequests' : 'consignmentApplications'
   const rows = [...cached[key]]
   const normalizedRequest = normalizeCommercialRequestRow(request)

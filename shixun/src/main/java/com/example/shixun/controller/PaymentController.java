@@ -423,6 +423,107 @@ public class PaymentController {
         }
     }
 
+    /** Create a payment order for a professional guidance quote. */
+    @PostMapping("/commercial-guidance-orders")
+    public Map<String, Object> createCommercialGuidanceOrder(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+            @RequestBody(required = false) Map<String, String> body) throws Exception {
+        Long userId = requireConsumer(principal);
+        String guidanceIdText = body == null ? "" : nullToEmpty(body.get("guidanceId"));
+        String channel = body == null ? "" : nullToEmpty(body.get("channel"));
+        long guidanceId;
+        try { guidanceId = Long.parseLong(guidanceIdText); } catch (Exception e) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "专业指导编号无效"); }
+        if (guidanceId <= 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "专业指导编号无效");
+        validateRequestedChannel(channel);
+
+        GuidanceOrderCreation creation;
+        try {
+            creation = Objects.requireNonNull(transactions.execute(status -> {
+                List<Map<String, Object>> rows = jdbc.queryForList(
+                        "SELECT g.id,g.status,g.quoted_fee_yuan,g.payment_status,g.payment_order_no,p.product_name "
+                                + "FROM commercial_professional_guidance_request g "
+                                + "LEFT JOIN creative_product_template p ON p.id=g.product_template_id "
+                                + "WHERE g.id=? AND g.user_id=? FOR UPDATE", guidanceId, userId);
+                if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业指导申请不存在");
+                Map<String, Object> guidance = rows.get(0);
+                if (!"quoted".equals(String.valueOf(guidance.get("status")))) {
+                    throw new IllegalStateException("请等待运营确认专业指导报价后再支付");
+                }
+                Object quotedFee = guidance.get("quoted_fee_yuan");
+                if (quotedFee == null) throw new IllegalStateException("专业指导费用尚未配置，请联系运营");
+                BigDecimal feeYuan = decimal(quotedFee);
+                if (feeYuan.signum() <= 0) throw new IllegalStateException("专业指导费用尚未配置，请联系运营");
+                String existingOrderNo = nullableText(guidance.get("payment_order_no"));
+                if (!blank(existingOrderNo)) {
+                    List<Map<String, Object>> existing = jdbc.queryForList(
+                            "SELECT status,channel FROM payment_order WHERE order_no=? AND user_id=? FOR UPDATE", existingOrderNo, userId);
+                    if (!existing.isEmpty()) {
+                        String existingStatus = String.valueOf(existing.get(0).get("status"));
+                        if (Set.of("pending", "manual_review", "paid").contains(existingStatus)) {
+                            return new GuidanceOrderCreation(existingOrderNo, true, feeYuan,
+                                    nullableText(guidance.get("product_name")), String.valueOf(existing.get(0).get("channel")));
+                        }
+                    }
+                }
+                String paymentStatus = nullableText(guidance.get("payment_status"));
+                if (!Set.of("unpaid", "not_required").contains(paymentStatus)) {
+                    throw new IllegalStateException("当前专业指导支付状态异常，请刷新后重试");
+                }
+                String productName = nullableText(guidance.get("product_name"));
+                CreditPackage pkg = new CreditPackage("commercial_guidance_" + guidanceId,
+                        limit("专业指导费 · " + (blank(productName) ? "商品化申请" : productName), 100),
+                        "商品化申请专业指导服务费用", feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
+                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
+                jdbc.update("UPDATE commercial_professional_guidance_request SET payment_status='pending',payment_order_no=? WHERE id=? AND user_id=?",
+                        order.orderNo, guidanceId, userId);
+                return new GuidanceOrderCreation(order.orderNo, order.reused, feeYuan, productName, channel);
+            }));
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
+
+        String actualChannel = creation.channel;
+        if (creation.reused) return createdOrderView(creation.orderNo, userId, actualChannel, true);
+        if ("manual_wechat_qr".equals(actualChannel)) {
+            transactions.execute(status -> {
+                jdbc.update("UPDATE payment_order SET code_url=?,provider_response=? WHERE order_no=? AND user_id=?",
+                        manualWechatQrUrl.trim(), "manual receipt QR for commercial guidance fee", creation.orderNo, userId);
+                return null;
+            });
+            return createdOrderView(creation.orderNo, userId, actualChannel, false);
+        }
+
+        CreditPackage pkg = new CreditPackage("commercial_guidance_" + guidanceId,
+                limit("专业指导费 · " + (blank(creation.productName) ? "商品化申请" : creation.productName), 100),
+                "商品化申请专业指导服务费用", creation.feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
+        boolean providerSubmissionAttempted = false;
+        try {
+            if ("wechat_jsapi".equals(actualChannel)) {
+                String openId = boundOpenId(userId);
+                transactions.execute(status -> { prepareWechatOrderMetadata(creation.orderNo, openId); return null; });
+                providerSubmissionAttempted = true;
+                persistWechatPrepay(creation.orderNo, createWechatJsapiOrder(creation.orderNo, pkg, openId));
+            } else {
+                transactions.execute(status -> { prepareWechatOrderMetadata(creation.orderNo, null); return null; });
+                providerSubmissionAttempted = true;
+                persistWechatPrepay(creation.orderNo, createWechatNativeOrder(creation.orderNo, pkg));
+            }
+            return createdOrderView(creation.orderNo, userId, actualChannel, false);
+        } catch (Exception e) {
+            String nextStatus = providerSubmissionAttempted && providerResultUnknown(e) ? "payment_exception" : "failed";
+            transactions.execute(status -> {
+                jdbc.update("UPDATE payment_order SET status=?,provider_response=? WHERE order_no=? AND status='pending'", nextStatus, safeError(e), creation.orderNo);
+                if ("failed".equals(nextStatus)) {
+                    jdbc.update("UPDATE commercial_professional_guidance_request SET payment_status='unpaid',payment_order_no=NULL WHERE payment_order_no=? AND payment_status='pending'",
+                            creation.orderNo);
+                }
+                return null;
+            });
+            throw userSafeWechatError(e, providerSubmissionAttempted && providerResultUnknown(e)
+                    ? "微信下单结果待核对，请勿重复付款或创建新订单" : "微信支付下单未成功，请稍后重试");
+        }
+    }
+
     @GetMapping("/orders/{orderNo}")
     public Map<String, Object> order(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
@@ -2338,6 +2439,18 @@ public class PaymentController {
             }
             return;
         }
+        if (productCode.startsWith("commercial_guidance_")) {
+            try {
+                long guidanceId = Long.parseLong(productCode.substring("commercial_guidance_".length()));
+                int linked = jdbc.update("UPDATE commercial_professional_guidance_request SET payment_status='paid',paid_at=NOW(),status='in_progress' "
+                                + "WHERE id=? AND payment_order_no=? AND payment_status IN ('pending','manual_review') AND status='quoted'",
+                        guidanceId, orderNo);
+                if (linked != 1) throw new IllegalStateException("专业指导支付订单未关联到可支付指导单");
+            } catch (NumberFormatException ignored) {
+                throw new IllegalStateException("专业指导支付订单关联申请无效");
+            }
+            return;
+        }
         BigDecimal credits = decimal(order.get("credit_amount"));
         ensureCreditAccount(userId);
         Map<String, Object> account = jdbc.queryForMap("SELECT balance FROM consumer_credit_account WHERE user_id=? FOR UPDATE", userId);
@@ -2593,6 +2706,7 @@ public class PaymentController {
 
     private record CreditPackage(String code, String name, String description, long amountFen, BigDecimal credits) { }
     private record SampleOrderCreation(String orderNo, boolean reused, BigDecimal feeYuan, String productName, String channel) { }
+    private record GuidanceOrderCreation(String orderNo, boolean reused, BigDecimal feeYuan, String productName, String channel) { }
     private record OrderCreation(String orderNo, boolean reused) { }
     private record RefundPreparation(String refundNo, String orderNo, Long userId, long amountFen, BigDecimal credits, String transactionId, String reason) { }
     private record DailyBillRetry(LocalDate billDate, String billType) { }

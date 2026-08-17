@@ -5,65 +5,76 @@
         <text class="title">我的作品</text>
         <text class="sub">查看和管理已生成的图片、模型与灵感素材</text>
       </view>
-      <button class="refresh" size="mini" :loading="loading" @tap="refresh(true)">刷新</button>
+      <button v-if="signedIn" class="refresh" size="mini" :loading="loading" @tap="refresh(true)">刷新</button>
+      <button v-else class="back-home" size="mini" @tap="goHome">返回首页</button>
     </view>
-    <AiGeneratedNotice class="ai-disclosure" compact description="带有“AI生成”标识的图片、四视图和 3D 原型由人工智能生成。展示、商业使用、打样和生产前请完成人工复核与权利核验。" />
 
-    <view v-if="loading && !assets.length && !jobs.length" class="empty">正在同步作品状态…</view>
+    <view v-if="!signedIn" class="guest-state">
+      <view class="guest-mark">作</view>
+      <text class="guest-title">登录后查看我的作品</text>
+      <text class="guest-copy">你的效果图、审核进度和打样记录会安全保存在账号中。</text>
+      <button class="guest-login" @tap="goLogin">登录查看我的作品</button>
+      <button class="guest-browse" @tap="goHome">暂不登录，继续浏览</button>
+    </view>
 
-    <view v-else>
-      <view v-if="activeJobs.length" class="section">
-        <view class="section-head"><text>生成任务</text><text>{{ activeJobs.length }} 条</text></view>
-        <view v-for="job in activeJobs" :key="`job-${job.id}`" class="job-card" :class="job.status">
-          <view class="job-icon">{{ jobIcon(job.jobType) }}</view>
-          <view class="job-body">
-            <view class="row"><text class="name">{{ jobTitle(job) }}</text><text class="status" :class="job.status">{{ statusText(job.status) }}</text></view>
-            <text class="meta">{{ jobNo(job) }} · {{ jobTypeText(job.jobType) }}</text>
-            <view v-if="isGenerating(job.status)" class="progress-line"><view class="progress-value" :style="{ width: `${jobProgress(job)}%` }" /></view>
-            <text v-if="isGenerating(job.status)" class="progress-text">生成进度 {{ jobProgress(job) }}%</text>
-            <text v-if="job.status === 'failed'" class="failure">失败原因：{{ job.errorMessage || '生成服务未返回具体原因，请稍后重试。' }}</text>
-          </view>
-        </view>
-      </view>
+    <template v-else>
+      <AiGeneratedNotice class="ai-disclosure" compact description="带有“AI生成”标识的图片、四视图和 3D 原型由人工智能生成。展示、商业使用、打样和生产前请完成人工复核与权利核验。" />
 
-      <view v-if="!assets.length && !activeJobs.length" class="empty">
-        <text>还没有作品，去开始第一件创作吧。</text>
-        <button class="create-first" @tap="goCreate">开始创作</button>
-      </view>
+      <view v-if="loading && !assets.length && !jobs.length" class="empty">正在同步作品状态…</view>
 
-      <view v-else-if="assets.length" class="section">
-        <view class="section-head"><text>作品库</text><text>{{ assets.length }} 件</text></view>
-        <view v-for="item in assets" :key="item.id" class="asset">
-          <view class="asset-media">
-            <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" />
-            <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
-            <text v-if="isAiGenerated(item)" class="ai-output-badge">AI生成</text>
-          </view>
-          <view class="body">
-            <view class="row"><text class="name">{{ item.title || '未命名作品' }}</text><text class="status" :class="assetDisplayStatus(item)">{{ statusText(assetDisplayStatus(item)) }}</text></view>
-            <text class="meta">{{ item.assetType === 'model' ? '3D 模型' : 'AI 图片' }} · {{ item.format?.toUpperCase() || '文件' }}</text>
-            <view v-if="materialFor(item)" class="material-summary">
-              <text>本次工艺</text><text>{{ materialFor(item)?.name }}</text><text>{{ materialFor(item)?.hint }}</text>
-            </view>
-            <text v-if="generationText(item)" class="generation">{{ generationText(item) }}</text>
-            <view v-if="isGenerating(assetDisplayStatus(item))" class="progress-line"><view class="progress-value" :style="{ width: `${assetProgress(item)}%` }" /></view>
-            <text v-if="assetFailure(item)" class="failure">失败原因：{{ assetFailure(item) }}</text>
-            <text v-if="source(item)" class="source">审批出处：{{ source(item) }}</text>
-            <view v-if="requestFor(item)" class="project-entry" @tap="openCommercial"><text>已创建商品化申请</text><text>查看申请 ›</text></view>
-            <view class="actions">
-              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button>
-              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
-              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="export" :loading="downloadingModelId === String(item.id)" @tap="chooseModelExport(item)">导出模型</button>
-              <button v-if="canRunDesignReview(item)" size="mini" class="design-review" @tap="openDesignReview(item)">AI 深度评审</button>
-              <button v-if="canSubmitReview(item)" size="mini" :loading="submittingId === item.id" @tap="submitReview(item)">提交审核</button>
-              <button v-if="canApplyProduction(item)" size="mini" class="production" @tap="applyProduction(item)">打样 / 生产</button>
-              <button size="mini" @tap="copy(item)">复制编号</button>
+      <view v-else>
+        <view v-if="activeJobs.length" class="section">
+          <view class="section-head"><text>生成任务</text><text>{{ activeJobs.length }} 条</text></view>
+          <view v-for="job in activeJobs" :key="`job-${job.id}`" class="job-card" :class="job.status">
+            <view class="job-icon">{{ jobIcon(job.jobType) }}</view>
+            <view class="job-body">
+              <view class="row"><text class="name">{{ jobTitle(job) }}</text><text class="status" :class="job.status">{{ statusText(job.status) }}</text></view>
+              <text class="meta">{{ jobNo(job) }} · {{ jobTypeText(job.jobType) }}</text>
+              <view v-if="isGenerating(job.status)" class="progress-line"><view class="progress-value" :style="{ width: `${jobProgress(job)}%` }" /></view>
+              <text v-if="isGenerating(job.status)" class="progress-text">生成进度 {{ jobProgress(job) }}%</text>
+              <text v-if="job.status === 'failed'" class="failure">失败原因：{{ job.errorMessage || '生成服务未返回具体原因，请稍后重试。' }}</text>
             </view>
           </view>
         </view>
-      </view>
 
-    </view>
+        <view v-if="!assets.length && !activeJobs.length" class="empty">
+          <text>还没有作品，去开始第一件创作吧。</text>
+          <button class="create-first" @tap="goCreate">开始创作</button>
+        </view>
+
+        <view v-else-if="assets.length" class="section">
+          <view class="section-head"><text>作品库</text><text>{{ assets.length }} 件</text></view>
+          <view v-for="item in assets" :key="item.id" class="asset">
+            <view class="asset-media">
+              <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" />
+              <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
+              <text v-if="isAiGenerated(item)" class="ai-output-badge">AI生成</text>
+            </view>
+            <view class="body">
+              <view class="row"><text class="name">{{ item.title || '未命名作品' }}</text><text class="status" :class="assetDisplayStatus(item)">{{ statusText(assetDisplayStatus(item)) }}</text></view>
+              <text class="meta">{{ item.assetType === 'model' ? '3D 模型' : 'AI 图片' }} · {{ item.format?.toUpperCase() || '文件' }}</text>
+              <view v-if="materialFor(item)" class="material-summary">
+                <text>本次工艺</text><text>{{ materialFor(item)?.name }}</text><text>{{ materialFor(item)?.hint }}</text>
+              </view>
+              <text v-if="generationText(item)" class="generation">{{ generationText(item) }}</text>
+              <view v-if="isGenerating(assetDisplayStatus(item))" class="progress-line"><view class="progress-value" :style="{ width: `${assetProgress(item)}%` }" /></view>
+              <text v-if="assetFailure(item)" class="failure">失败原因：{{ assetFailure(item) }}</text>
+              <text v-if="source(item)" class="source">审批出处：{{ source(item) }}</text>
+              <view v-if="requestFor(item)" class="project-entry" @tap="openCommercial"><text>已创建商品化申请</text><text>查看申请 ›</text></view>
+              <view class="actions">
+                <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button>
+                <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
+                <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="export" :loading="downloadingModelId === String(item.id)" @tap="chooseModelExport(item)">导出模型</button>
+                <button v-if="canRunDesignReview(item)" size="mini" class="design-review" @tap="openDesignReview(item)">AI 深度评审</button>
+                <button v-if="canSubmitReview(item)" size="mini" :loading="submittingId === item.id" @tap="submitReview(item)">提交审核</button>
+                <button v-if="canApplyProduction(item)" size="mini" class="production" @tap="applyProduction(item)">打样 / 生产</button>
+                <button size="mini" @tap="copy(item)">复制编号</button>
+              </view>
+            </view>
+          </view>
+        </view>
+      </view>
+    </template>
   </view>
 </template>
 
@@ -74,7 +85,7 @@ import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
 import { getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
-import { getSession, requireSession } from '../../utils/session'
+import { getSession } from '../../utils/session'
 import { statusText } from '../../utils/format'
 
 const assets = ref<any[]>([])
@@ -84,6 +95,7 @@ const securedPreviews = ref<Record<string, string>>({})
 const loading = ref(true)
 const submittingId = ref<number | null>(null)
 const downloadingModelId = ref('')
+const signedIn = ref(Boolean(getSession()?.token))
 const DESKTOP_MODEL_URL = 'https://www.zhijiansk.com/'
 const threeDimensionalPolicyConfirmed = ref(false)
 
@@ -205,6 +217,11 @@ async function hydratePreviews(rows: any[]) {
 }
 
 async function refresh(notify = false) {
+  if (!signedIn.value || !getSession()?.token) {
+    loading.value = false
+    uni.stopPullDownRefresh()
+    return
+  }
   loading.value = true
   try {
     const [assetRows, jobRows, requestRows] = await Promise.all([getAssets(), getJobs(), getProductionRequests()])
@@ -288,7 +305,7 @@ async function downloadModel(asset: any, format: ModelExportFormat) {
   const assetId = String(asset?.id || '')
   const session = getSession()
   if (!session?.token) {
-    requireSession()
+    promptLogin('导出模型')
     return
   }
   if (downloadingModelId.value) return
@@ -327,6 +344,39 @@ function copy(asset: any) {
 
 function goCreate() {
   uni.navigateTo({ url: '/pages/create/index' })
+}
+
+function goLogin() {
+  const redirect = encodeURIComponent('/pages/works/index')
+  uni.navigateTo({ url: `/pages/login/index?from=works&redirect=${redirect}` })
+}
+
+function goHome() {
+  const pages = getCurrentPages()
+  const previousPage = pages[pages.length - 2] as any
+  if (previousPage?.route === 'pages/home/index') {
+    uni.navigateBack()
+    return
+  }
+  uni.reLaunch({ url: '/pages/home/index' })
+}
+
+function promptLogin(action: string) {
+  uni.showModal({
+    title: `登录后可${action}`,
+    content: '登录后可使用个人作品与文件服务。您也可以暂不登录，继续浏览小程序。',
+    cancelText: '暂不登录',
+    confirmText: '去登录',
+    success: (result) => { if (result.confirm) goLogin() },
+  })
+}
+
+function resetGuestState() {
+  assets.value = []
+  jobs.value = []
+  productionRequests.value = []
+  securedPreviews.value = {}
+  loading.value = false
 }
 
 function applyProduction(asset: any) {
@@ -383,11 +433,14 @@ function submitReview(asset: any) {
 }
 
 onShow(() => {
-  if (requireSession()) void refresh(false)
+  signedIn.value = Boolean(getSession()?.token)
+  if (signedIn.value) void refresh(false)
+  else resetGuestState()
 })
 
 onPullDownRefresh(() => {
-  if (requireSession()) refresh(false)
+  signedIn.value = Boolean(getSession()?.token)
+  if (signedIn.value) refresh(false)
   else uni.stopPullDownRefresh()
 })
 </script>
@@ -399,4 +452,5 @@ onPullDownRefresh(() => {
 
 <style scoped lang="scss">
 .page{background:radial-gradient(ellipse at 10% 0%,rgba(151,177,163,.17),transparent 29%),linear-gradient(180deg,#faf8f3,#f0e9df)}.title{font-family:"Songti SC","STSong",serif;color:#302b26}.sub{color:#82786d}.refresh{background:#edf3ed;color:#607b6e}.section-head{font-family:"Songti SC","STSong",serif}.asset,.job-card{border:1rpx solid rgba(129,112,93,.13);box-shadow:0 9rpx 21rpx rgba(67,53,37,.055)}.cover{background:#eef2eb}.model,.job-icon{background:linear-gradient(145deg,#5f7f71,#9eb5a8)}.job-card.failed .job-icon{background:linear-gradient(145deg,#865346,#bf765f)}.status{background:#f5ece4;color:#9d5c48}.status.approved,.status.succeeded,.status.paid{background:#e7f1e8;color:#567a67}.status.running,.status.queued,.status.processing{background:#f6f0df;color:#9b7540}.meta,.source,.generation,.progress-text{color:#8c8176}.source{color:#7d9587}.project-entry{background:#edf3ed;color:#5f7a69}.progress-line{background:#ebe5dc}.progress-value{background:linear-gradient(90deg,#a56e58,#6e8b7c)}.actions button{background:#f2f5ef;color:#59776a}.actions .material{background:#dcece2;color:#426d5a}.actions .export{background:#e8edf5;color:#526b85}.actions .production{background:#efe1d5;color:#8c5947}.actions .design-review{background:#eeeaf5;color:#6b5b8b}.create-first{border-radius:17rpx;background:linear-gradient(135deg,#3e3933,#617e71)}.material-summary{display:flex;align-items:center;flex-wrap:wrap;gap:7rpx;margin-top:11rpx}.material-summary text:first-child{padding:3rpx 8rpx;border-radius:8rpx;background:#eef2ec;color:#728578;font-size:16rpx;font-weight:800}.material-summary text:nth-child(2){color:#476c5b;font-size:20rpx;font-weight:850}.material-summary text:last-child{color:#978c80;font-size:17rpx}
+.back-home{margin:4rpx 0 0;border:1rpx solid #d5e0d6;background:#fffdf9;color:#587666;font-size:21rpx}.guest-state{display:flex;align-items:center;flex-direction:column;margin:16rpx 0 36rpx;padding:64rpx 38rpx 48rpx;border:1rpx solid rgba(113,136,120,.22);border-radius:16rpx;background:rgba(255,253,249,.9);box-shadow:0 12rpx 30rpx rgba(67,53,37,.06);text-align:center}.guest-mark{display:grid;place-items:center;width:88rpx;height:88rpx;border-radius:16rpx;background:#edf3ed;color:#567765;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:700}.guest-title{display:block;margin-top:27rpx;color:#37332d;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:700}.guest-copy{display:block;margin-top:13rpx;color:#877d72;font-size:23rpx;line-height:1.7}.guest-login,.guest-browse{width:100%;height:84rpx;line-height:84rpx;margin:32rpx 0 0;border-radius:12rpx;font-size:26rpx;font-weight:800}.guest-login{background:#456a59;color:#fffdf8}.guest-browse{margin-top:16rpx;border:1rpx solid #d7dfd7;background:#fffdfa;color:#557364}
 </style>

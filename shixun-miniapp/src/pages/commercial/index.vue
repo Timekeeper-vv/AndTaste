@@ -8,7 +8,34 @@
 
     <view class="notice"><text class="notice-title">首期试运行规则</text><text>预售 / 按单生产 · 平台暂不承诺备货 · 创作者 70% / 平台服务 30% 为试运行规则，结算口径以正式协议为准。</text></view>
 
-    <view v-if="orderedRequests.length" class="request-history order-history"><view class="section-head"><view><text class="eyebrow">MY ORDERS</text><text class="section-title">我的订单</text></view><text>优先处理待付款订单</text></view><view v-for="item in orderedRequests" :key="item.requestNo || item.applicationNo" class="history-row"><view class="history-main"><view class="history-head"><view><text class="history-name">{{ item.productName }}</text><text class="history-no">{{ item.requestNo || item.applicationNo }} · {{ item.channelName || '报价/打样' }}</text></view><text class="history-status">{{ statusText(item.status) }}</text></view><view v-if="item.requestNo && ['quoted', 'accepted'].includes(item.status)" class="quote-detail"><text>单价：{{ displayMoney(item.quotedUnitPrice) }}</text><text>总价：{{ displayMoney(item.quotedTotalPrice) }}</text><text>交期：{{ item.quotedLeadTime || '待确认' }}</text><text v-if="item.operatorComment">说明：{{ item.operatorComment }}</text></view><button v-if="item.requestNo && item.status === 'quoted'" class="accept-quote" size="mini" :loading="acceptingId === item.id" @tap.stop="acceptQuote(item)">{{ acceptingId === item.id ? '提交中' : '接受报价' }}</button><button v-if="item.requestNo && item.status === 'accepted' && item.requestType === 'sample' && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))" class="pay-sample" size="mini" @tap.stop="paySampleFee(item)">支付打样费</button></view></view></view>
+    <view v-if="orderedRequests.length" class="request-history order-history">
+      <view class="section-head"><view><text class="eyebrow">MY ORDERS</text><text class="section-title">我的订单</text></view><text>优先处理待付款订单</text></view>
+      <view v-for="item in orderedRequests" :key="item.requestNo || item.applicationNo" class="history-row">
+        <view class="history-main">
+          <view class="history-head"><view><text class="history-name">{{ item.productName }}</text><text class="history-no">{{ item.requestNo || item.applicationNo }} · {{ item.channelName || '报价/打样' }}</text></view><text class="history-status">{{ statusText(item.status) }}</text></view>
+          <view v-if="item.requestNo && ['quoted', 'accepted'].includes(item.status)" class="quote-detail"><text>单价：{{ displayMoney(item.quotedUnitPrice) }}</text><text>总价：{{ displayMoney(item.quotedTotalPrice) }}</text><text>交期：{{ item.quotedLeadTime || '待确认' }}</text><text v-if="item.operatorComment">说明：{{ item.operatorComment }}</text></view>
+          <view v-if="canRepair(item)" class="repair-panel">
+            <text class="repair-title">需要修改后再提交</text>
+            <text class="repair-reason">{{ item.operatorComment || '运营已退回该申请，请根据作品或材料要求调整后重新提交。' }}</text>
+            <view v-if="guidanceFor(item) && guidanceFor(item)?.status !== 'closed'" class="guidance-detail">
+              <text>专业指导 · {{ guidanceStatusText(guidanceFor(item)?.status) }}</text>
+              <text v-if="guidanceFor(item)?.operatorComment">运营说明：{{ guidanceFor(item)?.operatorComment }}</text>
+              <text v-if="guidanceFor(item)?.quotedFeeYuan">指导费：{{ displayMoney(guidanceFor(item)?.quotedFeeYuan) }} · {{ guidanceFor(item)?.quotedLeadTime || '交付时间待确认' }}</text>
+              <text v-if="guidanceFor(item)?.guidanceResult">指导建议：{{ guidanceFor(item)?.guidanceResult }}</text>
+              <button v-if="guidanceFor(item)?.status === 'quoted' && ['unpaid', 'pending'].includes(String(guidanceFor(item)?.paymentStatus || 'unpaid'))" class="guidance-pay" size="mini" @tap.stop="payGuidance(guidanceFor(item))">支付专业指导费</button>
+              <button v-if="guidanceFor(item)?.status === 'completed'" class="resubmit" size="mini" :loading="uploadingRevisionId === item.id" @tap.stop="uploadLocalRevision(item)">上传本地修改图重新提交</button>
+            </view>
+            <view v-else class="repair-actions">
+              <button class="resubmit" size="mini" :loading="uploadingRevisionId === item.id" @tap.stop="uploadLocalRevision(item)">上传本地修改图重新提交</button>
+              <button class="guidance" size="mini" :loading="requestingGuidanceId === item.id" @tap.stop="requestProfessionalGuidance(item)">申请专业指导</button>
+            </view>
+          </view>
+          <view v-else-if="guidanceFor(item)?.status === 'completed'" class="guidance-detail"><text>专业指导已完成</text><text v-if="guidanceFor(item)?.guidanceResult">指导建议：{{ guidanceFor(item)?.guidanceResult }}</text></view>
+          <button v-if="item.requestNo && item.status === 'quoted'" class="accept-quote" size="mini" :loading="acceptingId === item.id" @tap.stop="acceptQuote(item)">{{ acceptingId === item.id ? '提交中' : '接受报价' }}</button>
+          <button v-if="item.requestNo && item.status === 'accepted' && item.requestType === 'sample' && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))" class="pay-sample" size="mini" @tap.stop="paySampleFee(item)">支付打样费</button>
+        </view>
+      </view>
+    </view>
 
     <view v-if="boundProduct" class="bound-product"><view><text class="eyebrow">CREATIVE PRODUCT</text><text class="bound-title">{{ boundProduct.productName }}</text><text class="bound-meta">已绑定本次对话生成的产品方向{{ boundMaterial ? ` · ${boundMaterial}` : '' }}</text></view><text class="bound-mark">已绑定</text></view>
     <template v-else>
@@ -69,9 +96,10 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import { apiUrl } from '../../api/client'
-import { acceptCommercialQuote, createConsignmentApplication, createQuoteRequest, getCommercialChannelDirectory, getCommercialProducts, getCommercialRequests, rememberCommercialRequest, type CommercialChannel, type CommercialChannelDirectory, type CommercialProduct } from '../../api/commercial'
+import { acceptCommercialQuote, createConsignmentApplication, createProfessionalGuidanceRequest, createQuoteRequest, getCommercialChannelDirectory, getCommercialProducts, getCommercialRequests, rememberCommercialRequest, resubmitCommercialApplication, type CommercialChannel, type CommercialChannelDirectory, type CommercialProduct } from '../../api/commercial'
+import { uploadReference } from '../../api/creative'
 import { requireSession } from '../../utils/session'
 
 const products = ref<CommercialProduct[]>([])
@@ -92,6 +120,8 @@ const channelDirectory = ref<CommercialChannelDirectory>({ items: [], total: 0, 
 const loading = ref(false)
 const submitting = ref(false)
 const acceptingId = ref<number | null>(null)
+const uploadingRevisionId = ref<number | null>(null)
+const requestingGuidanceId = ref<number | null>(null)
 const mode = ref<'quote' | 'consignment'>('quote')
 const quoteType = ref('sample')
 const quantity = ref('1')
@@ -101,7 +131,7 @@ const copyrightBasis = ref('original')
 const copyrightConfirmed = ref(false)
 const authorizationNote = ref('')
 const copyrightStatement = ref('我确认提交的作品为本人原创、已取得有效商业授权，或属于可依法商业使用的公有领域内容；我不会在未获授权的情况下使用博物馆、景区、品牌、字体、人物肖像或他人作品。平台审核不等于权利授予，正式上架前仍需补充权利证明并签署相关协议。')
-const requests = ref<{ quoteRequests: any[]; consignmentApplications: any[]; selectionDemands: any[] }>({ quoteRequests: [], consignmentApplications: [], selectionDemands: [] })
+const requests = ref<{ quoteRequests: any[]; consignmentApplications: any[]; selectionDemands: any[]; guidanceRequests: any[] }>({ quoteRequests: [], consignmentApplications: [], selectionDemands: [], guidanceRequests: [] })
 const quoteTypes = [{ value: 'sample', label: '先做打样' }, { value: 'bulk', label: '批量生产' }, { value: 'personal', label: '个人定制' }]
 const copyrightBases = [{ value: 'original', label: '本人原创' }, { value: 'authorized', label: '已取得授权' }, { value: 'public_domain', label: '公有领域' }]
 const channelTypes = [{ key: '', name: '全部' }, { key: 'museum', name: '博物馆' }, { key: 'scenic_spot', name: '景区' }]
@@ -130,6 +160,15 @@ const filteredProducts = computed(() => {
 const orderedRequests = computed(() => [...requests.value.quoteRequests, ...requests.value.consignmentApplications]
   .sort((left, right) => orderPriority(left) - orderPriority(right) || Number(right.id || 0) - Number(left.id || 0)))
 
+const guidanceByApplication = computed(() => {
+  const map = new Map<string, any>()
+  ;(requests.value.guidanceRequests || []).forEach((guidance) => {
+    const key = `${guidance.applicationType}:${guidance.applicationId}`
+    if (!map.has(key)) map.set(key, guidance)
+  })
+  return map
+})
+
 onLoad(async (query: any) => {
   if (!requireSession()) return
   assetId.value = String(query?.assetId || '')
@@ -137,6 +176,10 @@ onLoad(async (query: any) => {
   boundProductName.value = String(query?.productName || '')
   boundMaterial.value = String(query?.material || '')
   await load()
+})
+
+onShow(() => {
+  if (requireSession() && products.value.length) void refreshRequests()
 })
 
 async function load() {
@@ -148,6 +191,11 @@ async function load() {
     requests.value = await getCommercialRequests({ force: true })
   } catch (error: any) { uni.showToast({ title: error?.message || '商品化服务暂不可用', icon: 'none' }) }
   finally { loading.value = false }
+}
+
+async function refreshRequests() {
+  try { requests.value = await getCommercialRequests({ force: true }) }
+  catch { /* Keep the already loaded list visible when returning from payment. */ }
 }
 
 function bindProductFromCreation() {
@@ -236,6 +284,88 @@ function paySampleFee(item: any) {
   uni.navigateTo({ url: `/pages/sample-payment/index?quoteId=${encodeURIComponent(String(item.id))}` })
 }
 
+function applicationTypeOf(item: any): 'quote' | 'consignment' {
+  return item?.requestNo ? 'quote' : 'consignment'
+}
+
+function canRepair(item: any) {
+  const status = String(item?.status || '')
+  return applicationTypeOf(item) === 'quote'
+    ? status === 'rejected'
+    : ['rejected', 'need_materials'].includes(status)
+}
+
+function guidanceFor(item: any) {
+  return guidanceByApplication.value.get(`${applicationTypeOf(item)}:${item?.id}`)
+}
+
+function chooseLocalRevisionImage(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    uni.chooseImage({
+      count: 1,
+      sizeType: ['compressed'],
+      sourceType: ['album', 'camera'],
+      success: (result) => {
+        const filePath = result.tempFilePaths?.[0]
+        if (filePath) resolve(filePath)
+        else reject(new Error('没有读取到本地图片'))
+      },
+      fail: (error: any) => {
+        if (String(error?.errMsg || '').toLowerCase().includes('cancel')) reject(new Error('已取消选择图片'))
+        else reject(new Error('无法选择本地图片'))
+      },
+    })
+  })
+}
+
+async function uploadLocalRevision(item: any) {
+  if (!canRepair(item) || uploadingRevisionId.value) return
+  uploadingRevisionId.value = Number(item.id)
+  try {
+    const filePath = await chooseLocalRevisionImage()
+    uni.showLoading({ title: '正在上传修改图', mask: true })
+    const uploaded = await uploadReference(filePath)
+    const revisedAssetId = Number(uploaded?.assetId)
+    if (!Number.isFinite(revisedAssetId) || revisedAssetId <= 0) throw new Error('本地修改图上传后未返回作品编号')
+    uni.showLoading({ title: '正在重新提交', mask: true })
+    await resubmitCommercialApplication({
+      applicationType: applicationTypeOf(item),
+      applicationId: Number(item.id),
+      assetId: revisedAssetId,
+      note: '用户上传本地修改图重新提交',
+    })
+    await refreshRequests()
+    uni.showToast({ title: '已重新提交审核', icon: 'success' })
+  } catch (error: any) {
+    if (error?.message !== '已取消选择图片') uni.showToast({ title: error?.message || '重新提交失败，请稍后重试', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+    uploadingRevisionId.value = null
+  }
+}
+
+async function requestProfessionalGuidance(item: any) {
+  if (!canRepair(item) || requestingGuidanceId.value) return
+  requestingGuidanceId.value = Number(item.id)
+  try {
+    const result = await createProfessionalGuidanceRequest({
+      applicationType: applicationTypeOf(item),
+      applicationId: Number(item.id),
+    })
+    await refreshRequests()
+    uni.showModal({ title: '已申请专业指导', content: result?.message || '运营会确认指导内容、费用和完成时间后通知你。', showCancel: false })
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '申请专业指导失败，请稍后重试', icon: 'none' })
+  } finally {
+    requestingGuidanceId.value = null
+  }
+}
+
+function payGuidance(guidance: any) {
+  if (!guidance?.id) return
+  uni.navigateTo({ url: `/pages/guidance-payment/index?guidanceId=${encodeURIComponent(String(guidance.id))}` })
+}
+
 function orderPriority(item: any) {
   const awaitingSamplePayment = item.requestType === 'sample' && item.status === 'accepted'
     && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))
@@ -248,11 +378,13 @@ function orderPriority(item: any) {
 
 function displayMoney(value: unknown) { return value === null || value === undefined || value === '' ? '待确认' : `¥${Number(value).toFixed(2)}` }
 function statusText(status: string) { const map: Record<string, string> = { new: '待处理', processing: '处理中', quoted: '已报价', pending_review: '待审核', need_materials: '待补材料', approved: '已通过', rejected: '未通过', accepted: '已接受', closed: '已关闭' }; return map[status] || status }
+function guidanceStatusText(status?: string) { const map: Record<string, string> = { requested: '等待运营报价', quoted: '待支付指导费', in_progress: '专业指导进行中', completed: '指导已完成', closed: '已关闭' }; return map[String(status || '')] || '处理中' }
 </script>
 
 <style scoped lang="scss">
 .bound-product{display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin-top:22rpx;padding:18rpx;border:1rpx solid #b8cdbb;border-radius:18rpx;background:#eef6ee}.bound-product>view{display:flex;min-width:0;flex:1;flex-direction:column;gap:6rpx}.bound-title{color:#405f4f;font-family:"Songti SC","STSong",serif;font-size:28rpx;font-weight:800}.bound-meta{color:#718778;font-size:14rpx;line-height:1.45}.bound-mark{padding:7rpx 10rpx;border-radius:9rpx;background:#d8eadb;color:#527562;font-size:14rpx;font-weight:800;white-space:nowrap}
 .page{min-height:100vh;padding:30rpx 28rpx 80rpx;box-sizing:border-box;background:linear-gradient(160deg,#fbf8f2,#f1e9df 58%,#edf3ed);color:#3b342d}.hero{padding:10rpx 6rpx 25rpx}.eyebrow{display:block;color:#668575;font-size:16rpx;font-weight:900;letter-spacing:2.2rpx}.title{display:block;margin-top:12rpx;font-family:"Songti SC","STSong",serif;font-size:52rpx;font-weight:800}.sub{display:block;margin-top:12rpx;color:#7c7167;font-size:20rpx;line-height:1.6}.notice{display:flex;flex-direction:column;gap:7rpx;padding:17rpx;border:1rpx solid #e5d1bd;border-radius:18rpx;background:#fff8ef;color:#866653;font-size:16rpx;line-height:1.55}.notice-title{font-size:21rpx;color:#a45f43;font-weight:900}.section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:10rpx;margin:28rpx 5rpx 13rpx}.section-head>view{display:flex;flex-direction:column;gap:5rpx}.section-title{color:#443c34;font-family:"Songti SC","STSong",serif;font-size:29rpx;font-weight:800}.section-head>text:last-child{color:#9b8e82;font-size:15rpx}.catalog-tools{margin:0 0 15rpx;padding:12rpx;border:1rpx solid #e3d8cb;border-radius:15rpx;background:#f8f3eb}.catalog-search{box-sizing:border-box;width:100%;height:66rpx;padding:0 13rpx;border:1rpx solid #ded4c7;border-radius:11rpx;background:#fffefa;color:#4c433a;font-size:18rpx}.catalog-categories{margin-top:10rpx;white-space:nowrap}.catalog-categories>view{display:flex;gap:7rpx}.catalog-category{display:inline-block;padding:8rpx 10rpx;border:1rpx solid #ded5c9;border-radius:9rpx;background:#fffefa;color:#897d72;font-size:14rpx}.catalog-category.active{border-color:#72917f;background:#e7f0e7;color:#4e705e;font-weight:800}.product-list{display:grid;gap:13rpx}.product-card{display:flex;overflow:hidden;border:1rpx solid rgba(130,113,94,.15);border-radius:20rpx;background:rgba(255,254,250,.94);box-shadow:0 10rpx 23rpx rgba(69,54,39,.06)}.product-card.active{border-color:#779886;box-shadow:0 0 0 3rpx rgba(119,152,134,.13)}.product-cover{flex:0 0 190rpx;width:190rpx;height:240rpx;background:#e7dfd3}.fallback{display:flex;align-items:center;justify-content:center;background:linear-gradient(145deg,#dce7dd,#efdfd0);color:#5b7b6d}.fallback text{font-family:"Songti SC","STSong",serif;font-size:70rpx;font-weight:800}.product-body{min-width:0;flex:1;padding:16rpx}.product-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:6rpx}.product-name{color:#403931;font-family:"Songti SC","STSong",serif;font-size:26rpx;font-weight:800}.status{padding:5rpx 7rpx;border-radius:8rpx;background:#f5eee3;color:#aa765a;font-size:12rpx;white-space:nowrap}.product-meta{display:block;margin-top:8rpx;overflow:hidden;color:#81766b;font-size:15rpx;text-overflow:ellipsis;white-space:nowrap}.product-tip{display:block;margin-top:10rpx;color:#5d7b6b;font-size:14rpx;line-height:1.4}.select-btn{height:52rpx;margin:14rpx 0 0;padding:0 14rpx;border:1rpx solid #6b8d7b;border-radius:10rpx;background:#eef5ee;color:#527462;font-size:14rpx}.select-btn::after{border:0}.empty{padding:58rpx 20rpx;border:1rpx dashed #d5cabb;border-radius:19rpx;color:#8e8277;text-align:center}.empty.compact{padding:34rpx 18rpx}.apply-panel,.request-history{margin-top:22rpx;padding:18rpx;border:1rpx solid #d7c9b9;border-radius:21rpx;background:#fffaf3;box-shadow:0 10rpx 22rpx rgba(90,66,45,.07)}.order-history{border-color:#c3d6c6;background:#fffdf8}.panel-head{display:flex;justify-content:space-between;gap:12rpx}.panel-head>view{display:flex;flex-direction:column;gap:5rpx}.close{font-size:35rpx;color:#9a7863}.mode-tabs{display:flex;gap:9rpx;margin-top:18rpx}.mode-tabs text,.chips text{padding:9rpx 11rpx;border:1rpx solid #e2d6ca;border-radius:10rpx;background:#fffdf9;color:#8b7b6c;font-size:15rpx}.mode-tabs text.active,.chips text.active{border-color:#6e907f;background:#eaf3ea;color:#527363;font-weight:800}.form{display:flex;flex-direction:column;gap:8rpx;margin-top:17rpx}.label{display:block;margin-top:6rpx;color:#6c5c4f;font-size:16rpx;font-weight:800}.chips{display:flex;flex-wrap:wrap;gap:7rpx}.input,.textarea{box-sizing:border-box;width:100%;border:1rpx solid #dfd4c8;border-radius:12rpx;background:#fffdf9;color:#4a423a;font-size:17rpx}.input{height:68rpx;padding:0 12rpx}.textarea{height:130rpx;padding:11rpx;line-height:1.5}.channel-picker{display:flex;align-items:center;justify-content:space-between;gap:8rpx;padding:15rpx 12rpx;border:1rpx solid #dfd4c8;border-radius:12rpx;background:#fffdf9;color:#796d62;font-size:16rpx}.copyright-box{margin-top:17rpx;padding:13rpx;border-radius:14rpx;background:#f7f2e9}.copyright-statement{display:block;margin-top:10rpx;color:#6d6258;font-size:14rpx;line-height:1.6}.check-row{display:flex;align-items:flex-start;gap:6rpx;margin-top:12rpx;color:#6d6258;font-size:14rpx;line-height:1.45}.check-row checkbox{transform:scale(.75);transform-origin:top left}.copyright-note{display:block;margin-top:10rpx;color:#947f70;font-size:14rpx;line-height:1.5}.submit{height:74rpx;margin-top:17rpx;border-radius:13rpx;background:#5e7c6f;color:#fff;font-size:21rpx;font-weight:850}.submit[loading]{opacity:.65}.history-row{padding:13rpx 0;border-top:1rpx solid #eee2d6}.history-main{display:flex;min-width:0;flex-direction:column;gap:9rpx}.history-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10rpx}.history-head>view{display:flex;min-width:0;flex-direction:column;gap:5rpx}.history-name{color:#4b4036;font-size:18rpx;font-weight:800}.history-no{color:#97897d;font-size:13rpx}.history-status{padding:5rpx 7rpx;border-radius:8rpx;background:#edf4ed;color:#5f7b6e;font-size:13rpx;white-space:nowrap}.quote-detail{display:flex;flex-direction:column;gap:5rpx;padding:11rpx;border-radius:11rpx;background:#f3f7f2;color:#62796d;font-size:14rpx;line-height:1.45}.accept-quote{align-self:flex-start;height:52rpx;margin:0;padding:0 15rpx;border-radius:10rpx;background:#5e7c6f;color:#fff;font-size:15rpx}.accept-quote::after{border:0}
 .pay-sample{align-self:flex-start;height:52rpx;margin:0;padding:0 15rpx;border-radius:10rpx;background:#b9664f;color:#fff;font-size:15rpx}.pay-sample::after{border:0}
+.repair-panel{display:flex;flex-direction:column;gap:8rpx;padding:12rpx;border:1rpx solid #ecd7c6;border-radius:12rpx;background:#fff7ef}.repair-title{color:#9d5e43;font-size:15rpx;font-weight:850}.repair-reason{color:#826f61;font-size:14rpx;line-height:1.55}.repair-actions{display:flex;flex-wrap:wrap;gap:9rpx;margin-top:3rpx}.resubmit,.guidance,.guidance-pay{align-self:flex-start;height:54rpx;margin:0;padding:0 15rpx;border-radius:10rpx;font-size:15rpx}.resubmit{background:#5e7c6f;color:#fff}.guidance{border:1rpx solid #b9845e;background:#fffaf4;color:#9a633f}.guidance-pay{background:#b9664f;color:#fff}.resubmit::after,.guidance::after,.guidance-pay::after{border:0}.guidance-detail{display:flex;flex-direction:column;gap:6rpx;padding:10rpx;border-radius:10rpx;background:#fffdf9;color:#78695d;font-size:13rpx;line-height:1.5}
 .channel-picker>view{display:flex;min-width:0;flex:1;flex-direction:column;gap:4rpx}.channel-picker>view text:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.channel-picker>view text:last-child{color:#a08d7e;font-size:13rpx}.channel-notice{display:block;margin-top:3rpx;color:#9b7968;font-size:13rpx;line-height:1.45}.channel-mask{position:fixed;z-index:90;inset:0;display:flex;align-items:flex-end;background:rgba(36,31,27,.58)}.channel-modal{width:100%;max-height:89vh;box-sizing:border-box;padding:22rpx 22rpx calc(20rpx + env(safe-area-inset-bottom));border-radius:24rpx 24rpx 0 0;background:#fffaf4;box-shadow:0 -12rpx 36rpx rgba(44,31,21,.16)}.channel-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16rpx}.channel-modal-head>view{display:flex;flex-direction:column;gap:6rpx}.channel-modal-head text:first-child{color:#413931;font-family:"Songti SC","STSong",serif;font-size:30rpx;font-weight:800}.channel-modal-head text:last-child{color:#938276;font-size:14rpx;line-height:1.45}.channel-close{width:44rpx;height:44rpx;color:#937460;font-size:36rpx;line-height:38rpx;text-align:center}.channel-search-row{display:grid;grid-template-columns:minmax(0,1fr) 100rpx;gap:9rpx;margin-top:16rpx}.channel-search-row input{box-sizing:border-box;width:100%;height:66rpx;padding:0 13rpx;border:1rpx solid #ded3c6;border-radius:12rpx;background:#fffefa;color:#4b4239;font-size:17rpx}.channel-search-row button{height:66rpx;margin:0;border-radius:12rpx;background:#587766;color:#fff;font-size:16rpx;line-height:66rpx}.channel-search-row button::after,.channel-modal-actions button::after,.load-more::after{border:0}.channel-filter-label{display:block;margin:15rpx 2rpx -2rpx;color:#6d5b4d;font-size:15rpx;font-weight:800}.channel-filter-scroll{margin-top:11rpx;white-space:nowrap}.channel-filter-row{display:flex;gap:8rpx}.channel-filter-row text{display:inline-block;padding:8rpx 11rpx;border:1rpx solid #e1d6ca;border-radius:10rpx;background:#fffefa;color:#877a6d;font-size:14rpx}.channel-filter-row text.active{border-color:#779884;background:#e9f2e9;color:#50725f;font-weight:800}.channel-result-note{display:block;margin:13rpx 2rpx 8rpx;color:#957c6a;font-size:13rpx}.channel-results{height:56vh;min-height:480rpx;border-top:1rpx solid #eadfd3;border-bottom:1rpx solid #eadfd3}.channel-empty{padding:58rpx 20rpx;color:#968679;font-size:17rpx;text-align:center}.channel-option{display:flex;align-items:center;justify-content:space-between;gap:12rpx;padding:15rpx 4rpx;border-bottom:1rpx solid #f0e7de}.channel-option.selected{background:#eff5ef}.channel-option>view{display:flex;min-width:0;flex:1;flex-direction:column;gap:5rpx}.channel-name-row{display:flex;align-items:center;gap:7rpx}.channel-name-row text:first-child{overflow:hidden;color:#493f36;font-size:19rpx;font-weight:850;text-overflow:ellipsis;white-space:nowrap}.channel-name-row .channel-type-tag{flex:0 0 auto;padding:3rpx 6rpx;border-radius:6rpx;background:#f1eadf;color:#9a725c;font-size:11rpx}.channel-option>view>text{color:#97897d;font-size:13rpx;line-height:1.35}.channel-option>text{color:#668472;font-size:26rpx}.load-more{display:block;height:62rpx;margin:14rpx auto;padding:0 25rpx;border:1rpx solid #a9c0ad;border-radius:11rpx;background:#f1f7f1;color:#537664;font-size:16rpx;line-height:62rpx}.channel-modal-actions{display:grid;grid-template-columns:1fr 1.4fr;gap:10rpx;margin-top:15rpx}.channel-modal-actions button{height:70rpx;margin:0;border-radius:13rpx;font-size:18rpx;font-weight:800;line-height:70rpx}.channel-clear{border:1rpx solid #d8cbbd;background:#fffefa;color:#806f61}.channel-confirm{background:#587766;color:#fff}
 </style>

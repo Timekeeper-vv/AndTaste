@@ -56,6 +56,7 @@ const password = ref('')
 const loading = ref(false)
 const fromWebview = ref(false)
 const miniWebLoginSession = ref('')
+const redirectUrl = ref('')
 const wechatLoading = ref(false)
 const wechatPhoneRequired = ref(false)
 const wechatTermsAccepted = ref(false)
@@ -79,6 +80,8 @@ function finishLogin(session: any) {
   } else if (fromWebview.value) {
     uni.setStorageSync('smart_pig_auth_updated', String(Date.now()))
     uni.navigateBack()
+  } else if (redirectUrl.value) {
+    uni.reLaunch({ url: redirectUrl.value })
   } else {
     uni.reLaunch({ url: '/pages/purpose/index' })
   }
@@ -203,9 +206,18 @@ function leaveLogin() {
   uni.reLaunch({ url: '/pages/home/index' })
 }
 
+function safeMiniProgramRoute(value: unknown) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  let route = raw
+  try { route = decodeURIComponent(raw) } catch { return '' }
+  return route.startsWith('/pages/') ? route : ''
+}
+
 onLoad((query: Record<string, string> = {}) => {
   fromWebview.value = query.from === 'webview'
   miniWebLoginSession.value = query.miniWebLoginSession || ''
+  redirectUrl.value = safeMiniProgramRoute(query.redirect)
   readPendingCampaign()
   void loadCampaigns()
   // The web-view login button already represents an explicit user action.

@@ -94,7 +94,8 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
             return new Rule("wechat-login", 20, 60_000);
         }
         if ("/api/payments/orders".equals(path) || "/api/payments/sample-orders".equals(path)
-                || "/api/payments/commercial-quote-sample-orders".equals(path)) {
+                || "/api/payments/commercial-quote-sample-orders".equals(path)
+                || "/api/payments/commercial-guidance-orders".equals(path)) {
             return new Rule("payment-order", 10, 60_000);
         }
         if (path.startsWith("/api/creative/ai/") || "/api/creative/ai".equals(path)) {

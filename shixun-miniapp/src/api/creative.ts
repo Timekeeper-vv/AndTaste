@@ -367,6 +367,9 @@ export const createSamplePaymentOrder = (requestId: number | string, channel: Pa
 export const createCommercialQuoteSamplePaymentOrder = (requestId: number | string, channel: PaymentChannel = 'wechat_jsapi') => request<PaymentOrder>('/api/payments/commercial-quote-sample-orders', {
   method: 'POST', data: { requestId: String(requestId), channel }, header: { 'content-type': 'application/json' },
 })
+export const createCommercialGuidancePaymentOrder = (guidanceId: number | string, channel: PaymentChannel = 'wechat_jsapi') => request<PaymentOrder>('/api/payments/commercial-guidance-orders', {
+  method: 'POST', data: { guidanceId: String(guidanceId), channel }, header: { 'content-type': 'application/json' },
+})
 export const submitProductionRequest = (body: ProductionSubmission) => request<any>('/api/creative/ai/consumer-production/submit', {
   method: 'POST', data: body, header: { 'content-type': 'application/json' },
 })

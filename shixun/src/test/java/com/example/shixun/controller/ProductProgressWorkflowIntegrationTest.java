@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
@@ -39,6 +40,7 @@ class ProductProgressWorkflowIntegrationTest {
     @Autowired ObjectMapper mapper;
     @Autowired JdbcTemplate jdbc;
     @Autowired JwtService jwtService;
+    @Autowired PaymentController paymentController;
 
     @DynamicPropertySource
     static void workflowProperties(DynamicPropertyRegistry registry) {
@@ -50,6 +52,9 @@ class ProductProgressWorkflowIntegrationTest {
         createWorkflowSchema();
         jdbc.update("DELETE FROM consumer_production_request");
         jdbc.update("DELETE FROM consumer_sample_fee_catalog");
+        jdbc.update("DELETE FROM commercial_application_revision");
+        jdbc.update("DELETE FROM commercial_professional_guidance_request");
+        jdbc.update("DELETE FROM payment_order");
         jdbc.update("DELETE FROM commercial_application_audit_log");
         jdbc.update("DELETE FROM creative_consignment_application");
         jdbc.update("DELETE FROM creative_quote_request");
@@ -168,6 +173,133 @@ class ProductProgressWorkflowIntegrationTest {
         assertThat(otherProductionRequests.size()).isZero();
     }
 
+    @Test
+    void rejectedApplicationCanBeResubmittedWithOwnedLocalImageAndUseProfessionalGuidance() throws Exception {
+        TestUser creator = createUser("revision-creator", "user");
+        TestUser otherConsumer = createUser("revision-other", "user");
+        TestUser reviewer = createUser("revision-reviewer", "admin");
+        seedProductCatalog();
+
+        long originalAssetId = createAsset(creator, "AST-REVISION-ORIGINAL", "image", "draft");
+        JsonNode quote = request(post("/api/commercial/consumer/quote-requests"), creator.token(), Map.of(
+                "templateCode", "alloy-magnet",
+                "assetId", originalAssetId,
+                "requestType", "sample",
+                "quantity", 1,
+                "purpose", "personal",
+                "copyrightBasis", "original",
+                "copyrightConfirmed", true));
+        long quoteId = quote.path("id").asLong();
+
+        request(put("/api/commercial/admin/quote-requests/{id}", quoteId), reviewer.token(), Map.of(
+                "status", "rejected", "operatorComment", "请调整主体比例并补充可生产细节"));
+
+        // A revision must be a newly uploaded local image, not another existing
+        // generated asset from the user's work library.
+        mvc.perform(post("/api/commercial/consumer/application-revisions")
+                        .header("Authorization", "Bearer " + creator.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of(
+                                "applicationType", "quote", "applicationId", quoteId, "assetId", originalAssetId))))
+                .andExpect(status().isConflict());
+
+        long otherUsersUpload = createAsset(otherConsumer, "AST-REVISION-OTHER", "image", "draft", "upload");
+        mvc.perform(post("/api/commercial/consumer/application-revisions")
+                        .header("Authorization", "Bearer " + creator.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of(
+                                "applicationType", "quote", "applicationId", quoteId, "assetId", otherUsersUpload))))
+                .andExpect(status().isForbidden());
+
+        long localRevisionAsset = createAsset(creator, "AST-REVISION-LOCAL", "image", "draft", "upload");
+        JsonNode resubmission = request(post("/api/commercial/consumer/application-revisions"), creator.token(), Map.of(
+                "applicationType", "quote", "applicationId", quoteId, "assetId", localRevisionAsset));
+        assertThat(resubmission.path("status").asText()).isEqualTo("new");
+        assertThat(jdbc.queryForObject("SELECT asset_id FROM creative_quote_request WHERE id=?", Long.class, quoteId)).isEqualTo(localRevisionAsset);
+        assertThat(jdbc.queryForObject("SELECT status FROM creative_quote_request WHERE id=?", String.class, quoteId)).isEqualTo("new");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM commercial_application_revision WHERE application_type='quote' AND application_id=? AND asset_id=?", Integer.class, quoteId, localRevisionAsset)).isEqualTo(1);
+
+        request(put("/api/commercial/admin/quote-requests/{id}", quoteId), reviewer.token(), Map.of(
+                "status", "rejected", "operatorComment", "建议先接受专业指导后修改"));
+        JsonNode guidance = request(post("/api/commercial/consumer/professional-guidance"), creator.token(), Map.of(
+                "applicationType", "quote", "applicationId", quoteId));
+        long guidanceId = guidance.path("guidanceId").asLong();
+        assertThat(guidance.path("status").asText()).isEqualTo("requested");
+        mvc.perform(post("/api/commercial/consumer/professional-guidance")
+                        .header("Authorization", "Bearer " + creator.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of("applicationType", "quote", "applicationId", quoteId))))
+                .andExpect(status().isConflict());
+
+        request(put("/api/commercial/admin/professional-guidance/{id}", guidanceId), reviewer.token(), Map.of(
+                "status", "quoted", "quotedFeeYuan", new BigDecimal("199.00"),
+                "quotedLeadTime", "2 个工作日", "operatorComment", "包含视觉、工艺与修改路径建议"));
+        JsonNode feed = request(get("/api/commercial/consumer/requests"), creator.token(), null);
+        assertThat(feed.path("guidanceRequests").size()).isEqualTo(1);
+        JsonNode guidanceRow = feed.path("guidanceRequests").get(0);
+        assertThat(field(guidanceRow, "id").asLong()).isEqualTo(guidanceId);
+        assertThat(field(guidanceRow, "status").asText()).isEqualTo("quoted");
+        assertThat(field(guidanceRow, "paymentStatus").asText()).isEqualTo("unpaid");
+        assertThat(field(feed.path("summary"), "professionalGuidanceCount").asInt()).isEqualTo(1);
+
+        // Payment confirmation is normally executed by the verified WeChat
+        // callback. Invoke the same server-side business handler here so this
+        // test covers the state transition without calling an external gateway.
+        String guidancePaymentNo = "PAY-GUIDANCE-" + guidanceId;
+        createPendingPayment(creator.id(), guidancePaymentNo, "commercial_guidance_" + guidanceId);
+        jdbc.update("UPDATE commercial_professional_guidance_request SET payment_status='pending',payment_order_no=? WHERE id=?",
+                guidancePaymentNo, guidanceId);
+        confirmPayment(creator.id(), guidancePaymentNo, "commercial_guidance_" + guidanceId, "WX-GUIDANCE-1");
+        assertThat(jdbc.queryForObject("SELECT status FROM commercial_professional_guidance_request WHERE id=?", String.class, guidanceId))
+                .isEqualTo("in_progress");
+        assertThat(jdbc.queryForObject("SELECT payment_status FROM commercial_professional_guidance_request WHERE id=?", String.class, guidanceId))
+                .isEqualTo("paid");
+
+        request(put("/api/commercial/admin/professional-guidance/{id}", guidanceId), reviewer.token(), Map.of(
+                "status", "completed",
+                "operatorComment", "已完成专业指导",
+                "guidanceResult", "保留云纹主体，压缩边缘层次，并将厚度控制为 4mm 以内。"));
+        assertThat(jdbc.queryForObject("SELECT status FROM commercial_professional_guidance_request WHERE id=?", String.class, guidanceId))
+                .isEqualTo("completed");
+
+        long guidedLocalRevisionAsset = createAsset(creator, "AST-REVISION-GUIDED-LOCAL", "image", "draft", "upload");
+        JsonNode guidedResubmission = request(post("/api/commercial/consumer/application-revisions"), creator.token(), Map.of(
+                "applicationType", "quote", "applicationId", quoteId, "assetId", guidedLocalRevisionAsset,
+                "note", "已根据专业指导完成本地修改"));
+        assertThat(guidedResubmission.path("status").asText()).isEqualTo("new");
+        assertThat(jdbc.queryForObject("SELECT asset_id FROM creative_quote_request WHERE id=?", Long.class, quoteId))
+                .isEqualTo(guidedLocalRevisionAsset);
+
+        request(put("/api/commercial/admin/quote-requests/{id}", quoteId), reviewer.token(), Map.of(
+                "status", "quoted", "quotedUnitPrice", new BigDecimal("36.00"),
+                "quotedTotalPrice", new BigDecimal("36.00"), "quotedLeadTime", "7 个工作日",
+                "operatorComment", "修改作品已通过工艺评估，可进入打样"));
+        JsonNode accepted = request(post("/api/commercial/consumer/quote-requests/{id}/accept", quoteId), creator.token(), null);
+        assertThat(accepted.path("status").asText()).isEqualTo("accepted");
+        assertThat(jdbc.queryForObject("SELECT sample_payment_status FROM creative_quote_request WHERE id=?", String.class, quoteId))
+                .isEqualTo("unpaid");
+
+        String samplePaymentNo = "PAY-SAMPLE-" + quoteId;
+        createPendingPayment(creator.id(), samplePaymentNo, "commercial_quote_sample_" + quoteId);
+        jdbc.update("UPDATE creative_quote_request SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=?",
+                samplePaymentNo, quoteId);
+        confirmPayment(creator.id(), samplePaymentNo, "commercial_quote_sample_" + quoteId, "WX-SAMPLE-1");
+        assertThat(jdbc.queryForObject("SELECT sample_payment_status FROM creative_quote_request WHERE id=?", String.class, quoteId))
+                .isEqualTo("paid");
+    }
+
+    private void createPendingPayment(long userId, String orderNo, String productCode) {
+        jdbc.update("INSERT INTO payment_order (order_no,user_id,product_code,amount_fen,credit_amount,channel,status) VALUES (?,?,?,?,?,?,?)",
+                orderNo, userId, productCode, 100L, BigDecimal.ZERO, "wechat_jsapi", "pending");
+    }
+
+    private void confirmPayment(long userId, String orderNo, String productCode, String providerOrderNo) {
+        ReflectionTestUtils.invokeMethod(paymentController, "creditConfirmedOrder",
+                Map.of("order_no", orderNo, "user_id", userId, "product_code", productCode), providerOrderNo, "test callback");
+        assertThat(jdbc.queryForObject("SELECT status FROM payment_order WHERE order_no=?", String.class, orderNo))
+                .isEqualTo("paid");
+    }
+
     private JsonNode request(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder builder,
                              String token, Map<String, Object> body) throws Exception {
         if (body != null) builder.contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(body));
@@ -205,8 +337,12 @@ class ProductProgressWorkflowIntegrationTest {
     }
 
     private long createAsset(TestUser owner, String assetNo, String assetType, String statusValue) {
+        return createAsset(owner, assetNo, assetType, statusValue, "ai_generated");
+    }
+
+    private long createAsset(TestUser owner, String assetNo, String assetType, String statusValue, String sourceType) {
         jdbc.update("INSERT INTO digital_asset (asset_no,title,asset_type,source_type,file_url,preview_url,prompt,metadata_json,format,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
-                assetNo, "之间智造效果图", assetType, "ai_generated", "/generated/test.png", "/generated/test.png", "青铜云纹合金冰箱贴",
+                assetNo, "之间智造效果图", assetType, sourceType, "/generated/test.png", "/generated/test.png", "青铜云纹合金冰箱贴",
                 "{\"productKey\":\"souvenir-alloy-magnet\",\"productName\":\"合金冰箱贴\"}", assetType.equals("model") ? "glb" : "png", statusValue, owner.id());
         return jdbc.queryForObject("SELECT id FROM digital_asset WHERE asset_no=?", Long.class, assetNo);
     }
@@ -241,9 +377,12 @@ class ProductProgressWorkflowIntegrationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS user_selection_favorite (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL,option_id BIGINT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS selection_demand_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,request_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,option_id BIGINT NOT NULL,asset_id BIGINT,theme VARCHAR(300),budget_max DECIMAL(12,2),audience VARCHAR(200),occasion VARCHAR(100),note VARCHAR(1000),status VARCHAR(30) NOT NULL DEFAULT 'new',created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS creative_product_template (id BIGINT AUTO_INCREMENT PRIMARY KEY,template_code VARCHAR(80) NOT NULL UNIQUE,selection_option_id BIGINT,product_name VARCHAR(160) NOT NULL,published TINYINT NOT NULL DEFAULT 1,supply_status VARCHAR(30) NOT NULL DEFAULT 'pending_confirmation')");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_quote_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,request_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT,product_template_id BIGINT NOT NULL,request_type VARCHAR(30) NOT NULL,quantity INT NOT NULL,purpose VARCHAR(30) NOT NULL,note VARCHAR(1200),copyright_basis VARCHAR(30) NOT NULL,copyright_confirmed TINYINT NOT NULL,copyright_statement_version VARCHAR(30) NOT NULL,status VARCHAR(30) NOT NULL DEFAULT 'new',quoted_unit_price DECIMAL(10,2),quoted_total_price DECIMAL(12,2),quoted_lead_time VARCHAR(120),operator_comment VARCHAR(1200),sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',sample_payment_order_no VARCHAR(64),sample_paid_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_consignment_application (id BIGINT AUTO_INCREMENT PRIMARY KEY,application_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT NOT NULL,product_template_id BIGINT NOT NULL,channel_id BIGINT,channel_name_snapshot VARCHAR(200),sales_mode VARCHAR(30) NOT NULL,creator_share_percent DECIMAL(5,2) NOT NULL,platform_service_percent DECIMAL(5,2) NOT NULL,note VARCHAR(1200),copyright_basis VARCHAR(30) NOT NULL,copyright_confirmed TINYINT NOT NULL,copyright_statement_version VARCHAR(30) NOT NULL,authorization_note VARCHAR(1000),status VARCHAR(30) NOT NULL DEFAULT 'pending_review',operator_comment VARCHAR(1200),created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_quote_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,request_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT,product_template_id BIGINT NOT NULL,request_type VARCHAR(30) NOT NULL,quantity INT NOT NULL,purpose VARCHAR(30) NOT NULL,note VARCHAR(1200),copyright_basis VARCHAR(30) NOT NULL,copyright_confirmed TINYINT NOT NULL,copyright_statement_version VARCHAR(30) NOT NULL,status VARCHAR(30) NOT NULL DEFAULT 'new',quoted_unit_price DECIMAL(10,2),quoted_total_price DECIMAL(12,2),quoted_lead_time VARCHAR(120),operator_comment VARCHAR(1200),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',sample_payment_order_no VARCHAR(64),sample_paid_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_consignment_application (id BIGINT AUTO_INCREMENT PRIMARY KEY,application_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT NOT NULL,product_template_id BIGINT NOT NULL,channel_id BIGINT,channel_name_snapshot VARCHAR(200),sales_mode VARCHAR(30) NOT NULL,creator_share_percent DECIMAL(5,2) NOT NULL,platform_service_percent DECIMAL(5,2) NOT NULL,note VARCHAR(1200),copyright_basis VARCHAR(30) NOT NULL,copyright_confirmed TINYINT NOT NULL,copyright_statement_version VARCHAR(30) NOT NULL,authorization_note VARCHAR(1000),status VARCHAR(30) NOT NULL DEFAULT 'pending_review',operator_comment VARCHAR(1200),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS commercial_application_audit_log (id BIGINT AUTO_INCREMENT PRIMARY KEY,application_type VARCHAR(30) NOT NULL,application_id BIGINT NOT NULL,action VARCHAR(40) NOT NULL,operator VARCHAR(80) NOT NULL,comment VARCHAR(1200),created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS commercial_application_revision (id BIGINT AUTO_INCREMENT PRIMARY KEY,application_type VARCHAR(30) NOT NULL,application_id BIGINT NOT NULL,user_id BIGINT NOT NULL,previous_asset_id BIGINT,asset_id BIGINT NOT NULL,note VARCHAR(1200),created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS commercial_professional_guidance_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,guidance_no VARCHAR(80) NOT NULL UNIQUE,application_type VARCHAR(30) NOT NULL,application_id BIGINT NOT NULL,user_id BIGINT NOT NULL,asset_id BIGINT,product_template_id BIGINT,request_note VARCHAR(1200),status VARCHAR(30) NOT NULL DEFAULT 'requested',quoted_fee_yuan DECIMAL(12,2),quoted_lead_time VARCHAR(120),operator_comment VARCHAR(1200),guidance_result VARCHAR(3000),payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',payment_order_no VARCHAR(64),paid_at TIMESTAMP,quoted_by VARCHAR(80),quoted_at TIMESTAMP,completed_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS payment_order (id BIGINT AUTO_INCREMENT PRIMARY KEY,order_no VARCHAR(64) NOT NULL UNIQUE,user_id BIGINT NOT NULL,product_code VARCHAR(100) NOT NULL,amount_fen BIGINT NOT NULL DEFAULT 0,credit_amount DECIMAL(12,2) NOT NULL DEFAULT 0,channel VARCHAR(40) NOT NULL,status VARCHAR(30) NOT NULL,provider_order_no VARCHAR(128),provider_response CLOB,paid_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_sample_fee_catalog (id BIGINT AUTO_INCREMENT PRIMARY KEY,product_name VARCHAR(120) NOT NULL UNIQUE,fee_yuan DECIMAL(10,2) NOT NULL,active TINYINT NOT NULL DEFAULT 1)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,request_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT NOT NULL,request_type VARCHAR(20) NOT NULL,title VARCHAR(200),quantity INT NOT NULL,self_ship_quantity INT NOT NULL,museum_distribution_json CLOB,recipient_name VARCHAR(80),recipient_phone VARCHAR(80),recipient_address VARCHAR(500),note VARCHAR(1000),status VARCHAR(30) NOT NULL DEFAULT 'review',review_comment VARCHAR(1000),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,sample_product_name VARCHAR(120),sample_fee_yuan DECIMAL(10,2),sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',sample_payment_order_no VARCHAR(64),sample_paid_at TIMESTAMP,created_at TIMESTAMP,updated_at TIMESTAMP)");
     }
