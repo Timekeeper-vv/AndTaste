@@ -2995,18 +2995,28 @@ public class CreativeAiController {
         requireAssetAccess(assetId);
         String requestType=body==null||body.get("requestType")==null?"":String.valueOf(body.get("requestType")).trim();
         if(!Set.of("sample","bulk").contains(requestType)) throw new IllegalArgumentException("申请类型只能是打样或批量生产");
-        Map<String,Object> asset=jdbc.queryForMap("SELECT id,title,asset_type assetType,status,created_by createdBy FROM digital_asset WHERE id=?",assetId);
+        Map<String,Object> asset=jdbc.queryForMap("SELECT id,title,asset_type assetType,status,created_by createdBy,metadata_json metadataJson FROM digital_asset WHERE id=?",assetId);
         if(!"model".equals(String.valueOf(asset.get("assetType")))) throw new IllegalStateException("第一版仅支持3D模型作品提交打样/生产申请");
         if(!"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
         if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
-        String sampleProductName = body==null || body.get("sampleProductName")==null ? "" : String.valueOf(body.get("sampleProductName")).trim();
+        String requestedSampleProductName = body==null || body.get("sampleProductName")==null ? "" : String.valueOf(body.get("sampleProductName")).trim();
+        String boundProductName = productNameFromAssetMetadata(asset.get("metadataJson"));
+        // Current mini-program creation binds product identity to every generated
+        // asset. Prefer that server-stored identity so a user cannot accidentally
+        // turn a selected product into a different sample request at the last step.
+        String sampleProductName = firstNonBlank(boundProductName, requestedSampleProductName);
         BigDecimal sampleFeeYuan = null;
         if ("sample".equals(requestType)) {
-            if (blank(sampleProductName)) throw new IllegalArgumentException("请选择打样产品");
+            if (blank(sampleProductName)) throw new IllegalArgumentException("当前 3D 作品未绑定产品方向，请返回作品页重新选择产品后再提交打样");
             List<BigDecimal> feeRows = jdbc.query("SELECT fee_yuan FROM consumer_sample_fee_catalog WHERE product_name=? AND active=1", (rs, rowNum) -> rs.getBigDecimal(1), sampleProductName);
-            if (feeRows.isEmpty()) throw new IllegalArgumentException("打样产品不存在或已下架，请刷新后重试");
-            sampleFeeYuan = feeRows.get(0);
+            if (!feeRows.isEmpty()) {
+                sampleFeeYuan = feeRows.get(0);
+            } else if (blank(boundProductName)) {
+                // Legacy assets can still submit an explicit catalog product,
+                // but do not accept an arbitrary client-supplied price category.
+                throw new IllegalArgumentException("打样产品不存在或已下架，请刷新后重试");
+            }
         }
         String purpose=body==null||body.get("purpose")==null?"personal":String.valueOf(body.get("purpose")).trim();
         if(blank(purpose)) purpose="personal";
@@ -3043,7 +3053,31 @@ public class CreativeAiController {
             return ps;
         },kh);
         Long id=Objects.requireNonNull(kh.getKey()).longValue();
-        return Map.of("success",true,"id",id,"requestNo",requestNo,"status","review","message","sample".equals(requestType)?"打样申请已提交，请等待审核":"批量生产申请已提交，请等待审核");
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("success",true); result.put("id",id); result.put("requestNo",requestNo); result.put("status","review");
+        if ("sample".equals(requestType)) {
+            result.put("sampleProductName", sampleProductName);
+            result.put("sampleFeeYuan", sampleFeeYuan);
+            result.put("message", sampleFeeYuan == null
+                    ? "打样申请已提交，请等待审核和费用确认"
+                    : "打样申请已提交，请等待审核");
+        } else {
+            result.put("message", "批量生产申请已提交，请等待审核");
+        }
+        return result;
+    }
+
+    private String productNameFromAssetMetadata(Object metadataJson) {
+        try {
+            JsonNode metadata = storedJsonNode(metadataJson);
+            if (metadata == null || !metadata.isObject()) return "";
+            return firstNonBlank(
+                    metadata.path("productName").asText(""),
+                    metadata.path("productCategory").asText(""),
+                    metadata.path("productType").asText(""));
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     @GetMapping("/consumer-production/admin/review")

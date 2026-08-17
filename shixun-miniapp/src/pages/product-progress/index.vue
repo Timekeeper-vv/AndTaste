@@ -32,10 +32,10 @@
       </view>
     </scroll-view>
 
-    <view v-if="commercialSyncState === 'cached' || commercialSyncState === 'failed'" class="commercial-sync-alert" :class="commercialSyncState">
+    <view v-if="hasSyncWarning" class="commercial-sync-alert" :class="commercialSyncState === 'failed' || assetSyncMessage ? 'failed' : commercialSyncState">
       <view>
-        <text>{{ commercialSyncState === 'cached' ? '商品化进度暂未连接服务器' : '商品化进度同步失败' }}</text>
-        <text>{{ commercialSyncMessage || (commercialSyncState === 'cached' ? '已显示此账号最近保存的申请记录。' : '不能将这次同步结果当作没有项目。') }}</text>
+        <text>{{ syncWarningTitle }}</text>
+        <text>{{ syncWarningMessage }}</text>
       </view>
       <button size="mini" :loading="loading" @tap="loadProjects(true)">重新同步</button>
     </view>
@@ -44,10 +44,17 @@
       <view class="loading-seal"><text>之</text></view><text>正在同步项目进度</text>
     </view>
 
-    <view v-else-if="!projects.length && commercialSyncState === 'failed'" class="empty-state sync-failed-state">
+    <view v-else-if="loginRequired" class="empty-state">
+      <view class="empty-seal"><text>登</text></view>
+      <text class="empty-title">登录后查看项目进度</text>
+      <text class="empty-copy">已提交审核、打样或生产的项目会按当前账号显示在这里。</text>
+      <button class="empty-action" @tap="goLogin">去登录</button>
+    </view>
+
+    <view v-else-if="!projects.length && hasCriticalSyncFailure" class="empty-state sync-failed-state">
       <view class="empty-seal"><text>！</text></view>
-      <text class="empty-title">商品化进度暂未同步</text>
-      <text class="empty-copy">{{ commercialSyncMessage || '当前无法确认商品化申请数据，请重新同步后再查看。' }}</text>
+      <text class="empty-title">项目进度暂未同步</text>
+      <text class="empty-copy">{{ syncWarningMessage }}</text>
       <button class="empty-action" :loading="loading" @tap="loadProjects(true)">重新同步</button>
       <button class="empty-link" @tap="goCommercial">查看商品化申请</button>
     </view>
@@ -111,15 +118,18 @@ import { acceptCommercialQuote, getCachedCommercialRequests, getCommercialReques
 import { createModel, getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
-import { getSession, requireSession } from '../../utils/session'
+import { getSession } from '../../utils/session'
 
 const assets = ref<any[]>([])
 const requests = ref<any[]>([])
 const jobs = ref<any[]>([])
 const commercialRequests = ref<{ quoteRequests: any[]; consignmentApplications: any[]; selectionDemands: any[] }>({ quoteRequests: [], consignmentApplications: [], selectionDemands: [] })
-const commercialSyncState = ref<'idle' | 'loading' | 'ready' | 'cached' | 'failed'>('idle')
+const commercialSyncState = ref<'idle' | 'loading' | 'ready' | 'cached' | 'failed'>('loading')
 const commercialSyncMessage = ref('')
-const loading = ref(false)
+const assetSyncMessage = ref('')
+const auxiliarySyncMessage = ref('')
+const loginRequired = ref(false)
+const loading = ref(true)
 const actionBusyKey = ref('')
 const securedPreviews = ref<Record<string, string>>({})
 const activeFilter = ref<ProjectFilter>('all')
@@ -260,12 +270,26 @@ const filteredProjects = computed(() => projects.value.filter(project => {
   return true
 }))
 const commercialSyncLabel = computed(() => ({
-  idle: '准备同步',
+  idle: loginRequired.value ? '等待登录' : '准备同步',
   loading: '同步中',
   ready: '已同步',
   cached: '缓存记录',
   failed: '等待重试',
 }[commercialSyncState.value]))
+const hasCriticalSyncFailure = computed(() => Boolean(assetSyncMessage.value || auxiliarySyncMessage.value) || ['cached', 'failed'].includes(commercialSyncState.value))
+const hasSyncWarning = computed(() => Boolean(assetSyncMessage.value || auxiliarySyncMessage.value) || ['cached', 'failed'].includes(commercialSyncState.value))
+const syncWarningTitle = computed(() => {
+  if (assetSyncMessage.value) return '作品进度同步失败'
+  if (commercialSyncState.value === 'failed') return '商品化进度同步失败'
+  if (commercialSyncState.value === 'cached') return '商品化进度暂未连接服务器'
+  return '部分项目状态暂未同步'
+})
+const syncWarningMessage = computed(() => {
+  if (assetSyncMessage.value) return `${assetSyncMessage.value}。为避免误判，本页不会将这次结果显示为“没有项目”。`
+  if (commercialSyncState.value === 'failed') return commercialSyncMessage.value || '当前无法确认商品化申请数据，请重新同步后再查看。'
+  if (commercialSyncState.value === 'cached') return commercialSyncMessage.value || '已显示此账号最近保存的申请记录。'
+  return auxiliarySyncMessage.value || '部分辅助状态暂未同步，已展示可用项目数据。'
+})
 
 const trackedAssetStatuses = ['review', 'approved', 'rejected']
 const directActions: ProductAction[] = ['pay', 'pay_quote', 'accept_quote', 'open_commercial', 'open_selection', 'apply', 'adjust', 'submit_image_review', 'generate_model', 'retry_model', 'submit_model_review', 'resubmit_request']
@@ -527,6 +551,10 @@ function goWorks() {
 
 function goCommercial() {
   uni.navigateTo({ url: '/pages/commercial/index' })
+}
+
+function goLogin() {
+  uni.navigateTo({ url: '/pages/login/index?from=protected&resume=product-progress' })
 }
 
 function goSelection() {
@@ -793,20 +821,35 @@ async function hydratePreviews(rows: ProductProject[]) {
 }
 
 async function loadProjects(notify = false) {
-  if (!requireSession()) return
+  if (!getSession()?.token) {
+    loginRequired.value = true
+    commercialSyncState.value = 'idle'
+    commercialSyncMessage.value = ''
+    assetSyncMessage.value = ''
+    auxiliarySyncMessage.value = ''
+    loading.value = false
+    uni.stopPullDownRefresh()
+    return
+  }
+  loginRequired.value = false
   const serial = ++projectLoadSerial
   loading.value = true
+  assetSyncMessage.value = ''
+  auxiliarySyncMessage.value = ''
   try {
     await loadCommercialProgress(serial)
     if (serial !== projectLoadSerial) return
     const [assetResult, requestResult, jobResult] = await Promise.allSettled([getAssets(), getProductionRequests(), getJobs()])
     if (serial !== projectLoadSerial) return
     if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
+    else assetSyncMessage.value = errorMessage(assetResult.reason, '无法读取已提交的作品')
     if (requestResult.status === 'fulfilled') requests.value = Array.isArray(requestResult.value) ? requestResult.value : []
+    else auxiliarySyncMessage.value = errorMessage(requestResult.reason, '生产申请状态暂未返回')
     if (jobResult.status === 'fulfilled') jobs.value = Array.isArray(jobResult.value) ? jobResult.value : []
+    else if (!auxiliarySyncMessage.value) auxiliarySyncMessage.value = errorMessage(jobResult.reason, '3D 建模状态暂未返回')
     void hydratePreviews(projects.value)
     const partialFailure = [assetResult, requestResult, jobResult].some(result => result.status === 'rejected')
-    if (partialFailure) uni.showToast({ title: '部分状态暂未同步，已展示可用数据', icon: 'none' })
+    if (partialFailure) uni.showToast({ title: assetSyncMessage.value ? '作品进度同步失败，请重新同步' : '部分状态暂未同步，已展示可用数据', icon: 'none' })
     else if (notify && commercialSyncState.value === 'ready') uni.showToast({ title: '项目进度已更新', icon: 'success' })
   } catch (error: any) {
     if (serial !== projectLoadSerial) return
@@ -817,6 +860,11 @@ async function loadProjects(notify = false) {
       uni.stopPullDownRefresh()
     }
   }
+}
+
+function errorMessage(error: any, fallback: string) {
+  const message = String(error?.message || '').trim()
+  return message || fallback
 }
 
 async function loadCommercialProgress(serial: number) {
@@ -860,8 +908,8 @@ function formatCachedAt(value: number) {
   return `${part(date.getMonth() + 1)}.${part(date.getDate())} ${part(date.getHours())}:${part(date.getMinutes())}`
 }
 
-onShow(() => { if (getSession()) void loadProjects() })
-onPullDownRefresh(() => { if (getSession()) void loadProjects(true); else uni.stopPullDownRefresh() })
+onShow(() => { void loadProjects() })
+onPullDownRefresh(() => { void loadProjects(true) })
 </script>
 
 <style scoped lang="scss">
