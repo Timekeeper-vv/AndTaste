@@ -65,10 +65,17 @@ export interface CachedCommercialRequests {
 
 const COMMERCIAL_REQUEST_CACHE_PREFIX = 'smart_pig_commercial_requests:'
 const COMMERCIAL_REQUEST_CACHE_MAX_AGE = 30 * 24 * 60 * 60 * 1000
+const COMMERCIAL_PENDING_REQUEST_MAX_AGE = 10 * 60 * 1000
+let commercialRequestFetchSerial = 0
+let commercialRequestInFlight: Promise<CommercialRequests> | null = null
 
 function commercialRequestCacheKey() {
-  const username = getSession()?.user?.username
-  return username ? `${COMMERCIAL_REQUEST_CACHE_PREFIX}${encodeURIComponent(username)}` : ''
+  const session = getSession()
+  const username = session?.user?.username
+  if (!username) return ''
+  // Keep cached records separate when the same device changes accounts.
+  const tokenTail = String(session?.token || '').slice(-16)
+  return `${COMMERCIAL_REQUEST_CACHE_PREFIX}${encodeURIComponent(`${username}:${tokenTail}`)}`
 }
 
 function normalizeCommercialRequests(value: any): CommercialRequests {
@@ -82,6 +89,61 @@ function normalizeCommercialRequests(value: any): CommercialRequests {
     summary: payload?.summary && typeof payload.summary === 'object' ? payload.summary : undefined,
     syncedAt: typeof payload?.syncedAt === 'string' ? payload.syncedAt : undefined,
   }
+}
+
+function commercialPendingKey() {
+  const key = commercialRequestCacheKey()
+  return key ? `${key}:pending` : ''
+}
+
+function requestIdentity(value: any) {
+  return String(value?.id || value?.requestNo || value?.applicationNo || '')
+}
+
+function sameCommercialRequest(left: any, right: any) {
+  const keys = (value: any) => [value?.id, value?.requestNo, value?.applicationNo]
+    .map(item => String(item || ''))
+    .filter(Boolean)
+  const leftKeys = keys(left)
+  const rightKeys = new Set(keys(right))
+  return leftKeys.some(key => rightKeys.has(key))
+}
+
+function readPendingCommercialRequests(): Array<{ kind: 'quote' | 'consignment'; request: any; savedAt: number }> {
+  const key = commercialPendingKey()
+  if (!key) return []
+  const raw = uni.getStorageSync(key)
+  if (!Array.isArray(raw)) return []
+  const valid = raw.filter(item => item && ['quote', 'consignment'].includes(item.kind)
+    && item.request && typeof item.savedAt === 'number'
+    && Date.now() - item.savedAt <= COMMERCIAL_PENDING_REQUEST_MAX_AGE)
+  if (valid.length !== raw.length) uni.setStorageSync(key, valid)
+  return valid
+}
+
+function mergePendingCommercialRequests(data: CommercialRequests): CommercialRequests {
+  const pending = readPendingCommercialRequests()
+  if (!pending.length) return data
+  const quoteRequests = [...data.quoteRequests]
+  const consignmentApplications = [...data.consignmentApplications]
+  const remaining: typeof pending = []
+  pending.forEach(item => {
+    const target = item.kind === 'quote' ? quoteRequests : consignmentApplications
+    const identity = requestIdentity(item.request)
+    const index = identity ? target.findIndex(row => sameCommercialRequest(row, item.request)) : -1
+    if (index >= 0) {
+      target[index] = { ...item.request, ...target[index] }
+    } else {
+      target.unshift(item.request)
+      remaining.push(item)
+    }
+  })
+  const key = commercialPendingKey()
+  if (key) {
+    if (remaining.length) uni.setStorageSync(key, remaining)
+    else uni.removeStorageSync(key)
+  }
+  return { ...data, quoteRequests, consignmentApplications }
 }
 
 function cacheCommercialRequests(data: CommercialRequests) {
@@ -100,7 +162,7 @@ export function getCachedCommercialRequests(): CachedCommercialRequests | null {
     if (cached) uni.removeStorageSync(key)
     return null
   }
-  return { data: normalizeCommercialRequests(cached.data), savedAt: cached.savedAt }
+  return { data: mergePendingCommercialRequests(normalizeCommercialRequests(cached.data)), savedAt: cached.savedAt }
 }
 
 export const getCommercialProducts = () => request<CommercialProduct[]>('/api/commercial/consumer/products')
@@ -119,8 +181,59 @@ export const createQuoteRequest = (body: Record<string, unknown>) => request<any
 
 export const createConsignmentApplication = (body: Record<string, unknown>) => request<any>('/api/commercial/consumer/consignment-applications', { method: 'POST', data: body, header: { 'content-type': 'application/json' } })
 
-export const getCommercialRequests = async () => cacheCommercialRequests(normalizeCommercialRequests(
-  await request<unknown>('/api/commercial/consumer/requests'),
-))
+export interface CommercialRequestFetchOptions {
+  /** Bypass an older in-flight request and read the current server state. */
+  force?: boolean
+}
+
+/**
+ * Reads the current account's applications. The sequence guard prevents a
+ * slower, older response from overwriting a newer response after navigation
+ * back from the submission page.
+ */
+export function getCommercialRequests(options: CommercialRequestFetchOptions = {}): Promise<CommercialRequests> {
+  if (!options.force && commercialRequestInFlight) return commercialRequestInFlight
+
+  const serial = ++commercialRequestFetchSerial
+  const path = `/api/commercial/consumer/requests?_refresh=${Date.now()}_${serial}`
+  const promise = request<unknown>(path, {
+    timeout: 30000,
+    header: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+  }).then(value => {
+    const data = mergePendingCommercialRequests(normalizeCommercialRequests(value))
+    if (serial === commercialRequestFetchSerial) cacheCommercialRequests(data)
+    return data
+  })
+  commercialRequestInFlight = promise
+  void promise.then(
+    () => { if (commercialRequestInFlight === promise) commercialRequestInFlight = null },
+    () => { if (commercialRequestInFlight === promise) commercialRequestInFlight = null },
+  )
+  return promise
+}
+
+/** Merge a successful submission into local state if the follow-up read is delayed. */
+export function rememberCommercialRequest(kind: 'quote' | 'consignment', request: any): CommercialRequests {
+  const cached = getCachedCommercialRequests()?.data || { quoteRequests: [], consignmentApplications: [] }
+  const key = kind === 'quote' ? 'quoteRequests' : 'consignmentApplications'
+  const rows = [...cached[key]]
+  const identity = String(request?.id || request?.requestNo || request?.applicationNo || '')
+  const existingIndex = identity ? rows.findIndex(row => sameCommercialRequest(row, request)) : -1
+  if (existingIndex >= 0) rows[existingIndex] = { ...rows[existingIndex], ...request }
+  else rows.unshift(request)
+  const merged: CommercialRequests = {
+    ...cached,
+    [key]: rows,
+  }
+  cacheCommercialRequests(merged)
+  const pendingKey = commercialPendingKey()
+  if (pendingKey && identity) {
+    const pending = readPendingCommercialRequests()
+      .filter(item => !(item.kind === kind && sameCommercialRequest(item.request, request)))
+    pending.unshift({ kind, request, savedAt: Date.now() })
+    uni.setStorageSync(pendingKey, pending)
+  }
+  return merged
+}
 
 export const acceptCommercialQuote = (id: number) => request<any>(`/api/commercial/consumer/quote-requests/${id}/accept`, { method: 'POST' })

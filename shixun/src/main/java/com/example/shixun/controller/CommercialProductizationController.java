@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import javax.servlet.http.HttpServletResponse;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -172,7 +173,12 @@ public class CommercialProductizationController {
                 requestNo, userId, assetId, product.get("id"), requestType, quantity, purpose, limit(text(body.get("note")), 1200), basis, true, COPYRIGHT_VERSION);
         Long applicationId = jdbc.queryForObject("SELECT id FROM creative_quote_request WHERE request_no=?", Long.class, requestNo);
         audit("quote", String.valueOf(applicationId), "created", principal.username(), "用户提交报价/打样申请");
-        return result(requestNo, "报价申请已提交，运营会根据作品、数量和工艺条件人工确认");
+        Map<String, Object> out = result(requestNo, "报价申请已提交，运营会根据作品、数量和工艺条件人工确认");
+        out.put("id", applicationId);
+        out.put("requestId", applicationId);
+        out.put("requestKind", "quote");
+        out.put("request", createdQuoteRequest(applicationId, requestNo, assetId, requestType, quantity, purpose, product));
+        return out;
     }
 
     @PostMapping("/consumer/consignment-applications")
@@ -204,23 +210,41 @@ public class CommercialProductizationController {
                 applicationNo, userId, assetId, product.get("id"), channelId, channelName, limit(text(body.get("note")), 1200), basis, true, COPYRIGHT_VERSION, limit(text(body.get("authorizationNote")), 1000));
         Long applicationId = jdbc.queryForObject("SELECT id FROM creative_consignment_application WHERE application_no=?", Long.class, applicationNo);
         audit("consignment", String.valueOf(applicationId), "created", principal.username(), "用户提交代销申请");
-        return result(applicationNo, "代销申请已提交，平台会先进行版权、作品质量和渠道匹配审核");
+        Map<String, Object> out = result(applicationNo, "代销申请已提交，平台会先进行版权、作品质量和渠道匹配审核");
+        out.put("id", applicationId);
+        out.put("applicationId", applicationId);
+        out.put("requestKind", "consignment");
+        out.put("application", createdConsignmentApplication(applicationId, applicationNo, assetId, channelId, channelName, product));
+        out.put("request", out.get("application"));
+        return out;
     }
 
     @GetMapping("/consumer/requests")
     public Map<String, Object> consumerRequests(
-            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
-        return consumerRequestPayload(requireConsumer(principal));
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+            HttpServletResponse response) {
+        noStore(response);
+        return consumerRequests(principal);
     }
 
     /**
-     * Kept only for already-published mini-program packages. New clients use
-     * /consumer/requests directly, and both URLs deliberately share one payload.
+     * Direct overload retained for controller-level tests and internal calls.
+     * The mapped method above adds no-store headers for real HTTP responses.
      */
+    public Map<String, Object> consumerRequests(JwtService.Claims principal) {
+        return consumerRequestPayload(requireConsumer(principal));
+    }
+
     @Deprecated
     @GetMapping("/consumer/product-progress")
     public Map<String, Object> consumerProductProgress(
-            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+            HttpServletResponse response) {
+        noStore(response);
+        return consumerProductProgress(principal);
+    }
+
+    public Map<String, Object> consumerProductProgress(JwtService.Claims principal) {
         return consumerRequests(principal);
     }
 
@@ -331,7 +355,7 @@ public class CommercialProductizationController {
 
     private Map<String, Object> product(Object code) {
         if (blank(code)) throw new IllegalArgumentException("请选择商品方向");
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.id,p.template_code templateCode,o.option_key optionKey FROM creative_product_template p LEFT JOIN selection_option o ON o.id=p.selection_option_id WHERE p.template_code=? AND p.published=1 AND p.supply_status <> 'suspended'", String.valueOf(code).trim());
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.id,p.template_code templateCode,p.product_name productName,o.option_key optionKey FROM creative_product_template p LEFT JOIN selection_option o ON o.id=p.selection_option_id WHERE p.template_code=? AND p.published=1 AND p.supply_status <> 'suspended'", String.valueOf(code).trim());
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "商品方向不存在或暂未开放");
         return rows.get(0);
     }
@@ -386,6 +410,50 @@ public class CommercialProductizationController {
 
     private void audit(String type, String applicationId, String action, String operator, String comment) {
         jdbc.update("INSERT INTO commercial_application_audit_log (application_type,application_id,action,operator,comment) VALUES (?,?,?,?,?)", type, numericId(applicationId), action, operator == null ? "system" : operator, limit(comment, 1200));
+    }
+
+    private Map<String, Object> createdQuoteRequest(Long id, String requestNo, Long assetId,
+                                                     String requestType, int quantity, String purpose,
+                                                     Map<String, Object> product) {
+        String now = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", id);
+        row.put("requestNo", requestNo);
+        row.put("assetId", assetId);
+        row.put("requestType", requestType);
+        row.put("quantity", quantity);
+        row.put("purpose", purpose);
+        row.put("status", "new");
+        row.put("samplePaymentStatus", "not_required");
+        row.put("templateCode", product.get("templateCode"));
+        row.put("productName", product.get("productName"));
+        row.put("createdAt", now);
+        row.put("updatedAt", now);
+        return row;
+    }
+
+    private Map<String, Object> createdConsignmentApplication(Long id, String applicationNo, Long assetId,
+                                                               Long channelId, String channelName,
+                                                               Map<String, Object> product) {
+        String now = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", id);
+        row.put("applicationNo", applicationNo);
+        row.put("assetId", assetId);
+        row.put("channelId", channelId);
+        row.put("channelName", channelName);
+        row.put("status", "pending_review");
+        row.put("templateCode", product.get("templateCode"));
+        row.put("productName", product.get("productName"));
+        row.put("createdAt", now);
+        row.put("updatedAt", now);
+        return row;
+    }
+
+    private void noStore(HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        response.setHeader("Pragma", "no-cache");
+        response.setDateHeader("Expires", 0);
     }
 
     private long numericId(String value) {

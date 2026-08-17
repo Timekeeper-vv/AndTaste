@@ -123,6 +123,7 @@ const loading = ref(false)
 const actionBusyKey = ref('')
 const securedPreviews = ref<Record<string, string>>({})
 const activeFilter = ref<ProjectFilter>('all')
+let projectLoadSerial = 0
 const steps = ['创作', '审核', '3D 原型', '打样', '生产']
 const filters: Array<{ key: ProjectFilter; label: string }> = [
   { key: 'all', label: '全部' },
@@ -769,10 +770,13 @@ async function hydratePreviews(rows: ProductProject[]) {
 
 async function loadProjects(notify = false) {
   if (!requireSession()) return
+  const serial = ++projectLoadSerial
   loading.value = true
   try {
-    await loadCommercialProgress()
+    await loadCommercialProgress(serial)
+    if (serial !== projectLoadSerial) return
     const [assetResult, requestResult, jobResult] = await Promise.allSettled([getAssets(), getProductionRequests(), getJobs()])
+    if (serial !== projectLoadSerial) return
     if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
     if (requestResult.status === 'fulfilled') requests.value = Array.isArray(requestResult.value) ? requestResult.value : []
     if (jobResult.status === 'fulfilled') jobs.value = Array.isArray(jobResult.value) ? jobResult.value : []
@@ -781,27 +785,32 @@ async function loadProjects(notify = false) {
     if (partialFailure) uni.showToast({ title: '部分状态暂未同步，已展示可用数据', icon: 'none' })
     else if (notify && commercialSyncState.value === 'ready') uni.showToast({ title: '项目进度已更新', icon: 'success' })
   } catch (error: any) {
+    if (serial !== projectLoadSerial) return
     uni.showToast({ title: error?.message || '项目进度加载失败', icon: 'none' })
   } finally {
-    loading.value = false
-    uni.stopPullDownRefresh()
+    if (serial === projectLoadSerial) {
+      loading.value = false
+      uni.stopPullDownRefresh()
+    }
   }
 }
 
-async function loadCommercialProgress() {
+async function loadCommercialProgress(serial: number) {
   commercialSyncState.value = 'loading'
   commercialSyncMessage.value = ''
   try {
     // Keep this identical to the "商品化申请" page: one function, one URL and
     // one account-scoped cache. Product progress must never have its own view
     // of a consumer's commercial applications.
-    const data = await getCommercialRequests()
+    const data = await getCommercialRequests({ force: true })
+    if (serial !== projectLoadSerial) return
     commercialRequests.value = {
       quoteRequests: data.quoteRequests,
       consignmentApplications: data.consignmentApplications,
     }
     commercialSyncState.value = 'ready'
   } catch (error: any) {
+    if (serial !== projectLoadSerial) return
     const cached = getCachedCommercialRequests()
     if (cached) {
       commercialRequests.value = {

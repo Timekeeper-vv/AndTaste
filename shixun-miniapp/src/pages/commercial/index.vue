@@ -71,7 +71,7 @@
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { apiUrl } from '../../api/client'
-import { acceptCommercialQuote, createConsignmentApplication, createQuoteRequest, getCommercialChannelDirectory, getCommercialProducts, getCommercialRequests, type CommercialChannel, type CommercialChannelDirectory, type CommercialProduct } from '../../api/commercial'
+import { acceptCommercialQuote, createConsignmentApplication, createQuoteRequest, getCommercialChannelDirectory, getCommercialProducts, getCommercialRequests, rememberCommercialRequest, type CommercialChannel, type CommercialChannelDirectory, type CommercialProduct } from '../../api/commercial'
 import { requireSession } from '../../utils/session'
 
 const products = ref<CommercialProduct[]>([])
@@ -145,7 +145,7 @@ async function load() {
     products.value = await getCommercialProducts()
     if (products.value[0]?.copyrightStatement) copyrightStatement.value = String(products.value[0].copyrightStatement)
     bindProductFromCreation()
-    requests.value = await getCommercialRequests()
+    requests.value = await getCommercialRequests({ force: true })
   } catch (error: any) { uni.showToast({ title: error?.message || '商品化服务暂不可用', icon: 'none' }) }
   finally { loading.value = false }
 }
@@ -199,7 +199,22 @@ async function submit() {
     const result = mode.value === 'quote'
       ? await createQuoteRequest({ ...body, requestType: quoteType.value, purpose: 'personal', quantity: Number(quantity.value) || 1, assetId: assetId.value || undefined })
       : await createConsignmentApplication({ ...body, assetId: Number(assetId.value), channelId: selectedChannel.value?.id || undefined, authorizationNote: authorizationNote.value })
-    requests.value = await getCommercialRequests()
+    let refreshed: typeof requests.value | null = null
+    try { refreshed = await getCommercialRequests({ force: true }) } catch { /* The submitted record below remains available offline. */ }
+    const requestKind = result?.requestKind === 'consignment' || mode.value === 'consignment' ? 'consignment' : 'quote'
+    const submittedRequest = result?.request || (result?.requestNo ? {
+      id: result?.id,
+      ...(requestKind === 'consignment' ? { applicationNo: result.requestNo } : { requestNo: result.requestNo }),
+      assetId: assetId.value || undefined,
+      templateCode: selected.value.templateCode,
+      productName: selected.value.productName,
+      ...(requestKind === 'consignment'
+        ? { status: 'pending_review', channelId: selectedChannel.value?.id || undefined, channelName: selectedChannel.value?.name || '' }
+        : { requestType: quoteType.value, quantity: Number(quantity.value) || 1, purpose: 'personal', status: 'new', samplePaymentStatus: 'not_required' }),
+    } : null)
+    requests.value = submittedRequest
+      ? rememberCommercialRequest(requestKind, submittedRequest)
+      : (refreshed || requests.value)
     uni.showModal({ title: '已提交', content: `${result?.message || '申请已提交'}\n编号：${result?.requestNo || '-'}`, showCancel: false })
     selected.value = null; note.value = ''; authorizationNote.value = ''; copyrightConfirmed.value = false
   } catch (error: any) { uni.showToast({ title: error?.message || '提交失败，请稍后重试', icon: 'none' }) }
@@ -211,7 +226,7 @@ async function acceptQuote(item: any) {
   acceptingId.value = Number(item.id)
   try {
     const result = await acceptCommercialQuote(Number(item.id))
-    requests.value = await getCommercialRequests()
+    requests.value = await getCommercialRequests({ force: true })
     uni.showModal({ title: '报价已接受', content: result?.message || '运营会联系你确认打样或生产细节', showCancel: false })
   } catch (error: any) { uni.showToast({ title: error?.message || '接受报价失败，请稍后重试', icon: 'none' }) }
   finally { acceptingId.value = null }
