@@ -20,65 +20,43 @@
     <template v-else>
       <AiGeneratedNotice class="ai-disclosure" compact description="带有“AI生成”标识的图片、四视图和 3D 原型由人工智能生成。展示、商业使用、打样和生产前请完成人工复核与权利核验。" />
 
-      <view v-if="loading && !assets.length && !jobs.length" class="empty">正在同步作品状态…</view>
-
-      <view v-else-if="syncError && !assets.length && !activeJobs.length" class="sync-error">
-        <text class="sync-error-title">作品暂时未能同步</text>
-        <text class="sync-error-copy">{{ syncError }}</text>
-        <button class="sync-retry" @tap="refresh(true)">重新加载</button>
+      <view v-if="loadError && !assets.length" class="load-error">
+        <text class="load-error-title">作品暂时未能打开</text>
+        <text class="load-error-copy">{{ loadError }}</text>
+        <button class="load-retry" @tap="refresh(true)">重新加载</button>
       </view>
 
-      <view v-else>
-        <view v-if="syncError" class="sync-warning" @tap="refresh(true)">
-          <text>{{ syncError }}</text><text>点击重试 ›</text>
+      <view v-else-if="!assets.length" class="empty">
+        <text>还没有作品，去开始第一件创作吧。</text>
+        <button class="create-first" @tap="goCreate">开始创作</button>
+      </view>
+
+      <view v-else class="section">
+        <view v-if="loadError" class="cache-warning" @tap="refresh(true)">
+          <text>暂时无法更新最新作品</text><text>重新加载 ›</text>
         </view>
-        <view v-if="activeJobs.length" class="section">
-          <view class="section-head"><text>生成任务</text><text>{{ activeJobs.length }} 条</text></view>
-          <view v-for="job in activeJobs" :key="`job-${job.id}`" class="job-card" :class="job.status">
-            <view class="job-icon">{{ jobIcon(job.jobType) }}</view>
-            <view class="job-body">
-              <view class="row"><text class="name">{{ jobTitle(job) }}</text><text class="status" :class="job.status">{{ statusText(job.status) }}</text></view>
-              <text class="meta">{{ jobNo(job) }} · {{ jobTypeText(job.jobType) }}</text>
-              <view v-if="isGenerating(job.status)" class="progress-line"><view class="progress-value" :style="{ width: `${jobProgress(job)}%` }" /></view>
-              <text v-if="isGenerating(job.status)" class="progress-text">生成进度 {{ jobProgress(job) }}%</text>
-              <text v-if="job.status === 'failed'" class="failure">失败原因：{{ job.errorMessage || '生成服务未返回具体原因，请稍后重试。' }}</text>
-            </view>
+        <view class="section-head"><text>作品库</text><text>{{ assets.length }} 件</text></view>
+        <view v-for="item in assets" :key="item.id" class="asset">
+          <view class="asset-media">
+            <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" />
+            <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
+            <text v-if="isAiGenerated(item)" class="ai-output-badge">AI生成</text>
           </view>
-        </view>
-
-        <view v-if="!assets.length && !activeJobs.length" class="empty">
-          <text>还没有作品，去开始第一件创作吧。</text>
-          <button class="create-first" @tap="goCreate">开始创作</button>
-        </view>
-
-        <view v-else-if="assets.length" class="section">
-          <view class="section-head"><text>作品库</text><text>{{ assets.length }} 件</text></view>
-          <view v-for="item in assets" :key="item.id" class="asset">
-            <view class="asset-media">
-              <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" />
-              <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
-              <text v-if="isAiGenerated(item)" class="ai-output-badge">AI生成</text>
+          <view class="body">
+            <view class="row"><text class="name">{{ item.title || '未命名作品' }}</text><text class="status" :class="assetDisplayStatus(item)">{{ statusText(assetDisplayStatus(item)) }}</text></view>
+            <text class="meta">{{ item.assetType === 'model' ? '3D 模型' : 'AI 图片' }} · {{ item.format?.toUpperCase() || '文件' }}</text>
+            <view v-if="materialFor(item)" class="material-summary">
+              <text>本次工艺</text><text>{{ materialFor(item)?.name }}</text><text>{{ materialFor(item)?.hint }}</text>
             </view>
-            <view class="body">
-              <view class="row"><text class="name">{{ item.title || '未命名作品' }}</text><text class="status" :class="assetDisplayStatus(item)">{{ statusText(assetDisplayStatus(item)) }}</text></view>
-              <text class="meta">{{ item.assetType === 'model' ? '3D 模型' : 'AI 图片' }} · {{ item.format?.toUpperCase() || '文件' }}</text>
-              <view v-if="materialFor(item)" class="material-summary">
-                <text>本次工艺</text><text>{{ materialFor(item)?.name }}</text><text>{{ materialFor(item)?.hint }}</text>
-              </view>
-              <text v-if="generationText(item)" class="generation">{{ generationText(item) }}</text>
-              <view v-if="isGenerating(assetDisplayStatus(item))" class="progress-line"><view class="progress-value" :style="{ width: `${assetProgress(item)}%` }" /></view>
-              <text v-if="assetFailure(item)" class="failure">失败原因：{{ assetFailure(item) }}</text>
-              <text v-if="source(item)" class="source">审批出处：{{ source(item) }}</text>
-              <view v-if="requestFor(item)" class="project-entry" @tap="openCommercial"><text>已创建商品化申请</text><text>查看申请 ›</text></view>
-              <view class="actions">
-                <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button>
-                <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
-                <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="export" :loading="downloadingModelId === String(item.id)" @tap="chooseModelExport(item)">导出模型</button>
-                <button v-if="canRunDesignReview(item)" size="mini" class="design-review" @tap="openDesignReview(item)">AI 深度评审</button>
-                <button v-if="canSubmitReview(item)" size="mini" :loading="submittingId === item.id" @tap="submitReview(item)">提交审核</button>
-                <button v-if="canApplyProduction(item)" size="mini" class="production" @tap="applyProduction(item)">打样 / 生产</button>
-                <button size="mini" @tap="copy(item)">复制编号</button>
-              </view>
+            <text v-if="source(item)" class="source">审批出处：{{ source(item) }}</text>
+            <view class="actions">
+              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button>
+              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
+              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="export" :loading="downloadingModelId === String(item.id)" @tap="chooseModelExport(item)">导出模型</button>
+              <button v-if="canRunDesignReview(item)" size="mini" class="design-review" @tap="openDesignReview(item)">AI 深度评审</button>
+              <button v-if="canSubmitReview(item)" size="mini" :loading="submittingId === item.id" @tap="submitReview(item)">提交审核</button>
+              <button v-if="canApplyProduction(item)" size="mini" class="production" @tap="applyProduction(item)">打样 / 生产</button>
+              <button size="mini" @tap="copy(item)">复制编号</button>
             </view>
           </view>
         </view>
@@ -88,93 +66,43 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
-import { getAssetPreviewAccess, getAssets, getJobs, getProductionRequests, submitAssetReview } from '../../api/creative'
+import { getAssetPreviewAccess, getAssets, getProductionRequests, submitAssetReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
 import { getSession } from '../../utils/session'
 import { statusText } from '../../utils/format'
 
 const assets = ref<any[]>([])
-const jobs = ref<any[]>([])
-const productionRequests = ref<any[]>([])
 const securedPreviews = ref<Record<string, string>>({})
-const loading = ref(true)
-const syncing = ref(false)
-const syncError = ref('')
+const loading = ref(false)
+const loadError = ref('')
 const submittingId = ref<number | null>(null)
 const downloadingModelId = ref('')
 const signedIn = ref(Boolean(getSession()?.token))
 const DESKTOP_MODEL_URL = 'https://www.zhijiansk.com/'
 const threeDimensionalPolicyConfirmed = ref(false)
 
-const assetJobMap = computed(() => {
-  const result: Record<string, any> = {}
-  jobs.value.forEach((job) => {
-    if (job.outputAssetId !== undefined && job.outputAssetId !== null) result[String(job.outputAssetId)] = job
-  })
-  return result
-})
-
-const activeJobs = computed(() => {
-  const knownAssetIds = new Set(assets.value.map((asset) => String(asset.id)))
-  return jobs.value.filter((job) => {
-    const outputAssetId = job.outputAssetId
-    return !outputAssetId || !knownAssetIds.has(String(outputAssetId)) || job.status === 'failed'
-  })
-})
-
-const productionByAsset = computed(() => {
-  const result: Record<string, any> = {}
-  productionRequests.value.forEach((request) => {
-    if (!result[String(request.assetId)]) result[String(request.assetId)] = request
-  })
-  return result
-})
-
-const jobFor = (asset: any) => assetJobMap.value[String(asset.id)]
-const isAiGenerated = (asset: any) => Boolean(jobFor(asset))
-const requestFor = (asset: any) => productionByAsset.value[String(asset.id)]
+const isAiGenerated = (asset: any) => String(asset?.sourceType || '') === 'ai_generated'
 const previewSrc = (asset: any) => {
   const secured = securedPreviews.value[String(asset.id)]
   if (secured) return secured
   return /^https:\/\//.test(String(asset.previewUrl || '')) ? asset.previewUrl : ''
 }
 const isGenerating = (status?: string) => ['queued', 'pending', 'running', 'processing'].includes(String(status || ''))
-const jobProgress = (job: any) => Math.max(0, Math.min(100, Number(job?.progress) || 0))
-const assetProgress = (asset: any) => jobProgress(jobFor(asset))
-const assetDisplayStatus = (asset: any) => {
-  const job = jobFor(asset)
-  if (job && (isGenerating(job.status) || job.status === 'failed')) return job.status
-  return String(asset.status || 'draft')
-}
-const assetFailure = (asset: any) => {
-  const job = jobFor(asset)
-  return job?.status === 'failed' ? job.errorMessage || '生成服务未返回具体原因，请稍后重试。' : ''
-}
-const generationText = (asset: any) => {
-  const job = jobFor(asset)
-  if (!job) return ''
-  if (isGenerating(job.status)) return `生成任务 ${jobNo(job)} 正在处理`
-  if (job.status === 'succeeded') return `生成任务 ${jobNo(job)} 已完成`
-  return ''
-}
+const assetDisplayStatus = (asset: any) => String(asset.status || 'draft')
 const source = (asset: any) => {
   const tags = String(asset.tags || '')
   const match = tags.match(/审批出处=([^,，;；]+)/)
   return match?.[1] || ''
 }
-const jobNo = (job: any) => job?.jobNo || `任务 #${job?.id || '-'}`
-const jobTypeText = (type?: string) => ({ text_to_image: '文生图', image_to_3d: '图生 3D', text_to_3d: '文生 3D' }[String(type || '')] || 'AI 创作')
-const jobIcon = (type?: string) => String(type || '').includes('3d') ? '3D' : 'AI'
-const jobTitle = (job: any) => job?.title || job?.productName || `${jobTypeText(job?.jobType)}任务`
 const canSubmitReview = (asset: any) => {
   if (!['image', 'model'].includes(asset.assetType) || isGenerating(assetDisplayStatus(asset))) return false
   return !['review', 'approved'].includes(String(asset.status || 'draft'))
 }
-const canApplyProduction = (asset: any) => asset.assetType === 'model' && asset.status === 'approved' && !requestFor(asset)
+const canApplyProduction = (asset: any) => asset.assetType === 'model' && asset.status === 'approved'
 const canRunDesignReview = (asset: any) => ['image', 'model'].includes(String(asset?.assetType || '')) && !isGenerating(assetDisplayStatus(asset))
 
 const materialDefinitions = [
@@ -227,44 +155,68 @@ async function hydratePreviews(rows: any[]) {
   securedPreviews.value = next
 }
 
+function worksCacheKey() {
+  const username = String(getSession()?.user?.username || '').trim()
+  return username ? `smart_pig_works_${username}` : ''
+}
+
+function saveWorksCache(rows: any[]) {
+  const key = worksCacheKey()
+  if (!key) return
+  const cacheRows = rows.slice(0, 100).map((asset) => {
+    const copy = { ...asset }
+    delete copy.previewUrl
+    delete copy.fileUrl
+    delete copy.signedPreviewUrl
+    delete copy.signedFileUrl
+    return copy
+  })
+  try { uni.setStorageSync(key, { rows: cacheRows, savedAt: Date.now() }) } catch { /* Cache is optional. */ }
+}
+
+function restoreWorksCache() {
+  const key = worksCacheKey()
+  if (!key) return
+  try {
+    const cached = uni.getStorageSync(key)
+    const rows = Array.isArray(cached?.rows) ? cached.rows : []
+    if (!rows.length) return
+    assets.value = rows
+    void hydratePreviews(rows)
+  } catch { /* A missing or stale cache must never block the work library. */ }
+}
+
+function readableLoadError(error: any) {
+  const message = String(error?.message || error || '')
+  if (/timeout|timed out/i.test(message)) return '网络响应较慢，请稍后重新加载。'
+  if (/network|fail|connect|domain|dns/i.test(message)) return '暂时无法连接作品库，请检查网络后重试。'
+  return '作品暂时无法加载，请稍后重新加载。'
+}
+
 async function refresh(notify = false) {
   if (!signedIn.value || !getSession()?.token) {
     loading.value = false
     uni.stopPullDownRefresh()
     return
   }
-  if (syncing.value) {
+  if (loading.value) {
     uni.stopPullDownRefresh()
     return
   }
-  syncing.value = true
   loading.value = true
-  syncError.value = ''
+  loadError.value = ''
   try {
-    const [assetResult, jobResult, requestResult] = await Promise.allSettled([
-      getAssets(),
-      getJobs(),
-      getProductionRequests(),
-    ])
-    const failed: string[] = []
-    if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
-    else failed.push('作品')
-    if (jobResult.status === 'fulfilled') jobs.value = Array.isArray(jobResult.value) ? jobResult.value : []
-    else failed.push('生成任务')
-    if (requestResult.status === 'fulfilled') productionRequests.value = Array.isArray(requestResult.value) ? requestResult.value : []
-    else failed.push('商品化状态')
-    // 静态 /generated 与 /uploads 在生产环境受保护；只为当前列表前 12 个作品签发短期封面地址。
-    if (assetResult.status === 'fulfilled') void hydratePreviews(assets.value)
-    if (failed.length) {
-      syncError.value = `${failed.join('、')}暂时未能同步，请检查网络后重试。`
-      if (notify) uni.showToast({ title: '部分状态未同步', icon: 'none' })
-    } else if (notify) uni.showToast({ title: '状态已更新', icon: 'success' })
+    const rows = await getAssets()
+    assets.value = Array.isArray(rows) ? rows : []
+    saveWorksCache(assets.value)
+    // 图片签名地址在后台补齐，作品列表本身不等待这些预览请求。
+    void hydratePreviews(assets.value)
+    if (notify) uni.showToast({ title: '作品已更新', icon: 'success' })
   } catch (error: any) {
-    syncError.value = error?.message || '加载作品失败，请检查网络后重试。'
-    if (notify) uni.showToast({ title: '加载作品失败', icon: 'none' })
+    loadError.value = readableLoadError(error)
+    if (notify) uni.showToast({ title: '暂时无法加载作品', icon: 'none' })
   } finally {
     loading.value = false
-    syncing.value = false
     uni.stopPullDownRefresh()
   }
 }
@@ -403,19 +355,32 @@ function promptLogin(action: string) {
 
 function resetGuestState() {
   assets.value = []
-  jobs.value = []
-  productionRequests.value = []
   securedPreviews.value = {}
-  syncError.value = ''
+  loadError.value = ''
   loading.value = false
 }
 
-function applyProduction(asset: any) {
-  uni.navigateTo({ url: `/pages/production/index?assetId=${encodeURIComponent(String(asset.id))}&title=${encodeURIComponent(asset.title || '3D模型')}` })
-}
-
-function openCommercial() {
-  uni.navigateTo({ url: '/pages/commercial/index' })
+async function applyProduction(asset: any) {
+  uni.showLoading({ title: '正在检查申请', mask: true })
+  try {
+    const requests = await getProductionRequests()
+    const existing = Array.isArray(requests) && requests.some((request) => String(request?.assetId) === String(asset.id))
+    if (existing) {
+      uni.showModal({
+        title: '已有商品化申请',
+        content: '该作品已有打样或生产申请，请在商品化申请中继续处理。',
+        cancelText: '取消',
+        confirmText: '查看申请',
+        success: (result) => { if (result.confirm) uni.navigateTo({ url: '/pages/commercial/index' }) },
+      })
+      return
+    }
+    uni.navigateTo({ url: `/pages/production/index?assetId=${encodeURIComponent(String(asset.id))}&title=${encodeURIComponent(asset.title || '3D模型')}` })
+  } catch {
+    uni.showToast({ title: '暂时无法检查申请，请稍后重试', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
 }
 
 function openDesignReview(asset: any) {
@@ -465,7 +430,10 @@ function submitReview(asset: any) {
 
 onShow(() => {
   signedIn.value = Boolean(getSession()?.token)
-  if (signedIn.value) void refresh(false)
+  if (signedIn.value) {
+    restoreWorksCache()
+    void refresh(false)
+  }
   else resetGuestState()
 })
 
@@ -484,5 +452,5 @@ onPullDownRefresh(() => {
 <style scoped lang="scss">
 .page{background:radial-gradient(ellipse at 10% 0%,rgba(151,177,163,.17),transparent 29%),linear-gradient(180deg,#faf8f3,#f0e9df)}.title{font-family:"Songti SC","STSong",serif;color:#302b26}.sub{color:#82786d}.refresh{background:#edf3ed;color:#607b6e}.section-head{font-family:"Songti SC","STSong",serif}.asset,.job-card{border:1rpx solid rgba(129,112,93,.13);box-shadow:0 9rpx 21rpx rgba(67,53,37,.055)}.cover{background:#eef2eb}.model,.job-icon{background:linear-gradient(145deg,#5f7f71,#9eb5a8)}.job-card.failed .job-icon{background:linear-gradient(145deg,#865346,#bf765f)}.status{background:#f5ece4;color:#9d5c48}.status.approved,.status.succeeded,.status.paid{background:#e7f1e8;color:#567a67}.status.running,.status.queued,.status.processing{background:#f6f0df;color:#9b7540}.meta,.source,.generation,.progress-text{color:#8c8176}.source{color:#7d9587}.project-entry{background:#edf3ed;color:#5f7a69}.progress-line{background:#ebe5dc}.progress-value{background:linear-gradient(90deg,#a56e58,#6e8b7c)}.actions button{background:#f2f5ef;color:#59776a}.actions .material{background:#dcece2;color:#426d5a}.actions .export{background:#e8edf5;color:#526b85}.actions .production{background:#efe1d5;color:#8c5947}.actions .design-review{background:#eeeaf5;color:#6b5b8b}.create-first{border-radius:17rpx;background:linear-gradient(135deg,#3e3933,#617e71)}.material-summary{display:flex;align-items:center;flex-wrap:wrap;gap:7rpx;margin-top:11rpx}.material-summary text:first-child{padding:3rpx 8rpx;border-radius:8rpx;background:#eef2ec;color:#728578;font-size:16rpx;font-weight:800}.material-summary text:nth-child(2){color:#476c5b;font-size:20rpx;font-weight:850}.material-summary text:last-child{color:#978c80;font-size:17rpx}
 .back-home{margin:4rpx 0 0;border:1rpx solid #d5e0d6;background:#fffdf9;color:#587666;font-size:21rpx}.guest-state{display:flex;align-items:center;flex-direction:column;margin:16rpx 0 36rpx;padding:64rpx 38rpx 48rpx;border:1rpx solid rgba(113,136,120,.22);border-radius:16rpx;background:rgba(255,253,249,.9);box-shadow:0 12rpx 30rpx rgba(67,53,37,.06);text-align:center}.guest-mark{display:grid;place-items:center;width:88rpx;height:88rpx;border-radius:16rpx;background:#edf3ed;color:#567765;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:700}.guest-title{display:block;margin-top:27rpx;color:#37332d;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:700}.guest-copy{display:block;margin-top:13rpx;color:#877d72;font-size:23rpx;line-height:1.7}.guest-login,.guest-browse{width:100%;height:84rpx;line-height:84rpx;margin:32rpx 0 0;border-radius:12rpx;font-size:26rpx;font-weight:800}.guest-login{background:#456a59;color:#fffdf8}.guest-browse{margin-top:16rpx;border:1rpx solid #d7dfd7;background:#fffdfa;color:#557364}
-.sync-error{display:flex;align-items:center;flex-direction:column;margin:20rpx 0;padding:90rpx 42rpx 70rpx;border:1rpx solid #e6d9c9;border-radius:16rpx;background:#fffdf9;text-align:center}.sync-error-title{color:#4c4137;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:700}.sync-error-copy{display:block;margin-top:16rpx;color:#897c70;font-size:23rpx;line-height:1.7}.sync-retry{width:280rpx;height:82rpx;line-height:82rpx;margin-top:30rpx;border-radius:12rpx;background:#456a59;color:#fffdf8;font-size:25rpx;font-weight:800}.sync-warning{display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin:8rpx 0 22rpx;padding:17rpx 18rpx;border:1rpx solid #eadfc9;border-radius:12rpx;background:#fff9ed;color:#88704f;font-size:20rpx;line-height:1.5}.sync-warning text:first-child{min-width:0;flex:1}.sync-warning text:last-child{flex:none;color:#617967;font-weight:800;white-space:nowrap}
+.load-error{display:flex;align-items:center;flex-direction:column;margin:20rpx 0;padding:90rpx 42rpx 70rpx;border:1rpx solid #e6d9c9;border-radius:16rpx;background:#fffdf9;text-align:center}.load-error-title{color:#4c4137;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:700}.load-error-copy{display:block;margin-top:16rpx;color:#897c70;font-size:23rpx;line-height:1.7}.load-retry{width:280rpx;height:82rpx;line-height:82rpx;margin-top:30rpx;border-radius:12rpx;background:#456a59;color:#fffdf8;font-size:25rpx;font-weight:800}.cache-warning{display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin:8rpx 0 22rpx;padding:17rpx 18rpx;border:1rpx solid #eadfc9;border-radius:12rpx;background:#fff9ed;color:#88704f;font-size:20rpx;line-height:1.5}.cache-warning text:first-child{min-width:0;flex:1}.cache-warning text:last-child{flex:none;color:#617967;font-weight:800;white-space:nowrap}
 </style>
