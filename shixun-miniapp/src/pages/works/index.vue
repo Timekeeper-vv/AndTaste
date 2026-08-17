@@ -49,7 +49,7 @@
             <view v-if="isGenerating(assetDisplayStatus(item))" class="progress-line"><view class="progress-value" :style="{ width: `${assetProgress(item)}%` }" /></view>
             <text v-if="assetFailure(item)" class="failure">失败原因：{{ assetFailure(item) }}</text>
             <text v-if="source(item)" class="source">审批出处：{{ source(item) }}</text>
-            <view v-if="requestFor(item)" class="project-entry" @tap="openProductProgress"><text>已创建产品项目</text><text>查看进度 ›</text></view>
+            <view v-if="requestFor(item)" class="project-entry" @tap="openCommercial"><text>已创建商品化申请</text><text>查看申请 ›</text></view>
             <view class="actions">
               <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button>
               <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
@@ -333,8 +333,8 @@ function applyProduction(asset: any) {
   uni.navigateTo({ url: `/pages/production/index?assetId=${encodeURIComponent(String(asset.id))}&title=${encodeURIComponent(asset.title || '3D模型')}` })
 }
 
-function openProductProgress() {
-  uni.navigateTo({ url: '/pages/product-progress/index' })
+function openCommercial() {
+  uni.navigateTo({ url: '/pages/commercial/index' })
 }
 
 function openDesignReview(asset: any) {

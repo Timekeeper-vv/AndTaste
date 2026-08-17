@@ -56,7 +56,6 @@ const password = ref('')
 const loading = ref(false)
 const fromWebview = ref(false)
 const miniWebLoginSession = ref('')
-const resumeProductProgress = ref(false)
 const wechatLoading = ref(false)
 const wechatPhoneRequired = ref(false)
 const wechatTermsAccepted = ref(false)
@@ -80,9 +79,6 @@ function finishLogin(session: any) {
   } else if (fromWebview.value) {
     uni.setStorageSync('smart_pig_auth_updated', String(Date.now()))
     uni.navigateBack()
-  } else if (resumeProductProgress.value) {
-    if (getCurrentPages().length > 1) uni.navigateBack()
-    else uni.reLaunch({ url: '/pages/product-progress/index' })
   } else {
     uni.reLaunch({ url: '/pages/purpose/index' })
   }
@@ -210,7 +206,6 @@ function leaveLogin() {
 onLoad((query: Record<string, string> = {}) => {
   fromWebview.value = query.from === 'webview'
   miniWebLoginSession.value = query.miniWebLoginSession || ''
-  resumeProductProgress.value = query.resume === 'product-progress'
   readPendingCampaign()
   void loadCampaigns()
   // The web-view login button already represents an explicit user action.

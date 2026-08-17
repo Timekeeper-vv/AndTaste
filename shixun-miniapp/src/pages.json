@@ -13,7 +13,6 @@
     { "path": "pages/create/index", "style": { "navigationBarTitleText": "AI 创作", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/style-lab/index", "style": { "navigationBarTitleText": "灵感风格工作台", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/works/index", "style": { "navigationBarTitleText": "我的作品", "navigationBarBackgroundColor": "#f7f3ed" } },
-    { "path": "pages/product-progress/index", "style": { "navigationBarTitleText": "产品进度", "navigationBarBackgroundColor": "#f3f5f1", "enablePullDownRefresh": true, "backgroundTextStyle": "dark" } },
     { "path": "pages/review/index", "style": { "navigationBarTitleText": "AI 深度评审", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/market/index", "style": { "navigationBarTitleText": "文创商城", "navigationBarBackgroundColor": "#f7f3ed", "enablePullDownRefresh": true, "backgroundTextStyle": "dark" } },
     { "path": "pages/product/index", "style": { "navigationBarTitleText": "商品详情", "navigationBarBackgroundColor": "#f7f3ed" } },

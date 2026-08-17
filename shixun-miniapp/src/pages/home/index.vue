@@ -26,7 +26,7 @@
       </view>
     </view>
 
-    <view class="journey-card" @tap="openProgress">
+    <view class="journey-card" @tap="openCommercial">
       <view class="journey-mark"><text>{{ progressNumber }}</text><text>现在</text></view>
       <view class="journey-copy"><text>创作正在发生</text><text>{{ progressState.title }}</text><text>{{ progressState.description }}</text></view>
       <view class="journey-state"><text :class="progressState.tone">{{ progressState.label }}</text><text>›</text></view>
@@ -39,7 +39,7 @@
         <view class="entry-card-bottom"><view><text>对话式创作</text><text>说出一个想法，开始一件作品。</text></view><text class="entry-arrow">›</text></view>
       </view>
       <view class="minor-entry-row">
-        <view class="entry-card progress-entry" @tap="openProgress"><text>02</text><view><text>产品进度</text><text>{{ progressShortLabel }}</text></view><text class="entry-arrow">›</text></view>
+        <view class="entry-card commercial-entry" @tap="openCommercial"><text>02</text><view><text>商品化申请</text><text>报价、打样与渠道代销</text></view><text class="entry-arrow">›</text></view>
         <view class="entry-card works-entry" @tap="openWorks"><text>03</text><view><text>作品与灵感</text><text>{{ assetCount }} 件作品</text></view><text class="entry-arrow">›</text></view>
       </view>
     </view>
@@ -149,29 +149,13 @@ const progressState = computed(() => {
   const paymentStatus = String(request.samplePaymentStatus || '').toLowerCase()
   const title = request.title || request.assetTitle || request.sampleProductName || '未命名产品'
   if (['rejected', 'returned', 'need_materials'].includes(status)) return { index: 1, tone: 'warning', label: '需要调整', title, description: request.reviewComment || '请在作品页查看审核说明并补充后重新提交。' }
-  if (['completed', 'shipped'].includes(status)) return { index: 3, tone: 'complete', label: '已完成', title, description: '该产品流程已完成，详情以产品进度页为准。' }
-  if (['producing', 'production', 'in_progress'].includes(status)) return { index: 3, tone: 'active', label: '生产中', title, description: '供应链正在推进生产，详情以产品进度页为准。' }
+  if (['completed', 'shipped'].includes(status)) return { index: 3, tone: 'complete', label: '已完成', title, description: '该产品流程已完成，相关订单可在商品化申请中查看。' }
+  if (['producing', 'production', 'in_progress'].includes(status)) return { index: 3, tone: 'active', label: '生产中', title, description: '供应链正在推进生产，相关订单可在商品化申请中查看。' }
   if (status === 'approved' && ['unpaid', 'pending', 'manual_review'].includes(paymentStatus)) return { index: 2, tone: 'warning', label: '待支付打样费', title, description: '申请已通过，请完成打样费支付后进入生产安排。' }
   if (status === 'approved' && paymentStatus === 'paid') return { index: 2, tone: 'active', label: '打样安排中', title, description: '已完成打样费支付，供应链正在安排后续流程。' }
   if (status === 'approved') return { index: 2, tone: 'active', label: '审核已通过', title, description: '产品已通过审核，正在进入打样或生产对接。' }
   return { index: 1, tone: 'active', label: '审核中', title, description: '平台正在核对作品、工艺和生产信息。' }
 })
-const progressShortLabel = computed(() => ({
-  '登录后同步': '登录后同步',
-  '待开始': '从创作开始',
-  '需要调整': '需要调整',
-  '可创建项目': '创建项目',
-  '报价待确认': '待确认报价',
-  '渠道审核通过': '待上架安排',
-  '渠道审核中': '渠道审核中',
-  '报价审核中': '报价审核中',
-  '待支付打样费': '待支付',
-  '打样安排中': '打样中',
-  '审核已通过': '已通过',
-  '审核中': '审核中',
-  '生产中': '生产中',
-  '已完成': '已完成',
-}[progressState.value.label] || '查看进度'))
 const progressNumber = computed(() => String(Math.min(Math.max(Number(progressState.value.index) + 1, 1), 3)).padStart(2, '0'))
 
 function requestTime(item: any) {
@@ -194,9 +178,9 @@ function openWorks() {
   go('/pages/works/index')
 }
 
-function openProgress() {
+function openCommercial() {
   if (!requireSession()) return
-  go('/pages/product-progress/index')
+  go('/pages/commercial/index')
 }
 
 function openProfile() {
@@ -272,4 +256,5 @@ onShow(() => {
 .professional-link{display:flex;align-items:center;justify-content:space-between;gap:17rpx;margin:20rpx 24rpx 0;padding:17rpx 4rpx 17rpx 3rpx;border-top:1rpx solid #dce4dd;color:#466c58}.professional-link>view{display:flex;flex-direction:column;gap:5rpx}.professional-link>view text:first-child{font-size:20rpx;font-weight:850}.professional-link>view text:last-child{color:#87928a;font-size:17rpx}.professional-link>text{font-size:32rpx}.context-link{display:block;margin:23rpx 24rpx 0;color:#74827a;font-size:18rpx;text-align:center}
 
 .bottom-nav{position:fixed;z-index:15;right:0;bottom:0;left:0;display:grid;grid-template-columns:repeat(4,1fr);align-items:center;height:112rpx;padding-bottom:env(safe-area-inset-bottom);box-sizing:content-box;border-top:1rpx solid #dae1dc;background:rgba(250,252,249,.94);backdrop-filter:blur(15rpx)}.bottom-nav view{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:5rpx;color:#929d94;font-size:18rpx}.bottom-nav view text:first-child{font-size:29rpx;line-height:1}.bottom-nav view.active{color:#285d48;font-weight:850}
+.commercial-entry{background:#f7f9f5}
 </style>
