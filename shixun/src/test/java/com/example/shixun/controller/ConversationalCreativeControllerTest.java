@@ -46,22 +46,35 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
-    void naturalLanguageCompletesProductInspirationAndMaterialWithoutModelFields() {
+    void naturalLanguageRequiresFinishedProductSizeBeforeGenerationConfirmation() {
         Map<String, Object> result = controller.chat(1L, Map.of(
                 "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"
         ), claims);
 
         assertThat(result.get("readyToGenerate")).isEqualTo(false);
-        assertThat(result.get("generationConfirmationRequired")).isEqualTo(true);
-        assertThat(result.get("quickReplies").toString()).contains("没有补充，开始生成");
+        assertThat(result.get("generationConfirmationRequired")).isEqualTo(false);
+        assertThat(result.get("stage")).isEqualTo("need_size");
+        assertThat(result.get("quickReplies").toString()).contains("按推荐规格");
         Map<?, ?> brief = (Map<?, ?>) result.get("brief");
         assertThat(brief.get("productKey")).isEqualTo("souvenir-alloy-magnet");
         assertThat(brief.get("material")).isEqualTo("合金");
         assertThat(brief.get("mode")).isEqualTo("text");
         assertThat(String.valueOf(brief.get("inspiration"))).contains("祥云");
+        assertMissingKeys(brief, "productSize");
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM creative_conversation_event WHERE session_id=1 AND event_type='chat_state'",
                 Integer.class)).isEqualTo(1);
+
+        Map<String, Object> size = new LinkedHashMap<>();
+        size.put("type", "size");
+        size.put("value", "recommend");
+        Map<String, Object> withSize = controller.chat(1L, Map.of("action", size), claims);
+        assertThat(withSize.get("readyToGenerate")).isEqualTo(false);
+        assertThat(withSize.get("generationConfirmationRequired")).isEqualTo(true);
+        assertThat(withSize.get("stage")).isEqualTo("confirm_before_image");
+        assertThat(((Map<?, ?>) withSize.get("brief")).get("productSize")).isEqualTo("60×60×4mm");
+        assertThat(jdbc.queryForObject("SELECT product_size FROM creative_conversation_session WHERE id=1", String.class))
+                .isEqualTo("60×60×4mm");
 
         Map<String, Object> confirmation = new LinkedHashMap<>();
         confirmation.put("type", "confirm_generate");
@@ -92,6 +105,7 @@ class ConversationalCreativeControllerTest {
     @Test
     void additionalInputClearsPreviousGenerationConfirmation() {
         controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
+        chooseRecommendedSize();
         Map<String, Object> confirmation = new LinkedHashMap<>();
         confirmation.put("type", "confirm_generate");
         confirmation.put("value", "confirm");
@@ -168,6 +182,30 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void customSizeIsPersistedAndCanBeEditedWithoutLosingTheRestOfTheBrief() {
+        controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
+
+        Map<String, Object> size = new LinkedHashMap<>();
+        size.put("type", "size");
+        size.put("value", "65×55×4mm");
+        Map<String, Object> sized = controller.chat(1L, Map.of("action", size), claims);
+        assertThat(((Map<?, ?>) sized.get("brief")).get("productSize")).isEqualTo("65×55×4mm");
+        assertThat(sized.get("stage")).isEqualTo("confirm_before_image");
+
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("type", "edit");
+        edit.put("value", "size");
+        Map<String, Object> edited = controller.chat(1L, Map.of("action", edit), claims);
+        Map<?, ?> brief = (Map<?, ?>) edited.get("brief");
+        assertThat(brief.get("productKey")).isEqualTo("souvenir-alloy-magnet");
+        assertThat(brief.get("material")).isEqualTo("合金");
+        assertThat(String.valueOf(brief.get("inspiration"))).contains("祥云");
+        assertMissingKeys(brief, "productSize");
+        assertThat(edited.get("stage")).isEqualTo("need_size");
+        assertThat(jdbc.queryForObject("SELECT product_size FROM creative_conversation_session WHERE id=1", String.class)).isNull();
+    }
+
+    @Test
     void editingRejectsUnknownTargetWithoutChangingBrief() {
         controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
         Map<?, ?> before = (Map<?, ?>) controller.chat(1L, Map.of(), claims).get("brief");
@@ -217,6 +255,8 @@ class ConversationalCreativeControllerTest {
                 "{\"inspirationText\":\"祥云和古城墙\"}");
         jdbc.update("INSERT INTO creative_conversation_event(session_id,user_id,step,event_type,payload_json) VALUES (1,1,'material','material_selected',?)",
                 "{\"materialName\":\"合金\"}");
+        jdbc.update("INSERT INTO creative_conversation_event(session_id,user_id,step,event_type,payload_json) VALUES (1,1,'size','size_selected',?)",
+                "{\"productSize\":\"60×60×4mm\"}");
 
         Map<String, Object> result = controller.chat(1L, Map.of(), claims);
 
@@ -224,6 +264,7 @@ class ConversationalCreativeControllerTest {
         assertThat(brief.get("productName")).isEqualTo("合金冰箱贴");
         assertThat(brief.get("inspiration")).isEqualTo("祥云和古城墙");
         assertThat(brief.get("material")).isEqualTo("合金");
+        assertThat(brief.get("productSize")).isEqualTo("60×60×4mm");
         assertThat(brief.get("mode")).isEqualTo("text");
         assertThat(result.get("readyToGenerate")).isEqualTo(false);
         assertThat(result.get("generationConfirmationRequired")).isEqualTo(true);
@@ -240,22 +281,25 @@ class ConversationalCreativeControllerTest {
                 "{\"inputAssetId\":7}");
         jdbc.update("INSERT INTO creative_conversation_event(session_id,user_id,step,event_type,payload_json) VALUES (1,1,'material','material_selected',?)",
                 "{\"materialName\":\"合金\"}");
+        jdbc.update("INSERT INTO creative_conversation_event(session_id,user_id,step,event_type,payload_json) VALUES (1,1,'size','size_selected',?)",
+                "{\"productSize\":\"60×60×4mm\"}");
 
         Map<String, Object> result = controller.chat(1L, Map.of(), claims);
 
         Map<?, ?> brief = (Map<?, ?>) result.get("brief");
         assertThat(brief.get("referenceAssetId")).isEqualTo(7L);
         assertThat(brief.get("inspirationSource")).isEqualTo("image");
+        assertThat(brief.get("productSize")).isEqualTo("60×60×4mm");
         assertThat(result.get("readyToGenerate")).isEqualTo(false);
         assertThat(result.get("generationConfirmationRequired")).isEqualTo(true);
     }
 
     private void createSchema() {
         jdbc.execute("CREATE TABLE user (id BIGINT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(100), role VARCHAR(20), status VARCHAR(20))");
-        jdbc.execute("CREATE TABLE creative_conversation_session (id BIGINT AUTO_INCREMENT PRIMARY KEY, session_no VARCHAR(80), user_id BIGINT, mode VARCHAR(24), product_type VARCHAR(120), material VARCHAR(120), status VARCHAR(24), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE creative_conversation_session (id BIGINT AUTO_INCREMENT PRIMARY KEY, session_no VARCHAR(80), user_id BIGINT, mode VARCHAR(24), product_type VARCHAR(120), material VARCHAR(120), product_size VARCHAR(120), status VARCHAR(24), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE creative_conversation_event (id BIGINT AUTO_INCREMENT PRIMARY KEY, session_id BIGINT, user_id BIGINT, step VARCHAR(40), event_type VARCHAR(60), payload_json CLOB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE selection_category (id BIGINT AUTO_INCREMENT PRIMARY KEY, category_key VARCHAR(60), name VARCHAR(80), enabled INT, review_status VARCHAR(30))");
-        jdbc.execute("CREATE TABLE selection_option (id BIGINT AUTO_INCREMENT PRIMARY KEY, option_key VARCHAR(80), category_key VARCHAR(60), name VARCHAR(120), subtitle VARCHAR(200), description VARCHAR(500), material VARCHAR(500), process VARCHAR(1000), tags VARCHAR(1000), enabled INT, review_status VARCHAR(30), sort_order INT)");
+        jdbc.execute("CREATE TABLE selection_option (id BIGINT AUTO_INCREMENT PRIMARY KEY, option_key VARCHAR(80), category_key VARCHAR(60), name VARCHAR(120), subtitle VARCHAR(200), description VARCHAR(500), material VARCHAR(500), process VARCHAR(1000), specification VARCHAR(500), tags VARCHAR(1000), enabled INT, review_status VARCHAR(30), sort_order INT)");
         jdbc.execute("CREATE TABLE digital_asset (id BIGINT AUTO_INCREMENT PRIMARY KEY, created_by BIGINT)");
     }
 
@@ -267,6 +311,13 @@ class ConversationalCreativeControllerTest {
         jdbc.update("INSERT INTO user(id,username,role,status) VALUES (1,'consumer','user','active')");
         jdbc.update("INSERT INTO creative_conversation_session(id,session_no,user_id,status) VALUES (1,'CCS-test',1,'draft')");
         jdbc.update("INSERT INTO selection_category(category_key,name,enabled,review_status) VALUES ('souvenir','纪念品',1,'approved')");
-        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,tags,enabled,review_status,sort_order) VALUES ('souvenir-alloy-magnet','souvenir','合金冰箱贴','景区纪念','文化纪念品','合金','压铸/烤漆','博物馆,景区,纪念',1,'approved',1)");
+        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES ('souvenir-alloy-magnet','souvenir','合金冰箱贴','景区纪念','文化纪念品','合金','压铸/烤漆','60×60×4mm','博物馆,景区,纪念',1,'approved',1)");
+    }
+
+    private void chooseRecommendedSize() {
+        Map<String, Object> size = new LinkedHashMap<>();
+        size.put("type", "size");
+        size.put("value", "recommend");
+        controller.chat(1L, Map.of("action", size), claims);
     }
 }

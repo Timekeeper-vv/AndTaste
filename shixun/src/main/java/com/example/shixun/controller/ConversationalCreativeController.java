@@ -30,6 +30,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Persists the C-end conversational creation journey. AI execution remains in
@@ -39,10 +41,16 @@ import java.util.Set;
 @RequestMapping("/api/creative/ai/conversations")
 public class ConversationalCreativeController {
     private static final Set<String> MODES = Set.of("template", "text", "image");
-    private static final Set<String> CHAT_ACTIONS = Set.of("product", "category", "material", "template", "image", "text", "confirm_generate", "add_detail", "edit");
-    private static final Set<String> EDIT_TARGETS = Set.of("product", "inspiration", "material");
-    private static final Set<String> STEPS = Set.of("welcome", "chat", "mode", "product", "inspiration", "material", "style", "summary", "image", "multiview", "model", "commercial", "compliance", "navigation");
+    private static final Set<String> CHAT_ACTIONS = Set.of("product", "category", "material", "size", "template", "image", "text", "confirm_generate", "add_detail", "edit");
+    private static final Set<String> EDIT_TARGETS = Set.of("product", "inspiration", "material", "size");
+    private static final Set<String> STEPS = Set.of("welcome", "chat", "mode", "product", "inspiration", "material", "size", "style", "summary", "image", "multiview", "model", "commercial", "compliance", "navigation");
     private static final int MAX_PAYLOAD_LENGTH = 12000;
+    private static final Pattern DIMENSION_PATTERN = Pattern.compile(
+            "(?i)(?:\\d{1,4}(?:\\.\\d+)?\\s*(?:(?:[x×*]|乘)\\s*\\d{1,4}(?:\\.\\d+)?\\s*){1,3}(?:mm|毫米|cm|厘米|m|米|in|英寸)|"
+                    + "\\d{1,4}(?:\\.\\d+)?\\s*(?:mm|毫米|cm|厘米|m|米|in|英寸)(?:\\s*(?:[x×*]|乘|长|宽|高|厚)\\s*\\d{1,4}(?:\\.\\d+)?\\s*(?:mm|毫米|cm|厘米|m|米|in|英寸)?){0,3})");
+    private static final Pattern STANDARD_SIZE_PATTERN = Pattern.compile("(?i)\\bA[3-6]\\b");
+    private static final Pattern NAMED_DIMENSION_PATTERN = Pattern.compile(
+            "(?i)(?:长|宽|高|厚|直径|口径)[^。；，,]{0,48}\\d{1,4}(?:\\.\\d+)?\\s*(?:mm|毫米|cm|厘米|m|米|in|英寸)");
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -82,7 +90,7 @@ public class ConversationalCreativeController {
     public List<Map<String, Object>> mine(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         long userId = requireConsumer(principal);
-        return jdbc.queryForList("SELECT id,session_no sessionNo,mode,product_type productType,material,status,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE user_id=? ORDER BY updated_at DESC,id DESC LIMIT 30", userId);
+        return jdbc.queryForList("SELECT id,session_no sessionNo,mode,product_type productType,material,product_size productSize,status,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE user_id=? ORDER BY updated_at DESC,id DESC LIMIT 30", userId);
     }
 
     @GetMapping("/{id}")
@@ -167,8 +175,10 @@ public class ConversationalCreativeController {
             reply = "好的，产品和材质会继续保留。请重新描述灵感，或上传一张新的参考图。";
         } else if ("material".equals(editTarget)) {
             reply = "好的，请重新选择材质；不确定时可以继续让我推荐。";
+        } else if ("size".equals(editTarget)) {
+            reply = "好的，请重新告诉我成品尺寸；例如 60×60×3mm，也可以让我按常用规格推荐。";
         } else if (confirmationRequired) {
-            reply = "我已经整理好产品、灵感和材质。生成图片前，还有需要补充的吗？没有的话点击“没有补充，开始生成”。";
+            reply = "我已经整理好产品、灵感、材质和尺寸。生成图片前，还有需要补充的吗？没有的话点击“没有补充，开始生成”。";
         } else if (ready && (isGenerationConfirmationAction(action) || confirmationText)) {
             reply = "好的，我按当前方案开始生成产品图。";
         }
@@ -205,11 +215,11 @@ public class ConversationalCreativeController {
     private Map<String, Object> currentBrief(long id, long userId) {
         Map<String, Object> brief = new LinkedHashMap<>();
         List<Map<String, Object>> sessionRows = jdbc.queryForList(
-                "SELECT mode,product_type productType,material FROM creative_conversation_session WHERE id=? AND user_id=?",
+                "SELECT mode,product_type productType,material,product_size productSize FROM creative_conversation_session WHERE id=? AND user_id=?",
                 id, userId);
         if (!sessionRows.isEmpty()) {
             Map<String, Object> session = sessionRows.get(0);
-            copyNonBlank(brief, session, "mode", "productType", "material");
+            copyNonBlank(brief, session, "mode", "productType", "material", "productSize");
             if (session.get("productType") != null) brief.put("productName", session.get("productType"));
         }
         List<Map<String, Object>> rows = jdbc.queryForList(
@@ -239,6 +249,11 @@ public class ConversationalCreativeController {
                 Map<String, Object> payload = parseObject(String.valueOf(row.get("payload_json")));
                 String material = firstText(payload, "material", "materialName");
                 if (material != null) brief.put("material", material);
+            }
+            if ("size_selected".equals(eventType)) {
+                Map<String, Object> payload = parseObject(String.valueOf(row.get("payload_json")));
+                String productSize = normalizeProductSize(firstText(payload, "productSize", "size", "dimensions"));
+                if (productSize != null) brief.put("productSize", productSize);
             }
             if ("text_inspiration_submitted".equals(eventType)) {
                 Map<String, Object> payload = parseObject(String.valueOf(row.get("payload_json")));
@@ -288,6 +303,21 @@ public class ConversationalCreativeController {
                     brief.put("materialRecommended", false);
                 }
             }
+        } else if ("size".equals(type)) {
+            if ("recommend".equalsIgnoreCase(value)) {
+                String recommended = recommendedProductSize(brief);
+                if (recommended != null) {
+                    brief.put("productSize", recommended);
+                    brief.put("sizeRecommended", true);
+                }
+            } else {
+                String productSize = normalizeProductSize(value);
+                if (productSize == null) {
+                    throw new IllegalArgumentException("请填写可识别的成品尺寸，例如 60×60×3mm");
+                }
+                brief.put("productSize", productSize);
+                brief.put("sizeRecommended", false);
+            }
         } else if ("template".equals(type)) {
             brief.put("mode", "template");
             brief.put("inspiration", "无具体灵感，由系统根据产品类别和生产工艺推荐创意方向。");
@@ -313,6 +343,9 @@ public class ConversationalCreativeController {
             } else if ("material".equals(value)) {
                 brief.remove("material");
                 brief.remove("materialRecommended");
+            } else if ("size".equals(value)) {
+                brief.remove("productSize");
+                brief.remove("sizeRecommended");
             }
         }
         if ("text".equals(type)) brief.put("mode", "text");
@@ -371,12 +404,27 @@ public class ConversationalCreativeController {
             }
         }
 
+        String productSize = extractProductSize(input);
+        if (productSize != null) {
+            brief.put("productSize", productSize);
+            brief.put("sizeRecommended", false);
+        } else if (blank(text(brief.get("productSize"))) && hasRequiredFieldsBeforeSize(brief)
+                && input.length() <= 24 && input.matches(".*(推荐|帮我选|你来选).*")) {
+            String recommended = recommendedProductSize(brief);
+            if (recommended != null) {
+                brief.put("productSize", recommended);
+                brief.put("sizeRecommended", true);
+            }
+        }
+
         boolean selectionOnly = matchedProduct != null && input.length() <= 18
                 && !input.matches(".*(想做|做成|设计|主题|灵感|结合|希望|需要|请|我要).*?");
         boolean recommendOnly = input.length() <= 24 && input.matches(".*(推荐|帮我选|你来选).*" );
         boolean materialOnly = (material != null || recommendOnly) && input.length() <= 24
                 && !input.matches(".*(想做|做成|设计|主题|灵感|结合|希望|需要|请|我要).*?");
-        if (!selectionOnly && !materialOnly) {
+        boolean sizeOnly = productSize != null && input.length() <= 96
+                && !input.matches(".*(想做|做成|设计|主题|灵感|结合|希望|需要|请|我要).*?");
+        if (!selectionOnly && !materialOnly && !sizeOnly) {
             brief.put("inspiration", input);
             brief.put("inspirationSource", "text");
             if (blank(text(brief.get("referenceAssetId")))) brief.put("mode", "text");
@@ -435,6 +483,56 @@ public class ConversationalCreativeController {
         return blank(options) ? requested.trim() : null;
     }
 
+    private String extractProductSize(String input) {
+        if (blank(input)) return null;
+        Matcher dimensions = DIMENSION_PATTERN.matcher(input);
+        if (dimensions.find()) return normalizeProductSize(dimensions.group());
+        Matcher standardSize = STANDARD_SIZE_PATTERN.matcher(input);
+        if (standardSize.find()) return normalizeProductSize(standardSize.group());
+        Matcher namedDimensions = NAMED_DIMENSION_PATTERN.matcher(input);
+        if (namedDimensions.find()) return normalizeProductSize(namedDimensions.group());
+        String normalized = input.trim().replaceAll("\\s+", " ");
+        if (normalized.length() <= 80 && normalized.matches(".*(掌心|手掌|口袋|随身|桌面|迷你|小号|中号|大号|常规|标准).*(尺寸|大小|规格)?.*")) {
+            return normalized;
+        }
+        return null;
+    }
+
+    private String normalizeProductSize(String requested) {
+        if (blank(requested)) return null;
+        String normalized = requested.trim().replaceAll("\\s+", " ");
+        if (normalized.length() > 120) return null;
+        if (DIMENSION_PATTERN.matcher(normalized).find() || STANDARD_SIZE_PATTERN.matcher(normalized).find()
+                || NAMED_DIMENSION_PATTERN.matcher(normalized).find()
+                || normalized.matches(".*(掌心|手掌|口袋|随身|桌面|迷你|小号|中号|大号|常规|标准).*(尺寸|大小|规格)?.*")) {
+            return normalized;
+        }
+        return null;
+    }
+
+    private String recommendedProductSize(Map<String, Object> brief) {
+        String specification = text(brief.get("sizeRecommendation"));
+        if (!blank(specification)) return specification;
+        String product = text(brief.get("productName"));
+        if (blank(product)) return null;
+        if (product.contains("冰箱贴")) return "约 60×60×4mm";
+        if (product.contains("徽章") || product.contains("胸针")) return "约 58×58×3mm";
+        if (product.contains("钥匙扣")) return "约 50×50×4mm";
+        if (product.contains("书签")) return "约 40×120×1.2mm";
+        if (product.contains("明信片")) return "A6（105×148mm）";
+        if (product.contains("帆布袋") || product.contains("手提袋")) return "约 350×300×100mm";
+        if (product.contains("马克杯") || product.contains("杯")) return "约 直径 80×高 95mm";
+        return "约 80×80×8mm";
+    }
+
+    private boolean hasRequiredFieldsBeforeSize(Map<String, Object> brief) {
+        return !blank(text(brief.get("productKey")))
+                && !blank(text(brief.get("material")))
+                && !blank(text(brief.get("inspiration")))
+                && !blank(text(brief.get("mode")))
+                && (!"image".equals(text(brief.get("mode"))) || !blank(text(brief.get("referenceAssetId"))));
+    }
+
     private void clearProductSelection(Map<String, Object> brief) {
         brief.remove("productKey");
         brief.remove("productName");
@@ -442,6 +540,9 @@ public class ConversationalCreativeController {
         brief.remove("material");
         brief.remove("materialOptions");
         brief.remove("materialRecommended");
+        brief.remove("productSize");
+        brief.remove("sizeRecommended");
+        brief.remove("sizeRecommendation");
     }
 
     private PlannerDecision planTurn(String message, Map<String, Object> action, Map<String, Object> brief,
@@ -451,8 +552,8 @@ public class ConversationalCreativeController {
                 .map(row -> String.join("|", value(row, "optionKey"), value(row, "name"), value(row, "categoryKey"), value(row, "material"), value(row, "process")))
                 .reduce((left, right) -> left + "\n" + right).orElse("");
         String system = "你是‘之间智造’的对话式文创产品设计师。你要像豆包一样自然聊天，但每次只推进一个最必要的问题。\n"
-                + "必须只输出JSON，不要Markdown，格式：{\"reply\":\"给用户看的简短中文回复\",\"productKey\":\"选品表中的optionKey或空\",\"productName\":\"或空\",\"categoryKey\":\"或空\",\"material\":\"或空\",\"inspiration\":\"用户灵感或空\",\"mode\":\"text/image/template或空\",\"ready\":false}\n"
-                + "产品只能从提供的选品目录中选择，不能创造不存在的产品；不要强制询问颜色和视觉风格，按产品自动处理；材质不确定时允许推荐；信息足够时ready=true；回复不要重复询问已经有的字段，最多两句话。\n"
+                + "必须只输出JSON，不要Markdown，格式：{\"reply\":\"给用户看的简短中文回复\",\"productKey\":\"选品表中的optionKey或空\",\"productName\":\"或空\",\"categoryKey\":\"或空\",\"material\":\"或空\",\"productSize\":\"用户明确的成品尺寸/规格或空\",\"inspiration\":\"用户灵感或空\",\"mode\":\"text/image/template或空\",\"ready\":false}\n"
+                + "产品只能从提供的选品目录中选择，不能创造不存在的产品；不要强制询问颜色和视觉风格，按产品自动处理；材质不确定时允许推荐。生成前必须已明确产品、灵感、材质和成品尺寸；尺寸优先记录用户明确的长宽高/厚度、直径或 A 系列规格，用户说“你帮我推荐”时不要伪造尺寸，由系统按选品规格推荐。信息足够时ready=true；回复不要重复询问已经有的字段，最多两句话。\n"
                 + "选品目录：\n" + catalogText;
         String user = "当前创作档案：" + brief + "\n用户本轮输入：" + (blank(message) ? "（点击了快捷选项）" : message)
                 + "\n快捷动作：" + action;
@@ -464,6 +565,7 @@ public class ConversationalCreativeController {
             fields.put("productName", node.path("productName").asText(""));
             fields.put("categoryKey", node.path("categoryKey").asText(""));
             fields.put("material", node.path("material").asText(""));
+            fields.put("productSize", node.path("productSize").asText(""));
             fields.put("inspiration", node.path("inspiration").asText(""));
             fields.put("mode", node.path("mode").asText(""));
             fields.put("ready", node.path("ready").asBoolean(false));
@@ -486,6 +588,11 @@ public class ConversationalCreativeController {
         if (canonical != null) {
             brief.put("material", canonical);
             brief.put("materialRecommended", false);
+        }
+        String productSize = normalizeProductSize(text(fields.get("productSize")));
+        if (productSize != null) {
+            brief.put("productSize", productSize);
+            brief.put("sizeRecommended", false);
         }
         String inspiration = text(fields.get("inspiration"));
         if (!blank(inspiration) && !isSystemPlaceholder(inspiration)) {
@@ -514,11 +621,19 @@ public class ConversationalCreativeController {
             brief.put("material", recommendedMaterialValue(value(product, "material")));
             brief.put("materialRecommended", true);
         }
+        String productSize = normalizeProductSize(text(brief.get("productSize")));
+        if (productSize != null) {
+            brief.put("productSize", productSize);
+        } else {
+            brief.remove("productSize");
+            brief.remove("sizeRecommended");
+        }
     }
 
     private boolean hasRequiredBrief(Map<String, Object> brief) {
         boolean base = !blank(text(brief.get("productKey")))
                 && !blank(text(brief.get("material")))
+                && !blank(text(brief.get("productSize")))
                 && !blank(text(brief.get("inspiration")))
                 && !blank(text(brief.get("mode")));
         if (!base) return false;
@@ -530,6 +645,7 @@ public class ConversationalCreativeController {
         if ("image".equals(text(brief.get("mode"))) && blank(text(brief.get("referenceAssetId")))) return "need_inspiration";
         if (blank(text(brief.get("inspiration"))) && !"template".equals(brief.get("mode"))) return "need_inspiration";
         if (blank(text(brief.get("material"))) ) return "need_material";
+        if (blank(text(brief.get("productSize")))) return "need_size";
         return "understanding";
     }
 
@@ -538,6 +654,8 @@ public class ConversationalCreativeController {
         if (blank(text(brief.get("productKey")))) return "你想把这个灵感做成什么产品？可以直接输入，也可以从下面选择。";
         if ("image".equals(text(brief.get("mode"))) && blank(text(brief.get("referenceAssetId")))) return "请先上传一张你有权使用的灵感图片，我会保留主体和可识别细节。";
         if (blank(text(brief.get("inspiration"))) && !"template".equals(brief.get("mode"))) return "说说你的灵感即可，不需要写专业提示词；也可以上传一张参考图。";
+        if (blank(text(brief.get("material")))) return "材质不确定也没关系，我会根据产品结构和量产工艺帮你推荐。";
+        if (blank(text(brief.get("productSize")))) return "这件产品想做多大？例如 60×60×3mm、直径 80mm 或 A5；不确定时可以让我按常用规格推荐。";
         return "材质不确定也没关系，我会根据产品结构和量产工艺帮你推荐。";
     }
 
@@ -580,6 +698,10 @@ public class ConversationalCreativeController {
             result.add(reply("你帮我推荐", "material", "recommend"));
             String material = text(brief.get("materialOptions"));
             if (material != null) for (String item : material.split("[,，/]")) if (!blank(item)) result.add(reply(item.trim(), "material", item.trim()));
+            return result;
+        }
+        if (blank(text(brief.get("productSize")))) {
+            result.add(reply("按推荐规格", "size", "recommend"));
         }
         return result;
     }
@@ -601,7 +723,7 @@ public class ConversationalCreativeController {
             return;
         }
         if ("add_detail".equals(type) || !blank(message)
-                || (type != null && Set.of("product", "category", "material", "template", "image", "text", "edit").contains(type))) {
+                || (type != null && Set.of("product", "category", "material", "size", "template", "image", "text", "edit").contains(type))) {
             brief.put("generationConfirmed", false);
         }
     }
@@ -621,12 +743,17 @@ public class ConversationalCreativeController {
         if (previousKey != null && !previousKey.equals(nextKey)) {
             brief.remove("material");
             brief.remove("materialRecommended");
+            brief.remove("productSize");
+            brief.remove("sizeRecommended");
         }
         brief.put("productKey", product.get("optionKey"));
         brief.put("productName", product.get("name"));
         brief.put("categoryKey", product.get("categoryKey"));
         brief.put("categoryName", product.get("categoryName"));
         brief.put("materialOptions", product.get("material"));
+        String specification = value(product, "specification");
+        if (!blank(specification)) brief.put("sizeRecommendation", specification);
+        else brief.remove("sizeRecommendation");
         String existingMaterial = text(brief.get("material"));
         String canonical = canonicalMaterial(value(product, "material"), existingMaterial);
         if (canonical != null) brief.put("material", canonical);
@@ -654,7 +781,7 @@ public class ConversationalCreativeController {
     }
 
     private List<Map<String, Object>> catalogOptions(String categoryKey, String keyword, int size) {
-        StringBuilder sql = new StringBuilder("SELECT o.option_key optionKey,o.category_key categoryKey,c.name categoryName,o.name,o.material,o.process,o.description,o.tags FROM selection_option o JOIN selection_category c ON c.category_key=o.category_key WHERE o.enabled=1 AND o.review_status='approved' AND c.enabled=1 AND c.review_status='approved'");
+        StringBuilder sql = new StringBuilder("SELECT o.option_key optionKey,o.category_key categoryKey,c.name categoryName,o.name,o.material,o.process,o.specification,o.description,o.tags FROM selection_option o JOIN selection_category c ON c.category_key=o.category_key WHERE o.enabled=1 AND o.review_status='approved' AND c.enabled=1 AND c.review_status='approved'");
         List<Object> args = new ArrayList<>();
         if (!blank(categoryKey)) { sql.append(" AND o.category_key=?"); args.add(categoryKey); }
         if (!blank(keyword) && keyword.length() > 2) { sql.append(" AND (o.name LIKE ? OR o.subtitle LIKE ? OR o.tags LIKE ? OR o.description LIKE ?)"); String k = "%" + keyword + "%"; args.add(k); args.add(k); args.add(k); args.add(k); }
@@ -669,13 +796,13 @@ public class ConversationalCreativeController {
 
     private Map<String, Object> findCatalogOption(String optionKey, long userId) {
         if (blank(optionKey)) return null;
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT o.option_key optionKey,o.category_key categoryKey,c.name categoryName,o.name,o.material,o.process,o.description,o.tags FROM selection_option o JOIN selection_category c ON c.category_key=o.category_key WHERE o.option_key=? AND o.enabled=1 AND o.review_status='approved' AND c.enabled=1 AND c.review_status='approved' LIMIT 1", optionKey);
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT o.option_key optionKey,o.category_key categoryKey,c.name categoryName,o.name,o.material,o.process,o.specification,o.description,o.tags FROM selection_option o JOIN selection_category c ON c.category_key=o.category_key WHERE o.option_key=? AND o.enabled=1 AND o.review_status='approved' AND c.enabled=1 AND c.review_status='approved' LIMIT 1", optionKey);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
     private Map<String, Object> findCatalogOptionByName(String name, long userId) {
         if (blank(name)) return null;
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT o.option_key optionKey,o.category_key categoryKey,c.name categoryName,o.name,o.material,o.process,o.description,o.tags FROM selection_option o JOIN selection_category c ON c.category_key=o.category_key WHERE o.enabled=1 AND o.review_status='approved' AND c.enabled=1 AND c.review_status='approved' AND (o.name=? OR o.name LIKE ?) ORDER BY CHAR_LENGTH(o.name) DESC,o.sort_order LIMIT 1", name.trim(), "%" + name.trim() + "%");
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT o.option_key optionKey,o.category_key categoryKey,c.name categoryName,o.name,o.material,o.process,o.specification,o.description,o.tags FROM selection_option o JOIN selection_category c ON c.category_key=o.category_key WHERE o.enabled=1 AND o.review_status='approved' AND c.enabled=1 AND c.review_status='approved' AND (o.name=? OR o.name LIKE ?) ORDER BY CHAR_LENGTH(o.name) DESC,o.sort_order LIMIT 1", name.trim(), "%" + name.trim() + "%");
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -719,14 +846,15 @@ public class ConversationalCreativeController {
         String mode = text(values.get("mode"));
         String productType = firstText(values, "productType", "product", "productName");
         String material = firstText(values, "material", "materialName");
+        String productSize = firstText(values, "productSize", "dimensions", "size");
         if ("chat".equals(step)) {
-            jdbc.update("UPDATE creative_conversation_session SET mode=?,product_type=?,material=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
-                    mode, productType, material, id, userId);
+            jdbc.update("UPDATE creative_conversation_session SET mode=?,product_type=?,material=?,product_size=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+                    mode, productType, material, productSize, id, userId);
             return;
         }
         String status = "image".equals(step) || "model".equals(step) ? "completed" : null;
-        jdbc.update("UPDATE creative_conversation_session SET mode=COALESCE(?,mode),product_type=COALESCE(?,product_type),material=COALESCE(?,material),status=COALESCE(?,status),updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
-                mode, productType, material, status, id, userId);
+        jdbc.update("UPDATE creative_conversation_session SET mode=COALESCE(?,mode),product_type=COALESCE(?,product_type),material=COALESCE(?,material),product_size=COALESCE(?,product_size),status=COALESCE(?,status),updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+                mode, productType, material, productSize, status, id, userId);
     }
 
     private void saveEvent(long sessionId, long userId, String step, String eventType, Object payload) {
@@ -737,7 +865,7 @@ public class ConversationalCreativeController {
     }
 
     private Map<String, Object> getOwnedSession(long id, long userId) {
-        List<Map<String, Object>> sessions = jdbc.queryForList("SELECT id,session_no sessionNo,user_id userId,mode,product_type productType,material,status,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE id=? AND user_id=?", id, userId);
+        List<Map<String, Object>> sessions = jdbc.queryForList("SELECT id,session_no sessionNo,user_id userId,mode,product_type productType,material,product_size productSize,status,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE id=? AND user_id=?", id, userId);
         if (sessions.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作会话不存在");
         Map<String, Object> result = new LinkedHashMap<>(sessions.get(0));
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT id,step,event_type eventType,payload_json payloadJson,created_at createdAt FROM creative_conversation_event WHERE session_id=? AND user_id=? ORDER BY id ASC", id, userId);

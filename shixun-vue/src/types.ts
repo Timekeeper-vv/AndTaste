@@ -15,6 +15,7 @@ export type PageName =
   | 'historicalSales'
   | 'consumerProductionReview'
   | 'commercialProductization'
+  | 'professionalGuidance'
   | 'aiAssistant'
   | 'customerService'
   | 'consumerMobile'

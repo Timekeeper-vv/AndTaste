@@ -189,6 +189,8 @@ export interface ImagePromptOptimizeRequest {
   provider?: string
   productCategory?: string
   material?: string
+  /** Finished product dimensions, never the image output resolution. */
+  productSize?: string
 }
 
 export interface ImagePromptOptimizeResult {
@@ -208,6 +210,8 @@ export interface ImageEditPromptOptimizeRequest {
   refinementNote: string
   productCategory?: string
   material?: string
+  /** Keep the revision compatible with the selected finished product dimensions. */
+  productSize?: string
 }
 
 /** 将用户的补充修改转为平衡的图改图指令，保留主题连续性并明确执行修改。 */
@@ -224,6 +228,8 @@ export interface SeedreamMultiViewRequest {
   productKey?: string
   productCategory?: string
   material?: string
+  /** Finished product dimensions, retained with every generated view. */
+  productSize?: string
   /** Conversational route uses front/side/back; professional route defaults to four. */
   viewCount?: 3 | 4
   /** Seedream 多视图接口当前只接受 1K 或 2K。 */

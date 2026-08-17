@@ -225,6 +225,10 @@ class ProductProgressWorkflowIntegrationTest {
                 "applicationType", "quote", "applicationId", quoteId));
         long guidanceId = guidance.path("guidanceId").asLong();
         assertThat(guidance.path("status").asText()).isEqualTo("requested");
+        JsonNode adminGuidance = request(get("/api/commercial/admin/professional-guidance?status=requested"), reviewer.token(), null);
+        assertThat(adminGuidance.size()).isEqualTo(1);
+        assertThat(field(adminGuidance.get(0), "id").asLong()).isEqualTo(guidanceId);
+        assertThat(field(adminGuidance.get(0), "applicationNo").asText()).isEqualTo(quote.path("requestNo").asText());
         mvc.perform(post("/api/commercial/consumer/professional-guidance")
                         .header("Authorization", "Bearer " + creator.token())
                         .contentType(MediaType.APPLICATION_JSON)

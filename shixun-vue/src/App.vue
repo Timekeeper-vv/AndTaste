@@ -63,6 +63,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   historicalSales:SUPER_ADMIN_ROLES,
   consumerProductionReview:SUPER_ADMIN_ROLES,
   commercialProductization:MANAGER_ROLES,
+  professionalGuidance:MANAGER_ROLES,
   aiAssistant:  ALL_ROLES,
   customerService: ALL_ROLES,
   studio:       STAFF_WORKFLOW_ROLES,
@@ -293,6 +294,7 @@ const pageLabels: Record<string, string> = {
   historicalSales:'历史销售数据',
   consumerProductionReview:'C端用户作品生产审核',
   commercialProductization:'商品化与代销审核',
+  professionalGuidance:'专业指导',
   aiAssistant:  '之间味道AI助手',
   customerService:'C端客服会话',
   studio:       '创意设计',
@@ -446,6 +448,7 @@ const pageLabels: Record<string, string> = {
         <HistoricalSalesManagement v-if="currentPage === 'historicalSales'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerProductionReview v-if="currentPage === 'consumerProductionReview'" :current-user="currentUser" @alert="showAlert" />
         <CommercialProductization v-if="currentPage === 'commercialProductization'" :current-user="currentUser" @alert="showAlert" />
+        <CommercialProductization v-if="currentPage === 'professionalGuidance'" :current-user="currentUser" initial-tab="guidance" guidance-only @alert="showAlert" />
         <AiAssistantPage v-if="currentPage === 'aiAssistant'" :current-user="currentUser" />
         <CustomerServiceDesk v-if="currentPage === 'customerService'" :current-user="currentUser" @alert="showAlert" />
         <CreativeStudio v-if="currentPage === 'studio'" initial-view="image2d" @alert="showAlert" />

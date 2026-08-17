@@ -767,13 +767,14 @@ public class CreativeAiController {
     public Map<String,Object> optimizeTripoImagePrompt(@RequestBody GenerateImageRequest req) throws Exception {
         assertCompliantPrompt(req.prompt, req.productCategory);
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写基础创意描述");
-        String sourcePrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        String sourcePrompt = applyProductSizeConstraint(
+                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), req.productSize);
         String provider = nullToEmpty(req.provider).toLowerCase(Locale.ROOT);
         String system = "You are a senior English prompt writer for premium AI image generation, specializing in cinematic commercial product photography, official brand visuals, cultural creative products, packaging concepts, and realistic lifestyle scenes. "
                 + "Rewrite the user's Chinese or rough idea into ONE polished English image-generation prompt. Output the final English prompt only: no title, no explanation, no negative prompt, no Markdown, no Chinese characters unless the user explicitly asks for visible Chinese text printed on the product. "
                 + "Use this reference template and tone: A photo of a computer screen displaying a Spotify playlist during golden-hour evening light in a living room with many green plants in the background. The playlist says GPT-image-2. The caption is \"this new image model from OpenAI is dope.\" The artists are Replicate. The songs are themed around open-source AI and machine learning. The account name is Replicate. Use the Replicate logo as the profile picture and artist image. "
                 + "Follow the same structure: clear photographic subject, specific environment, warm cinematic lighting, exact visible text when provided, brand/profile/logo placement when relevant, detailed product or interface contents, realistic background objects, premium composition, shallow depth of field, tactile materials, sharp focal details, official and trustworthy visual tone. "
-                + "Preserve the user's actual product, place, cultural theme, brand elements, materials, colors, label text, audience, and use case. If the user provides Chinese product/region names, translate them naturally into English unless they are meant to appear as printed text. "
+                + "Preserve the user's actual product, place, cultural theme, brand elements, materials, colors, label text, audience, use case, and finished-product dimensions. If the user provides Chinese product/region names, translate them naturally into English unless they are meant to appear as printed text. "
                 + "For packaging or product concepts, describe the package shape, paper/plastic/metal/ceramic texture, typography, illustration style, net weight or label copy if supplied, countertop/tabletop/studio setting, lens, depth of field, and commercial product-shot quality. "
                 + "Keep it concise but rich, within 900 English words. Target provider: " + (blank(provider) ? "general" : provider) + ". "
                 + ProductPromptPolicy.optimizerRules(req.productCategory, req.material);
@@ -801,7 +802,7 @@ public class CreativeAiController {
         if (blank(req.refinementNote)) throw new IllegalArgumentException("请先填写希望修改的内容");
         String system = "You are a precise image-to-image editing prompt writer for commercial cultural creative products. "
                 + "Return ONE concise ENGLISH edit prompt only, with no title, explanation, Markdown, JSON, or Chinese. "
-                + "The current image is the reference source. Preserve its recognizable main subject identity, cultural theme, dominant color family, and key decorative motifs unless the user's edit explicitly changes one of them. "
+                + "The current image is the reference source. Preserve its recognizable main subject identity, cultural theme, dominant color family, key decorative motifs, and finished-product dimensions unless the user's edit explicitly changes one of them. "
                 + "The user's requested edit is mandatory and has higher priority than preserving shape, carrier, composition, or product form. "
                 + "If they request a new shape, carrier, product category, pose, composition, or structure, state that change explicitly and make it visibly clear. "
                 + "Do not return a near-duplicate of the current image, but do not invent an unrelated subject, theme, color world, or random extra objects. "
@@ -810,6 +811,7 @@ public class CreativeAiController {
         String user = "Original creation direction: " + nullToEmpty(req.prompt) + "\n"
                 + "Product category: " + nullToEmpty(req.productCategory) + "\n"
                 + "Material: " + nullToEmpty(req.material) + "\n"
+                + "Finished product dimensions: " + normalizedProductSize(req.productSize) + "\n"
                 + "MANDATORY USER EDIT: " + req.refinementNote.trim();
         String optimized = callChat(system, user).trim()
                 .replaceAll("(?is)^```[a-z]*", "").replaceAll("(?is)```$", "").trim();
@@ -898,7 +900,8 @@ public class CreativeAiController {
                 : List.of("front", "left", "back", "right");
         Map<String,String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
         List<Map<String,Object>> images = new ArrayList<>();
-        String basePrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        String basePrompt = applyProductSizeConstraint(
+                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), req.productSize);
         String referenceImage = buildInputImageForSiliconFlow(req.inputAssetId);
         for (String view : views) {
             String viewPrompt = "PRODUCT TURNAROUND IMAGE EDIT. Use the supplied reference image as the only source of truth. "
@@ -932,7 +935,7 @@ public class CreativeAiController {
             Map<String,Object> metadata = new LinkedHashMap<>();
             metadata.put("provider", "siliconflow"); metadata.put("model", imageEditModel);
             metadata.put("view", view); metadata.put("remoteUrl", remoteUrl); metadata.put("multiView", true);
-            addProductIdentity(metadata, req.productKey, req.productCategory, req.material);
+            addProductIdentity(metadata, req.productKey, req.productCategory, req.material, req.productSize);
             metadata.put("createdByUserId", ownerUserId);
             if (currentConsumerUserIdOrNull() != null) metadata.put("consumerWork", true);
             Long assetId = createAsset("AI 多视图参考 · " + labels.get(view), "image", "ai_generated", localUrl, localUrl,
@@ -985,7 +988,9 @@ public class CreativeAiController {
         if (blank(resolvedArkApiKey())) throw new IllegalStateException("未配置火山方舟 Ark API Key，请联系平台管理员完成 VOLCENGINE_ARK_API_KEY 配置");
         if (blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
 
-        String prompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        String productSize = normalizedProductSize(req.productSize);
+        String prompt = applyProductSizeConstraint(
+                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), productSize);
         Map<String, Object> style = style(req.styleId);
         String finalPrompt = buildPrompt(prompt, style, req.scene, req.productType);
         if (finalPrompt.length() > 3500) finalPrompt = finalPrompt.substring(0, 3500);
@@ -1016,6 +1021,7 @@ public class CreativeAiController {
             Map<String, Object> requestPayload = new LinkedHashMap<>();
             requestPayload.put("title", req.title);
             requestPayload.put("requestedFormat", format);
+            requestPayload.put("productSize", productSize);
             Long jobId;
             try {
                 jobId = createArkQueuedJob(jobNo, req.styleId, finalPrompt, negative, size,
@@ -1149,7 +1155,8 @@ public class CreativeAiController {
             metadata.put("imageSize", normalizedArkImageSize(job.get("exportFormats")));
             metadata.put("watermark", true);
             metadata.put("aiGenerated", true);
-            addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")), str(job.get("productMaterial")));
+            addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")),
+                    str(job.get("productMaterial")), requestPayloadText(job.get("requestPayloadJson"), "productSize"));
             if (ownerUserId != null) {
                 metadata.put("createdByUserId", ownerUserId);
                 if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
@@ -1659,7 +1666,8 @@ public class CreativeAiController {
         if (inputAssetId == null) throw new IllegalStateException("图改图任务缺少参考图");
         Long ownerUserId = numberAsLong(job.get("createdBy"));
         Map<String, Object> style = style(req.styleId);
-        String requestedPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        String requestedPrompt = applyProductSizeConstraint(
+                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), req.productSize);
         ReferenceImageAnalysis referenceAnalysis = analyzeReferenceImage(inputAssetId, true);
         boolean refinement = Boolean.TRUE.equals(req.refinement);
         String finalPrompt = refinement
@@ -1684,7 +1692,7 @@ public class CreativeAiController {
                 "image", "ai_generated", localUrl, localUrl, finalPrompt, negative, req.styleId, inputAssetId, "png",
                 blank(req.tags) ? "图改图,AI生成,之间味道" : req.tags + ",图改图",
                 withProductIdentity(withAssetOwner(referenceImageMetadata(remoteUrl, inputAssetId, referenceAnalysis, refinement), ownerUserId),
-                        req.productKey, req.productCategory, req.material));
+                        req.productKey, req.productCategory, req.material, req.productSize));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("assetId", assetId);
         result.put("referenceAnalysis", referenceAnalysis.visualBrief);
@@ -1707,7 +1715,8 @@ public class CreativeAiController {
         List<Map<String, Object>> images = storedMultiViewImages(jobId);
         Set<String> completedViews = new HashSet<>();
         for (Map<String, Object> image : images) completedViews.add(str(image.get("view")));
-        String basePrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        String basePrompt = applyProductSizeConstraint(
+                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), req.productSize);
         String referenceImage = readInputImageForSiliconFlow(inputAssetId);
         for (String view : views) {
             if (completedViews.contains(view)) continue;
@@ -1734,7 +1743,7 @@ public class CreativeAiController {
             metadata.put("view", view);
             metadata.put("remoteUrl", remoteUrl);
             metadata.put("multiView", true);
-            addProductIdentity(metadata, req.productKey, req.productCategory, req.material);
+            addProductIdentity(metadata, req.productKey, req.productCategory, req.material, req.productSize);
             if (ownerUserId != null) {
                 metadata.put("createdByUserId", ownerUserId);
                 if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
@@ -1826,7 +1835,8 @@ public class CreativeAiController {
         requireAssetAccess(req.inputAssetId);
         if (Boolean.TRUE.equals(req.queue)) return queueSiliconflowImageToImage(req, ownerUserId);
         Map<String, Object> style = style(req.styleId);
-        String requestedPrompt = enforceMaterialConstraint(req.prompt, req.productCategory, req.material);
+        String requestedPrompt = applyProductSizeConstraint(
+                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), req.productSize);
         ReferenceImageAnalysis referenceAnalysis = analyzeReferenceImage(req.inputAssetId);
         boolean refinement = Boolean.TRUE.equals(req.refinement);
         String finalPrompt = refinement
@@ -1882,7 +1892,8 @@ public class CreativeAiController {
                     req.inputAssetId,
                     "png",
                     req.tags == null || req.tags.isBlank() ? "图改图,AI生成,之间味道" : req.tags + ",图改图",
-                    withProductIdentity(withAssetOwner(referenceImageMetadata(remoteUrl, req.inputAssetId, referenceAnalysis, refinement), ownerUserId), req.productKey, req.productCategory, req.material)
+                    withProductIdentity(withAssetOwner(referenceImageMetadata(remoteUrl, req.inputAssetId, referenceAnalysis, refinement), ownerUserId),
+                            req.productKey, req.productCategory, req.material, req.productSize)
             );
             jdbc.update("UPDATE ai_generation_job SET status='succeeded', output_asset_id=? WHERE id=?", assetId, jobId);
             Map<String,Object> result = new LinkedHashMap<>();
@@ -2211,6 +2222,7 @@ public class CreativeAiController {
         Map<String,Object> taskBody = new LinkedHashMap<>();
         taskBody.put("model", selectedModel);
         Long primaryInputAssetId = req.inputAssetId;
+        String productSize = normalizedProductSize(req.productSize);
         String finalTextPrompt = null;
         Long creditTxId = consumerRequest ? reserveConsumerCredit(consumerUserId,"text_to_model".equals(mode)?"text_to_3d":"image_to_3d",consumerCreditCost("text_to_model".equals(mode)?"text_to_3d":"image_to_3d"),"C端3D生成预扣") : null;
 
@@ -2220,6 +2232,10 @@ public class CreativeAiController {
                 if(req.prompt.trim().length() > 1024) throw new IllegalArgumentException("模型描述不能超过1024个字符");
                 if(!blank(req.negativePrompt) && req.negativePrompt.trim().length() > 255) throw new IllegalArgumentException("反向提示词不能超过255个字符");
                 String textPrompt = enforce3dCraftConstraint(enforceMaterialConstraint(req.prompt, req.productCategory, req.material));
+                if (!blank(productSize)) {
+                    textPrompt = textPrompt + ", finished product dimensions: " + productSize
+                            + ", preserve real-world scale, thickness, and manufacturable proportions";
+                }
                 if (!blank(req.materialPrompt)) textPrompt = textPrompt + ", material and surface finish: " + req.materialPrompt.trim();
                 if(textPrompt.length() > 1024) textPrompt = textPrompt.substring(0, 1024);
                 finalTextPrompt = textPrompt;
@@ -2260,13 +2276,16 @@ public class CreativeAiController {
 
             String jobNo = no("T3D");
             String materialNote = blank(req.materialLabel) ? "" : "期望材质/表面质感：" + req.materialLabel;
+            String sizeNote = blank(productSize) ? "" : "成品尺寸：" + productSize;
             String storedPrompt = "text_to_model".equals(mode) ? finalTextPrompt : materialNote;
             if ("text_to_model".equals(mode) && !blank(materialNote)) storedPrompt = (storedPrompt == null ? "" : storedPrompt) + "；" + materialNote;
+            if (!blank(sizeNote)) storedPrompt = (storedPrompt == null ? "" : storedPrompt) + "；" + sizeNote;
             String storedNegativePrompt = "text_to_model".equals(mode) ? req.negativePrompt : "";
             Long jobId = createJob(jobNo, mode, "tripo", selectedModel, null,
                     primaryInputAssetId, storedPrompt, storedNegativePrompt, "running", null,
                     Boolean.TRUE.equals(req.quad) ? "FBX" : (blank(req.exportFormats) ? "GLB" : req.exportFormats));
             storeJobProductIdentity(jobId, req.productKey, req.productCategory, req.material);
+            storeJobProductSize(jobId, productSize);
             assignJobOwner(jobId, ownerUserId);
             linkCreditTransaction(creditTxId,jobId,null);
             jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
@@ -2333,7 +2352,7 @@ public class CreativeAiController {
     }
 
     private synchronized Map<String,Object> pollTripoTask(Long jobId) throws Exception {
-        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,product_key productKey,product_name productName,product_material productMaterial,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
+        Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,product_key productKey,product_name productName,product_material productMaterial,request_payload_json requestPayloadJson,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
         String taskId=str(job.get("externalTaskId")); if(blank(taskId))throw new IllegalStateException("任务没有Tripo task_id");
         if(job.get("outputAssetId")!=null) return completedTripoJob(jobId,job);
         String response=tripoJson("GET","/tasks/"+URLEncoder.encode(taskId,StandardCharsets.UTF_8),null);
@@ -2350,7 +2369,8 @@ public class CreativeAiController {
             Long inputId=job.get("inputAssetId") instanceof Number ? ((Number)job.get("inputAssetId")).longValue() : null;
             String modelName=jdbc.queryForObject("SELECT model_name FROM ai_generation_job WHERE id=?",String.class,jobId);
             Map<String,Object> metadata=new LinkedHashMap<>(); metadata.put("provider","tripo"); metadata.put("taskId",taskId); metadata.put("remoteModel",modelUrl); metadata.put("modelVersion",modelName);
-            addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")), str(job.get("productMaterial")));
+            addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")),
+                    str(job.get("productMaterial")), requestPayloadText(job.get("requestPayloadJson"), "productSize"));
             if(job.get("createdBy") instanceof Number){
                 Long ownerUserId=((Number)job.get("createdBy")).longValue();
                 metadata.put("createdByUserId", ownerUserId);
@@ -2360,7 +2380,7 @@ public class CreativeAiController {
             Long assetId=createAsset(blank(productName) ? "Tripo "+modelName+" 3D模型" : productName+" · 3D 原型","model","ai_generated",localModel,localPreview,String.valueOf(jdbc.queryForObject("SELECT prompt FROM ai_generation_job WHERE id=?",String.class,jobId)),null,null,inputId,suffixFromUrl(modelUrl,".glb").replace(".",""),"Tripo,3D模型,"+modelName,metadata);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100 WHERE id=?",assetId,jobId);
             completeConsumerCredit(job.get("creditTransactionId") instanceof Number?((Number)job.get("creditTransactionId")).longValue():null,jobId,assetId);
-            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,product_key productKey,product_name productName,product_material productMaterial,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
+            job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,product_key productKey,product_name productName,product_material productMaterial,request_payload_json requestPayloadJson,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
             return completedTripoJob(jobId,job);
         }
         Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);return out;
@@ -4276,9 +4296,16 @@ public class CreativeAiController {
     }
 
     private void addProductIdentity(Map<String, Object> metadata, String productKey, String productName, String material) {
+        addProductIdentity(metadata, productKey, productName, material, null);
+    }
+
+    private void addProductIdentity(Map<String, Object> metadata, String productKey, String productName,
+                                    String material, String productSize) {
         if (!blank(productKey)) metadata.put("productKey", productKey.trim());
         if (!blank(productName)) metadata.put("productName", productName.trim());
         if (!blank(material)) metadata.put("productMaterial", material.trim());
+        String normalizedSize = normalizedProductSize(productSize);
+        if (!blank(normalizedSize)) metadata.put("productSize", normalizedSize);
     }
 
     private Map<String, Object> withProductIdentity(Map<String, Object> metadata, String productKey, String productName, String material) {
@@ -4286,11 +4313,42 @@ public class CreativeAiController {
         return metadata;
     }
 
+    private Map<String, Object> withProductIdentity(Map<String, Object> metadata, String productKey, String productName,
+                                                     String material, String productSize) {
+        addProductIdentity(metadata, productKey, productName, material, productSize);
+        return metadata;
+    }
+
+    private String normalizedProductSize(String productSize) {
+        if (blank(productSize)) return "";
+        String normalized = productSize.trim().replaceAll("\\s+", " ");
+        return normalized.length() > 120 ? normalized.substring(0, 120) : normalized;
+    }
+
+    private String applyProductSizeConstraint(String prompt, String productSize) {
+        String normalized = normalizedProductSize(productSize);
+        if (blank(normalized)) return prompt;
+        return nullToEmpty(prompt) + "\n成品物理尺寸为 " + normalized
+                + "。必须保持与该规格匹配的真实比例、厚度和可生产结构；这是成品尺寸，不是图片分辨率。";
+    }
+
     private void storeJobProductIdentity(Long jobId, String productKey, String productName, String material) {
         if (jobId == null) return;
         jdbc.update("UPDATE ai_generation_job SET product_key=?,product_name=?,product_material=? WHERE id=?",
                 blank(productKey) ? null : productKey.trim(), blank(productName) ? null : productName.trim(),
                 blank(material) ? null : material.trim(), jobId);
+    }
+
+    private void storeJobProductSize(Long jobId, String productSize) {
+        String normalized = normalizedProductSize(productSize);
+        if (jobId == null || blank(normalized)) return;
+        try {
+            jdbc.update("UPDATE ai_generation_job SET request_payload_json=? WHERE id=?",
+                    mapper.writeValueAsString(Map.of("productSize", normalized)), jobId);
+        } catch (Exception ignored) {
+            // The 3D job itself remains valid if an older schema lacks this
+            // optional request-payload column.
+        }
     }
 
     private void assignAssetOwner(Long assetId, Long userId) {
@@ -5000,6 +5058,8 @@ public class CreativeAiController {
         public String productCategory;
         public String productKey;
         public String material;
+        /** Physical finished-product dimensions, separate from image resolution. */
+        public String productSize;
         public String imageSize;
         public Long seed;
         public String tags;
@@ -5022,6 +5082,8 @@ public class CreativeAiController {
         public String productCategory;
         public String productKey;
         public String material;
+        /** Physical finished-product dimensions, separate from the 1K/2K image size. */
+        public String productSize;
         public Long inputAssetId;
         public String size;
         /** Conversational creation uses 3 views; the professional page keeps 4. */
@@ -5044,6 +5106,8 @@ public class CreativeAiController {
         public String material;
         public String productCategory;
         public String productKey;
+        /** Physical finished-product dimensions retained with the 3D prototype. */
+        public String productSize;
         public Long inputAssetId;
         public Map<String,Long> multiviewAssetIds;
         public String exportFormats;
