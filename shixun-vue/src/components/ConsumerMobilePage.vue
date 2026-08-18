@@ -63,6 +63,8 @@ const rewardBusy = ref('')
 const campaignAssetId = ref<number | null>(null)
 const selectedMissionKey = ref('first_image_success')
 const assets = ref<any[]>([])
+const libraryLoading = ref(false)
+const libraryLoadError = ref('')
 const imageResult = ref<any>(null)
 const doubaoMultiViewResult = ref<any[]>([])
 const doubaoReferenceAssetId = ref<number | null>(null)
@@ -1070,10 +1072,19 @@ onBeforeUnmount(() => {
   document.body.style.overflow = ''
 })
 
-async function json(url: string) {
-  const r = await fetch(url, { cache: 'no-store' })
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  return await r.json()
+async function json(url: string, timeout = 20000) {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeout)
+  try {
+    const r = await fetch(url, { cache: 'no-store', signal: controller.signal })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return await r.json()
+  } catch (error: any) {
+    if (error?.name === 'AbortError') throw new Error('请求超时')
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 const fallbackMarketOpportunities = [
@@ -1119,31 +1130,56 @@ function launchMarketOpportunity(opportunity: any) {
   switchTab('image')
 }
 
-async function load() {
+async function loadLibrary() {
+  libraryLoading.value = true
+  libraryLoadError.value = ''
   try {
-    const [i, t, a, c, prs, ms, fees] = await Promise.all([
-      json('/api/creative/ai/ark/config'),
-      json('/api/creative/ai/tripo/config'),
-      json('/api/creative/ai/assets'),
-      json('/api/creative/ai/consumer-credits/account'),
-      json('/api/creative/ai/consumer-production/my'),
-      json('/api/creative/ai/consumer-production/museums'),
-      json('/api/creative/ai/consumer-production/sample-fees'),
-    ])
-    await loadPaymentPackages()
-    imageConfig.value = i
-    tripoConfig.value = t
-    assets.value = Array.isArray(a) ? a : []
-    creditAccount.value = c
-    creditRules.value = c?.rules || {}
-    productionRequests.value = Array.isArray(prs) ? prs : []
-    museums.value = Array.isArray(ms) ? ms : []
-    sampleFeeCatalog.value = Array.isArray(fees) ? fees : []
-    await loadRewards()
-    await loadMarketInsights()
-  } catch (e: any) {
-    emit('alert', '加载移动创作页失败：' + (e?.message || e), 'error')
+    const rows = await json('/api/creative/ai/assets')
+    assets.value = Array.isArray(rows) ? rows : []
+  } catch (error: any) {
+    libraryLoadError.value = error?.message === '请求超时'
+      ? '作品库响应超时，请重新加载。'
+      : '作品库暂时无法打开，请重新加载。'
+  } finally {
+    libraryLoading.value = false
   }
+}
+
+function settledValue(result: PromiseSettledResult<any>) {
+  return result.status === 'fulfilled' ? result.value : undefined
+}
+
+async function load() {
+  // The work library is a core capability. Configuration and optional panels
+  // must never prevent it from rendering when an older server endpoint fails.
+  const library = loadLibrary()
+  const [imageConfigResult, tripoConfigResult, creditResult, productionResult, museumsResult, feesResult] = await Promise.allSettled([
+    json('/api/creative/ai/ark/config'),
+    json('/api/creative/ai/tripo/config'),
+    json('/api/creative/ai/consumer-credits/account'),
+    json('/api/creative/ai/consumer-production/my'),
+    json('/api/creative/ai/consumer-production/museums'),
+    json('/api/creative/ai/consumer-production/sample-fees'),
+  ])
+  await library
+
+  const imageConfigData = settledValue(imageConfigResult)
+  const tripoConfigData = settledValue(tripoConfigResult)
+  const creditData = settledValue(creditResult)
+  const productionData = settledValue(productionResult)
+  const museumsData = settledValue(museumsResult)
+  const feesData = settledValue(feesResult)
+  if (imageConfigData) imageConfig.value = imageConfigData
+  if (tripoConfigData) tripoConfig.value = tripoConfigData
+  if (creditData) {
+    creditAccount.value = creditData
+    creditRules.value = creditData?.rules || {}
+  }
+  if (productionData) productionRequests.value = Array.isArray(productionData) ? productionData : []
+  if (museumsData) museums.value = Array.isArray(museumsData) ? museumsData : []
+  if (feesData) sampleFeeCatalog.value = Array.isArray(feesData) ? feesData : []
+
+  await Promise.all([loadPaymentPackages(), loadRewards(), loadMarketInsights()])
 }
 
 async function loadProfessionalSubmissions() {
@@ -2119,15 +2155,17 @@ function closeModelPreview() {
 
     <section v-else key="gallery" class="panel creation-panel">
       <div class="section-head">
-        <span>WORKS</span>
-        <b>最近作品</b>
+        <div><span>WORKS</span><b>最近作品</b></div>
+        <button type="button" class="library-reload" :disabled="libraryLoading" @click="loadLibrary">{{ libraryLoading ? '加载中' : '刷新' }}</button>
       </div>
       <div class="gallery-summary">
         <article><b>{{ recentImages.length }}</b><span>产品图</span></article>
         <article><b>{{ recentModels.length }}</b><span>3D模型</span></article>
         <article><b>{{ reviewCount }}</b><span>审批中</span></article>
       </div>
-      <div class="gallery">
+      <div v-if="libraryLoading" class="library-state"><i></i><span>正在读取你的作品</span></div>
+      <div v-else-if="libraryLoadError" class="library-state error"><span>{{ libraryLoadError }}</span><button type="button" @click="loadLibrary">重新加载</button></div>
+      <div v-else class="gallery">
         <article v-for="a in recentImages" :key="`img-${a.id}`">
           <img :src="a.previewUrl || a.fileUrl" alt="作品图片" />
           <span class="work-status" :class="workStatusClass(a)">{{ workStatusLabel(a) }}</span>
@@ -2150,7 +2188,7 @@ function closeModelPreview() {
           </div>
         </article>
       </div>
-      <p v-if="!recentImages.length && !recentModels.length" class="empty">暂无作品</p>
+      <p v-if="!libraryLoading && !libraryLoadError && !recentImages.length && !recentModels.length" class="empty">暂无作品</p>
 
       <div v-if="recentProductionRequests.length" class="production-list">
         <h3>我的生产申请</h3>
@@ -2332,6 +2370,7 @@ function closeModelPreview() {
 </style>
 
 <style scoped>
+.section-head > div{display:grid;gap:2px}.library-reload{height:30px;padding:0 10px;border:1px solid #ded2c5;border-radius:8px;background:#fffaf4;color:#6e5547;font-size:12px;font-weight:800}.library-reload:disabled{opacity:.6}.library-state{display:flex;min-height:138px;flex-direction:column;align-items:center;justify-content:center;gap:11px;color:#8a7161;font-size:13px;text-align:center}.library-state i{width:22px;height:22px;border:2px solid #eadfd4;border-top-color:#0f766e;border-radius:50%;animation:library-spin .8s linear infinite}.library-state.error{padding:0 18px;color:#9a3412}.library-state.error button{height:34px;padding:0 13px;border:0;border-radius:8px;background:#201a17;color:#fff;font-weight:800}@keyframes library-spin{to{transform:rotate(360deg)}}
 /* Final mobile-only pass.  Older blocks designed this page as a phone-shaped
    desktop card; this mode keeps real functions but gives touch screens one
    clear reading column and horizontally browsable task choices. */

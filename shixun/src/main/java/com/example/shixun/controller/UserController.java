@@ -571,6 +571,87 @@ public class UserController {
         return result;
     }
 
+    /**
+     * Links the WeChat identity on the current device to an already authenticated
+     * consumer account. This is used after password login in the mini-program so
+     * web and mini-program sessions resolve to the same work library.
+     */
+    @PostMapping("/wechat-bind-current")
+    @Operation(summary = "绑定当前小程序微信身份", description = "需先使用已有账号登录，并提交当前设备的一次性微信登录凭证")
+    public Map<String, Object> bindCurrentWechatIdentity(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE) JwtService.Claims principal,
+            @RequestBody(required = false) Map<String, Object> body) throws Exception {
+        if (principal == null || principal.userId() == null || !"user".equals(principal.role())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅用户端账号可以绑定小程序身份");
+        }
+        String code = text(body == null ? null : body.get("code"));
+        if (!validWechatCode(code)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "微信登录凭证无效，请重新登录后再试");
+        }
+        ensureWechatBindingTable();
+        WechatIdentity identity = exchangeWechatCode(code);
+        return linkAuthenticatedWechatIdentity(principal.userId(), identity);
+    }
+
+    private Map<String, Object> linkAuthenticatedWechatIdentity(Long targetUserId, WechatIdentity identity) {
+        return transactions.execute(status -> {
+            List<Map<String, Object>> targets = jdbc.queryForList(
+                    "SELECT id,username,age,email,phone,role,status FROM user WHERE id=? FOR UPDATE", targetUserId);
+            if (targets.isEmpty()) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "登录账号不存在，请重新登录");
+            User target = userFromRow(targets.get(0));
+            if (!"user".equals(target.getRole()) || (target.getStatus() != null && !"active".equalsIgnoreCase(target.getStatus()))) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前账号无法绑定小程序身份");
+            }
+
+            List<Long> owners = jdbc.query(
+                    "SELECT user_id FROM wechat_user_binding WHERE app_id=? AND openid=? FOR UPDATE",
+                    (rs, rowNum) -> rs.getLong(1), identity.appId(), identity.openId());
+            if (owners.isEmpty()) {
+                ensureAuthorizedWechatBinding(targetUserId, identity);
+                return Map.of("bound", true, "merged", false, "movedAssets", 0);
+            }
+            Long sourceUserId = owners.get(0);
+            if (targetUserId.equals(sourceUserId)) return Map.of("bound", true, "merged", false, "movedAssets", 0);
+
+            List<Map<String, Object>> sources = jdbc.queryForList(
+                    "SELECT id,username,age,email,phone,role,status FROM user WHERE id=? FOR UPDATE", sourceUserId);
+            if (sources.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "微信身份绑定异常，请联系客服处理");
+            User source = userFromRow(sources.get(0));
+            // Only an automatically-created mini-program account may be merged.
+            // A separately registered account requires manual support review.
+            if (!"user".equals(source.getRole()) || source.getUsername() == null || !source.getUsername().startsWith("wx_")) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "该微信已绑定其他创作账号，请使用原账号登录或联系客服处理");
+            }
+
+            int movedAssets = moveMiniProgramCreationRecords(sourceUserId, targetUserId);
+            jdbc.update("UPDATE wechat_user_binding SET user_id=? WHERE app_id=? AND openid=?",
+                    targetUserId, identity.appId(), identity.openId());
+            synchronizePlatformIdentity(target);
+            return Map.of("bound", true, "merged", true, "movedAssets", movedAssets);
+        });
+    }
+
+    /**
+     * A first-time quick login may have created a lightweight wx_* account.
+     * After both credentials are verified, retain its creation history when it
+     * is attached to the user's established web account.
+     */
+    private int moveMiniProgramCreationRecords(Long sourceUserId, Long targetUserId) {
+        int movedAssets = jdbc.update("UPDATE digital_asset SET created_by=? WHERE created_by=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE ai_generation_job SET created_by=? WHERE created_by=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE creative_conversation_session SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE creative_conversation_event SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE creative_quote_request SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE creative_consignment_application SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE consumer_production_request SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE commercial_application_revision SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE commercial_professional_guidance_request SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE creative_selection_recommendation SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE selection_demand_request SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        return movedAssets;
+    }
+
     private boolean hasWechatProfile(Map<String, Object> body) {
         return body != null
                 && !blank(text(body.get("username")))

@@ -92,6 +92,24 @@ async function login() {
   loading.value = true
   try {
     const session = await request<any>('/api/users/login', { method: 'POST', data: { username: username.value, password: password.value }, header: { 'content-type': 'application/json' } })
+    // Keep the password-authenticated session before asking the server to bind
+    // the current WeChat OpenID. A prior quick-login placeholder is safely
+    // merged only after both identities have been verified.
+    saveSession(session)
+    try {
+      const code = await miniProgramLoginCode()
+      const binding = await request<any>('/api/users/wechat-bind-current', {
+        method: 'POST', data: { code }, header: { 'content-type': 'application/json' },
+      })
+      if (binding?.merged) uni.showToast({ title: '已同步已有作品', icon: 'success' })
+    } catch (bindingError: any) {
+      // Password login remains available when a browser does not implement
+      // uni.login. On a mini-program device, surface a short actionable notice.
+      const message = String(bindingError?.message || '')
+      if (message && !/当前运行在小程序中/.test(message)) {
+        uni.showToast({ title: message.includes('已绑定其他创作账号') ? '微信已绑定其他账号' : '作品同步将在下次登录完成', icon: 'none' })
+      }
+    }
     finishLogin(session)
   } catch (error: any) { uni.showToast({ title: error.message || '登录失败', icon: 'none' }) } finally { loading.value = false }
 }

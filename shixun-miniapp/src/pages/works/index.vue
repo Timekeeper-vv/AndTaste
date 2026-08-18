@@ -38,7 +38,7 @@
         <view class="section-head"><text>作品库</text><text>{{ assets.length }} 件</text></view>
         <view v-for="item in assets" :key="item.id" class="asset">
           <view class="asset-media">
-            <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" />
+            <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" @error="handlePreviewError(item)" />
             <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
             <text v-if="isAiGenerated(item)" class="ai-output-badge">AI生成</text>
           </view>
@@ -77,6 +77,7 @@ import { statusText } from '../../utils/format'
 
 const assets = ref<any[]>([])
 const securedPreviews = ref<Record<string, string>>({})
+const localPreviews = ref<Record<string, { path: string; savedAt: number }>>({})
 const loading = ref(false)
 const loadError = ref('')
 const submittingId = ref<number | null>(null)
@@ -87,6 +88,8 @@ const threeDimensionalPolicyConfirmed = ref(false)
 
 const isAiGenerated = (asset: any) => String(asset?.sourceType || '') === 'ai_generated'
 const previewSrc = (asset: any) => {
+  const local = localPreviews.value[String(asset.id)]?.path
+  if (local) return local
   const secured = securedPreviews.value[String(asset.id)]
   if (secured) return secured
   return /^https:\/\//.test(String(asset.previewUrl || '')) ? asset.previewUrl : ''
@@ -153,9 +156,15 @@ async function hydratePreviews(rows: any[]) {
   const next: Record<string, string> = {}
   pairs.forEach((pair) => { if (pair) next[pair[0]] = pair[1] })
   securedPreviews.value = next
+  // Save a small, account-scoped offline preview set. Remote signed URLs still
+  // refresh in the background, while saved files keep recent works visible on
+  // a slow or temporarily unavailable network.
+  pairs.forEach((pair) => { if (pair) void cachePreview(pair[0], pair[1]) })
 }
 
 function worksCacheKey() {
+  // The session shape intentionally exposes only the public mini-user fields;
+  // username is unique and prevents cached previews crossing accounts.
   const username = String(getSession()?.user?.username || '').trim()
   return username ? `smart_pig_works_${username}` : ''
 }
@@ -171,7 +180,7 @@ function saveWorksCache(rows: any[]) {
     delete copy.signedFileUrl
     return copy
   })
-  try { uni.setStorageSync(key, { rows: cacheRows, savedAt: Date.now() }) } catch { /* Cache is optional. */ }
+  try { uni.setStorageSync(key, { rows: cacheRows, previews: localPreviews.value, savedAt: Date.now() }) } catch { /* Cache is optional. */ }
 }
 
 function restoreWorksCache() {
@@ -180,10 +189,37 @@ function restoreWorksCache() {
   try {
     const cached = uni.getStorageSync(key)
     const rows = Array.isArray(cached?.rows) ? cached.rows : []
+    localPreviews.value = cached?.previews && typeof cached.previews === 'object' ? cached.previews : {}
     if (!rows.length) return
     assets.value = rows
     void hydratePreviews(rows)
   } catch { /* A missing or stale cache must never block the work library. */ }
+}
+
+async function cachePreview(assetId: string, url: string) {
+  if (localPreviews.value[assetId]?.path || !url) return
+  try {
+    const downloaded = await uni.downloadFile({ url, timeout: 30000 })
+    if (downloaded.statusCode < 200 || downloaded.statusCode >= 300 || !downloaded.tempFilePath) return
+    const saved = await uni.saveFile({ tempFilePath: downloaded.tempFilePath })
+    const next = { ...localPreviews.value, [assetId]: { path: saved.savedFilePath, savedAt: Date.now() } }
+    const entries = Object.entries(next).sort((a, b) => b[1].savedAt - a[1].savedAt)
+    const retained = Object.fromEntries(entries.slice(0, 20)) as Record<string, { path: string; savedAt: number }>
+    entries.slice(20).forEach(([, preview]) => { void uni.removeSavedFile({ filePath: preview.path }).catch(() => undefined) })
+    localPreviews.value = retained
+    saveWorksCache(assets.value)
+  } catch {
+    // Preview caching is a resilience layer and must never block the library.
+  }
+}
+
+function handlePreviewError(asset: any) {
+  const assetId = String(asset?.id || '')
+  if (!assetId || !localPreviews.value[assetId]) return
+  const next = { ...localPreviews.value }
+  delete next[assetId]
+  localPreviews.value = next
+  saveWorksCache(assets.value)
 }
 
 function readableLoadError(error: any) {
@@ -356,6 +392,7 @@ function promptLogin(action: string) {
 function resetGuestState() {
   assets.value = []
   securedPreviews.value = {}
+  localPreviews.value = {}
   loadError.value = ''
   loading.value = false
 }
