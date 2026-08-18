@@ -57,6 +57,24 @@ info(){ echo -e "\033[1;34m[INFO]\033[0m $*"; }; ok(){ echo -e "\033[1;32m[OK]\0
 need(){ command -v "$1" >/dev/null 2>&1 || die "缺少命令：$1，请先执行 install-deps"; }
 run_root(){ if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 
+check_project_files(){
+  local missing=() file
+  for file in \
+    "$BACKEND_DIR/pom.xml" \
+    "$BACKEND_DIR/mvnw" \
+    "$BACKEND_DIR/.mvn/wrapper/maven-wrapper.properties" \
+    "$FRONTEND_DIR/package.json" \
+    "$BACKEND_DIR/src/main/resources/db/migration/V20260803_01__wechat_jsapi_payment.sql"; do
+    [ -f "$file" ] || missing+=("$file")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "[ERR] 服务器代码不完整，已停止部署；缺少以下文件：" >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    echo "[ERR] 请先执行：git fetch origin main && git restore --source=origin/main -- shixun shixun-vue scripts" >&2
+    return 1
+  fi
+}
+
 install_deps(){
   info "安装 Java 17、Node.js 22、Git、MySQL、Nginx 等生产环境"
   if command -v apt-get >/dev/null 2>&1; then
@@ -388,7 +406,7 @@ validate_runtime_config(){
     [ -n "$PAYMENT_WECHAT_VIRTUAL_SESSION_ENCRYPTION_KEY" ] || die "PAYMENT_WECHAT_VIRTUAL_SESSION_ENCRYPTION_KEY 不能为空"
   fi
 }
-deploy(){ check_deps; validate_runtime_config; write_config; init_db; build; restart; }
-production(){ check_deps; validate_runtime_config; write_config; init_db; build; install_service; nginx; }
+deploy(){ check_project_files; check_deps; validate_runtime_config; write_config; init_db; build; restart; }
+production(){ check_project_files; check_deps; validate_runtime_config; write_config; init_db; build; install_service; nginx; }
 case "${1:-deploy}" in
  install-deps) install_deps;; config) write_config;; init-db) init_db;; build) build;; start) start;; stop) stop;; restart) restart;; status) status;; logs) logs;; service) install_service;; nginx) nginx;; deploy) deploy;; production) production;; *) echo "用法: $0 {install-deps|config|init-db|build|deploy|production|start|stop|restart|status|logs|service|nginx}"; exit 1;; esac
