@@ -53,6 +53,38 @@ CREATE TABLE digital_asset (
     updated_at TIMESTAMP NULL
 );
 
+CREATE TABLE creative_multiview_bundle (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bundle_no VARCHAR(80) NOT NULL UNIQUE,
+    user_id BIGINT NOT NULL,
+    input_asset_id BIGINT,
+    product_key VARCHAR(120),
+    product_name VARCHAR(180),
+    material VARCHAR(180),
+    product_size VARCHAR(120),
+    view_count INT NOT NULL DEFAULT 3,
+    status VARCHAR(30) NOT NULL DEFAULT 'draft',
+    purpose VARCHAR(30),
+    museum_id VARCHAR(80),
+    museum_name VARCHAR(200),
+    campaign_key VARCHAR(100),
+    note VARCHAR(1200),
+    review_comment VARCHAR(1200),
+    reviewed_by VARCHAR(80),
+    reviewed_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE creative_multiview_bundle_item (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bundle_id BIGINT NOT NULL,
+    view_key VARCHAR(20) NOT NULL,
+    asset_id BIGINT NOT NULL,
+    label VARCHAR(40) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE channel_directory (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     channel_code VARCHAR(120) NOT NULL UNIQUE,

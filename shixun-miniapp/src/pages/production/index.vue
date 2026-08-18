@@ -3,14 +3,19 @@
     <view class="head">
       <text class="eyebrow">MAKE IT REAL</text>
       <text class="title">打样 / 生产申请</text>
-      <text class="sub">仅审核通过的 3D 作品可以提交。平台审核通过后才会进入后续生产安排。</text>
+      <text class="sub">审核通过的三视图作品包或 3D 作品可以提交。平台确认申请后再进入打样与后续生产安排。</text>
     </view>
 
-    <view class="work-card"><text class="work-label">申请作品</text><text class="work-title">{{ assetTitle || '3D 作品' }}</text><text class="work-id">作品编号：{{ assetId || '-' }}</text></view>
+    <view class="work-card"><text class="work-label">{{ bundleId ? '三视图作品包' : '申请作品' }}</text><text class="work-title">{{ assetTitle || (bundleId ? '三视图作品' : '3D 作品') }}</text><text class="work-id">{{ bundleId ? `作品包编号：${bundleNo || bundleId}` : `作品编号：${assetId || '-'}` }}</text></view>
+
+    <view v-if="bundleImages.length" class="bundle-preview">
+      <view v-for="item in bundleImages" :key="item.assetId"><image :src="bundleImageUrl(item)" mode="aspectFit" /><text>{{ item.label }}</text></view>
+    </view>
 
     <view class="card">
       <text class="label">申请类型</text>
-      <radio-group class="options" @change="changeRequestType">
+      <view v-if="bundleId" class="bundle-sample-only"><text>先做打样</text><text>三视图审核已通过，先确认材质、工艺和实物效果</text></view>
+      <radio-group v-else class="options" @change="changeRequestType">
         <label class="option" :class="{ active: requestType === 'sample' }"><radio value="sample" :checked="requestType === 'sample'" color="#9b4328" /><view><text>先做打样</text><text>建议先确认工艺、材质与实物效果</text></view></label>
         <label class="option" :class="{ active: requestType === 'bulk' }"><radio value="bulk" :checked="requestType === 'bulk'" color="#9b4328" /><view><text>批量生产</text><text>适合已确认方案的正式量产</text></view></label>
       </radio-group>
@@ -55,10 +60,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import { getMuseums, submitProductionRequest } from '../../api/creative'
+import { getMuseums, getMyMultiViewBundles, submitProductionRequest } from '../../api/creative'
 import { requireSession } from '../../utils/session'
+import { imageUrl } from '../../utils/format'
 
 const assetId = ref<number | null>(null)
+const bundleId = ref<number | null>(null)
+const bundleNo = ref('')
+const bundleImages = ref<any[]>([])
 const assetTitle = ref('')
 const requestType = ref<'sample' | 'bulk'>('sample')
 const quantity = ref('1')
@@ -78,6 +87,7 @@ const provinces = computed(() => [...new Set(museums.value.map((museum) => museu
 const filteredMuseums = computed(() => museums.value.filter((museum) => museum.province === province.value))
 const museumNames = computed(() => filteredMuseums.value.map((museum) => `${museum.name} · ${museum.channelType === 'scenic_spot' ? '景区' : '博物馆'}`))
 const selectedMuseum = computed(() => filteredMuseums.value.find((museum) => String(museum.id) === selectedMuseumId.value) || null)
+const bundleImageUrl = (item: any) => imageUrl(item?.previewUrl || item?.imageUrl || item?.fileUrl || '')
 
 function safelyDecode(value: unknown) {
   try { return decodeURIComponent(String(value || '')) } catch { return String(value || '') }
@@ -128,7 +138,7 @@ function validQuantity() {
 }
 
 async function submit() {
-  if (!assetId.value) return uni.showToast({ title: '缺少作品编号，请返回作品页重新进入', icon: 'none' })
+  if (!assetId.value && !bundleId.value) return uni.showToast({ title: '缺少作品编号，请返回作品页重新进入', icon: 'none' })
   const amount = validQuantity()
   if (!amount) return uni.showToast({ title: '申请数量必须是大于 0 的整数', icon: 'none' })
   const museum = selectedMuseum.value
@@ -140,9 +150,10 @@ async function submit() {
   submitting.value = true
   try {
     const response = await submitProductionRequest({
-      assetId: assetId.value,
+      assetId: assetId.value || undefined,
+      bundleId: bundleId.value || undefined,
       requestType: requestType.value,
-      title: `${requestType.value === 'sample' ? '打样申请' : '批量生产申请'}-${assetTitle.value || '3D作品'}`,
+      title: `${requestType.value === 'sample' ? '打样申请' : '批量生产申请'}-${assetTitle.value || (bundleId.value ? '三视图作品' : '3D作品')}`,
       quantity: amount,
       purpose: purpose.value,
       selfShipQuantity: purpose.value === 'personal' ? amount : 0,
@@ -169,7 +180,28 @@ onLoad((query: any) => {
   if (!requireSession()) return
   const parsedId = Number(query?.assetId)
   if (Number.isFinite(parsedId) && parsedId > 0) assetId.value = parsedId
-  assetTitle.value = safelyDecode(query?.title)
+  const parsedBundleId = Number(query?.bundleId)
+  const requestedTitle = safelyDecode(query?.title)
+  if (Number.isFinite(parsedBundleId) && parsedBundleId > 0) {
+    bundleId.value = parsedBundleId
+    requestType.value = 'sample'
+    void getMyMultiViewBundles().then(rows => {
+      const bundle = rows.find(item => Number(item.id || item.bundleId) === parsedBundleId)
+      if (!bundle) return
+      if (bundle.status !== 'approved') {
+        uni.showModal({ title: '暂不能申请打样', content: '该三视图作品包尚未审核通过。', showCancel: false, success: () => uni.navigateBack() })
+        return
+      }
+      bundleNo.value = String(bundle.bundleNo || '')
+      bundleImages.value = Array.isArray(bundle.images) ? bundle.images : []
+      // The product identity comes from the approved server-side bundle.
+      // A stale navigation title must never replace it at the payment/sample
+      // boundary.
+      assetTitle.value = bundle.productName || requestedTitle || '三视图作品'
+    }).catch((error: any) => uni.showToast({ title: error?.message || '三视图作品包加载失败', icon: 'none' }))
+  } else {
+    assetTitle.value = requestedTitle
+  }
   const context = uni.getStorageSync('creation_context') || {}
   purpose.value = context.purpose === 'museum_sale' ? 'museum_sale' : 'personal'
   void loadMuseums(context)
@@ -179,6 +211,7 @@ onLoad((query: any) => {
 <style scoped lang="scss">
 .page{min-height:100vh;padding:38rpx 34rpx 80rpx;box-sizing:border-box}.head{padding:14rpx 4rpx 30rpx}.eyebrow{display:block;font-size:20rpx;color:#a64b2b;letter-spacing:3rpx}.title{display:block;font-size:48rpx;font-weight:800;margin-top:14rpx}.sub{display:block;font-size:23rpx;line-height:1.65;color:#8c7063;margin-top:12rpx}.work-card{padding:26rpx 30rpx;background:linear-gradient(135deg,#482116,#9c4529);border-radius:24rpx;color:#fff}.work-label,.work-title,.work-id{display:block}.work-label{font-size:21rpx;color:#f3cdb8}.work-title{font-size:33rpx;font-weight:750;margin-top:9rpx}.work-id{font-size:20rpx;color:#eec8b2;margin-top:10rpx}.card{margin-top:26rpx;background:#fff;border-radius:25rpx;padding:30rpx;box-sizing:border-box}.label{display:block;font-size:28rpx;font-weight:750;margin:8rpx 0 17rpx}.options{display:flex;gap:14rpx;margin-bottom:28rpx}.option{flex:1;display:flex;gap:8rpx;align-items:flex-start;background:#faf4ee;border:2rpx solid transparent;border-radius:16rpx;padding:18rpx 12rpx;box-sizing:border-box}.option.active{background:#fff5eb;border-color:#d9936e}.option text{display:block;font-size:24rpx;font-weight:700}.option text:last-child{font-size:19rpx;line-height:1.45;font-weight:400;color:#8d7366;margin-top:8rpx}.input,.textarea,.picker{box-sizing:border-box;width:100%;background:#faf5f1;border-radius:16rpx;padding:0 22rpx;font-size:26rpx;margin-bottom:17rpx}.input,.picker{height:86rpx;line-height:86rpx}.textarea{height:150rpx;padding-top:20rpx;line-height:1.5}.picker{display:flex;justify-content:space-between;align-items:center}.picker text{font-size:38rpx;color:#a34a2a}.purpose-options{display:flex;flex-direction:column;gap:12rpx;margin-bottom:28rpx}.purpose-options label{display:block;padding:18rpx;background:#faf4ee;border:2rpx solid transparent;border-radius:14rpx;font-size:25rpx}.purpose-options label.active{border-color:#d9936e;background:#fff8f1}.tip{display:block;font-size:21rpx;color:#936d5c;line-height:1.55;margin:-4rpx 0 25rpx}.submit{height:96rpx;line-height:96rpx;margin-top:34rpx;background:#963c23;color:#fff;border-radius:48rpx;font-size:30rpx}.footer{display:block;margin:26rpx 12rpx 0;font-size:20rpx;color:#a0877b;line-height:1.65;text-align:center}
 .museum-location{display:block;margin:-4rpx 4rpx 14rpx;color:#88796c;font-size:20rpx;line-height:1.5}
+.bundle-preview{display:grid;grid-template-columns:repeat(3,1fr);gap:10rpx;margin-top:18rpx}.bundle-preview>view{overflow:hidden;border:1rpx solid #dce4dc;border-radius:10rpx;background:#fff}.bundle-preview image{display:block;width:100%;height:150rpx;background:#edf1ed}.bundle-preview text{display:block;padding:8rpx;color:#617668;font-size:19rpx;font-weight:800;text-align:center}.bundle-sample-only{display:flex;flex-direction:column;gap:7rpx;margin-bottom:28rpx;padding:20rpx;border:2rpx solid #9caf9f;border-radius:14rpx;background:#eef4ee}.bundle-sample-only text:first-child{color:#486856;font-size:27rpx;font-weight:800}.bundle-sample-only text:last-child{color:#75877b;font-size:20rpx;line-height:1.5}
 </style>
 
 <style scoped lang="scss">

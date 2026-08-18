@@ -20,13 +20,13 @@
     <template v-else>
       <AiGeneratedNotice class="ai-disclosure" compact description="带有“AI生成”标识的图片、四视图和 3D 原型由人工智能生成。展示、商业使用、打样和生产前请完成人工复核与权利核验。" />
 
-      <view v-if="loadError && !assets.length" class="load-error">
+      <view v-if="loadError && !assets.length && !multiviewBundles.length" class="load-error">
         <text class="load-error-title">作品暂时未能打开</text>
         <text class="load-error-copy">{{ loadError }}</text>
         <button class="load-retry" @tap="refresh(true)">重新加载</button>
       </view>
 
-      <view v-else-if="!assets.length" class="empty">
+      <view v-else-if="!visibleAssets.length && !multiviewBundles.length" class="empty">
         <text>还没有作品，去开始第一件创作吧。</text>
         <button class="create-first" @tap="goCreate">开始创作</button>
       </view>
@@ -35,8 +35,15 @@
         <view v-if="loadError" class="cache-warning" @tap="refresh(true)">
           <text>暂时无法更新最新作品</text><text>重新加载 ›</text>
         </view>
-        <view class="section-head"><text>作品库</text><text>{{ assets.length }} 件</text></view>
-        <view v-for="item in assets" :key="item.id" class="asset">
+        <view class="section-head"><text>作品库</text><text>{{ totalWorkCount }} 件</text></view>
+
+        <view v-for="bundle in multiviewBundles" :key="`bundle-${bundle.id}`" class="multiview-bundle-card">
+          <view class="bundle-card-head"><view><text>三视图作品包</text><text>{{ bundle.bundleNo || `#${bundle.id}` }}</text></view><text class="status" :class="String(bundle.status || 'draft')">{{ statusText(bundle.status || 'draft') }}</text></view>
+          <view class="bundle-image-grid"><view v-for="image in bundle.images" :key="image.assetId"><image v-if="bundlePreviewSrc(image)" :src="bundlePreviewSrc(image)" mode="aspectFit" /><view v-else class="bundle-image-placeholder">{{ image.label }}</view><text>{{ image.label }}</text></view></view>
+          <view class="bundle-card-body"><text class="bundle-title">{{ bundle.productName || '三视图文创作品' }}</text><text class="meta">{{ bundle.material || '材质待定' }} · {{ bundle.productSize || '尺寸待定' }} · {{ bundle.viewCount || 3 }} 张视图</text><text v-if="bundle.status === 'rejected' && bundle.reviewComment" class="bundle-reject-reason">未通过原因：{{ bundle.reviewComment }}</text><view class="actions"><button v-if="['draft','rejected'].includes(String(bundle.status || 'draft'))" size="mini" :loading="submittingBundleId === bundle.id" @tap="submitBundleReview(bundle)">{{ bundle.status === 'rejected' ? '重新提交整包审核' : '提交整包审核' }}</button><button v-if="bundle.status === 'approved'" size="mini" class="production" @tap="applyBundleProduction(bundle)">申请打样</button><button size="mini" @tap="copyBundle(bundle)">复制作品包编号</button></view></view>
+        </view>
+
+        <view v-for="item in visibleAssets" :key="item.id" class="asset">
           <view class="asset-media">
             <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" @error="handlePreviewError(item)" />
             <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
@@ -66,25 +73,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import AiGeneratedNotice from '../../components/AiGeneratedNotice.vue'
-import { getAssetPreviewAccess, getAssets, getProductionRequests, submitAssetReview } from '../../api/creative'
+import { getAssetPreviewAccess, getAssets, getMyMultiViewBundles, getProductionRequests, submitAssetReview, submitMultiViewBundleReview } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
 import { getSession } from '../../utils/session'
 import { statusText } from '../../utils/format'
 
 const assets = ref<any[]>([])
+const multiviewBundles = ref<any[]>([])
 const securedPreviews = ref<Record<string, string>>({})
 const localPreviews = ref<Record<string, { path: string; savedAt: number }>>({})
 const loading = ref(false)
 const loadError = ref('')
 const submittingId = ref<number | null>(null)
+const submittingBundleId = ref<number | null>(null)
 const downloadingModelId = ref('')
 const signedIn = ref(Boolean(getSession()?.token))
 const DESKTOP_MODEL_URL = 'https://www.zhijiansk.com/'
 const threeDimensionalPolicyConfirmed = ref(false)
+
+const bundleAssetIds = computed(() => new Set(multiviewBundles.value.flatMap(bundle => Array.isArray(bundle.images) ? bundle.images.map((item: any) => String(item.assetId)) : [])))
+const visibleAssets = computed(() => assets.value.filter(asset => !bundleAssetIds.value.has(String(asset.id))))
+const totalWorkCount = computed(() => visibleAssets.value.length + multiviewBundles.value.length)
 
 const isAiGenerated = (asset: any) => String(asset?.sourceType || '') === 'ai_generated'
 const previewSrc = (asset: any) => {
@@ -93,6 +106,11 @@ const previewSrc = (asset: any) => {
   const secured = securedPreviews.value[String(asset.id)]
   if (secured) return secured
   return /^https:\/\//.test(String(asset.previewUrl || '')) ? asset.previewUrl : ''
+}
+const bundlePreviewSrc = (item: any) => {
+  const raw = String(item?.previewUrl || item?.imageUrl || item?.fileUrl || '')
+  if (!raw) return ''
+  return /^https:\/\//.test(raw) ? raw : apiUrl(raw)
 }
 const isGenerating = (status?: string) => ['queued', 'pending', 'running', 'processing'].includes(String(status || ''))
 const assetDisplayStatus = (asset: any) => String(asset.status || 'draft')
@@ -242,8 +260,12 @@ async function refresh(notify = false) {
   loading.value = true
   loadError.value = ''
   try {
-    const rows = await getAssets()
+    const [rows, bundles] = await Promise.all([
+      getAssets(),
+      getMyMultiViewBundles().catch(() => []),
+    ])
     assets.value = Array.isArray(rows) ? rows : []
+    multiviewBundles.value = Array.isArray(bundles) ? bundles : []
     saveWorksCache(assets.value)
     // 图片签名地址在后台补齐，作品列表本身不等待这些预览请求。
     void hydratePreviews(assets.value)
@@ -391,10 +413,74 @@ function promptLogin(action: string) {
 
 function resetGuestState() {
   assets.value = []
+  multiviewBundles.value = []
   securedPreviews.value = {}
   localPreviews.value = {}
   loadError.value = ''
   loading.value = false
+}
+
+function copyBundle(bundle: any) {
+  uni.setClipboardData({ data: String(bundle?.bundleNo || bundle?.id || '') })
+}
+
+function submitBundleReview(bundle: any) {
+  const context = uni.getStorageSync('creation_context') || {}
+  const purpose = context.purpose === 'museum_sale' ? 'museum_sale' : 'personal'
+  const museumId = purpose === 'museum_sale' ? String(context.museum?.id || '') : undefined
+  const campaign = context.campaign && typeof context.campaign === 'object' ? context.campaign : null
+  if (purpose === 'museum_sale' && !museumId) {
+    uni.showToast({ title: '请先选择服务博物馆后再提交审核', icon: 'none' })
+    return
+  }
+  if (campaign?.key && (purpose !== 'museum_sale' || campaign.channelCode !== context.museum?.channelCode)) {
+    uni.showToast({ title: '优先征集任务与当前渠道不一致', icon: 'none' })
+    return
+  }
+  uni.showModal({
+    title: bundle.status === 'rejected' ? '重新提交三视图审核' : '提交三视图审核',
+    content: purpose === 'museum_sale' ? `正面、侧面和背面将作为一个作品包提交至${context.museum?.name || '目标渠道'}。` : '正面、侧面和背面将作为一个完整作品包提交审核。',
+    confirmText: '提交审核',
+    success: async result => {
+      if (!result.confirm) return
+      submittingBundleId.value = bundle.id
+      try {
+        const response = await submitMultiViewBundleReview(bundle.id, {
+          purpose,
+          museumId,
+          ...(campaign?.key ? { campaignKey: campaign.key } : {}),
+        })
+        uni.showToast({ title: response.message || '三视图已提交审核', icon: 'success' })
+        await refresh(false)
+      } catch (error: any) {
+        uni.showToast({ title: error?.message || '提交三视图审核失败', icon: 'none' })
+      } finally {
+        submittingBundleId.value = null
+      }
+    },
+  })
+}
+
+async function applyBundleProduction(bundle: any) {
+  uni.showLoading({ title: '正在检查申请', mask: true })
+  try {
+    const requests = await getProductionRequests()
+    const existing = Array.isArray(requests) && requests.some(request => String(request?.multiviewBundleId) === String(bundle.id))
+    if (existing) {
+      uni.showModal({
+        title: '已有打样申请',
+        content: '该三视图作品包已经提交过打样申请，请在商品化申请中继续处理。',
+        cancelText: '取消', confirmText: '查看申请',
+        success: result => { if (result.confirm) uni.navigateTo({ url: '/pages/commercial/index' }) },
+      })
+      return
+    }
+    uni.navigateTo({ url: `/pages/production/index?bundleId=${encodeURIComponent(String(bundle.id))}&title=${encodeURIComponent(bundle.productName || '三视图作品')}` })
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '暂时无法检查申请', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
 }
 
 async function applyProduction(asset: any) {
@@ -484,6 +570,7 @@ onPullDownRefresh(() => {
 <style scoped lang="scss">
 .ai-disclosure{margin:-18rpx 0 10rpx}.asset-media{position:relative;flex:0 0 180rpx;width:180rpx;height:180rpx}.asset-media .cover,.asset-media .model{display:block;width:180rpx;height:180rpx}.asset-media .model{display:flex}.ai-output-badge{position:absolute;left:10rpx;top:10rpx;padding:5rpx 8rpx;border-radius:6rpx;background:rgba(107,67,49,.88);color:#fff;font-size:16rpx;font-weight:900;line-height:1.2}
 .page{min-height:100vh;padding:34rpx}.intro{display:flex;align-items:flex-start;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 34rpx}.title{font-size:48rpx;font-weight:800;display:block}.sub{font-size:24rpx;color:#8e7469;display:block;margin-top:12rpx;line-height:1.55}.refresh{margin:4rpx 0 0;background:#f4e5db;color:#873e26;font-size:21rpx}.section{margin-top:10rpx}.section-head{display:flex;justify-content:space-between;align-items:center;margin:24rpx 4rpx 18rpx;font-size:30rpx;font-weight:750}.section-head text:last-child{font-size:21rpx;color:#9a7d70;font-weight:400}.empty{padding:120rpx 34rpx;text-align:center;color:#9c8479;line-height:1.8}.create-first{width:300rpx;height:82rpx;line-height:82rpx;margin:28rpx auto 0;border-radius:42rpx;background:#963c23;color:#fff;font-size:27rpx}.asset,.job-card{display:flex;background:#fff;border-radius:22rpx;margin-bottom:22rpx;overflow:hidden;box-shadow:0 8rpx 22rpx rgba(65,34,20,.07)}.cover,.model{width:180rpx;height:180rpx;flex-shrink:0}.cover{background:#f4e7df}.model,.job-icon{background:linear-gradient(145deg,#4b2518,#bc5a34);color:#fff;font-size:38rpx;font-weight:800;display:flex;align-items:center;justify-content:center}.body,.job-body{padding:20rpx;min-width:0;flex:1}.row{display:flex;align-items:center;gap:12rpx}.name{font-weight:700;font-size:29rpx;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.approved,.status.succeeded,.status.paid{background:#e4f5e9;color:#248653}.status.rejected,.status.failed{background:#ffe5e1;color:#ba3d2e}.status.running,.status.queued,.status.processing{background:#fff0d5;color:#aa681e}.meta,.source,.generation,.failure,.progress-text{display:block;font-size:21rpx;color:#967c70;margin-top:10rpx;line-height:1.5}.generation{color:#8b5a42}.source{color:#9d4e30}.failure{color:#ba3d2e;white-space:normal}.project-entry{display:flex;align-items:center;justify-content:space-between;gap:12rpx;margin-top:11rpx;padding:10rpx 12rpx;border-radius:10rpx;background:#edf3ed;color:#5d7969;font-size:19rpx;font-weight:750}.project-entry text:last-child{color:#789081;font-size:18rpx}.progress-line{height:10rpx;border-radius:8rpx;background:#f2e4da;margin-top:14rpx;overflow:hidden}.progress-value{height:100%;background:linear-gradient(90deg,#c86a40,#8b351f);border-radius:inherit}.progress-text{margin-top:7rpx;font-size:19rpx}.actions{display:flex;flex-wrap:wrap;gap:10rpx;margin-top:14rpx}.actions button{margin:0;background:#f8ede5;color:#843b23;font-size:20rpx}.actions .production{background:#f8d9c0;color:#74301d}.job-card{padding:0}.job-icon{width:130rpx;min-height:150rpx;flex-shrink:0;font-size:29rpx}.job-card.failed .job-icon{background:linear-gradient(145deg,#7f2920,#c64d3d)}
+.multiview-bundle-card{margin-bottom:22rpx;padding:19rpx;border:1rpx solid rgba(105,135,113,.24);border-radius:18rpx;background:#fff;box-shadow:0 9rpx 21rpx rgba(67,53,37,.055)}.bundle-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12rpx}.bundle-card-head view{display:flex;min-width:0;flex-direction:column;gap:5rpx}.bundle-card-head view text:first-child{color:#3f5548;font-size:27rpx;font-weight:800}.bundle-card-head view text:last-child{color:#9aa79d;font-size:18rpx}.bundle-card-head .status{background:#edf3ed;color:#5d7969}.bundle-card-head .status.review{background:#fff4dc;color:#9c743c}.bundle-card-head .status.approved{background:#e5f2e8;color:#4f8463}.bundle-card-head .status.rejected{background:#fff0ec;color:#ad5d4a}.bundle-image-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8rpx;margin-top:14rpx}.bundle-image-grid>view{overflow:hidden;border:1rpx solid #e1e9e2;border-radius:10rpx;background:#f8faf8}.bundle-image-grid image,.bundle-image-placeholder{display:block;width:100%;height:170rpx;background:#edf1ed}.bundle-image-placeholder{display:flex;align-items:center;justify-content:center;color:#809087;font-size:18rpx}.bundle-image-grid>view>text{display:block;padding:7rpx;color:#6d7f72;font-size:17rpx;font-weight:800;text-align:center}.bundle-card-body{display:flex;min-width:0;flex-direction:column}.bundle-title{display:block;margin-top:13rpx;color:#3d4c43;font-size:25rpx;font-weight:800}.bundle-reject-reason{display:block;margin-top:10rpx;padding:9rpx 10rpx;border-left:3rpx solid #bb6b55;border-radius:0 8rpx 8rpx 0;background:#fff3ef;color:#9c5946;font-size:19rpx;line-height:1.5}
 </style>
 
 <style scoped lang="scss">

@@ -64,7 +64,8 @@ check_project_files(){
     "$BACKEND_DIR/mvnw" \
     "$BACKEND_DIR/.mvn/wrapper/maven-wrapper.properties" \
     "$FRONTEND_DIR/package.json" \
-    "$BACKEND_DIR/src/main/resources/db/migration/V20260803_01__wechat_jsapi_payment.sql"; do
+    "$BACKEND_DIR/src/main/resources/db/migration/V20260803_01__wechat_jsapi_payment.sql" \
+    "$BACKEND_DIR/src/main/resources/db/migration/V20260818_01__multiview_review_workflow.sql"; do
     [ -f "$file" ] || missing+=("$file")
   done
   if [ "${#missing[@]}" -gt 0 ]; then

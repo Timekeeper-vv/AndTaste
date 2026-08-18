@@ -352,8 +352,57 @@ export const submitAssetReview = (assetId: number | string, body: ReviewSubmissi
   { method: 'PUT', data: body, header: { 'content-type': 'application/json' } },
 )
 
+export interface MultiViewBundleImage extends SeedreamMultiViewImage {
+  assetTitle?: string
+  assetStatus?: string
+}
+
+export interface MultiViewBundle {
+  id: number
+  bundleId?: number
+  bundleNo?: string
+  inputAssetId?: number
+  productKey?: string
+  productName?: string
+  material?: string
+  productSize?: string
+  viewCount?: number
+  status?: 'draft' | 'review' | 'approved' | 'rejected' | string
+  purpose?: 'personal' | 'museum_sale' | string
+  museumId?: string
+  museumName?: string
+  campaignKey?: string
+  note?: string
+  reviewComment?: string
+  reviewedBy?: string
+  reviewedAt?: string
+  createdAt?: string
+  updatedAt?: string
+  images: MultiViewBundleImage[]
+}
+
+export const createMultiViewBundle = (body: {
+  inputAssetId: number | string
+  productKey?: string
+  productName?: string
+  material?: string
+  productSize?: string
+  viewCount: 3 | 4
+  images: Array<{ view: string; assetId: number | string; label?: string }>
+}) => request<MultiViewBundle>('/api/creative/ai/consumer-multiview-bundles', {
+  method: 'POST', data: body, header: { 'content-type': 'application/json' },
+})
+
+export const getMyMultiViewBundles = () => request<MultiViewBundle[]>('/api/creative/ai/consumer-multiview-bundles/my')
+
+export const submitMultiViewBundleReview = (bundleId: number | string, body: ReviewSubmission) => request<MultiViewBundle & { success?: boolean; message?: string }>(
+  `/api/creative/ai/consumer-multiview-bundles/${encodeURIComponent(String(bundleId))}/submit-review`,
+  { method: 'PUT', data: body, header: { 'content-type': 'application/json' } },
+)
+
 export interface ProductionSubmission {
-  assetId: number
+  assetId?: number
+  bundleId?: number
   requestType: 'sample' | 'bulk'
   title?: string
   quantity: number

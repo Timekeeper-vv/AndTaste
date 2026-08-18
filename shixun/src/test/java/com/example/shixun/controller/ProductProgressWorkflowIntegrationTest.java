@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +56,8 @@ class ProductProgressWorkflowIntegrationTest {
         jdbc.update("DELETE FROM commercial_application_revision");
         jdbc.update("DELETE FROM commercial_professional_guidance_request");
         jdbc.update("DELETE FROM payment_order");
+        jdbc.update("DELETE FROM creative_multiview_bundle_item");
+        jdbc.update("DELETE FROM creative_multiview_bundle");
         jdbc.update("DELETE FROM commercial_application_audit_log");
         jdbc.update("DELETE FROM creative_consignment_application");
         jdbc.update("DELETE FROM creative_quote_request");
@@ -298,6 +301,162 @@ class ProductProgressWorkflowIntegrationTest {
                 .isEqualTo("paid");
     }
 
+    @Test
+    void threeViewsAreReviewedAsOneBundleBeforeSampleRequest() throws Exception {
+        TestUser creator = createUser("multiview-creator", "user");
+        TestUser otherConsumer = createUser("multiview-other", "user");
+        TestUser reviewer = createUser("multiview-reviewer", "admin");
+        seedProductCatalog();
+
+        long inputAssetId = createAsset(creator, "AST-MV-INPUT", "image", "draft");
+        long frontAssetId = createAsset(creator, "AST-MV-FRONT", "image", "draft");
+        long leftAssetId = createAsset(creator, "AST-MV-LEFT", "image", "draft");
+        long backAssetId = createAsset(creator, "AST-MV-BACK", "image", "draft");
+
+        Map<String, Object> incompleteBundle = Map.of(
+                "inputAssetId", inputAssetId,
+                "productKey", "souvenir-alloy-magnet",
+                "productName", "合金冰箱贴",
+                "material", "锌合金",
+                "productSize", "60mm",
+                "viewCount", 3,
+                "images", List.of(
+                        Map.of("view", "front", "assetId", frontAssetId),
+                        Map.of("view", "left", "assetId", leftAssetId)));
+        mvc.perform(post("/api/creative/ai/consumer-multiview-bundles")
+                        .header("Authorization", "Bearer " + creator.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(incompleteBundle)))
+                .andExpect(status().isBadRequest());
+
+        Map<String, Object> completeBundle = Map.of(
+                "inputAssetId", inputAssetId,
+                "productKey", "souvenir-alloy-magnet",
+                "productName", "合金冰箱贴",
+                "material", "锌合金",
+                "productSize", "60mm",
+                "viewCount", 3,
+                "images", List.of(
+                        Map.of("view", "front", "assetId", frontAssetId),
+                        Map.of("view", "left", "assetId", leftAssetId),
+                        Map.of("view", "back", "assetId", backAssetId)));
+
+        mvc.perform(post("/api/creative/ai/consumer-multiview-bundles")
+                        .header("Authorization", "Bearer " + otherConsumer.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(completeBundle)))
+                .andExpect(status().isForbidden());
+
+        JsonNode created = request(post("/api/creative/ai/consumer-multiview-bundles"), creator.token(), completeBundle);
+        long bundleId = field(created, "id").asLong();
+        assertThat(field(created, "status").asText()).isEqualTo("draft");
+        assertThat(field(created, "images").size()).isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creative_multiview_bundle", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creative_multiview_bundle_item WHERE bundle_id=?", Integer.class, bundleId)).isEqualTo(3);
+        JsonNode creatorAssetsAfterBundle = request(get("/api/creative/ai/assets"), creator.token(), null);
+        assertThat(containsId(creatorAssetsAfterBundle, frontAssetId)).isFalse();
+        assertThat(containsId(creatorAssetsAfterBundle, leftAssetId)).isFalse();
+        assertThat(containsId(creatorAssetsAfterBundle, backAssetId)).isFalse();
+
+        // A draft cannot be approved directly; the user must explicitly
+        // submit the complete package first.
+        mvc.perform(put("/api/creative/ai/consumer-multiview-bundles/{id}/review", bundleId)
+                        .header("Authorization", "Bearer " + reviewer.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of("status", "approved"))))
+                .andExpect(status().isBadRequest());
+
+        // The three child assets are represented by the bundle endpoint, not
+        // repeated in the administrator's legacy single-asset review list.
+        JsonNode ordinaryReviewRows = request(get("/api/creative/ai/consumer-assets/review"), reviewer.token(), null);
+        assertThat(containsId(ordinaryReviewRows, frontAssetId)).isFalse();
+        assertThat(containsId(ordinaryReviewRows, leftAssetId)).isFalse();
+        assertThat(containsId(ordinaryReviewRows, backAssetId)).isFalse();
+
+        // Replaying the generation callback must reuse the same bundle.
+        JsonNode duplicate = request(post("/api/creative/ai/consumer-multiview-bundles"), creator.token(), completeBundle);
+        assertThat(field(duplicate, "id").asLong()).isEqualTo(bundleId);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creative_multiview_bundle", Integer.class)).isEqualTo(1);
+
+        JsonNode submitted = request(put("/api/creative/ai/consumer-multiview-bundles/{id}/submit-review", bundleId), creator.token(), Map.of(
+                "purpose", "personal", "note", "整组三视图提交人工审核"));
+        assertThat(field(submitted, "status").asText()).isEqualTo("review");
+        assertThat(jdbc.queryForObject("SELECT status FROM creative_multiview_bundle WHERE id=?", String.class, bundleId)).isEqualTo("review");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM digital_asset WHERE id IN (?,?,?) AND status='review'", Integer.class, frontAssetId, leftAssetId, backAssetId)).isEqualTo(3);
+
+        JsonNode adminReviewRows = request(get("/api/creative/ai/consumer-multiview-bundles/review?status=review"), reviewer.token(), null);
+        assertThat(adminReviewRows.size()).isEqualTo(1);
+        assertThat(field(adminReviewRows.get(0), "id").asLong()).isEqualTo(bundleId);
+        assertThat(field(adminReviewRows.get(0), "images").size()).isEqualTo(3);
+
+        mvc.perform(put("/api/creative/ai/consumer-multiview-bundles/{id}/submit-review", bundleId)
+                        .header("Authorization", "Bearer " + creator.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of("purpose", "personal"))))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(put("/api/creative/ai/consumer-multiview-bundles/{id}/review", bundleId)
+                        .header("Authorization", "Bearer " + reviewer.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of("status", "rejected"))))
+                .andExpect(status().isBadRequest());
+
+        JsonNode rejected = request(put("/api/creative/ai/consumer-multiview-bundles/{id}/review", bundleId), reviewer.token(), Map.of(
+                "status", "rejected", "comment", "请补充侧面结构并确认尺寸比例"));
+        assertThat(field(rejected, "status").asText()).isEqualTo("rejected");
+        assertThat(field(rejected, "reviewComment").asText()).isEqualTo("请补充侧面结构并确认尺寸比例");
+        assertThat(jdbc.queryForObject("SELECT status FROM digital_asset WHERE id=?", String.class, frontAssetId)).isEqualTo("rejected");
+
+        mvc.perform(post("/api/creative/ai/consumer-production/submit")
+                        .header("Authorization", "Bearer " + creator.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of("bundleId", bundleId, "requestType", "sample"))))
+                .andExpect(status().isBadRequest());
+
+        JsonNode resubmitted = request(put("/api/creative/ai/consumer-multiview-bundles/{id}/submit-review", bundleId), creator.token(), Map.of(
+                "purpose", "personal", "note", "已按审核意见补充结构"));
+        assertThat(field(resubmitted, "status").asText()).isEqualTo("review");
+        JsonNode approved = request(put("/api/creative/ai/consumer-multiview-bundles/{id}/review", bundleId), reviewer.token(), Map.of(
+                "status", "approved", "comment", "三视图结构和产品信息已确认"));
+        assertThat(field(approved, "status").asText()).isEqualTo("approved");
+        assertThat(jdbc.queryForObject("SELECT status FROM creative_multiview_bundle WHERE id=?", String.class, bundleId)).isEqualTo("approved");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM digital_asset WHERE id IN (?,?,?) AND status='approved'", Integer.class, frontAssetId, leftAssetId, backAssetId)).isEqualTo(3);
+
+        JsonNode production = request(post("/api/creative/ai/consumer-production/submit"), creator.token(), Map.of(
+                "bundleId", bundleId,
+                "requestType", "sample",
+                "quantity", 1,
+                "purpose", "personal",
+                "recipientName", "三视图测试用户",
+                "recipientPhone", "13800138000",
+                "recipientAddress", "北京市东城区三视图测试路 1 号"));
+        long productionId = field(production, "id").asLong();
+        String productionNo = field(production, "requestNo").asText();
+        assertThat(field(production, "multiviewBundleId").asLong()).isEqualTo(bundleId);
+        assertThat(jdbc.queryForObject("SELECT multiview_bundle_id FROM consumer_production_request WHERE id=?", Long.class, productionId)).isEqualTo(bundleId);
+        assertThat(jdbc.queryForObject("SELECT asset_id FROM consumer_production_request WHERE id=?", Long.class, productionId)).isEqualTo(frontAssetId);
+        assertThat(jdbc.queryForObject("SELECT status FROM consumer_production_request WHERE id=?", String.class, productionId)).isEqualTo("review");
+        assertThat(jdbc.queryForObject("SELECT sample_fee_yuan FROM consumer_production_request WHERE id=?", BigDecimal.class, productionId)).isEqualByComparingTo("2000.00");
+
+        JsonNode myProduction = request(get("/api/creative/ai/consumer-production/my"), creator.token(), null);
+        assertThat(myProduction.size()).isEqualTo(1);
+        assertThat(field(myProduction.get(0), "requestNo").asText()).isEqualTo(productionNo);
+        assertThat(field(myProduction.get(0), "multiviewBundleStatus").asText()).isEqualTo("approved");
+        assertThat(field(myProduction.get(0), "multiviewImages").size()).isEqualTo(3);
+
+        JsonNode adminProduction = request(get("/api/creative/ai/consumer-production/admin/review?status=review"), reviewer.token(), null);
+        assertThat(adminProduction.size()).isEqualTo(1);
+        assertThat(field(adminProduction.get(0), "multiviewBundleId").asLong()).isEqualTo(bundleId);
+        assertThat(field(adminProduction.get(0), "multiviewImages").size()).isEqualTo(3);
+
+        JsonNode productionApproval = request(put("/api/creative/ai/consumer-production/admin/{id}/review", productionId), reviewer.token(), Map.of(
+                "status", "approved", "comment", "已确认三视图打样申请"));
+        assertThat(field(productionApproval, "status").asText()).isEqualTo("approved");
+        assertThat(field(productionApproval, "samplePaymentStatus").asText()).isEqualTo("unpaid");
+        assertThat(jdbc.queryForObject("SELECT status FROM consumer_production_request WHERE id=?", String.class, productionId)).isEqualTo("approved");
+        assertThat(jdbc.queryForObject("SELECT sample_payment_status FROM consumer_production_request WHERE id=?", String.class, productionId)).isEqualTo("unpaid");
+    }
+
     private void createPendingPayment(long userId, String orderNo, String productCode) {
         jdbc.update("INSERT INTO payment_order (order_no,user_id,product_code,amount_fen,credit_amount,channel,status) VALUES (?,?,?,?,?,?,?)",
                 orderNo, userId, productCode, 100L, BigDecimal.ZERO, "wechat_jsapi", "pending");
@@ -394,7 +553,9 @@ class ProductProgressWorkflowIntegrationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS commercial_professional_guidance_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,guidance_no VARCHAR(80) NOT NULL UNIQUE,application_type VARCHAR(30) NOT NULL,application_id BIGINT NOT NULL,user_id BIGINT NOT NULL,asset_id BIGINT,product_template_id BIGINT,request_note VARCHAR(1200),status VARCHAR(30) NOT NULL DEFAULT 'requested',quoted_fee_yuan DECIMAL(12,2),quoted_lead_time VARCHAR(120),operator_comment VARCHAR(1200),guidance_result VARCHAR(3000),payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',payment_order_no VARCHAR(64),paid_at TIMESTAMP,quoted_by VARCHAR(80),quoted_at TIMESTAMP,completed_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS payment_order (id BIGINT AUTO_INCREMENT PRIMARY KEY,order_no VARCHAR(64) NOT NULL UNIQUE,user_id BIGINT NOT NULL,product_code VARCHAR(100) NOT NULL,amount_fen BIGINT NOT NULL DEFAULT 0,credit_amount DECIMAL(12,2) NOT NULL DEFAULT 0,channel VARCHAR(40) NOT NULL,status VARCHAR(30) NOT NULL,provider_order_no VARCHAR(128),provider_response CLOB,paid_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_sample_fee_catalog (id BIGINT AUTO_INCREMENT PRIMARY KEY,product_name VARCHAR(120) NOT NULL UNIQUE,fee_yuan DECIMAL(10,2) NOT NULL,active TINYINT NOT NULL DEFAULT 1)");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,request_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT NOT NULL,request_type VARCHAR(20) NOT NULL,title VARCHAR(200),quantity INT NOT NULL,self_ship_quantity INT NOT NULL,museum_distribution_json CLOB,recipient_name VARCHAR(80),recipient_phone VARCHAR(80),recipient_address VARCHAR(500),note VARCHAR(1000),status VARCHAR(30) NOT NULL DEFAULT 'review',review_comment VARCHAR(1000),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,sample_product_name VARCHAR(120),sample_fee_yuan DECIMAL(10,2),sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',sample_payment_order_no VARCHAR(64),sample_paid_at TIMESTAMP,created_at TIMESTAMP,updated_at TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_multiview_bundle (id BIGINT AUTO_INCREMENT PRIMARY KEY,bundle_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,input_asset_id BIGINT,product_key VARCHAR(120),product_name VARCHAR(180),material VARCHAR(180),product_size VARCHAR(120),view_count INT NOT NULL DEFAULT 3,status VARCHAR(30) NOT NULL DEFAULT 'draft',purpose VARCHAR(30),museum_id VARCHAR(80),museum_name VARCHAR(200),campaign_key VARCHAR(100),note VARCHAR(1200),review_comment VARCHAR(1200),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_multiview_bundle_item (id BIGINT AUTO_INCREMENT PRIMARY KEY,bundle_id BIGINT NOT NULL,view_key VARCHAR(20) NOT NULL,asset_id BIGINT NOT NULL,label VARCHAR(40) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,request_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT NOT NULL,multiview_bundle_id BIGINT,request_type VARCHAR(20) NOT NULL,title VARCHAR(200),quantity INT NOT NULL,self_ship_quantity INT NOT NULL,museum_distribution_json CLOB,recipient_name VARCHAR(80),recipient_phone VARCHAR(80),recipient_address VARCHAR(500),note VARCHAR(1000),status VARCHAR(30) NOT NULL DEFAULT 'review',review_comment VARCHAR(1000),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,sample_product_name VARCHAR(120),sample_fee_yuan DECIMAL(10,2),sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',sample_payment_order_no VARCHAR(64),sample_paid_at TIMESTAMP,created_at TIMESTAMP,updated_at TIMESTAMP)");
     }
 
     private record TestUser(long id, String token) { }

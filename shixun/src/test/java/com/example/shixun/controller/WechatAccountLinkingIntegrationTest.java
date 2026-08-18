@@ -34,6 +34,7 @@ class WechatAccountLinkingIntegrationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS creative_conversation_event (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS creative_quote_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS creative_consignment_application (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_multiview_bundle (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS commercial_application_revision (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS commercial_professional_guidance_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL)");
@@ -46,6 +47,7 @@ class WechatAccountLinkingIntegrationTest {
         jdbc.update("DELETE FROM creative_conversation_event");
         jdbc.update("DELETE FROM creative_quote_request");
         jdbc.update("DELETE FROM creative_consignment_application");
+        jdbc.update("DELETE FROM creative_multiview_bundle");
         jdbc.update("DELETE FROM consumer_production_request");
         jdbc.update("DELETE FROM commercial_application_revision");
         jdbc.update("DELETE FROM commercial_professional_guidance_request");
@@ -63,6 +65,7 @@ class WechatAccountLinkingIntegrationTest {
                 "AST-LINK-1", "之间智造效果图", "image", "draft", wxUserId);
         jdbc.update("INSERT INTO ai_generation_job(job_no,job_type,provider,status,created_by) VALUES (?,?,?,?,?)",
                 "JOB-LINK-1", "text_to_image", "test", "succeeded", wxUserId);
+        jdbc.update("INSERT INTO creative_multiview_bundle(bundle_no,user_id) VALUES (?,?)", "MVB-LINK-1", wxUserId);
 
         Map<String, Object> result = invokeLink(webUserId, "mini-app", "openid-1");
 
@@ -71,6 +74,7 @@ class WechatAccountLinkingIntegrationTest {
                 .isEqualTo(webUserId);
         assertThat(jdbc.queryForObject("SELECT created_by FROM digital_asset WHERE asset_no='AST-LINK-1'", Long.class)).isEqualTo(webUserId);
         assertThat(jdbc.queryForObject("SELECT created_by FROM ai_generation_job WHERE job_no='JOB-LINK-1'", Long.class)).isEqualTo(webUserId);
+        assertThat(jdbc.queryForObject("SELECT user_id FROM creative_multiview_bundle", Long.class)).isEqualTo(webUserId);
     }
 
     private long user(String username) {

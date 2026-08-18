@@ -25,9 +25,29 @@ interface ConsumerAsset {
   createdAt?: string
 }
 
+interface MultiViewBundle {
+  id: number
+  bundleNo?: string
+  userId?: number
+  username?: string
+  productName?: string
+  material?: string
+  productSize?: string
+  viewCount?: number
+  status?: string
+  purpose?: string
+  museumName?: string
+  campaignKey?: string
+  reviewComment?: string
+  createdAt?: string
+  images?: Array<{ view?: string; label?: string; assetId?: number; previewUrl?: string; imageUrl?: string }>
+}
+
 const works = ref<ConsumerAsset[]>([])
+const multiviewBundles = ref<MultiViewBundle[]>([])
 const loading = ref(false)
 const reviewingId = ref<number | null>(null)
+const reviewingBundleId = ref<number | null>(null)
 const keywordUserId = ref('')
 const status = ref<'all' | ReviewStatus>('review')
 const comment = ref('')
@@ -36,11 +56,21 @@ const activeMediaUrl = ref('')
 const professionalSubmissions = ref<any[]>([])
 const reviewingSubmissionId = ref<number | null>(null)
 
+const activeMultiViewBundles = computed(() => multiviewBundles.value.filter(bundle => bundle.status !== 'archived'))
+const visibleWorks = computed(() => {
+  const bundleAssets = new Set(activeMultiViewBundles.value.flatMap(bundle => (bundle.images || []).map(item => String(item.assetId))))
+  return works.value.filter(work => !bundleAssets.has(String(work.id)))
+})
+const visibleMultiViewBundles = computed(() => status.value === 'all'
+  ? activeMultiViewBundles.value
+  : activeMultiViewBundles.value.filter(bundle => bundle.status === status.value))
 const stats = computed(() => {
-  const total = works.value.length
-  const review = works.value.filter(x => x.status === 'review').length
-  const approved = works.value.filter(x => x.status === 'approved').length
-  const rejected = works.value.filter(x => x.status === 'rejected').length
+  const source = visibleWorks.value
+  const bundles = visibleMultiViewBundles.value
+  const total = source.length + bundles.length
+  const review = source.filter(x => x.status === 'review').length + bundles.filter(x => x.status === 'review').length
+  const approved = source.filter(x => x.status === 'approved').length + bundles.filter(x => x.status === 'approved').length
+  const rejected = source.filter(x => x.status === 'rejected').length + bundles.filter(x => x.status === 'rejected').length
   return { total, review, approved, rejected }
 })
 
@@ -94,11 +124,67 @@ async function load() {
     }
     const data = await r.json()
     works.value = Array.isArray(data) ? data : []
+    await loadMultiViewBundles()
     await loadProfessionalSubmissions()
   } catch (e: any) {
     emit('alert', '加载C端作品失败：' + (e?.message || e), 'error')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadMultiViewBundles() {
+  try {
+    const qs = new URLSearchParams({ size: '200' })
+    if (keywordUserId.value.trim()) qs.set('userId', keywordUserId.value.trim())
+    // Load every bundle so its child assets can be hidden from the legacy
+    // single-asset list regardless of the selected status filter. The card
+    // display itself is filtered by visibleMultiViewBundles below.
+    const r = await fetch(`/api/creative/ai/consumer-multiview-bundles/review?${qs}`, { cache: 'no-store' })
+    if (!r.ok) {
+      const err = await r.json().catch(() => null)
+      throw new Error(err?.message || `HTTP ${r.status}`)
+    }
+    const data = await r.json()
+    multiviewBundles.value = Array.isArray(data) ? data : []
+  } catch (e: any) {
+    // Keep the legacy single-asset review list usable while an older server
+    // is being upgraded; the bundle endpoint is required after deployment.
+    multiviewBundles.value = []
+    emit('alert', '加载三视图作品包失败：' + (e?.message || e), 'error')
+  }
+}
+
+function bundleImageUrl(item: NonNullable<MultiViewBundle['images']>[number]) {
+  return item?.previewUrl || item?.imageUrl || ''
+}
+
+function bundlePurpose(bundle: MultiViewBundle) {
+  return bundle.purpose === 'museum_sale' ? `博物馆售卖${bundle.museumName ? ` · ${bundle.museumName}` : ''}` : '个人创作'
+}
+
+async function reviewBundle(bundle: MultiViewBundle, nextStatus: ReviewStatus) {
+  if (nextStatus === 'rejected' && !comment.value.trim()) {
+    emit('alert', '请先在“审核意见”中填写不通过原因', 'error')
+    return
+  }
+  reviewingBundleId.value = bundle.id
+  try {
+    const r = await fetch(`/api/creative/ai/consumer-multiview-bundles/${bundle.id}/review`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: nextStatus, comment: comment.value.trim() }),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => null)
+      throw new Error(err?.message || `HTTP ${r.status}`)
+    }
+    emit('alert', nextStatus === 'approved' ? '三视图作品包已审核通过，可进入打样流程' : nextStatus === 'rejected' ? '三视图作品包已驳回并记录原因' : '三视图作品包已退回待审核', 'success')
+    await load()
+  } catch (e: any) {
+    emit('alert', '三视图作品包审核失败：' + (e?.message || e), 'error')
+  } finally {
+    reviewingBundleId.value = null
   }
 }
 
@@ -239,8 +325,21 @@ onMounted(load)
       <button type="button" :disabled="loading" @click="load">{{ loading ? '查询中…' : '查询作品' }}</button>
     </section>
 
-    <section class="work-grid" v-if="works.length">
-      <article v-for="w in works" :key="w.id" class="work-card">
+    <section v-if="visibleMultiViewBundles.length" class="multiview-review-panel">
+      <header class="multiview-review-header"><div><span>COMPLETE PRODUCT REVIEW</span><h2>三视图作品包审核</h2><p>正面、侧面和背面作为一个完整产品统一审核。通过后用户才能申请打样。</p></div><b>{{ visibleMultiViewBundles.length }} <small>个作品包</small></b></header>
+      <div class="multiview-review-grid">
+        <article v-for="bundle in visibleMultiViewBundles" :key="bundle.id" class="multiview-review-card">
+          <div class="bundle-review-top"><div><strong>{{ bundle.productName || '三视图文创作品' }}</strong><small>{{ bundle.bundleNo || `#${bundle.id}` }} · 用户 {{ bundle.userId || '-' }} · {{ bundle.username || '-' }}</small></div><span class="status-pill" :class="statusClass(bundle.status)">{{ statusText[bundle.status || 'review'] || bundle.status }}</span></div>
+          <div class="bundle-review-images"><div v-for="image in bundle.images || []" :key="image.assetId"><img v-if="bundleImageUrl(image)" :src="bundleImageUrl(image)" :alt="image.label || '视图'" /><span v-else>{{ image.label || '视图' }}</span><small>{{ image.label }}</small></div></div>
+          <div class="bundle-review-meta"><span>{{ bundle.material || '材质待定' }}</span><span>{{ bundle.productSize || '尺寸待定' }}</span><span>{{ bundlePurpose(bundle) }}</span></div>
+          <p v-if="bundle.reviewComment" class="bundle-review-note">审核意见：{{ bundle.reviewComment }}</p>
+          <div class="actions"><template v-if="bundle.status === 'review'"><button class="approve" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'approved')">通过整包</button><button class="reject" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'rejected')">不通过</button></template><button v-if="['approved', 'rejected'].includes(String(bundle.status))" class="outline" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'review')">退回待审</button></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="work-grid" v-if="visibleWorks.length">
+      <article v-for="w in visibleWorks" :key="w.id" class="work-card">
         <div class="preview" @click="openPreview(w)">
           <img v-if="w.assetType === 'image' && previewUrl(w)" :src="previewUrl(w)" alt="C端作品" />
           <img v-else-if="w.assetType === 'model' && w.previewUrl" :src="w.previewUrl" alt="3D模型预览" />
@@ -279,7 +378,7 @@ onMounted(load)
       </article>
     </section>
 
-    <section v-else class="empty-card">
+    <section v-else-if="!visibleMultiViewBundles.length" class="empty-card">
       <b>{{ loading ? '正在加载作品…' : '暂无匹配作品' }}</b>
       <span>可以切换状态或输入其他用户 ID 再查询。</span>
     </section>
@@ -350,4 +449,5 @@ onMounted(load)
 
 <style scoped>
 .professional-review-panel{overflow:hidden;border:1px solid rgba(112,139,119,.24);border-radius:24px;background:linear-gradient(145deg,#f8fbf7,#edf4ed);box-shadow:0 15px 37px rgba(67,92,72,.07)}.professional-review-panel>header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:21px 23px;border-bottom:1px solid rgba(126,151,130,.17)}.professional-review-panel header span{display:block;color:#5f7b69;font-size:10px;font-weight:950;letter-spacing:.14em}.professional-review-panel h2{margin:6px 0;color:#34483b;font-size:22px}.professional-review-panel header p{max-width:620px;margin:0;color:#718072;font-size:12px;line-height:1.6}.professional-review-panel>header>b{display:grid;place-items:center;min-width:82px;min-height:65px;border:1px solid #d4e2d4;border-radius:16px;background:#fffefa;color:#476958;font-size:25px}.professional-review-panel>header>b small{color:#839185;font-size:10px}.submission-table-wrap{overflow:auto}.submission-table-wrap table{width:100%;min-width:980px;border-collapse:collapse}.submission-table-wrap th,.submission-table-wrap td{padding:15px 17px;border-bottom:1px solid rgba(126,151,130,.16);text-align:left;vertical-align:top}.submission-table-wrap th{background:rgba(255,255,255,.38);color:#617366;font-size:11px}.submission-table-wrap td strong,.submission-table-wrap td small{display:block}.submission-table-wrap td strong{max-width:260px;overflow:hidden;color:#33483b;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.submission-table-wrap td small{margin-top:5px;color:#7a887d;font-size:11px;line-height:1.45}.submission-table-wrap td p{max-width:270px;margin:8px 0 0;color:#6e786e;font-size:11px;line-height:1.5}.submission-status{display:inline-flex;padding:6px 8px;border-radius:999px;font-size:11px;font-weight:900}.submission-status.wait{color:#9a6700;background:#fff4d8}.submission-status.ok{color:#23734e;background:#e7f7ed}.submission-status.bad{color:#b42318;background:#ffeded}.review-note{max-width:190px}.submission-actions{display:flex;flex-wrap:wrap;gap:7px}.submission-actions button{height:35px;padding:0 10px;border-radius:10px;font-size:11px}.submission-empty{padding:38px 20px;color:#748174;text-align:center;font-size:13px}@media(max-width:640px){.professional-review-panel>header{padding:18px}.professional-review-panel h2{font-size:19px}.professional-review-panel>header>b{min-width:64px;min-height:54px;font-size:21px}}
+.multiview-review-panel{overflow:hidden;border:1px solid rgba(80,118,92,.24);border-radius:20px;background:#f7fbf7;box-shadow:0 12px 30px rgba(35,70,44,.06)}.multiview-review-header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:20px 22px;border-bottom:1px solid #dce9de}.multiview-review-header span{color:#62806a;font-size:10px;font-weight:900;letter-spacing:.14em}.multiview-review-header h2{margin:6px 0;color:#334b3b;font-size:21px}.multiview-review-header p{margin:0;color:#718275;font-size:12px;line-height:1.55}.multiview-review-header>b{display:grid;place-items:center;min-width:80px;min-height:62px;border:1px solid #d3e2d5;border-radius:14px;background:#fff;color:#477058;font-size:23px}.multiview-review-header>b small{color:#829286;font-size:10px}.multiview-review-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:14px;padding:16px}.multiview-review-card{padding:15px;border:1px solid #dce8dd;border-radius:15px;background:#fff}.bundle-review-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.bundle-review-top>div{display:flex;min-width:0;flex-direction:column;gap:5px}.bundle-review-top strong{overflow:hidden;color:#304a38;font-size:15px;text-overflow:ellipsis;white-space:nowrap}.bundle-review-top small{color:#819087;font-size:11px}.bundle-review-images{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:12px}.bundle-review-images>div{overflow:hidden;border:1px solid #e1eae2;border-radius:9px;background:#f5f8f5}.bundle-review-images img,.bundle-review-images span{display:block;width:100%;height:145px;object-fit:contain;background:#edf2ed}.bundle-review-images span{display:grid;place-items:center;color:#839287;font-size:12px}.bundle-review-images small{display:block;padding:6px;color:#708174;font-size:11px;text-align:center}.bundle-review-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}.bundle-review-meta span{padding:5px 7px;border-radius:7px;background:#f0f5f0;color:#607768;font-size:11px}.bundle-review-note{margin:10px 0 0;padding:9px 10px;border-left:3px solid #bd6c53;border-radius:0 8px 8px 0;background:#fff4ef;color:#925542;font-size:12px;line-height:1.5}.multiview-review-card .actions{margin-top:12px}.multiview-review-card .actions button{height:35px;padding:0 10px;border-radius:9px;font-size:11px}@media(max-width:640px){.multiview-review-header{padding:17px}.multiview-review-grid{grid-template-columns:1fr;padding:12px}.bundle-review-images img,.bundle-review-images span{height:112px}}
 </style>

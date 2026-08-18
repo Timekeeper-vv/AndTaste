@@ -25,6 +25,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -2684,9 +2685,10 @@ public class CreativeAiController {
         int limit = Math.max(1, Math.min(size, 500));
         if(!isCreativeAdmin(principal)){
             Long userId = requirePersistedAuthenticatedUser();
+            String ownerFilter = "created_by=? AND NOT EXISTS (SELECT 1 FROM creative_multiview_bundle_item bi JOIN creative_multiview_bundle mb ON mb.id=bi.bundle_id WHERE bi.asset_id=digital_asset.id AND mb.status<>'archived')";
             List<Map<String,Object>> rows = type != null && !type.isBlank()
-                    ? jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE asset_type=? AND created_by=? ORDER BY id DESC LIMIT ?", type, userId, limit)
-                    : jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE created_by=? ORDER BY id DESC LIMIT ?", userId, limit);
+                    ? jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE asset_type=? AND "+ownerFilter+" ORDER BY id DESC LIMIT ?", type, userId, limit)
+                    : jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE "+ownerFilter+" ORDER BY id DESC LIMIT ?", userId, limit);
             addSignedAssetUrls(rows);
             return rows;
         }
@@ -2702,7 +2704,11 @@ public class CreativeAiController {
                                                          @RequestParam(required=false) String status,
                                                          @RequestParam(required=false,defaultValue="100") int size) {
         requireCreativeAdmin();
-        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND (a.asset_type='model' OR COALESCE(a.source_type,'ai_generated')<>'upload')");
+        // Multi-view child images are reviewable only through their bundle.
+        // Excluding them here keeps the legacy single-asset list from showing
+        // the same product three additional times, even if the bundle panel
+        // is filtered or temporarily unavailable in the browser.
+        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND (a.asset_type='model' OR COALESCE(a.source_type,'ai_generated')<>'upload') AND NOT EXISTS (SELECT 1 FROM creative_multiview_bundle_item bi JOIN creative_multiview_bundle mb ON mb.id=bi.bundle_id WHERE bi.asset_id=a.id AND mb.status<>'archived')");
         List<Object> args=new ArrayList<>();
         if(userId!=null){sql.append(" AND a.created_by=?");args.add(userId);}
         if(!blank(status)){sql.append(" AND a.status=?");args.add(status);}
@@ -2792,6 +2798,313 @@ public class CreativeAiController {
             out.put("message", "approved".equals(status) ? "审核已通过，作品已进入C端用户端库存" : "审核状态已更新");
         }
         return out;
+    }
+
+    /**
+     * A multi-view generation produces several digital assets, but the user
+     * must submit them as one reviewable product.  The bundle is deliberately
+     * separate from the assets so an administrator cannot approve only one
+     * angle and accidentally unlock production for an incomplete product.
+     */
+    @PostMapping("/consumer-multiview-bundles")
+    @Transactional
+    public Map<String,Object> createConsumerMultiViewBundle(@RequestBody Map<String,Object> body) {
+        Long userId = requireCurrentConsumerUser();
+        Long inputAssetId = numberAsLong(body == null ? null : body.get("inputAssetId"));
+        if (inputAssetId == null) throw new IllegalArgumentException("缺少三视图参考作品");
+        Map<String,Long> assetIds = parseMultiViewAssetIds(body == null ? null : body.get("images"));
+        int viewCount = parsePositiveInt(body == null ? null : body.get("viewCount"), 3);
+        List<String> requiredViews = requiredMultiViewKeys(viewCount);
+        if (assetIds.size() != requiredViews.size() || !assetIds.keySet().containsAll(requiredViews)) {
+            throw new IllegalArgumentException(viewCount == 3 ? "三视图必须包含正面、侧面和背面" : "四视图缺少必要视角");
+        }
+        requireAssetAccess(inputAssetId);
+        for (String view : requiredViews) {
+            Long assetId = assetIds.get(view);
+            requireAssetAccess(assetId);
+            Map<String,Object> asset = jdbc.queryForMap(
+                    "SELECT asset_type assetType,created_by createdBy FROM digital_asset WHERE id=?", assetId);
+            if (!"image".equals(String.valueOf(asset.get("assetType")))) {
+                throw new IllegalArgumentException("三视图明细必须是图片资产");
+            }
+            if (!(asset.get("createdBy") instanceof Number)
+                    || ((Number) asset.get("createdBy")).longValue() != userId) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权使用其他用户的视图资产");
+            }
+        }
+
+        String productKey = body == null ? "" : str(body.get("productKey")).trim();
+        String productName = body == null ? "" : str(body.get("productName")).trim();
+        String material = body == null ? "" : str(body.get("material")).trim();
+        String productSize = normalizedProductSize(body == null ? "" : str(body.get("productSize")));
+        synchronized (this) {
+            List<Map<String,Object>> existingRows = jdbc.queryForList(
+                    "SELECT id,status FROM creative_multiview_bundle WHERE user_id=? AND input_asset_id=? ORDER BY id DESC LIMIT 1",
+                    userId, inputAssetId);
+            Long bundleId = existingRows.isEmpty() ? null : numberAsLong(existingRows.get(0).get("id"));
+            if (bundleId != null) {
+                String existingStatus = str(existingRows.get(0).get("status"));
+                if (("review".equals(existingStatus) || "approved".equals(existingStatus))
+                        && !multiViewBundleItemsMatch(bundleId, assetIds)) {
+                    throw new IllegalStateException("当前参考作品已有一个正在审核或已通过的三视图作品包");
+                }
+                if (!multiViewBundleItemsMatch(bundleId, assetIds)
+                        && !Set.of("draft", "rejected").contains(existingStatus)) {
+                    throw new IllegalStateException("当前三视图作品包状态不允许替换视图");
+                }
+                if (!multiViewBundleItemsMatch(bundleId, assetIds)) {
+                    jdbc.update("DELETE FROM creative_multiview_bundle_item WHERE bundle_id=?", bundleId);
+                    insertMultiViewBundleItems(bundleId, assetIds);
+                }
+                if (Set.of("draft", "rejected").contains(existingStatus)) {
+                    jdbc.update("UPDATE creative_multiview_bundle SET product_key=?,product_name=?,material=?,product_size=?,view_count=?,status='draft',review_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE id=? AND user_id=?",
+                            blank(productKey) ? null : productKey, blank(productName) ? null : productName,
+                            blank(material) ? null : material, blank(productSize) ? null : productSize,
+                            viewCount, bundleId, userId);
+                }
+            } else {
+                String bundleNo = no("MVB");
+                jdbc.update(con -> {
+                    PreparedStatement ps = con.prepareStatement(
+                        "INSERT INTO creative_multiview_bundle (bundle_no,user_id,input_asset_id,product_key,product_name,material,product_size,view_count,status) VALUES (?,?,?,?,?,?,?,?,'draft')",
+                            Statement.NO_GENERATED_KEYS);
+                    ps.setString(1, bundleNo); ps.setLong(2, userId); ps.setLong(3, inputAssetId);
+                    ps.setString(4, blank(productKey) ? null : productKey);
+                    ps.setString(5, blank(productName) ? null : productName);
+                    ps.setString(6, blank(material) ? null : material);
+                    ps.setString(7, blank(productSize) ? null : productSize);
+                    ps.setInt(8, viewCount);
+                    return ps;
+                });
+                bundleId = jdbc.queryForObject(
+                        "SELECT id FROM creative_multiview_bundle WHERE bundle_no=?",
+                        Long.class, bundleNo);
+                insertMultiViewBundleItems(bundleId, assetIds);
+            }
+            return multiViewBundleResponse(bundleId);
+        }
+    }
+
+    @GetMapping("/consumer-multiview-bundles/my")
+    public List<Map<String,Object>> myConsumerMultiViewBundles() {
+        Long userId = requireCurrentConsumerUser();
+        List<Long> ids = jdbc.queryForList(
+                "SELECT id FROM creative_multiview_bundle WHERE user_id=? AND status<>'archived' ORDER BY updated_at DESC,id DESC LIMIT 200",
+                Long.class, userId);
+        List<Map<String,Object>> result = new ArrayList<>();
+        for (Long id : ids) result.add(multiViewBundleResponse(id));
+        return result;
+    }
+
+    @PutMapping("/consumer-multiview-bundles/{id}/submit-review")
+    @Transactional
+    public Map<String,Object> submitConsumerMultiViewBundleReview(@PathVariable Long id,
+                                                                   @RequestBody(required=false) Map<String,String> body) {
+        Long userId = requireCurrentConsumerUser();
+        Map<String,Object> bundle = queryOwnedMultiViewBundle(id, userId);
+        String currentStatus = str(bundle.get("status"));
+        if (!Set.of("draft", "rejected").contains(currentStatus)) {
+            throw new IllegalStateException("该三视图作品包已经提交审核或审核通过，请勿重复提交");
+        }
+        Map<String,Long> assetIds = multiViewBundleItemIds(id);
+        int viewCount = ((Number) bundle.getOrDefault("viewCount", 3)).intValue();
+        List<String> requiredViews = requiredMultiViewKeys(viewCount);
+        if (assetIds.size() != requiredViews.size() || !assetIds.keySet().containsAll(requiredViews)) {
+            throw new IllegalStateException("三视图不完整，暂时不能提交审核");
+        }
+
+        String purpose = body == null ? "personal" : nullToEmpty(body.get("purpose")).trim();
+        if (blank(purpose)) purpose = "personal";
+        if (!Set.of("personal", "museum_sale").contains(purpose)) {
+            throw new IllegalArgumentException("创作目的只能是个人收藏/送礼或博物馆售卖");
+        }
+        String museumId = body == null ? "" : nullToEmpty(body.get("museumId")).trim();
+        String museumName = "";
+        if ("museum_sale".equals(purpose)) {
+            Map<String,Object> museum = findConsumerMuseum(museumId);
+            if (museum == null) throw new IllegalArgumentException("博物馆售卖作品必须选择投放博物馆");
+            museumName = str(museum.get("name"));
+        } else {
+            museumId = "";
+        }
+        String campaignKey = body == null ? "" : nullToEmpty(body.get("campaignKey")).trim();
+        CampaignDefinition campaign = blank(campaignKey) ? null : campaignDefinition(campaignKey);
+        if (campaign != null) {
+            if (!"museum_sale".equals(purpose) || blank(museumId)) {
+                throw new IllegalArgumentException("优先征集任务须按博物馆售卖方向提交");
+            }
+            Map<String,Object> museum = findConsumerMuseum(museumId);
+            if (museum == null || !campaign.channelCode().equals(String.valueOf(museum.get("channelCode")))) {
+                throw new IllegalArgumentException("该优先征集任务须选择对应的目标博物馆或景区");
+            }
+        }
+        String note = body == null ? "" : nullToEmpty(body.get("note"));
+        String auditTag = ";三视图作品包=" + str(bundle.get("bundleNo")) + ";用户提交审核;用途=" + purpose
+                + (blank(museumName) ? "" : ";审批出处=" + museumName)
+                + (campaign == null ? "" : ";活动投稿=" + campaign.key())
+                + (blank(note) ? "" : "-" + note);
+        Long primaryAssetId = assetIds.get("front");
+        jdbc.update("UPDATE creative_multiview_bundle SET status='review',purpose=?,museum_id=?,museum_name=?,campaign_key=?,note=?,review_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE id=? AND user_id=?",
+                purpose, blank(museumId) ? null : museumId, blank(museumName) ? null : museumName,
+                campaign == null ? null : campaign.key(), blank(note) ? null : note, id, userId);
+        for (Long assetId : assetIds.values()) {
+            jdbc.update("UPDATE digital_asset SET status='review',tags=CONCAT(COALESCE(tags,''),?) WHERE id=? AND created_by=?",
+                    auditTag, assetId, userId);
+        }
+        if (campaign != null) createOrResetCampaignParticipationForBundle(userId, campaign, primaryAssetId);
+        Map<String,Object> out = multiViewBundleResponse(id);
+        out.put("success", true);
+        out.put("message", campaign == null ? "三视图作品包已提交人工审核" : "三视图作品包已提交优先征集审核，通过后积分将自动到账");
+        return out;
+    }
+
+    @GetMapping("/consumer-multiview-bundles/review")
+    public List<Map<String,Object>> consumerMultiViewBundlesReview(@RequestParam(required=false) String status,
+                                                                   @RequestParam(required=false) Long userId,
+                                                                   @RequestParam(required=false,defaultValue="200") int size) {
+        requireCreativeAdmin();
+        StringBuilder sql = new StringBuilder("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,u.username,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b JOIN user u ON u.id=b.user_id WHERE 1=1");
+        List<Object> args = new ArrayList<>();
+        if (!blank(status) && Set.of("draft", "review", "approved", "rejected", "archived").contains(status.trim())) {
+            sql.append(" AND b.status=?"); args.add(status.trim());
+        }
+        if (userId != null) { sql.append(" AND b.user_id=?"); args.add(userId); }
+        sql.append(" ORDER BY b.updated_at DESC,b.id DESC LIMIT ?");
+        args.add(Math.max(1, Math.min(size, 500)));
+        List<Map<String,Object>> rows = jdbc.queryForList(sql.toString(), args.toArray());
+        for (Map<String,Object> row : rows) {
+            Map<String,Object> full = multiViewBundleResponse(numberAsLong(row.get("id")));
+            row.put("images", full.get("images"));
+        }
+        return rows;
+    }
+
+    @PutMapping("/consumer-multiview-bundles/{id}/review")
+    @Transactional
+    public Map<String,Object> reviewConsumerMultiViewBundle(@PathVariable Long id,
+                                                             @RequestBody Map<String,String> body) {
+        requireCreativeAdmin();
+        String status = body == null ? "" : nullToEmpty(body.get("status")).trim();
+        if (!Set.of("approved", "rejected", "review").contains(status)) {
+            throw new IllegalArgumentException("审核状态只能是 approved / rejected / review");
+        }
+        String comment = body == null ? "" : nullToEmpty(body.get("comment"));
+        if ("rejected".equals(status) && blank(comment)) throw new IllegalArgumentException("三视图审核不通过时必须填写原因");
+        Map<String,Object> bundle;
+        try {
+            bundle = jdbc.queryForMap("SELECT id,status FROM creative_multiview_bundle WHERE id=?", id);
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new IllegalArgumentException("三视图作品包不存在");
+        }
+        String currentStatus = str(bundle.get("status"));
+        if (Set.of("approved", "rejected").contains(status) && !"review".equals(currentStatus)) {
+            throw new IllegalStateException("只有已提交的三视图作品包才能完成审核");
+        }
+        if ("review".equals(status) && !Set.of("approved", "rejected").contains(currentStatus)) {
+            throw new IllegalStateException("草稿必须由用户提交后才能进入人工审核");
+        }
+        Map<String,Long> assetIds = multiViewBundleItemIds(id);
+        if (assetIds.size() < 3) throw new IllegalStateException("三视图作品包明细不完整，无法审核");
+        String operator = authenticatedPrincipal().username();
+        jdbc.update("UPDATE creative_multiview_bundle SET status=?,review_comment=?,reviewed_by=?,reviewed_at=?,updated_at=NOW() WHERE id=?",
+                status, blank(comment) ? null : comment, blank(operator) ? "admin" : operator,
+                "review".equals(status) ? null : LocalDateTime.now(), id);
+        for (Long assetId : assetIds.values()) {
+            jdbc.update("UPDATE digital_asset SET status=?,tags=CONCAT(COALESCE(tags,''),?) WHERE id=?",
+                    status, ";三视图包审核=" + status + (blank(comment) ? "" : "-" + comment), assetId);
+        }
+        BigDecimal reward = settleCampaignRewardForReview(assetIds.get("front"), status, blank(operator) ? "admin" : operator);
+        Map<String,Object> out = multiViewBundleResponse(id);
+        out.put("success", true); out.put("status", status); out.put("campaignReward", reward);
+        out.put("message", "approved".equals(status) ? "三视图作品包审核通过，可申请打样" : "rejected".equals(status) ? "三视图作品包已驳回" : "三视图作品包已退回待审核");
+        return out;
+    }
+
+    private List<String> requiredMultiViewKeys(int viewCount) {
+        if (viewCount == 3) return List.of("front", "left", "back");
+        if (viewCount == 4) return List.of("front", "left", "back", "right");
+        throw new IllegalArgumentException("作品包只支持三视图或四视图");
+    }
+
+    private Map<String,Object> findConsumerMuseum(String museumId) {
+        for (Map<String,Object> item : consumerProductionMuseums()) {
+            if (museumId.equals(String.valueOf(item.get("id")))) return item;
+        }
+        return null;
+    }
+
+    private Map<String,Long> parseMultiViewAssetIds(Object raw) {
+        Map<String,Long> ids = new LinkedHashMap<>();
+        if (raw instanceof Map<?,?> map) {
+            for (Map.Entry<?,?> entry : map.entrySet()) {
+                Long id = numberAsLong(entry.getValue());
+                if (id != null) ids.put(String.valueOf(entry.getKey()).toLowerCase(Locale.ROOT), id);
+            }
+        } else if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                if (!(item instanceof Map<?,?> map)) continue;
+                Long id = numberAsLong(map.get("assetId"));
+                String view = str(map.get("view")).toLowerCase(Locale.ROOT);
+                if (id != null && !blank(view)) ids.put(view, id);
+            }
+        }
+        return ids;
+    }
+
+    private void insertMultiViewBundleItems(Long bundleId, Map<String,Long> assetIds) {
+        Map<String,String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
+        for (Map.Entry<String,Long> entry : assetIds.entrySet()) {
+            jdbc.update("INSERT INTO creative_multiview_bundle_item (bundle_id,view_key,asset_id,label) VALUES (?,?,?,?)",
+                    bundleId, entry.getKey(), entry.getValue(), labels.getOrDefault(entry.getKey(), entry.getKey()));
+        }
+    }
+
+    private Map<String,Long> multiViewBundleItemIds(Long bundleId) {
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT view_key viewKey,asset_id assetId FROM creative_multiview_bundle_item WHERE bundle_id=? ORDER BY id", bundleId);
+        Map<String,Long> result = new LinkedHashMap<>();
+        for (Map<String,Object> row : rows) {
+            Long assetId = numberAsLong(row.get("assetId"));
+            if (assetId != null) result.put(str(row.get("viewKey")).toLowerCase(Locale.ROOT), assetId);
+        }
+        return result;
+    }
+
+    private boolean multiViewBundleItemsMatch(Long bundleId, Map<String,Long> expected) {
+        return multiViewBundleItemIds(bundleId).equals(expected);
+    }
+
+    private Map<String,Object> queryOwnedMultiViewBundle(Long id, Long userId) {
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT id,view_count viewCount,status,product_name productName FROM creative_multiview_bundle WHERE id=? AND user_id=?", id, userId);
+        if (rows.isEmpty()) throw new IllegalArgumentException("三视图作品包不存在或无权访问");
+        return jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment FROM creative_multiview_bundle b WHERE b.id=?", id);
+    }
+
+    private Map<String,Object> multiViewBundleResponse(Long bundleId) {
+        Map<String,Object> row = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b WHERE b.id=?", bundleId);
+        List<Map<String,Object>> items = jdbc.queryForList("SELECT i.view_key view,i.label,i.asset_id assetId,a.title assetTitle,a.status assetStatus FROM creative_multiview_bundle_item i JOIN digital_asset a ON a.id=i.asset_id WHERE i.bundle_id=? ORDER BY CASE i.view_key WHEN 'front' THEN 1 WHEN 'left' THEN 2 WHEN 'back' THEN 3 WHEN 'right' THEN 4 ELSE 5 END,i.id", bundleId);
+        for (Map<String,Object> item : items) {
+            Long assetId = numberAsLong(item.get("assetId"));
+            if (assetId != null) addSignedAssetFields(item, assetId, "image");
+        }
+        row.put("bundleId", row.get("id"));
+        row.put("images", items);
+        row.put("viewCount", items.size());
+        return row;
+    }
+
+    private void createOrResetCampaignParticipationForBundle(Long userId, CampaignDefinition campaign, Long assetId) {
+        List<Map<String,Object>> existing = jdbc.queryForList("SELECT id,asset_id assetId,status FROM consumer_campaign_reward WHERE user_id=? AND campaign_key=? LIMIT 1", userId, campaign.key());
+        if (existing.isEmpty()) {
+            createCampaignParticipation(userId, campaign, assetId);
+            return;
+        }
+        Map<String,Object> row = existing.get(0);
+        if ("rewarded".equals(str(row.get("status")))) throw new IllegalStateException("该优先征集任务已经发放过积分");
+        if (numberAsLong(row.get("assetId")) != null && !Objects.equals(numberAsLong(row.get("assetId")), assetId)) {
+            throw new IllegalStateException("该优先征集任务已使用其他作品投稿");
+        }
+        jdbc.update("UPDATE consumer_campaign_reward SET asset_id=?,status='pending_review',reward_amount=?,reviewed_by=NULL,reviewed_at=NULL,credit_transaction_id=NULL WHERE id=?",
+                assetId, campaign.rewardAmount(), row.get("id"));
     }
 
     @GetMapping("/consumer-production/museums")
@@ -3000,7 +3313,7 @@ public class CreativeAiController {
     public List<Map<String,Object>> myConsumerProductionRequests(@RequestParam(required=false) String type,
                                                                  @RequestParam(required=false,defaultValue="100") int size) {
         Long userId = requireCurrentConsumerUser();
-        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id WHERE r.user_id=?");
+        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo,b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id WHERE r.user_id=?");
         List<Object> args=new ArrayList<>();args.add(userId);
         if(!blank(type)&&Set.of("sample","bulk").contains(type)){sql.append(" AND r.request_type=?");args.add(type);}
         sql.append(" ORDER BY r.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,300)));
@@ -3010,18 +3323,30 @@ public class CreativeAiController {
     @PostMapping("/consumer-production/submit")
     public Map<String,Object> submitConsumerProductionRequest(@RequestBody Map<String,Object> body) throws Exception {
         Long userId = requireCurrentConsumerUser();
-        Long assetId=body==null||body.get("assetId")==null?null:Long.parseLong(String.valueOf(body.get("assetId")));
-        if(assetId==null) throw new IllegalArgumentException("请选择审核通过的3D作品");
+        Long bundleId=body==null?null:numberAsLong(body.get("bundleId"));
+        Long assetId=body==null?null:numberAsLong(body.get("assetId"));
+        Map<String,Object> bundle = null;
+        if (bundleId != null) {
+            bundle = queryOwnedMultiViewBundle(bundleId, userId);
+            if (!"approved".equals(str(bundle.get("status")))) {
+                throw new IllegalStateException("三视图作品包需先通过审核，才能申请打样");
+            }
+            Map<String,Long> bundleItems = multiViewBundleItemIds(bundleId);
+            assetId = bundleItems.get("front");
+            if (assetId == null || bundleItems.size() < 3) throw new IllegalStateException("三视图作品包不完整，无法申请打样");
+        }
+        if(assetId==null) throw new IllegalArgumentException("请选择审核通过的作品");
         requireAssetAccess(assetId);
         String requestType=body==null||body.get("requestType")==null?"":String.valueOf(body.get("requestType")).trim();
         if(!Set.of("sample","bulk").contains(requestType)) throw new IllegalArgumentException("申请类型只能是打样或批量生产");
+        if(bundleId != null && !"sample".equals(requestType)) throw new IllegalStateException("三视图作品包审核通过后需先申请打样，确认实物后再进入批量生产");
         Map<String,Object> asset=jdbc.queryForMap("SELECT id,title,asset_type assetType,status,created_by createdBy,metadata_json metadataJson FROM digital_asset WHERE id=?",assetId);
-        if(!"model".equals(String.valueOf(asset.get("assetType")))) throw new IllegalStateException("第一版仅支持3D模型作品提交打样/生产申请");
-        if(!"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
+        if(bundleId == null && !"model".equals(String.valueOf(asset.get("assetType")))) throw new IllegalStateException("单图流程仅支持审核通过的3D模型提交打样/生产申请");
+        if(bundleId == null && !"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
         if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
         String requestedSampleProductName = body==null || body.get("sampleProductName")==null ? "" : String.valueOf(body.get("sampleProductName")).trim();
-        String boundProductName = productNameFromAssetMetadata(asset.get("metadataJson"));
+        String boundProductName = bundleId == null ? productNameFromAssetMetadata(asset.get("metadataJson")) : str(bundle.get("productName"));
         // Current mini-program creation binds product identity to every generated
         // asset. Prefer that server-stored identity so a user cannot accidentally
         // turn a selected product into a different sample request at the last step.
@@ -3058,23 +3383,23 @@ public class CreativeAiController {
         if("museum_sale".equals(purpose) && museumQty!=quantity) throw new IllegalArgumentException("博物馆售卖用途必须将全部数量投放到所选博物馆");
         if("personal".equals(purpose) && selfQty!=quantity) throw new IllegalArgumentException("个人收藏/送礼用途必须将全部数量寄送给个人，不支持拆分");
         String title=body==null||body.get("title")==null?"":String.valueOf(body.get("title"));
-        if(blank(title)) title=("sample".equals(requestType)?"C端打样申请-":"C端批量生产申请-")+asset.get("title");
+        if(blank(title)) title=("sample".equals(requestType)?"C端打样申请-":"C端批量生产申请-")+(bundleId == null ? asset.get("title") : firstNonBlank(str(bundle.get("productName")), "三视图作品"));
         String requestNo=no("sample".equals(requestType)?"CYP":"CPR");
-        KeyHolder kh=new GeneratedKeyHolder();
-        Long finalUserId=userId; Long finalAssetId=assetId; String finalRequestType=requestType; int finalQuantity=quantity;
+        Long finalUserId=userId; Long finalAssetId=assetId; Long finalBundleId=bundleId; String finalRequestType=requestType; int finalQuantity=quantity;
         int finalSelfQty=selfQty; String finalTitle=title; String distributionJson=mapper.writeValueAsString(museumDistribution); BigDecimal finalSampleFeeYuan=sampleFeeYuan;
         String recipientName=body.get("recipientName")==null?"":String.valueOf(body.get("recipientName"));
         String recipientPhone=body.get("recipientPhone")==null?"":String.valueOf(body.get("recipientPhone"));
         String recipientAddress=body.get("recipientAddress")==null?"":String.valueOf(body.get("recipientAddress"));
         String note=body.get("note")==null?"":String.valueOf(body.get("note"));
         jdbc.update(con -> {
-            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status,sample_product_name,sample_fee_yuan,sample_payment_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'review',?,?,?)",Statement.RETURN_GENERATED_KEYS);
-            ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);ps.setString(4,finalRequestType);ps.setString(5,finalTitle);ps.setInt(6,finalQuantity);ps.setInt(7,finalSelfQty);ps.setString(8,distributionJson);ps.setString(9,recipientName);ps.setString(10,recipientPhone);ps.setString(11,recipientAddress);ps.setString(12,note);ps.setString(13,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(14, java.sql.Types.DECIMAL); else ps.setBigDecimal(14, finalSampleFeeYuan); ps.setString(15, "not_required");
+            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,multiview_bundle_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status,sample_product_name,sample_fee_yuan,sample_payment_status) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,?,'review',?,?,?)",Statement.NO_GENERATED_KEYS);
+            ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);if(finalBundleId==null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4,finalBundleId);ps.setString(5,finalRequestType);ps.setString(6,finalTitle);ps.setInt(7,finalQuantity);ps.setInt(8,finalSelfQty);ps.setString(9,distributionJson);ps.setString(10,recipientName);ps.setString(11,recipientPhone);ps.setString(12,recipientAddress);ps.setString(13,note);ps.setString(14,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(15, java.sql.Types.DECIMAL); else ps.setBigDecimal(15, finalSampleFeeYuan); ps.setString(16, "not_required");
             return ps;
-        },kh);
-        Long id=Objects.requireNonNull(kh.getKey()).longValue();
+        });
+        Long id=jdbc.queryForObject("SELECT id FROM consumer_production_request WHERE request_no=?", Long.class, requestNo);
         Map<String,Object> result = new LinkedHashMap<>();
         result.put("success",true); result.put("id",id); result.put("requestNo",requestNo); result.put("status","review");
+        if (bundleId != null) { result.put("multiviewBundleId", bundleId); result.put("multiviewBundleNo", bundle.get("bundleNo")); }
         if ("sample".equals(requestType)) {
             result.put("sampleProductName", sampleProductName);
             result.put("sampleFeeYuan", sampleFeeYuan);
@@ -3106,7 +3431,7 @@ public class CreativeAiController {
                                                              @RequestParam(required=false) Long userId,
                                                              @RequestParam(required=false,defaultValue="200") int size) {
         requireCreativeAdmin();
-        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id WHERE 1=1");
+        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo,b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id WHERE 1=1");
         List<Object> args=new ArrayList<>();
         if(!blank(type)&&Set.of("sample","bulk").contains(type)){sql.append(" AND r.request_type=?");args.add(type);}
         if(!blank(status)&&Set.of("review","approved","rejected").contains(status)){sql.append(" AND r.status=?");args.add(status);}
@@ -4368,6 +4693,14 @@ public class CreativeAiController {
                 if(json==null||blank(String.valueOf(json))) r.put("museumDistribution",List.of());
                 else r.put("museumDistribution",mapper.readValue(String.valueOf(json),List.class));
             } catch(Exception ignored) { r.put("museumDistribution",List.of()); }
+            Long bundleId = numberAsLong(r.get("multiviewBundleId"));
+            if (bundleId != null) {
+                Map<String,Object> bundle = multiViewBundleResponse(bundleId);
+                r.put("multiviewImages", bundle.get("images"));
+                r.put("multiviewViewCount", bundle.get("viewCount"));
+            } else {
+                r.put("multiviewImages", List.of());
+            }
         }
         addSignedAssetUrls(rows);
         return rows;

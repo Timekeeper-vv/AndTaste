@@ -644,6 +644,7 @@ public class UserController {
         jdbc.update("UPDATE creative_conversation_event SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
         jdbc.update("UPDATE creative_quote_request SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
         jdbc.update("UPDATE creative_consignment_application SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
+        jdbc.update("UPDATE creative_multiview_bundle SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
         jdbc.update("UPDATE consumer_production_request SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
         jdbc.update("UPDATE commercial_application_revision SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
         jdbc.update("UPDATE commercial_professional_guidance_request SET user_id=? WHERE user_id=?", targetUserId, sourceUserId);
