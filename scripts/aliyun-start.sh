@@ -274,6 +274,13 @@ init_db(){
   local escaped=${DB_PASSWORD//\'/\'\'}
   mysql_exec "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER IF NOT EXISTS '$DB_USER'@'%' IDENTIFIED BY '$escaped'; ALTER USER '$DB_USER'@'%' IDENTIFIED BY '$escaped'; GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'%'; FLUSH PRIVILEGES;"
   init_schema_if_needed
+  local flyway_history_count
+  flyway_history_count="$(mysql_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='schema_history'")"
+  if [ "${flyway_history_count:-0}" != "0" ]; then
+    info "检测到 Flyway schema_history，跳过历史兼容脚本；由应用启动时执行版本迁移"
+    ok "数据库及业务账号已就绪：$DB_NAME / $DB_USER"
+    return
+  fi
   # This migration is idempotent and must also run for existing deployments;
   # the application uses the extension tables on its first payment request.
   mysql_import_file "$BACKEND_DIR/src/main/resources/db/migration/V20260803_01__wechat_jsapi_payment.sql"
