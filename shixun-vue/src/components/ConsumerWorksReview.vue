@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
 import { requestAssetPreviewUrl } from '../utils/assetAccess'
 
-const props = defineProps<{ currentUser: User }>()
+const props = defineProps<{ currentUser: User; mode?: 'standard' | 'professional' | 'multiview' }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
 
 type ReviewStatus = 'review' | 'approved' | 'rejected'
@@ -50,27 +50,36 @@ const reviewingId = ref<number | null>(null)
 const reviewingBundleId = ref<number | null>(null)
 const keywordUserId = ref('')
 const status = ref<'all' | ReviewStatus>('review')
-const comment = ref('')
 const activeWork = ref<ConsumerAsset | null>(null)
 const activeMediaUrl = ref('')
 const professionalSubmissions = ref<any[]>([])
 const reviewingSubmissionId = ref<number | null>(null)
+const rejectionTarget = ref<{ kind: 'work' | 'bundle' | 'professional'; item: any } | null>(null)
+const rejectionReason = ref('')
+const activeBundleImage = ref<{ url: string; label: string } | null>(null)
+
+const reviewMode = computed(() => props.mode || 'standard')
+const isProfessionalMode = computed(() => reviewMode.value === 'professional')
+const isMultiviewMode = computed(() => reviewMode.value === 'multiview')
+const isStandardMode = computed(() => reviewMode.value === 'standard')
 
 const activeMultiViewBundles = computed(() => multiviewBundles.value.filter(bundle => bundle.status !== 'archived'))
 const visibleWorks = computed(() => {
   const bundleAssets = new Set(activeMultiViewBundles.value.flatMap(bundle => (bundle.images || []).map(item => String(item.assetId))))
-  return works.value.filter(work => !bundleAssets.has(String(work.id)))
+  return works.value.filter(work => work.assetType === 'model' && !bundleAssets.has(String(work.id)))
 })
 const visibleMultiViewBundles = computed(() => status.value === 'all'
   ? activeMultiViewBundles.value
   : activeMultiViewBundles.value.filter(bundle => bundle.status === status.value))
+const visibleProfessionalSubmissions = computed(() => status.value === 'all'
+  ? professionalSubmissions.value
+  : professionalSubmissions.value.filter(item => item.status === status.value))
 const stats = computed(() => {
-  const source = visibleWorks.value
-  const bundles = visibleMultiViewBundles.value
-  const total = source.length + bundles.length
-  const review = source.filter(x => x.status === 'review').length + bundles.filter(x => x.status === 'review').length
-  const approved = source.filter(x => x.status === 'approved').length + bundles.filter(x => x.status === 'approved').length
-  const rejected = source.filter(x => x.status === 'rejected').length + bundles.filter(x => x.status === 'rejected').length
+  const source = isProfessionalMode.value ? visibleProfessionalSubmissions.value : isMultiviewMode.value ? visibleMultiViewBundles.value : visibleWorks.value
+  const total = source.length
+  const review = source.filter(x => x.status === 'review').length
+  const approved = source.filter(x => x.status === 'approved').length
+  const rejected = source.filter(x => x.status === 'rejected').length
   return { total, review, approved, rejected }
 })
 
@@ -112,22 +121,25 @@ function formatTime(v?: string) {
 async function load() {
   loading.value = true
   try {
-    const qs = new URLSearchParams({ size: '200' })
-    if (keywordUserId.value.trim()) qs.set('userId', keywordUserId.value.trim())
-    if (status.value !== 'all') qs.set('status', status.value)
-    const r = await fetch(`/api/creative/ai/consumer-assets/review?${qs}`, {
-      cache: 'no-store',
-    })
-    if (!r.ok) {
-      const err = await r.json().catch(() => null)
-      throw new Error(err?.message || `HTTP ${r.status}`)
+    if (isProfessionalMode.value) {
+      await loadProfessionalSubmissions()
+    } else {
+      const qs = new URLSearchParams({ size: '200' })
+      if (keywordUserId.value.trim()) qs.set('userId', keywordUserId.value.trim())
+      if (status.value !== 'all') qs.set('status', status.value)
+      const r = await fetch(`/api/creative/ai/consumer-assets/review?${qs}`, { cache: 'no-store' })
+      if (!r.ok) {
+        const err = await r.json().catch(() => null)
+        throw new Error(err?.message || `HTTP ${r.status}`)
+      }
+      const data = await r.json()
+      works.value = Array.isArray(data) ? data : []
     }
-    const data = await r.json()
-    works.value = Array.isArray(data) ? data : []
-    await loadMultiViewBundles()
-    await loadProfessionalSubmissions()
+    if (isMultiviewMode.value) {
+      await loadMultiViewBundles()
+    }
   } catch (e: any) {
-    emit('alert', '加载C端作品失败：' + (e?.message || e), 'error')
+    emit('alert', `加载${isProfessionalMode.value ? '专业作品包' : isMultiviewMode.value ? '多视图作品包' : 'C端作品'}失败：` + (e?.message || e), 'error')
   } finally {
     loading.value = false
   }
@@ -159,21 +171,36 @@ function bundleImageUrl(item: NonNullable<MultiViewBundle['images']>[number]) {
   return item?.previewUrl || item?.imageUrl || ''
 }
 
+async function openBundleImage(image: NonNullable<MultiViewBundle['images']>[number]) {
+  const fallback = bundleImageUrl(image)
+  if (!fallback && !image.assetId) return
+  activeBundleImage.value = { url: fallback, label: image.label || image.view || '视图' }
+  document.body.style.overflow = 'hidden'
+  if (!image.assetId) return
+  try {
+    const secured = await requestAssetPreviewUrl(image.assetId)
+    if (secured && activeBundleImage.value) activeBundleImage.value.url = secured
+  } catch {
+    // Keep the signed URL returned by the bundle endpoint as a fallback.
+  }
+}
+
+function closeBundleImage() {
+  activeBundleImage.value = null
+  if (!activeWork.value && !rejectionTarget.value) document.body.style.overflow = ''
+}
+
 function bundlePurpose(bundle: MultiViewBundle) {
   return bundle.purpose === 'museum_sale' ? `博物馆售卖${bundle.museumName ? ` · ${bundle.museumName}` : ''}` : '个人创作'
 }
 
-async function reviewBundle(bundle: MultiViewBundle, nextStatus: ReviewStatus) {
-  if (nextStatus === 'rejected' && !comment.value.trim()) {
-    emit('alert', '请先在“审核意见”中填写不通过原因', 'error')
-    return
-  }
+async function reviewBundle(bundle: MultiViewBundle, nextStatus: ReviewStatus, reviewComment = '') {
   reviewingBundleId.value = bundle.id
   try {
     const r = await fetch(`/api/creative/ai/consumer-multiview-bundles/${bundle.id}/review`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus, comment: comment.value.trim() }),
+      body: JSON.stringify({ status: nextStatus, comment: reviewComment.trim() }),
     })
     if (!r.ok) {
       const err = await r.json().catch(() => null)
@@ -202,13 +229,13 @@ async function loadProfessionalSubmissions() {
   }
 }
 
-async function reviewProfessionalSubmission(item: any, nextStatus: ReviewStatus) {
+async function reviewProfessionalSubmission(item: any, nextStatus: ReviewStatus, reviewComment = '') {
   reviewingSubmissionId.value = item.id
   try {
     const r = await fetch(`/api/creative/ai/consumer-professional-submissions/${item.id}/review`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus, comment: comment.value.trim() }),
+      body: JSON.stringify({ status: nextStatus, comment: reviewComment.trim() }),
     })
     if (!r.ok) {
       const err = await r.json().catch(() => null)
@@ -244,7 +271,7 @@ async function downloadProfessionalSubmission(item: any) {
   }
 }
 
-async function reviewWork(w: ConsumerAsset, nextStatus: ReviewStatus) {
+async function reviewWork(w: ConsumerAsset, nextStatus: ReviewStatus, reviewComment = '') {
   reviewingId.value = w.id
   try {
     const r = await fetch(`/api/creative/ai/consumer-assets/${w.id}/review`, {
@@ -252,7 +279,7 @@ async function reviewWork(w: ConsumerAsset, nextStatus: ReviewStatus) {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ status: nextStatus, operator: props.currentUser.username, comment: comment.value.trim() }),
+      body: JSON.stringify({ status: nextStatus, operator: props.currentUser.username, comment: reviewComment.trim() }),
     })
     if (!r.ok) {
       const err = await r.json().catch(() => null)
@@ -285,6 +312,32 @@ function closePreview() {
   document.body.style.overflow = ''
 }
 
+function openRejectForm(kind: 'work' | 'bundle' | 'professional', item: any) {
+  rejectionTarget.value = { kind, item }
+  rejectionReason.value = ''
+  document.body.style.overflow = 'hidden'
+}
+
+function closeRejectForm() {
+  rejectionTarget.value = null
+  rejectionReason.value = ''
+  if (!activeWork.value && !activeBundleImage.value) document.body.style.overflow = ''
+}
+
+async function confirmReject() {
+  const target = rejectionTarget.value
+  const reason = rejectionReason.value.trim()
+  if (!target) return
+  if (reason.length < 2) {
+    emit('alert', '请填写具体的不通过原因', 'error')
+    return
+  }
+  closeRejectForm()
+  if (target.kind === 'work') await reviewWork(target.item, 'rejected', reason)
+  else if (target.kind === 'bundle') await reviewBundle(target.item, 'rejected', reason)
+  else await reviewProfessionalSubmission(target.item, 'rejected', reason)
+}
+
 onMounted(load)
 </script>
 
@@ -292,9 +345,11 @@ onMounted(load)
   <div class="review-page">
     <section class="hero-card">
       <div>
-        <span class="eyebrow">CONSUMER REVIEW</span>
-        <h1>C端作品审核</h1>
-        <p>集中查看 C 端用户提交的产品图和 3D 模型，并明确区分“个人收藏/送礼”和“博物馆售卖”用途；只有博物馆售卖才进入博物馆准入判断。</p>
+        <span class="eyebrow">{{ isProfessionalMode ? 'PROFESSIONAL REVIEW' : isMultiviewMode ? 'MULTI-VIEW REVIEW' : 'CONSUMER REVIEW' }}</span>
+        <h1>{{ isProfessionalMode ? '专业作品审核' : isMultiviewMode ? '多视图审核' : 'C端作品审核' }}</h1>
+        <p v-if="isProfessionalMode">审核专业用户提交的 ZIP 作品包。驳回时必须填写具体原因，用户会在作品流程中看到并可重新提交。</p>
+        <p v-else-if="isMultiviewMode">正面、侧面和背面作为一个完整作品包统一审核。每个视角都可以放大查看，通过后用户才能申请打样。</p>
+        <p v-else>这里只处理已完成的 3D 原型。单张产品图不能单独进入审核，用户需要先生成三视图或 3D 模型。</p>
       </div>
       <div class="hero-stats">
         <article><b>{{ stats.total }}</b><span>当前列表</span></article>
@@ -304,7 +359,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section class="filter-card">
+    <section class="filter-card" v-if="!isProfessionalMode || professionalSubmissions.length">
       <label>
         <span>用户ID</span>
         <input v-model.trim="keywordUserId" type="number" placeholder="输入C端用户ID查询" @keyup.enter="load" />
@@ -318,27 +373,23 @@ onMounted(load)
           <option value="rejected">未通过</option>
         </select>
       </label>
-      <label class="comment-field">
-        <span>审核意见</span>
-        <input v-model="comment" placeholder="选填：不通过原因或内部备注" />
-      </label>
       <button type="button" :disabled="loading" @click="load">{{ loading ? '查询中…' : '查询作品' }}</button>
     </section>
 
-    <section v-if="visibleMultiViewBundles.length" class="multiview-review-panel">
+    <section v-if="isMultiviewMode && visibleMultiViewBundles.length" class="multiview-review-panel">
       <header class="multiview-review-header"><div><span>COMPLETE PRODUCT REVIEW</span><h2>三视图作品包审核</h2><p>正面、侧面和背面作为一个完整产品统一审核。通过后用户才能申请打样。</p></div><b>{{ visibleMultiViewBundles.length }} <small>个作品包</small></b></header>
       <div class="multiview-review-grid">
         <article v-for="bundle in visibleMultiViewBundles" :key="bundle.id" class="multiview-review-card">
           <div class="bundle-review-top"><div><strong>{{ bundle.productName || '三视图文创作品' }}</strong><small>{{ bundle.bundleNo || `#${bundle.id}` }} · 用户 {{ bundle.userId || '-' }} · {{ bundle.username || '-' }}</small></div><span class="status-pill" :class="statusClass(bundle.status)">{{ statusText[bundle.status || 'review'] || bundle.status }}</span></div>
-          <div class="bundle-review-images"><div v-for="image in bundle.images || []" :key="image.assetId"><img v-if="bundleImageUrl(image)" :src="bundleImageUrl(image)" :alt="image.label || '视图'" /><span v-else>{{ image.label || '视图' }}</span><small>{{ image.label }}</small></div></div>
+          <div class="bundle-review-images"><div v-for="image in bundle.images || []" :key="image.assetId" role="button" tabindex="0" @click="openBundleImage(image)"><img v-if="bundleImageUrl(image)" :src="bundleImageUrl(image)" :alt="image.label || '视图'" /><span v-else>{{ image.label || '视图' }}</span><small>{{ image.label }} · 点击查看大图</small></div></div>
           <div class="bundle-review-meta"><span>{{ bundle.material || '材质待定' }}</span><span>{{ bundle.productSize || '尺寸待定' }}</span><span>{{ bundlePurpose(bundle) }}</span></div>
           <p v-if="bundle.reviewComment" class="bundle-review-note">审核意见：{{ bundle.reviewComment }}</p>
-          <div class="actions"><template v-if="bundle.status === 'review'"><button class="approve" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'approved')">通过整包</button><button class="reject" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'rejected')">不通过</button></template><button v-if="['approved', 'rejected'].includes(String(bundle.status))" class="outline" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'review')">退回待审</button></div>
+          <div class="actions"><template v-if="bundle.status === 'review'"><button class="approve" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'approved')">通过整包</button><button class="reject" :disabled="reviewingBundleId === bundle.id" @click="openRejectForm('bundle', bundle)">不通过</button></template><button v-if="['approved', 'rejected'].includes(String(bundle.status))" class="outline" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'review')">退回待审</button></div>
         </article>
       </div>
     </section>
 
-    <section class="work-grid" v-if="visibleWorks.length">
+    <section class="work-grid" v-if="isStandardMode && visibleWorks.length">
       <article v-for="w in visibleWorks" :key="w.id" class="work-card">
         <div class="preview" @click="openPreview(w)">
           <img v-if="w.assetType === 'image' && previewUrl(w)" :src="previewUrl(w)" alt="C端作品" />
@@ -371,33 +422,33 @@ onMounted(load)
           <div class="actions">
             <button type="button" class="outline" @click="openPreview(w)">查看</button>
             <button type="button" class="approve" :disabled="reviewingId === w.id" @click="reviewWork(w, 'approved')">通过</button>
-            <button type="button" class="reject" :disabled="reviewingId === w.id" @click="reviewWork(w, 'rejected')">不通过</button>
+            <button type="button" class="reject" :disabled="reviewingId === w.id" @click="openRejectForm('work', w)">不通过</button>
             <button v-if="w.status !== 'review'" type="button" class="outline" :disabled="reviewingId === w.id" @click="reviewWork(w, 'review')">退回待审</button>
           </div>
         </div>
       </article>
     </section>
 
-    <section v-else-if="!visibleMultiViewBundles.length" class="empty-card">
-      <b>{{ loading ? '正在加载作品…' : '暂无匹配作品' }}</b>
+    <section v-if="((isStandardMode && !visibleWorks.length) || (isMultiviewMode && !visibleMultiViewBundles.length))" class="empty-card">
+      <b>{{ loading ? '正在加载审核数据…' : isProfessionalMode ? '暂无专业作品包' : isMultiviewMode ? '暂无多视图作品包' : '暂无可审核的3D作品' }}</b>
       <span>可以切换状态或输入其他用户 ID 再查询。</span>
     </section>
 
-    <section class="professional-review-panel">
+    <section v-if="isProfessionalMode" class="professional-review-panel">
       <header>
         <div><span>PROFESSIONAL SUBMISSIONS</span><h2>专业作品包审核</h2><p>这里的 ZIP 文件由专业设计师真实提交，只有审核管理员可下载查看和给出审核结论。</p></div>
-        <b>{{ professionalSubmissions.length }} <small>份作品包</small></b>
+        <b>{{ visibleProfessionalSubmissions.length }} <small>份作品包</small></b>
       </header>
-      <div v-if="professionalSubmissions.length" class="submission-table-wrap">
+      <div v-if="visibleProfessionalSubmissions.length" class="submission-table-wrap">
         <table>
           <thead><tr><th>作品包</th><th>提交人 / 用途</th><th>文件与时间</th><th>审核状态</th><th>操作</th></tr></thead>
           <tbody>
-            <tr v-for="item in professionalSubmissions" :key="item.id">
+            <tr v-for="item in visibleProfessionalSubmissions" :key="item.id">
               <td><strong>{{ item.title }}</strong><small>{{ item.submissionNo }}</small><p v-if="item.note">{{ item.note }}</p></td>
               <td><strong>{{ item.createdByName || `用户 #${item.userId}` }}</strong><small>{{ item.purpose === 'museum_sale' ? `博物馆售卖${item.museumName ? ` · ${item.museumName}` : ''}` : '个人创作' }}</small></td>
               <td><strong>{{ item.originalName }}</strong><small>{{ item.fileSize ? `${(item.fileSize / 1024 / 1024).toFixed(1)} MB` : '-' }} · {{ formatTime(item.createdAt) }}</small></td>
               <td><span class="submission-status" :class="statusClass(item.status)">{{ statusText[item.status || 'review'] || item.status }}</span><small v-if="item.reviewComment" class="review-note">{{ item.reviewComment }}</small></td>
-              <td><div class="submission-actions"><button type="button" class="outline" @click="downloadProfessionalSubmission(item)">下载 ZIP</button><button type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'rejected')">不通过</button><button v-if="item.status !== 'review'" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
+              <td><div class="submission-actions"><button type="button" class="outline" @click="downloadProfessionalSubmission(item)">下载 ZIP</button><button type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="openRejectForm('professional', item)">不通过</button><button v-if="item.status !== 'review'" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
             </tr>
           </tbody>
         </table>
@@ -426,9 +477,28 @@ onMounted(load)
           <footer>
             <a v-if="activeMediaUrl" :href="activeMediaUrl" target="_blank" rel="noopener">打开原文件</a>
             <button type="button" class="approve" @click="reviewWork(activeWork, 'approved')">审核通过</button>
-            <button type="button" class="reject" @click="reviewWork(activeWork, 'rejected')">审核不通过</button>
+            <button type="button" class="reject" @click="openRejectForm('work', activeWork)">审核不通过</button>
           </footer>
         </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="activeBundleImage" class="image-preview-modal" @click.self="closeBundleImage">
+        <div class="image-preview-card">
+          <header><div><b>{{ activeBundleImage.label }}</b><span>多视图审核 · 原图预览</span></div><button type="button" @click="closeBundleImage">×</button></header>
+          <div class="image-preview-body"><img :src="activeBundleImage.url" :alt="activeBundleImage.label" /></div>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="rejectionTarget" class="reject-modal" @click.self="closeRejectForm">
+        <form class="reject-dialog" @submit.prevent="confirmReject">
+          <header><div><span class="eyebrow">REVIEW FEEDBACK</span><h2>填写不通过原因</h2><p>{{ rejectionTarget.kind === 'professional' ? rejectionTarget.item.title : rejectionTarget.kind === 'bundle' ? rejectionTarget.item.productName || '三视图作品包' : rejectionTarget.item.title || '3D作品' }}</p></div><button type="button" @click="closeRejectForm">×</button></header>
+          <label><span>原因说明 <b>必填</b></span><textarea v-model.trim="rejectionReason" maxlength="500" autofocus placeholder="请写清楚需要修改的内容，例如：背面结构缺少闭合细节，请补充完整后重新提交。" /></label>
+          <div class="reject-dialog-foot"><span>{{ rejectionReason.length }}/500</span><div><button type="button" class="outline" @click="closeRejectForm">取消</button><button type="submit" class="reject" :disabled="rejectionReason.trim().length < 2">确认不通过</button></div></div>
+        </form>
       </div>
     </Teleport>
   </div>
@@ -436,6 +506,10 @@ onMounted(load)
 
 <style scoped>
 .review-page{padding:24px;display:flex;flex-direction:column;gap:18px}.hero-card{position:relative;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(360px,.8fr);gap:20px;padding:28px;border-radius:28px;color:#1f2937;background:linear-gradient(135deg,#fff 0%,#f8efe7 48%,#eefaf7 100%);border:1px solid rgba(148,163,184,.18);box-shadow:0 22px 60px rgba(15,23,42,.08)}.hero-card:after{content:"";position:absolute;right:-80px;top:-90px;width:260px;height:260px;border-radius:50%;background:rgba(180,83,42,.12)}.eyebrow{display:inline-flex;margin-bottom:10px;padding:7px 10px;border-radius:999px;background:#fff6ed;color:#b4532a;font-size:11px;font-weight:900;letter-spacing:1.7px}.hero-card h1{margin:0 0 10px;font-size:30px;letter-spacing:-.04em}.hero-card p{max-width:720px;margin:0;color:#64748b;line-height:1.7}.hero-stats{position:relative;z-index:1;display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.hero-stats article{padding:18px;border-radius:20px;background:rgba(255,255,255,.75);border:1px solid rgba(148,163,184,.16);box-shadow:0 12px 30px rgba(15,23,42,.05)}.hero-stats b{display:block;font-size:28px;color:#111827}.hero-stats span{font-size:12px;color:#64748b;font-weight:800}.filter-card{display:grid;grid-template-columns:180px 160px minmax(240px,1fr) 120px;gap:12px;align-items:end;padding:16px;border-radius:22px;background:#fff;border:1px solid rgba(148,163,184,.18);box-shadow:0 12px 34px rgba(15,23,42,.05)}label span{display:block;margin-bottom:7px;color:#475569;font-size:12px;font-weight:900}input,select{width:100%;height:42px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:13px;background:#f8fafc;padding:0 12px;color:#0f172a;outline:none}input:focus,select:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.filter-card button,.actions button,footer button{height:42px;border:0;border-radius:13px;font-weight:900;cursor:pointer}.filter-card button{background:#111827;color:#fff}.filter-card button:disabled,.actions button:disabled{opacity:.55;cursor:not-allowed}.work-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}.work-card{overflow:hidden;border-radius:24px;background:#fff;border:1px solid rgba(148,163,184,.16);box-shadow:0 16px 42px rgba(15,23,42,.07)}.preview{position:relative;height:230px;background:#111827;cursor:pointer;overflow:hidden}.preview img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s}.preview:hover img{transform:scale(1.03)}.model-placeholder{height:100%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:46px;font-weight:950;background:radial-gradient(circle at 70% 20%,rgba(20,184,166,.35),transparent 35%),linear-gradient(135deg,#111827,#334155)}.type-pill,.status-pill{position:absolute;top:12px;padding:7px 9px;border-radius:999px;background:rgba(255,255,255,.92);font-size:11px;font-weight:900}.type-pill{left:12px;color:#334155}.status-pill{right:12px}.status-pill.wait{color:#b45309;background:#fff7ed}.status-pill.ok{color:#047857;background:#ecfdf5}.status-pill.bad{color:#dc2626;background:#fef2f2}.work-body{padding:16px}.title-line{display:flex;align-items:center;justify-content:space-between;gap:12px}.title-line b{font-size:16px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.title-line small{color:#94a3b8;font-weight:900}.meta-row{display:flex;justify-content:space-between;gap:10px;margin-top:9px;color:#64748b;font-size:12px}.prompt{min-height:44px;margin:12px 0 14px;color:#475569;font-size:13px;line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.actions{display:flex;flex-wrap:wrap;gap:8px}.actions button{padding:0 13px}.outline{border:1px solid #e2e8f0!important;background:#fff!important;color:#334155!important}.approve{background:#0f766e!important;color:#fff!important}.reject{background:#b91c1c!important;color:#fff!important}.empty-card{padding:60px 20px;text-align:center;border-radius:24px;background:#fff;border:1px dashed #cbd5e1;color:#64748b}.empty-card b,.empty-card span{display:block}.empty-card b{margin-bottom:8px;color:#0f172a;font-size:18px}.preview-modal{position:fixed;inset:0;z-index:200;background:rgba(15,23,42,.62);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:24px}.modal-card{width:min(980px,96vw);max-height:92vh;display:flex;flex-direction:column;border-radius:26px;background:#fff;overflow:hidden;box-shadow:0 28px 90px rgba(0,0,0,.28)}.modal-card header,.modal-card footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid #e2e8f0}.modal-card footer{border-top:1px solid #e2e8f0;border-bottom:0;justify-content:flex-end}.modal-card header b,.modal-card header span{display:block}.modal-card header span{margin-top:4px;color:#64748b;font-size:12px}.modal-card header button{width:38px;height:38px;border:0;border-radius:12px;background:#f1f5f9;font-size:24px;color:#475569}.modal-body{min-height:320px;overflow:auto;background:#f8fafc;display:flex;align-items:center;justify-content:center}.modal-body img{max-width:100%;max-height:72vh;object-fit:contain}.model-large{display:flex;flex-direction:column;align-items:center;gap:10px;color:#64748b}.model-large b{font-size:28px;color:#0f172a}.model-large a,.modal-card footer a{height:40px;display:inline-flex;align-items:center;padding:0 14px;border-radius:12px;background:#111827;color:#fff;text-decoration:none;font-weight:900}@media(max-width:980px){.review-page{padding:16px}.hero-card{grid-template-columns:1fr}.filter-card{grid-template-columns:1fr 1fr}.comment-field{grid-column:1/-1}.filter-card button{grid-column:1/-1}}@media(max-width:640px){.filter-card,.work-grid{grid-template-columns:1fr}.hero-stats{grid-template-columns:repeat(2,1fr)}.preview{height:210px}}
+</style>
+
+<style scoped>
+.bundle-review-images>div{cursor:zoom-in}.bundle-review-images>div:focus-visible{outline:3px solid rgba(15,118,110,.35);outline-offset:2px}.image-preview-modal,.reject-modal{position:fixed;inset:0;z-index:220;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.72);backdrop-filter:blur(10px)}.image-preview-card{width:min(1080px,96vw);max-height:94vh;display:flex;flex-direction:column;overflow:hidden;border-radius:22px;background:#fff;box-shadow:0 30px 100px rgba(0,0,0,.34)}.image-preview-card header,.reject-dialog header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 20px;border-bottom:1px solid #e2e8f0}.image-preview-card header b,.image-preview-card header span{display:block}.image-preview-card header span{margin-top:5px;color:#64748b;font-size:12px}.image-preview-card header button,.reject-dialog header button{width:38px;height:38px;border:0;border-radius:11px;background:#f1f5f9;color:#475569;font-size:24px;cursor:pointer}.image-preview-body{min-height:440px;display:flex;align-items:center;justify-content:center;overflow:auto;background:#101827}.image-preview-body img{max-width:100%;max-height:78vh;object-fit:contain}.reject-dialog{width:min(600px,94vw);padding:0;overflow:hidden;border:0;border-radius:22px;background:#fff;box-shadow:0 30px 100px rgba(0,0,0,.3)}.reject-dialog header{border-bottom:0;padding-bottom:10px}.reject-dialog h2{margin:3px 0 0;color:#0f172a;font-size:22px}.reject-dialog header p{margin:8px 0 0;color:#64748b;font-size:13px}.reject-dialog>label{display:block;padding:0 20px}.reject-dialog>label>span{display:flex;align-items:center;gap:7px;margin-bottom:8px;color:#334155;font-size:13px;font-weight:900}.reject-dialog>label>span b{padding:3px 6px;border-radius:6px;background:#fef2f2;color:#b91c1c;font-size:10px}.reject-dialog textarea{display:block;width:100%;min-height:150px;box-sizing:border-box;resize:vertical;border:1px solid #dbe3ea;border-radius:13px;background:#f8fafc;padding:12px;color:#0f172a;font:inherit;line-height:1.6;outline:none}.reject-dialog textarea:focus{border-color:#0f766e;box-shadow:0 0 0 3px rgba(15,118,110,.12)}.reject-dialog-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px 20px;color:#94a3b8;font-size:12px}.reject-dialog-foot>div{display:flex;gap:8px}.reject-dialog-foot button{height:40px;padding:0 14px;border:0;border-radius:11px;font-weight:900;cursor:pointer}.reject-dialog-foot button:disabled{opacity:.5;cursor:not-allowed}@media(max-width:640px){.image-preview-modal,.reject-modal{padding:12px}.image-preview-body{min-height:300px}.image-preview-card{width:100%}.reject-dialog-foot{align-items:flex-end;flex-direction:column}.reject-dialog-foot>div{width:100%}.reject-dialog-foot button{flex:1}}
 </style>
 
 <style scoped>

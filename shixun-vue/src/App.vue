@@ -57,6 +57,8 @@ const PAGE_ROLES: Record<string, Role[]> = {
   dashboard:    ALL_ROLES,
   approvalCenter:MANAGER_ROLES,
   consumerWorksReview:SUPER_ADMIN_ROLES,
+  professionalWorksReview:SUPER_ADMIN_ROLES,
+  multiviewReview:SUPER_ADMIN_ROLES,
   consumerAssetInventory:SUPER_ADMIN_ROLES,
   consumerCreditManagement:SUPER_ADMIN_ROLES,
   paymentOperations:SUPER_ADMIN_ROLES,
@@ -288,6 +290,8 @@ const pageLabels: Record<string, string> = {
   dashboard:    '经营看板',
   approvalCenter:'审批中心',
   consumerWorksReview:'C端作品审核',
+  professionalWorksReview:'专业作品审核',
+  multiviewReview:'多视图审核',
   consumerAssetInventory:'C端用户端库存',
   consumerCreditManagement:'C端额度管理',
   paymentOperations:'支付运营',
@@ -442,6 +446,8 @@ const pageLabels: Record<string, string> = {
         <CreativeDashboard    v-if="currentPage === 'dashboard'"   @switch-page="p => { if (hasAccess(p, currentUser?.role)) currentPage = p as PageName }" @alert="showAlert" />
         <ApprovalCenter v-if="currentPage === 'approvalCenter'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerWorksReview v-if="currentPage === 'consumerWorksReview'" :current-user="currentUser" @alert="showAlert" />
+        <ConsumerWorksReview v-if="currentPage === 'professionalWorksReview'" :current-user="currentUser" mode="professional" @alert="showAlert" />
+        <ConsumerWorksReview v-if="currentPage === 'multiviewReview'" :current-user="currentUser" mode="multiview" @alert="showAlert" />
         <ConsumerAssetInventory v-if="currentPage === 'consumerAssetInventory'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerCreditManagement v-if="currentPage === 'consumerCreditManagement'" :current-user="currentUser" @alert="showAlert" />
         <PaymentOperations v-if="currentPage === 'paymentOperations'" :current-user="currentUser" @alert="showAlert" />

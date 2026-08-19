@@ -23,6 +23,8 @@ const allMenus: MenuGroup[] = [
     { key: 'dashboard', label: '经营看板', roles: ALL_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>` },
     { key: 'approvalCenter', label: '审批中心', roles: MANAGER_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>` },
     { key: 'consumerWorksReview', label: 'C端作品审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
+    { key: 'professionalWorksReview', label: '专业作品审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
+    { key: 'multiviewReview', label: '多视图审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'consumerAssetInventory', label: 'C端用户端库存', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'consumerProductionReview', label: 'C端用户作品生产审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'commercialProductization', label: '商品化与代销审核', parentKey: 'approvalCenter', roles: MANAGER_ROLES, icon: `<svg></svg>` },

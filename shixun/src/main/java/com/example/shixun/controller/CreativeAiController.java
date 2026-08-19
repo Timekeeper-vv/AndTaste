@@ -2525,6 +2525,7 @@ public class CreativeAiController {
         String status = body == null ? "" : nullToEmpty(body.get("status")).trim();
         if (!Set.of("review", "approved", "rejected").contains(status)) throw new IllegalArgumentException("审核状态只能是 review / approved / rejected");
         String comment = body == null ? "" : nullToEmpty(body.get("comment"));
+        if ("rejected".equals(status) && blank(comment)) throw new IllegalArgumentException("专业作品审核不通过时必须填写原因");
         int updated = jdbc.update("UPDATE consumer_professional_submission SET status=?,review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=?", status, comment, authenticatedPrincipal().username(), id);
         if (updated == 0) throw new IllegalArgumentException("专业作品包不存在");
         return Map.of("success", true, "status", status, "message", "专业作品包审核状态已更新");
@@ -2739,6 +2740,14 @@ public class CreativeAiController {
     public Map<String,Object> submitConsumerAssetReview(@PathVariable Long id,
                                                         @RequestBody(required=false) Map<String,String> body) {
         Long userId = requireCurrentConsumerUser();
+        List<Map<String,Object>> ownedAssets = jdbc.queryForList(
+                "SELECT asset_type assetType FROM digital_asset WHERE id=? AND created_by=? AND asset_type IN ('image','model')",
+                id, userId);
+        if (ownedAssets.isEmpty()) throw new IllegalArgumentException("作品不存在、无权提交或不是可审核作品");
+        Map<String,Object> ownedAsset = ownedAssets.get(0);
+        if ("image".equals(String.valueOf(ownedAsset.get("assetType")))) {
+            throw new IllegalStateException("单张产品图不能提交审核，请先生成三视图作品包或3D模型");
+        }
         String purpose=body==null?"":nullToEmpty(body.get("purpose")).trim();
         if(!Set.of("personal","museum_sale").contains(purpose)) purpose="";
         String note=body==null?"":nullToEmpty(body.get("note"));
@@ -2786,7 +2795,16 @@ public class CreativeAiController {
         if(!Set.of("approved","rejected","review").contains(status)) throw new IllegalArgumentException("审核状态只能是 approved / rejected / review");
         String operator = authenticatedPrincipal().username();
         String comment=body==null?"":nullToEmpty(body.get("comment"));
-        int n=jdbc.update("UPDATE digital_asset a SET a.status=?, a.tags=CONCAT(COALESCE(a.tags,''), ?) WHERE a.id=? AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')",status,";审核:"+status+(blank(comment)?"":"-"+comment),id);
+        Map<String,Object> asset;
+        try {
+            asset = jdbc.queryForMap("SELECT a.asset_type assetType FROM digital_asset a WHERE a.id=? AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')", id);
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new IllegalArgumentException("作品不存在或不是C端用户作品");
+        }
+        if ("image".equals(String.valueOf(asset.get("assetType")))) {
+            throw new IllegalStateException("单张产品图不能单独审核，请审核三视图作品包或3D模型");
+        }
+        int n=jdbc.update("UPDATE digital_asset a SET a.status=?, a.tags=CONCAT(COALESCE(a.tags,''), ?) WHERE a.id=? AND a.asset_type='model' AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')",status,";审核:"+status+(blank(comment)?"":"-"+comment),id);
         if(n==0) throw new IllegalArgumentException("作品不存在或不是C端用户作品");
         BigDecimal campaignReward = settleCampaignRewardForReview(id, status, blank(operator) ? "admin" : operator);
         Map<String,Object> out = new LinkedHashMap<>();

@@ -3,14 +3,53 @@ import { clearSession, getSession } from '../utils/session'
 // 小程序正式发布时，填写 .env 的 VITE_API_BASE_URL，例如 https://api.example.com
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://api.example.com').replace(/\/$/, '')
 
+function stringValue(value: any) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
+}
+
+function looksUnreadable(value: string) {
+  const text = value.trim()
+  if (!text || /^\[object Object\]$/i.test(text)) return true
+  if (text.includes('\uFFFD')) return true
+  const replacementCount = (text.match(/[?？]/g) || []).length
+  return replacementCount >= 3 && replacementCount >= Math.ceil(text.length * 0.45)
+}
+
+/**
+ * uni.request and the WeChat network layer do not always preserve the
+ * server's error body. In particular, an undecodable Chinese response can
+ * arrive as a string of question marks. Never expose that raw value to users.
+ */
+export function readableErrorMessage(error: any, fallback = '网络或服务暂时不可用，请稍后重试') {
+  const errMsg = stringValue(error?.errMsg)
+  const message = stringValue(error?.message)
+  const raw = message || errMsg || stringValue(error)
+  const context = `${errMsg} ${message}`.toLowerCase()
+  const statusCode = Number(error?.statusCode || error?.status || 0)
+
+  if (/url not in domain list|合法域名|not in domain/i.test(context)) return '当前接口域名未加入微信合法域名，请检查小程序 request 合法域名配置'
+  if (/ssl|certificate|cert/i.test(context)) return '服务 HTTPS 证书校验失败，请检查本地或线上域名证书'
+  if (/timeout|timed out/i.test(context)) return '请求超时了，当前输入已保留，请稍后重试'
+  if (/network|request:fail|connect|refused|dns/i.test(context)) return '暂时连接不上创作服务，请检查网络后重试'
+  if (statusCode === 401 || /unauthorized|请先登录|登录已过期/i.test(context)) return '登录状态已失效，请重新登录后继续'
+  if (statusCode === 403 || /forbidden|无权访问/i.test(context)) return '当前账号暂时没有使用该功能的权限'
+  if (statusCode === 429 || /too many|频繁|rate limit/i.test(context)) return '请求较多，创作服务正在排队，请稍后重试'
+  if (statusCode >= 500) return '创作服务暂时不可用，当前输入已保留，请稍后重试'
+  if (!looksUnreadable(raw)) return raw || fallback
+  return fallback
+}
+
 function messageOf(data: any, fallback: string) {
   // uni.request may leave an error response as a JSON string when the server
   // does not send an explicit JSON content type. Parse it before falling back
   // to a generic status message so the miniapp shows the real validation error.
   if (typeof data === 'string') {
-    try { data = JSON.parse(data) } catch { return data.trim() || fallback }
+    try { data = JSON.parse(data) } catch { return readableErrorMessage(data, fallback) }
   }
-  return data?.message || data?.error || data?.detail || fallback
+  return readableErrorMessage(data?.message || data?.error || data?.detail, fallback)
 }
 
 function parsePayload(data: any) {
@@ -62,7 +101,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   try {
     response = await uni.request({ url: apiUrl(path), ...requestOptions, timeout, header: headers })
   } catch (error: any) {
-    throw new Error(messageOf(error, '网络请求失败，请检查服务地址和网络连接'))
+    const message = readableErrorMessage(error, '网络请求失败，请检查服务地址和网络连接')
+    console.warn('[smart-pig api] request failed', { path, message })
+    throw new Error(message)
   }
   const data: any = parsePayload(response.data)
   if (response.statusCode === 401) {
@@ -72,7 +113,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     throw new Error('登录已过期')
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new ApiError(messageOf(data, `请求失败（${response.statusCode}）`), response.statusCode, data?.code)
+    const requestId = (response as any).header?.['X-Request-Id'] || (response as any).header?.['x-request-id'] || ''
+    const message = messageOf(data, `请求失败（${response.statusCode}）`)
+    console.warn('[smart-pig api] response failed', { path, statusCode: response.statusCode, requestId, message })
+    throw new ApiError(message, response.statusCode, data?.code)
   }
   return data as T
 }

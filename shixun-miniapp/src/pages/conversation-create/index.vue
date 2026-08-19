@@ -43,7 +43,7 @@
         <view class="visual-frame"><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFit" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view class="visual-badge">AI 生成</view></view>
         <view class="output-info"><view><text>{{ selectedProduct?.name || '文创产品' }}</text><text>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }} · {{ mode === 'image' ? '参考图改造' : '文字生图' }}</text></view><text class="output-open" @tap="previewImage">查看大图 ›</text></view>
         <view v-if="refiningImage" class="refinement-panel"><view class="refinement-heading"><view><text class="surface-kicker">REFINE THIS IMAGE</text><text>告诉我哪里不满意</text></view><text class="refinement-close" @tap="cancelRefinement">×</text></view><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：保留主体和构图，把边缘改得更简洁，去掉文字。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view></view>
-        <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成三视图</text><text>补全结构视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="openCommercial"><view class="action-icon gold">样</view><view><text>申请打样 / 商品化</text><text>提交给运营报价</text></view><text class="action-arrow">›</text></view></view>
+        <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成三视图</text><text>补全结构视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action disabled"><view class="action-icon gold">样</view><view><text>完成三视图或 3D 原型后打样</text><text>当前产品图仅用于继续创作</text></view></view></view>
       </view>
 
       <view v-if="phase === 'multiview'" id="multiview-output" class="output-surface">
@@ -71,7 +71,7 @@
         <button v-if="modelTask && !isModelTaskTerminal" class="outline-button full-button" :loading="modelRefreshing" @tap="refreshModelTask">刷新进度</button>
         <button v-if="isModelTaskFailed" class="dark-button full-button" :loading="busy" @tap="generateModel">重新提交 3D 建模</button>
         <button class="dark-button full-button" @tap="goWorks">{{ isModelTaskSucceeded ? '查看已完成的 3D 作品' : '查看我的作品' }}</button>
-        <button class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button>
+        <button v-if="isModelTaskSucceeded" class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button>
       </view>
 
       <view id="bottom-anchor" class="bottom-anchor" />
@@ -126,7 +126,7 @@ import {
   type MultiViewBundle,
   type SeedreamMultiViewImage,
 } from '../../api/creative'
-import { apiUrl, createReferenceToImage, createTextToImage, getArkImageJob, waitForArkImageJob } from '../../api/client'
+import { apiUrl, createReferenceToImage, createTextToImage, getArkImageJob, readableErrorMessage, waitForArkImageJob } from '../../api/client'
 import { CREATIVE_POLICY_VERSION, getCreativePolicy, type CreativePolicyKey } from '../../utils/compliance'
 import { requireSession } from '../../utils/session'
 
@@ -499,7 +499,9 @@ async function sendChatTurn(message: string, action?: { type: string; value?: st
   } catch (error: any) {
     setChatThinking(false)
     if (optimisticMessageId) messages.value = messages.value.filter(item => item.id !== optimisticMessageId)
-    uni.showModal({ title: '对话暂时中断', content: error?.message || '请稍后重试，当前已输入内容会保留。', showCancel: false })
+    const message = readableErrorMessage(error, '创作服务暂时不可用，当前已输入内容会保留，请稍后重试。')
+    console.warn('[conversation-create] chat failed', { message, statusCode: error?.statusCode || 0 })
+    uni.showModal({ title: '对话暂时中断', content: message, showCancel: false })
   } finally {
     setChatThinking(false)
     chatSending.value = false
@@ -543,8 +545,21 @@ function previousPhase(current: Phase): Phase | null {
 }
 function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
 function openCommercial() {
+  if (phase.value === 'result') {
+    uni.showToast({ title: '请先生成三视图或 3D 原型', icon: 'none' })
+    return
+  }
+  if (phase.value === 'model' && !isModelTaskSucceeded.value) {
+    uni.showToast({ title: '请等待 3D 原型生成完成', icon: 'none' })
+    return
+  }
   const params: string[] = []
-  if (generatedAssetId.value) params.push(`assetId=${encodeURIComponent(String(generatedAssetId.value))}`)
+  const commercialAssetId = phase.value === 'model' && isModelTaskSucceeded.value ? modelTask.value?.assetId : generatedAssetId.value
+  if (!commercialAssetId) {
+    uni.showToast({ title: '3D 原型尚未保存完成，请稍后再试', icon: 'none' })
+    return
+  }
+  if (commercialAssetId) params.push('assetId=' + encodeURIComponent(String(commercialAssetId)))
   if (selectedProduct.value?.key) params.push(`productKey=${encodeURIComponent(selectedProduct.value.key)}`)
   if (selectedProduct.value?.name) params.push(`productName=${encodeURIComponent(selectedProduct.value.name)}`)
   if (material.value) params.push(`material=${encodeURIComponent(material.value)}`)
@@ -1273,12 +1288,12 @@ async function completeGeneratedProductImage(result: any, generationPrompt: stri
   generatedAssetId.value = assetId
   previewUrl.value = imageUrl(result)
   await saveEvent('image', 'image_generated', { jobId: result?.jobId, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
-  addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
+  addMessage('assistant', '产品视觉已经生成并保存。下一步请生成三视图或 3D 原型，完成后才能提交审核和申请打样。')
   chatStage.value = 'image_ready'
   chatQuickReplies.value = [
     { label: '满意，生成三视图', type: 'multiview', value: '' },
     { label: '不满意，告诉我怎么改', type: 'refine', value: '' },
-    { label: '直接申请打样 / 商品化', type: 'commercial', value: '' },
+    { label: '生成 3D 原型', type: 'model', value: '' },
   ]
   phase.value = 'result'
   await scrollToSection('result-output')

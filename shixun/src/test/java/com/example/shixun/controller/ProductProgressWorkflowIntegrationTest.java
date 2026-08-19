@@ -80,20 +80,18 @@ class ProductProgressWorkflowIntegrationTest {
 
         long imageAssetId = createAsset(creator, "AST-WORKFLOW-IMAGE", "image", "draft");
 
-        JsonNode imageReview = request(put("/api/creative/ai/consumer-assets/{id}/submit-review", imageAssetId), creator.token(),
-                Map.of("purpose", "personal"));
-        assertThat(imageReview.path("success").asBoolean()).isTrue();
-        assertThat(imageReview.path("status").asText()).isEqualTo("review");
-        assertThat(assetStatus(imageAssetId)).isEqualTo("review");
+        mvc.perform(put("/api/creative/ai/consumer-assets/{id}/submit-review", imageAssetId)
+                        .header("Authorization", "Bearer " + creator.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(Map.of("purpose", "personal"))))
+                .andExpect(status().isBadRequest());
+        assertThat(assetStatus(imageAssetId)).isEqualTo("draft");
 
         JsonNode creatorAssets = request(get("/api/creative/ai/assets"), creator.token(), null);
         assertThat(containsId(creatorAssets, imageAssetId)).isTrue();
-        assertThat(field(assetById(creatorAssets, imageAssetId), "status").asText()).isEqualTo("review");
+        assertThat(field(assetById(creatorAssets, imageAssetId), "status").asText()).isEqualTo("draft");
         JsonNode otherAssets = request(get("/api/creative/ai/assets"), otherConsumer.token(), null);
         assertThat(containsId(otherAssets, imageAssetId)).isFalse();
-
-        reviewAsset(reviewer, imageAssetId, "approved");
-        assertThat(assetStatus(imageAssetId)).isEqualTo("approved");
 
         JsonNode demand = request(post("/api/selection/demands"), creator.token(), Map.of(
                 "optionKey", "souvenir-alloy-magnet",

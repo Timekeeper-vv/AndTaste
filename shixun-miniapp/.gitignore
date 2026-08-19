@@ -2,3 +2,5 @@ node_modules/
 unpackage/
 dist/
 .env
+.env.local
+.env.*.local

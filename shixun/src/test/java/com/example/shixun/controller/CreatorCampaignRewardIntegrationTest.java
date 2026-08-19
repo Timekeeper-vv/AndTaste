@@ -73,7 +73,7 @@ class CreatorCampaignRewardIntegrationTest {
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(directory).contains("museum-national");
         jdbc.update("INSERT INTO digital_asset (asset_no,title,asset_type,source_type,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
-                "AST-CAMPAIGN-1", "器物新生冰箱贴", "image", "ai_generated", "draft", creator.id());
+                "AST-CAMPAIGN-1", "器物新生冰箱贴", "model", "ai_generated", "draft", creator.id());
         long assetId = jdbc.queryForObject("SELECT id FROM digital_asset WHERE asset_no='AST-CAMPAIGN-1'", Long.class);
 
         String submitBody = "{\"purpose\":\"museum_sale\",\"museumId\":\"" + museumId

@@ -255,14 +255,14 @@ mysql_import_file(){
   if [ "$DB_HOST" = "127.0.0.1" ] || [ "$DB_HOST" = "localhost" ]; then
     if [ -z "$MYSQL_ADMIN_PASSWORD" ] && run_root mysql -u"$MYSQL_ADMIN_USER" -e "SELECT 1" >/dev/null 2>&1; then
       if ! sed -E '/^[[:space:]]*CREATE DATABASE IF NOT EXISTS[[:space:]]+shixun([[:space:]]|;)/d; /^[[:space:]]*USE[[:space:]]+shixun[[:space:]]*;/d' "$file" \
-        | run_root mysql --force --binary-mode -u"$MYSQL_ADMIN_USER" "$DB_NAME"; then
+        | run_root mysql --default-character-set=utf8mb4 --force --binary-mode -u"$MYSQL_ADMIN_USER" "$DB_NAME"; then
         warn "$(basename "$file") 包含可忽略的历史兼容错误，继续执行关键表检查"
       fi
       return
     fi
   fi
   if ! sed -E '/^[[:space:]]*CREATE DATABASE IF NOT EXISTS[[:space:]]+shixun([[:space:]]|;)/d; /^[[:space:]]*USE[[:space:]]+shixun[[:space:]]*;/d' "$file" \
-    | MYSQL_PWD="$MYSQL_ADMIN_PASSWORD" mysql --force --binary-mode -h"$DB_HOST" -P"$DB_PORT" -u"$MYSQL_ADMIN_USER" "$DB_NAME"; then
+    | MYSQL_PWD="$MYSQL_ADMIN_PASSWORD" mysql --default-character-set=utf8mb4 --force --binary-mode -h"$DB_HOST" -P"$DB_PORT" -u"$MYSQL_ADMIN_USER" "$DB_NAME"; then
     warn "$(basename "$file") 包含可忽略的历史兼容错误，继续执行关键表检查"
   fi
 }

@@ -7,6 +7,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -20,6 +21,7 @@ import java.util.Map;
 @Order(Ordered.LOWEST_PRECEDENCE)
 public class ApiExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+    private static final MediaType JSON_UTF8 = MediaType.parseMediaType("application/json;charset=UTF-8");
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, Object>> responseStatus(ResponseStatusException error) {
@@ -43,7 +45,7 @@ public class ApiExceptionHandler {
         body.put("success", false);
         body.put("message", message);
         body.put("requestId", requestId());
-        return ResponseEntity.status(status).body(body);
+        return ResponseEntity.status(status).contentType(JSON_UTF8).body(body);
     }
 
     private String requestId() {

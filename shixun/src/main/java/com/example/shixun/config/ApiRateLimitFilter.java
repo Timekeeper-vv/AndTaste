@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.http.MediaType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -70,7 +69,8 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         if (!allowed) {
             response.setStatus(429);
             response.setHeader("Retry-After", String.valueOf(Math.max(1, (rule.windowMillis - (now - window.startedAt)) / 1000)));
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            response.setCharacterEncoding("UTF-8");
+            response.setContentType("application/json;charset=UTF-8");
             mapper.writeValue(response.getWriter(), Map.of(
                     "success", false,
                     "message", "请求过于频繁，请稍后再试",

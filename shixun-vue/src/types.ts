@@ -9,6 +9,8 @@ export type PageName =
   | 'dashboard'
   | 'approvalCenter'
   | 'consumerWorksReview'
+  | 'professionalWorksReview'
+  | 'multiviewReview'
   | 'consumerAssetInventory'
   | 'consumerCreditManagement'
   | 'paymentOperations'
