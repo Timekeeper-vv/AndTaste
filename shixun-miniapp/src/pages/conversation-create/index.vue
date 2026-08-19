@@ -368,7 +368,7 @@ function isGenerationConfirmationText(message: string) {
   const value = message.trim()
   return Boolean(value) && (/.*(没有|无|不需要|不用).*(补充|修改|添加|意见).*/.test(value)
     || /.*(直接|开始|确认).*(生成|出图).*/.test(value)
-    || /^(没有|无|就这样)$/.test(value))
+    || /^(没有|没有了|无|无了|就这样|不用补充)$/.test(value))
 }
 function setInitialChatReplies() {
   if (productOptions.value.length) {

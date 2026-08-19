@@ -121,6 +121,20 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void noMoreDetailConfirmationDoesNotCallChatModelAgain() throws Exception {
+        controller.chat(1L, Map.of(
+                "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"
+        ), claims);
+        chooseRecommendedSize();
+
+        Map<String, Object> confirmed = controller.chat(1L, Map.of("message", "没有了"), claims);
+
+        assertThat(confirmed.get("readyToGenerate")).isEqualTo(true);
+        assertThat(confirmed.get("stage")).isEqualTo("ready_for_image");
+        verify(siliconFlow, times(1)).chat(anyString(), anyString(), anyDouble(), anyInt(), anyInt());
+    }
+
+    @Test
     void structuredProductAndMaterialChoicesDoNotBecomeInspiration() {
         Map<String, Object> productAction = new LinkedHashMap<>();
         productAction.put("type", "product");

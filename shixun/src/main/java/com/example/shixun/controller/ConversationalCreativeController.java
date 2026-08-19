@@ -735,7 +735,7 @@ public class ConversationalCreativeController {
     private boolean isGenerationConfirmationMessage(String message) {
         if (blank(message)) return false;
         String value = message.trim();
-        return value.matches(".*(没有|无|不需要|不用).*(补充|修改|添加|意见).*|.*(直接|开始|确认).*(生成|出图).*|^(没有|无|就这样)$");
+        return value.matches(".*(没有|无|不需要|不用).*(补充|修改|添加|意见).*|.*(直接|开始|确认).*(生成|出图).*|^(没有|没有了|无|无了|就这样|不用补充)$");
     }
 
     private void applyGenerationConfirmationState(Map<String, Object> brief, Map<String, Object> action, String message) {

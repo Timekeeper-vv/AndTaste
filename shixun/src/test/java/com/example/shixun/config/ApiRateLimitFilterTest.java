@@ -32,9 +32,38 @@ class ApiRateLimitFilterTest {
         assertEquals(200, response.getStatus());
     }
 
+    @Test
+    void isolatesCreativeChatBudgetByBearerToken() throws Exception {
+        ApiRateLimitFilter filter = new ApiRateLimitFilter(new ObjectMapper());
+        String path = "/api/creative/ai/conversations/12/chat";
+        for (int i = 0; i < 60; i++) {
+            MockHttpServletResponse response = invoke(filter, path, "token-a");
+            assertEquals(200, response.getStatus());
+        }
+        assertEquals(429, invoke(filter, path, "token-a").getStatus());
+        assertEquals(200, invoke(filter, path, "token-b").getStatus());
+    }
+
+    @Test
+    void unauthenticatedCreativeChatStillUsesTheProxyAddressBudget() throws Exception {
+        ApiRateLimitFilter filter = new ApiRateLimitFilter(new ObjectMapper());
+        String path = "/api/creative/ai/conversations/12/chat";
+        for (int i = 0; i < 60; i++) {
+            MockHttpServletResponse response = invoke(filter, path);
+            assertEquals(200, response.getStatus());
+        }
+        assertEquals(429, invoke(filter, path).getStatus());
+    }
+
     private MockHttpServletResponse invoke(ApiRateLimitFilter filter, String path) throws Exception {
+        return invoke(filter, path, null);
+    }
+
+    private MockHttpServletResponse invoke(ApiRateLimitFilter filter, String path, String token) throws Exception {
+        MockHttpServletRequest request = request("POST", path);
+        if (token != null) request.addHeader("Authorization", "Bearer " + token);
         MockHttpServletResponse response = new MockHttpServletResponse();
-        filter.doFilter(request("POST", path), response, new MockFilterChain());
+        filter.doFilter(request, response, new MockFilterChain());
         return response;
     }
 

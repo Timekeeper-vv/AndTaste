@@ -13,6 +13,9 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -56,7 +59,7 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
             return;
         }
         long now = clock.millis();
-        String key = rule.name + "|" + clientAddress(request);
+        String key = rule.name + "|" + requesterKey(request);
         Window window = windows.computeIfAbsent(key, ignored -> new Window(now));
         boolean allowed;
         synchronized (window) {
@@ -98,10 +101,37 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
                 || "/api/payments/commercial-guidance-orders".equals(path)) {
             return new Rule("payment-order", 10, 60_000);
         }
+        if (path.matches("/api/creative/ai/conversations/[^/]+/chat")) {
+            // A conversational turn may make several local state transitions,
+            // and old clients can retry after a network timeout. Isolate the
+            // budget per authenticated user instead of sharing one proxy IP.
+            return new Rule("creative-chat", 60, 60_000);
+        }
         if (path.startsWith("/api/creative/ai/") || "/api/creative/ai".equals(path)) {
-            return new Rule("creative-ai", 20, 60_000);
+            return new Rule("creative-ai", 30, 60_000);
         }
         return null;
+    }
+
+    private String requesterKey(HttpServletRequest request) {
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            String token = authorization.substring(7).trim();
+            if (!token.isEmpty()) return "token:" + sha256(token);
+        }
+        return "ip:" + clientAddress(request);
+    }
+
+    private String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte item : digest) hex.append(String.format("%02x", item));
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("无法计算请求身份指纹", e);
+        }
     }
 
     private String clientAddress(HttpServletRequest request) {
