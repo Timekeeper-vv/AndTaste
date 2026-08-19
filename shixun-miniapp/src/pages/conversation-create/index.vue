@@ -325,6 +325,19 @@ function addMessage(role: Message['role'], text: string) {
   void nextTick(() => { scrollIntoView.value = `message-${id}` })
   return id
 }
+function addRestoredMessage(role: Message['role'], text: string) {
+  const value = text.trim()
+  if (!value) return null
+  const isSizeQuestion = role === 'assistant' && /这件产品想做多大[？?]/.test(value)
+  const isRecommendedSizeReply = role === 'user' && value === '按推荐规格'
+  // Old sessions can contain several copies of the same size turn from the
+  // previous client. Once a size is already in the brief, those questions are
+  // stale and should not be shown again when the transcript is restored.
+  if (isSizeQuestion && productSize.value) return null
+  if (isRecommendedSizeReply && messages.value.some(item => item.role === 'user' && item.text === value)) return null
+  if (messages.value.some(item => item.role === role && item.text === value)) return null
+  return addMessage(role, value)
+}
 async function scrollToSection(id: 'result-output' | 'multiview-output' | 'model-output' | 'bottom-anchor') {
   scrollIntoView.value = ''
   await nextTick()
@@ -948,73 +961,73 @@ function restoreMessages(events: any[]) {
     const payload = event?.payload || {}
     switch (String(event?.eventType || '')) {
       case 'mode_selected':
-        addMessage('user', modeOptions.find(item => item.key === payload.mode)?.title || String(payload.modeName || '已选择创作方式'))
-        addMessage('assistant', '好，我们先确定产品方向。你想把它做成什么？')
+        addRestoredMessage('user', modeOptions.find(item => item.key === payload.mode)?.title || String(payload.modeName || '已选择创作方式'))
+        addRestoredMessage('assistant', '好，我们先确定产品方向。你想把它做成什么？')
         break
       case 'product_selected': {
         const product = productByValue(payload.productType, payload.productKey)
-        if (product) addMessage('user', product.name)
-        if (mode.value === 'template') addMessage('assistant', `${product?.name || '这个产品'}很适合先做一版。现在选材质，我会把工艺约束一起带进提示词。`)
-        else if (mode.value === 'text') addMessage('assistant', '收到。把你已有的文字灵感告诉我，不用写成复杂提示词。')
-        else addMessage('assistant', '收到。请上传一张你有权使用的灵感图片，我会保留主体并优化成产品视觉。')
+        if (product) addRestoredMessage('user', product.name)
+        if (mode.value === 'template') addRestoredMessage('assistant', `${product?.name || '这个产品'}很适合先做一版。现在选材质，我会把工艺约束一起带进提示词。`)
+        else if (mode.value === 'text') addRestoredMessage('assistant', '收到。把你已有的文字灵感告诉我，不用写成复杂提示词。')
+        else addRestoredMessage('assistant', '收到。请上传一张你有权使用的灵感图片，我会保留主体并优化成产品视觉。')
         break
       }
       case 'text_inspiration_submitted':
-        if (payload.inspirationText) addMessage('user', String(payload.inspirationText))
-        addMessage('assistant', '我记下了这段灵感。接下来选择材质，我会把材质、结构和生产限制一起考虑。')
+        if (payload.inspirationText) addRestoredMessage('user', String(payload.inspirationText))
+        addRestoredMessage('assistant', '我记下了这段灵感。接下来选择材质，我会把材质、结构和生产限制一起考虑。')
         break
       case 'image_inspiration_uploaded':
-        addMessage('user', '已上传一张灵感图片')
-        addMessage('assistant', '图片已收到。你希望它用什么材质？')
+        addRestoredMessage('user', '已上传一张灵感图片')
+        addRestoredMessage('assistant', '图片已收到。你希望它用什么材质？')
         break
       case 'material_selected':
-        addMessage('user', String(payload.material || payload.materialName || material.value))
-        addMessage('assistant', '材质已确认。接下来确认成品尺寸后，我会生成产品图。')
+        addRestoredMessage('user', String(payload.material || payload.materialName || material.value))
+        addRestoredMessage('assistant', '材质已确认。接下来确认成品尺寸后，我会生成产品图。')
         break
       case 'size_selected':
-        addMessage('user', String(payload.productSize || payload.size || payload.dimensions || productSize.value))
-        addMessage('assistant', '尺寸已确认。我会按这个比例和可生产结构准备产品图。')
+        addRestoredMessage('user', String(payload.productSize || payload.size || payload.dimensions || productSize.value))
+        addRestoredMessage('assistant', '尺寸已确认。我会按这个比例和可生产结构准备产品图。')
         break
       case 'creative_direction_auto_confirmed':
-        addMessage('assistant', `我会根据你的灵感自动匹配${payload.material || material.value}，现在直接生成产品图。`)
+        addRestoredMessage('assistant', `我会根据你的灵感自动匹配${payload.material || material.value}，现在直接生成产品图。`)
         break
       case 'image_generation_queued':
-        addMessage('assistant', '产品图已进入生成队列。离开当前页面也会继续生成，完成后会自动保存到作品库。')
+        addRestoredMessage('assistant', '产品图已进入生成队列。离开当前页面也会继续生成，完成后会自动保存到作品库。')
         break
       case 'image_generation_failed':
-        addMessage('assistant', `产品图本次没有生成成功。${payload.errorMessage || '可以调整描述后重新提交。'}`)
+        addRestoredMessage('assistant', `产品图本次没有生成成功。${payload.errorMessage || '可以调整描述后重新提交。'}`)
         break
       case 'image_generated':
-        addMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
+        addRestoredMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
         break
       case 'image_refined':
-        addMessage('user', `补充修改：${payload.refinementNote || '基于当前图重新生成'}`)
-        addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
+        addRestoredMessage('user', `补充修改：${payload.refinementNote || '基于当前图重新生成'}`)
+        addRestoredMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
         break
       case 'multiview_queued':
-        addMessage('assistant', '三视图已进入生成队列。离开当前页面也会继续生成，完成后会自动保存到作品库。')
+        addRestoredMessage('assistant', '三视图已进入生成队列。离开当前页面也会继续生成，完成后会自动保存到作品库。')
         break
       case 'multiview_failed':
-        addMessage('assistant', `三视图本次没有生成成功。${payload.errorMessage || '可以稍后重新提交。'}`)
+        addRestoredMessage('assistant', `三视图本次没有生成成功。${payload.errorMessage || '可以稍后重新提交。'}`)
         break
       case 'multiview_generated':
-        addMessage('assistant', '三视图已经保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
+        addRestoredMessage('assistant', '三视图已经保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
         break
       case 'model_submitted':
-        addMessage('assistant', '3D 建模任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。')
+        addRestoredMessage('assistant', '3D 建模任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。')
         break
       case 'model_completed':
-        addMessage('assistant', '3D 模型已经生成并保存到作品库，可以继续评审、申请打样或提交商品化报价。')
+        addRestoredMessage('assistant', '3D 模型已经生成并保存到作品库，可以继续评审、申请打样或提交商品化报价。')
         break
       case 'model_failed':
-        addMessage('assistant', '3D 建模没有完成，失败原因已保存。可以检查产品图后重新提交。')
+        addRestoredMessage('assistant', '3D 建模没有完成，失败原因已保存。可以检查产品图后重新提交。')
         break
       case 'chat_user_message':
-        if (payload.message) addMessage('user', String(payload.message))
-        else if (payload.action?.label) addMessage('user', String(payload.action.label))
+        if (payload.message) addRestoredMessage('user', String(payload.message))
+        else if (payload.action?.label) addRestoredMessage('user', String(payload.action.label))
         break
       case 'chat_assistant_message':
-        if (payload.text) addMessage('assistant', String(payload.text))
+        if (payload.text) addRestoredMessage('assistant', String(payload.text))
         if (Array.isArray(payload.quickReplies)) chatQuickReplies.value = payload.quickReplies
         if (payload.stage) chatStage.value = String(payload.stage)
         if (!generatedAssetId.value && (payload.generationConfirmationRequired || (payload.readyToGenerate && payload.generationConfirmed !== true))) {
