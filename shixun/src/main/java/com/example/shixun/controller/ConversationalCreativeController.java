@@ -140,7 +140,9 @@ public class ConversationalCreativeController {
         if (!confirmationText) applyLocalHints(brief, message, action, catalog, userId);
         applyGenerationConfirmationState(brief, action, message);
         String editTarget = "edit".equals(text(action.get("type"))) ? text(action.get("value")) : null;
-        PlannerDecision decision = (isGenerationConfirmationAction(action) || confirmationText || editTarget != null)
+        String actionType = text(action.get("type"));
+        boolean structuredAction = !action.isEmpty() && !"text".equals(actionType);
+        PlannerDecision decision = (isGenerationConfirmationAction(action) || confirmationText || editTarget != null || structuredAction)
                 ? new PlannerDecision("", Map.of())
                 : planTurn(message, action, brief, catalog);
         applyDecision(brief, decision, userId);

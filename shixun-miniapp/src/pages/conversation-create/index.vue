@@ -189,6 +189,7 @@ const chatExperience = true
 const chatInput = ref('')
 const chatQuickReplies = ref<ConversationQuickReply[]>([])
 const chatSending = ref(false)
+const quickReplySubmitting = ref(false)
 const chatThinking = ref(false)
 const thinkingLabel = ref('正在理解你的想法')
 const awaitingGenerationConfirmation = ref(false)
@@ -395,57 +396,62 @@ function applyChatBrief(brief: Record<string, any> | undefined) {
 }
 
 async function handleQuickReply(item: ConversationQuickReply) {
-  if (busy.value || chatSending.value) return
+  if (busy.value || chatSending.value || quickReplySubmitting.value) return
+  quickReplySubmitting.value = true
   const type = String(item.type || '')
-  if (type === 'upload') {
-    await pickInspirationImage()
-    return
+  try {
+    if (type === 'upload') {
+      await pickInspirationImage()
+      return
+    }
+    if (type === 'multiview') {
+      await generateMultiView()
+      return
+    }
+    if (type === 'bundle_review') {
+      await submitMultiViewReview()
+      return
+    }
+    if (type === 'bundle_production') {
+      applyMultiViewProduction()
+      return
+    }
+    if (type === 'model') {
+      await generateModel()
+      return
+    }
+    if (type === 'commercial') {
+      openCommercial()
+      return
+    }
+    if (type === 'works') {
+      goWorks()
+      return
+    }
+    if (type === 'refine') {
+      startRefinement()
+      return
+    }
+    if (type === 'template') {
+      showTemplateDeveloping()
+      return
+    }
+    if (type === 'confirm_generate' || type === 'add_detail') {
+      await sendChatTurn('', { type, value: String(item.value || ''), label: String(item.label || '') })
+      return
+    }
+    if (type === 'text' && !String(item.value || '').trim()) {
+      uni.showToast({ title: '请在下方输入框告诉我你的想法', icon: 'none' })
+      return
+    }
+    const label = String(item.label || item.value || '').trim()
+    // Keep structured selections out of the free-text slot. Otherwise a
+    // product/material button can be misread as the user's inspiration.
+    const message = type === 'text' ? label : ''
+    await sendChatTurn(message, { type, value: String(item.value || ''), label })
+  } finally {
+    quickReplySubmitting.value = false
   }
-  if (type === 'multiview') {
-    await generateMultiView()
-    return
-  }
-  if (type === 'bundle_review') {
-    await submitMultiViewReview()
-    return
-  }
-  if (type === 'bundle_production') {
-    applyMultiViewProduction()
-    return
-  }
-  if (type === 'model') {
-    await generateModel()
-    return
-  }
-  if (type === 'commercial') {
-    openCommercial()
-    return
-  }
-  if (type === 'works') {
-    goWorks()
-    return
-  }
-  if (type === 'refine') {
-    startRefinement()
-    return
-  }
-  if (type === 'template') {
-    showTemplateDeveloping()
-    return
-  }
-  if (type === 'confirm_generate' || type === 'add_detail') {
-    await sendChatTurn('', { type, value: String(item.value || ''), label: String(item.label || '') })
-    return
-  }
-  if (type === 'text' && !String(item.value || '').trim()) {
-    uni.showToast({ title: '请在下方输入框告诉我你的想法', icon: 'none' })
-    return
-  }
-  const label = String(item.label || item.value || '').trim()
-  // Keep structured selections out of the free-text slot. Otherwise a
-  // product/material button can be misread as the user's inspiration.
-  const message = type === 'text' ? label : ''
-  await sendChatTurn(message, { type, value: String(item.value || ''), label })
 }
 
 async function submitChatInput() {

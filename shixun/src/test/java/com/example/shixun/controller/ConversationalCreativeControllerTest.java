@@ -20,6 +20,8 @@ import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ConversationalCreativeControllerTest {
@@ -96,6 +98,26 @@ class ConversationalCreativeControllerTest {
         assertThat(brief.get("productSize")).isEqualTo("约 60mm");
         assertThat(sized.get("stage")).isEqualTo("confirm_before_image");
         assertThat(String.valueOf(sized.get("assistantText"))).doesNotContain("这件产品想做多大");
+    }
+
+    @Test
+    void recommendedSizeActionIsLocalAndRemainsAdvancedWhenSubmittedAgain() throws Exception {
+        controller.chat(1L, Map.of(
+                "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"
+        ), claims);
+
+        Map<String, Object> size = new LinkedHashMap<>();
+        size.put("type", "size");
+        size.put("value", "recommend");
+        Map<String, Object> first = controller.chat(1L, Map.of("action", size), claims);
+        Map<String, Object> second = controller.chat(1L, Map.of("action", size), claims);
+
+        assertThat(((Map<?, ?>) first.get("brief")).get("productSize")).isEqualTo("60×60×4mm");
+        assertThat(((Map<?, ?>) second.get("brief")).get("productSize")).isEqualTo("60×60×4mm");
+        assertThat(first.get("stage")).isEqualTo("confirm_before_image");
+        assertThat(second.get("stage")).isEqualTo("confirm_before_image");
+        assertThat(String.valueOf(second.get("assistantText"))).doesNotContain("这件产品想做多大");
+        verify(siliconFlow, times(1)).chat(anyString(), anyString(), anyDouble(), anyInt(), anyInt());
     }
 
     @Test
