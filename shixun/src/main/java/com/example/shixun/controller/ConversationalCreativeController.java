@@ -181,6 +181,10 @@ public class ConversationalCreativeController {
             reply = "我已经整理好产品、灵感、材质和尺寸。生成图片前，还有需要补充的吗？没有的话点击“没有补充，开始生成”。";
         } else if (ready && (isGenerationConfirmationAction(action) || confirmationText)) {
             reply = "好的，我按当前方案开始生成产品图。";
+        } else if ("need_size".equals(stage)) {
+            // The planner may phrase the reply differently, but it must not
+            // move the workflow backwards by repeating a stale question.
+            reply = fallbackReply(brief, catalog, false);
         }
         if (message != null || !action.isEmpty()) {
             saveEvent(id, userId, "chat", "chat_user_message", Map.of(
@@ -408,6 +412,15 @@ public class ConversationalCreativeController {
         if (productSize != null) {
             brief.put("productSize", productSize);
             brief.put("sizeRecommended", false);
+        } else if (blank(text(brief.get("productSize"))) && hasRequiredFieldsBeforeSize(brief)) {
+            // A common answer to the size question is just "60". Interpret a
+            // bare number as millimetres only in the size stage; elsewhere it
+            // may be part of the user's creative description.
+            String bareNumericSize = extractBareNumericSize(input);
+            if (bareNumericSize != null) {
+                brief.put("productSize", bareNumericSize);
+                brief.put("sizeRecommended", false);
+            }
         } else if (blank(text(brief.get("productSize"))) && hasRequiredFieldsBeforeSize(brief)
                 && input.length() <= 24 && input.matches(".*(推荐|帮我选|你来选).*")) {
             String recommended = recommendedProductSize(brief);
@@ -496,6 +509,13 @@ public class ConversationalCreativeController {
             return normalized;
         }
         return null;
+    }
+
+    private String extractBareNumericSize(String input) {
+        if (blank(input)) return null;
+        String normalized = input.trim().replaceAll("\\s+", "");
+        if (!normalized.matches("\\d{1,4}(?:\\.\\d+)?")) return null;
+        return "约 " + normalized + "mm";
     }
 
     private String normalizeProductSize(String requested) {

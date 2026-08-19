@@ -85,6 +85,20 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void bareNumericSizeAnswerAdvancesPastTheSizeQuestion() {
+        controller.chat(1L, Map.of(
+                "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"
+        ), claims);
+
+        Map<String, Object> sized = controller.chat(1L, Map.of("message", "60"), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) sized.get("brief");
+        assertThat(brief.get("productSize")).isEqualTo("约 60mm");
+        assertThat(sized.get("stage")).isEqualTo("confirm_before_image");
+        assertThat(String.valueOf(sized.get("assistantText"))).doesNotContain("这件产品想做多大");
+    }
+
+    @Test
     void structuredProductAndMaterialChoicesDoNotBecomeInspiration() {
         Map<String, Object> productAction = new LinkedHashMap<>();
         productAction.put("type", "product");
