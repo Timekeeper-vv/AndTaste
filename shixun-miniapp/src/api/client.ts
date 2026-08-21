@@ -158,6 +158,23 @@ export type ImageGenerationJobProgress = {
 
 export type ArkImageJobProgress = ImageGenerationJobProgress
 
+/** The miniapp keeps one image provider and one predictable output size. */
+export type SeedreamImageSize = '1K' | '2K'
+export const DEFAULT_SEEDREAM_IMAGE_SIZE: SeedreamImageSize = '2K'
+
+function seedreamRequestBody(body: any) {
+  const imageSize = body?.imageSize || DEFAULT_SEEDREAM_IMAGE_SIZE
+  return {
+    ...(body || {}),
+    provider: 'ark',
+    imageSize,
+    // Older server DTOs exposed this field with the Imagen-era spelling.
+    // Sending both keeps the selected Seedream resolution explicit across
+    // compatible deployments.
+    imagenImageSize: body?.imagenImageSize || imageSize,
+  }
+}
+
 const wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))
 
 export const getImageGenerationJob = (jobId: number | string) => request<ImageGenerationJobProgress>(
@@ -199,14 +216,14 @@ export const waitForArkImageJob = waitForImageGenerationJob
 
 export async function createTextToImage(body: any, onProgress?: (job: ArkImageJobProgress) => void) {
   const queued = await request<ArkImageJobProgress>('/api/creative/ai/ark/text-to-image', {
-    method: 'POST', data: body, timeout: 30000, header: { 'content-type': 'application/json' },
+    method: 'POST', data: seedreamRequestBody(body), timeout: 30000, header: { 'content-type': 'application/json' },
   })
   return waitForArkImageJob(queued, onProgress)
 }
 
 export async function createReferenceToImage(body: any, onProgress?: (job: ImageGenerationJobProgress) => void) {
   const queued = await request<ImageGenerationJobProgress>('/api/creative/ai/image-to-image', {
-    method: 'POST', data: { ...body, queue: true }, timeout: 30000, header: { 'content-type': 'application/json' },
+    method: 'POST', data: { ...seedreamRequestBody(body), queue: true }, timeout: 30000, header: { 'content-type': 'application/json' },
   })
   return waitForImageGenerationJob(queued, onProgress)
 }

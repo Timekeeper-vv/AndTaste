@@ -133,6 +133,7 @@ public class ConversationalCreativeController {
         String message = limit(text(input.get("message")), 1200);
         Map<String, Object> action = normalizeAction(input.get("action"));
         Map<String, Object> brief = currentBrief(id, userId);
+        boolean materialKnownBeforeTurn = !blank(text(brief.get("material")));
         boolean confirmationText = isGenerationConfirmationMessage(message);
         applyAction(brief, action, message, userId);
 
@@ -146,6 +147,9 @@ public class ConversationalCreativeController {
                 ? new PlannerDecision("", Map.of())
                 : planTurn(message, action, brief, catalog);
         applyDecision(brief, decision, userId);
+        // The model may improve the wording, but it must never erase a
+        // material, size, or inspiration already captured by local rules.
+        if (!confirmationText) applyLocalHints(brief, message, action, catalog, userId);
         // A structured button is authoritative. The language model may phrase
         // the next question as text mode, but it must not undo an explicit
         // product, material, template, or uploaded-image choice.
@@ -187,6 +191,30 @@ public class ConversationalCreativeController {
             // The planner may phrase the reply differently, but it must not
             // move the workflow backwards by repeating a stale question.
             reply = fallbackReply(brief, catalog, false);
+        }
+        if (!addingDetail && editTarget == null && !templateUnavailable && !ready
+                && isStaleProgressReply(reply, brief)) {
+            reply = fallbackReply(brief, catalog, false);
+        }
+        boolean recommendationTurn = isRecommendationMessage(message);
+        boolean materialRecommendationTurn = "material".equals(actionType)
+                && "recommend".equalsIgnoreCase(text(action.get("value")));
+        boolean sizeRecommendationTurn = "size".equals(actionType)
+                && "recommend".equalsIgnoreCase(text(action.get("value")));
+        if (materialRecommendationTurn || (recommendationTurn && !materialKnownBeforeTurn)) {
+            String selected = text(brief.get("material"));
+            if (!blank(selected)) {
+                String selectedSize = text(brief.get("productSize"));
+                reply = "我已推荐材质「" + selected + "」"
+                        + (blank(selectedSize) ? "" : "和成品规格「" + selectedSize + "」")
+                        + "，并直接写入图片生成提示词。生成前还有需要补充的吗？";
+            }
+        } else if (sizeRecommendationTurn || recommendationTurn) {
+            String selected = text(brief.get("productSize"));
+            if (!blank(selected)) {
+                reply = "根据「" + text(brief.get("productName")) + "」的常用打样规格，我推荐「" + selected
+                        + "」，已为你设置并写入图片生成提示词。生成前还有需要补充的吗？";
+            }
         }
         if (message != null || !action.isEmpty()) {
             saveEvent(id, userId, "chat", "chat_user_message", Map.of(
@@ -301,6 +329,13 @@ public class ConversationalCreativeController {
                 if (recommended != null) {
                     brief.put("material", recommended);
                     brief.put("materialRecommended", true);
+                    if (blank(text(brief.get("productSize")))) {
+                        String recommendedSize = recommendedProductSize(brief);
+                        if (recommendedSize != null) {
+                            brief.put("productSize", recommendedSize);
+                            brief.put("sizeRecommended", true);
+                        }
+                    }
                 }
             } else if (value != null) {
                 String canonical = canonicalMaterial(text(brief.get("materialOptions")), value);
@@ -399,10 +434,17 @@ public class ConversationalCreativeController {
         if (matchedProduct != null) applyProduct(brief, matchedProduct);
 
         String material = matchMaterial(text(brief.get("materialOptions")), input);
+        // Keep the catalog as the first choice, but do not discard a clear
+        // user-entered material merely because an older product row does not
+        // list that variant yet (for example 毛线 or 毛绒).
+        if (material == null && !blank(text(brief.get("productKey")))) {
+            material = extractExplicitMaterial(input);
+        }
         if (material != null) {
             brief.put("material", material);
             brief.put("materialRecommended", false);
-        } else if (brief.get("productKey") != null && input.matches(".*(推荐|帮我选|你来选).*")) {
+        } else if (blank(text(brief.get("material"))) && brief.get("productKey") != null
+                && input.matches(".*(推荐|帮我选|你来选).*")) {
             String recommended = recommendedMaterialValue(text(brief.get("materialOptions")));
             if (recommended != null) {
                 brief.put("material", recommended);
@@ -422,13 +464,12 @@ public class ConversationalCreativeController {
             if (bareNumericSize != null) {
                 brief.put("productSize", bareNumericSize);
                 brief.put("sizeRecommended", false);
-            }
-        } else if (blank(text(brief.get("productSize"))) && hasRequiredFieldsBeforeSize(brief)
-                && input.length() <= 24 && input.matches(".*(推荐|帮我选|你来选).*")) {
-            String recommended = recommendedProductSize(brief);
-            if (recommended != null) {
-                brief.put("productSize", recommended);
-                brief.put("sizeRecommended", true);
+            } else if (input.length() <= 24 && input.matches(".*(推荐|帮我选|你来选).*")) {
+                String recommended = recommendedProductSize(brief);
+                if (recommended != null) {
+                    brief.put("productSize", recommended);
+                    brief.put("sizeRecommended", true);
+                }
             }
         }
 
@@ -446,6 +487,20 @@ public class ConversationalCreativeController {
         } else if (blank(text(brief.get("mode"))) && matchedProduct != null) {
             brief.put("mode", "text");
         }
+    }
+
+    private String extractExplicitMaterial(String input) {
+        if (blank(input)) return null;
+        String normalized = input.trim().replaceAll("\\s+", "");
+        String[] materialTokens = {
+                "水晶超柔", "超柔", "毛线", "毛绒", "毛毡", "布艺", "棉布", "帆布",
+                "亚克力", "合金", "锌合金", "陶瓷", "硅胶", "木质", "木材", "纸质",
+                "不锈钢", "玻璃", "树脂", "PVC", "皮革", "牛皮纸", "磁性材料"
+        };
+        for (String token : materialTokens) {
+            if (normalized.contains(token)) return token;
+        }
+        return null;
     }
 
     private Map<String, Object> matchProduct(String input, List<Map<String, Object>> catalog, long userId) {
@@ -495,7 +550,8 @@ public class ConversationalCreativeController {
             String candidate = token.toLowerCase(Locale.ROOT);
             if (candidate.equals(normalized) || candidate.contains(normalized) || normalized.contains(candidate)) return token;
         }
-        return blank(options) ? requested.trim() : null;
+        String explicit = extractExplicitMaterial(requested);
+        return explicit != null ? explicit : (blank(options) ? requested.trim() : null);
     }
 
     private String extractProductSize(String input) {
@@ -534,17 +590,97 @@ public class ConversationalCreativeController {
 
     private String recommendedProductSize(Map<String, Object> brief) {
         String specification = text(brief.get("sizeRecommendation"));
-        if (!blank(specification)) return specification;
         String product = text(brief.get("productName"));
+        String concreteSpecification = concreteSizeFromSpecification(specification);
+        if (concreteSpecification != null) return concreteSpecification;
+        String productDefault = defaultSizeForProduct(product);
+        if (productDefault != null) return productDefault;
+        String categoryDefault = defaultSizeForCategory(text(brief.get("categoryKey")));
+        return categoryDefault == null ? "80×80×8mm" : categoryDefault;
+    }
+
+    /**
+     * Catalog specifications may be ranges ("4-8cm") or non-dimensional
+     * manufacturing notes ("随型", "定制"). Only reuse a specification when
+     * it already identifies one concrete finished size.
+     */
+    private String concreteSizeFromSpecification(String specification) {
+        if (blank(specification)) return null;
+        String normalized = specification.trim().replaceAll("\\s+", " ");
+
+        Matcher named = NAMED_DIMENSION_PATTERN.matcher(normalized);
+        while (named.find()) {
+            String candidate = named.group().trim();
+            if (!containsDimensionRange(candidate)) return candidate;
+        }
+
+        Matcher dimensions = DIMENSION_PATTERN.matcher(normalized);
+        while (dimensions.find()) {
+            String candidate = dimensions.group().trim();
+            boolean multipleDimensions = candidate.matches("(?i).*(?:[x×*]|乘).*");
+            boolean entireSpecification = candidate.equalsIgnoreCase(normalized);
+            boolean startsInsideRange = dimensions.start() > 0
+                    && "-~～至到".indexOf(normalized.charAt(dimensions.start() - 1)) >= 0;
+            if (!startsInsideRange && !containsDimensionRange(candidate)
+                    && (multipleDimensions || entireSpecification)) {
+                return candidate;
+            }
+        }
+
+        Matcher standardSize = STANDARD_SIZE_PATTERN.matcher(normalized);
+        if (standardSize.find()) {
+            String value = standardSize.group().toUpperCase(Locale.ROOT);
+            if ("A3".equals(value)) return "A3（297×420mm）";
+            if ("A4".equals(value)) return "A4（210×297mm）";
+            if ("A5".equals(value)) return "A5（148×210mm）";
+            if ("A6".equals(value)) return "A6（105×148mm）";
+        }
+        return null;
+    }
+
+    private boolean containsDimensionRange(String value) {
+        return value != null && value.matches(".*\\d(?:\\.\\d+)?\\s*[-~～至到]\\s*\\d.*");
+    }
+
+    private String defaultSizeForProduct(String product) {
         if (blank(product)) return null;
-        if (product.contains("冰箱贴")) return "约 60×60×4mm";
-        if (product.contains("徽章") || product.contains("胸针")) return "约 58×58×3mm";
-        if (product.contains("钥匙扣")) return "约 50×50×4mm";
-        if (product.contains("书签")) return "约 40×120×1.2mm";
+        if (product.contains("冰箱贴")) return "60×60×4mm";
+        if (product.contains("钥匙扣")) return "50×50×4mm";
+        if (product.contains("徽章") || product.contains("胸针") || product.contains("纪念章") || product.endsWith("币")) return "58×58×3mm";
+        if (product.contains("书签")) return "40×120×1.2mm";
         if (product.contains("明信片")) return "A6（105×148mm）";
-        if (product.contains("帆布袋") || product.contains("手提袋")) return "约 350×300×100mm";
-        if (product.contains("马克杯") || product.contains("杯")) return "约 直径 80×高 95mm";
-        return "约 80×80×8mm";
+        if (product.contains("贴纸")) return "50×50mm";
+        if (product.contains("本册") || product.contains("笔记本") || product.contains("打卡本")) return "A5（148×210mm）";
+        if (product.contains("抱枕")) return "400×400×120mm";
+        if (product.contains("毛巾")) return "200×700mm";
+        if (product.contains("公仔") || product.contains("潮玩") || product.contains("毛绒")) return "高 130mm";
+        if (product.contains("杯垫")) return "100×100×5mm";
+        if (product.contains("马克杯")) return "直径 80mm、高 95mm";
+        if (product.contains("保温杯") || product.contains("随行杯")) return "直径 70mm、高 200mm";
+        if (product.contains("帆布") && product.contains("包") || product.contains("手提袋")) return "350×300×100mm";
+        if (product.contains("T 恤") || product.contains("T恤")) return "衣长 680mm、胸宽 500mm";
+        if (product.contains("吊坠")) return "30×30×3mm";
+        if (product.contains("耳钉")) return "12×12×3mm";
+        if (product.contains("耳坠")) return "15×30×3mm";
+        if (product.contains("项链") || product.contains("颈链")) return "链长 450mm";
+        if (product.contains("手镯") || product.contains("手链")) return "周长 170mm";
+        if (product.contains("摆件") || product.contains("工艺品")) return "150×150×200mm";
+        return null;
+    }
+
+    private String defaultSizeForCategory(String category) {
+        if (blank(category)) return null;
+        if ("food".equals(category)) return "180×120×50mm";
+        if ("stationery".equals(category)) return "A5（148×210mm）";
+        if ("daily".equals(category)) return "300×300×80mm";
+        if ("toy".equals(category)) return "高 130mm";
+        if ("tableware".equals(category)) return "100×100×100mm";
+        if ("souvenir".equals(category)) return "60×60×4mm";
+        if ("accessory".equals(category)) return "35×35×3mm";
+        if ("apparel".equals(category)) return "350×300×100mm";
+        if ("craft".equals(category)) return "150×150×200mm";
+        if ("precious".equals(category)) return "40×40×3mm";
+        return null;
     }
 
     private boolean hasRequiredFieldsBeforeSize(Map<String, Object> brief) {
@@ -752,6 +888,27 @@ public class ConversationalCreativeController {
 
     private boolean isTrue(Object value) {
         return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value)) || "1".equals(String.valueOf(value));
+    }
+
+    private boolean isRecommendationMessage(String message) {
+        if (blank(message)) return false;
+        return message.trim().length() <= 32 && message.matches(".*(推荐|帮我选|你来选|按推荐规格).*" );
+    }
+
+    private boolean isStaleProgressReply(String reply, Map<String, Object> brief) {
+        if (blank(reply)) return true;
+        String value = reply.trim();
+        if (!blank(text(brief.get("productKey")))) {
+            if (value.matches(".*(做成什么产品|选择.*产品|产品方向).*")) return true;
+        }
+        if (!blank(text(brief.get("inspiration")))) {
+            if (value.matches(".*(说说你的灵感|描述.*灵感|上传.*参考图).*")) return true;
+        }
+        if (!blank(text(brief.get("material")))) {
+            if (value.matches(".*(材质不确定|确认材质|选择材质|推荐材质).*")) return true;
+        }
+        return !blank(text(brief.get("productSize")))
+                && value.matches(".*(想做多大|成品尺寸|确认.*尺寸|推荐规格).*");
     }
 
     private Map<String, Object> reply(String label, String type, String value) {

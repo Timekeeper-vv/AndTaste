@@ -16,7 +16,16 @@ interface WechatVirtualPaymentOptions {
   fail?: (error: { errMsg?: string; errCode?: number; message?: string }) => void
 }
 
+interface WechatClipboardOptions {
+  data: string
+  showToast?: boolean
+  success?: (result: { errMsg?: string }) => void
+  fail?: (error: { errMsg?: string; errCode?: number; message?: string }) => void
+  complete?: (result: { errMsg?: string }) => void
+}
+
 declare const wx: {
   requestVirtualPayment(options: WechatVirtualPaymentOptions): void
+  setClipboardData?(options: WechatClipboardOptions): void
   canIUse?(schema: string): boolean
 }

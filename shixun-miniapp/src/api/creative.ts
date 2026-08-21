@@ -1,4 +1,4 @@
-import { request, uploadFile, waitForImageGenerationJob, type ImageGenerationJobProgress } from './client'
+import { DEFAULT_SEEDREAM_IMAGE_SIZE, request, uploadFile, waitForImageGenerationJob, type ImageGenerationJobProgress, type SeedreamImageSize } from './client'
 
 export interface ConversationSession {
   id: number
@@ -233,7 +233,7 @@ export interface SeedreamMultiViewRequest {
   /** Conversational route uses front/side/back; professional route defaults to four. */
   viewCount?: 3 | 4
   /** Seedream 多视图接口当前只接受 1K 或 2K。 */
-  size?: '1K' | '2K'
+  size?: SeedreamImageSize
   watermark?: boolean
 }
 
@@ -260,7 +260,7 @@ export interface SeedreamMultiViewResult {
  */
 export async function createSeedreamMultiView(body: SeedreamMultiViewRequest, onProgress?: (job: ImageGenerationJobProgress) => void) {
   const queued = await request<ImageGenerationJobProgress>('/api/creative/ai/volcengine/seedream/multiview', {
-    method: 'POST', data: { ...body, queue: true }, timeout: 30000, header: { 'content-type': 'application/json' },
+    method: 'POST', data: { ...body, size: body?.size || DEFAULT_SEEDREAM_IMAGE_SIZE, provider: 'ark', queue: true }, timeout: 30000, header: { 'content-type': 'application/json' },
   })
   return waitForImageGenerationJob(queued, onProgress) as Promise<SeedreamMultiViewResult>
 }

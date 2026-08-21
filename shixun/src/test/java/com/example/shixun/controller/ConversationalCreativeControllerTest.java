@@ -75,6 +75,10 @@ class ConversationalCreativeControllerTest {
         assertThat(withSize.get("generationConfirmationRequired")).isEqualTo(true);
         assertThat(withSize.get("stage")).isEqualTo("confirm_before_image");
         assertThat(((Map<?, ?>) withSize.get("brief")).get("productSize")).isEqualTo("60×60×4mm");
+        assertThat(withSize.get("quickReplies").toString())
+                .contains("没有补充，开始生成")
+                .contains("我还要补充")
+                .doesNotContain("按推荐规格");
         assertThat(jdbc.queryForObject("SELECT product_size FROM creative_conversation_session WHERE id=1", String.class))
                 .isEqualTo("60×60×4mm");
 
@@ -118,6 +122,74 @@ class ConversationalCreativeControllerTest {
         assertThat(second.get("stage")).isEqualTo("confirm_before_image");
         assertThat(String.valueOf(second.get("assistantText"))).doesNotContain("这件产品想做多大");
         verify(siliconFlow, times(1)).chat(anyString(), anyString(), anyDouble(), anyInt(), anyInt());
+    }
+
+    @Test
+    void explicitMaterialOutsideLegacyCatalogIsKeptAndAdvancesToSize() {
+        controller.chat(1L, Map.of(
+                "message", "我想做一个合金冰箱贴，主题是白色的比熊"
+        ), claims);
+
+        Map<String, Object> result = controller.chat(1L, Map.of("message", "我要毛线"), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("material")).isEqualTo("毛线");
+        assertThat(result.get("stage")).isEqualTo("need_size");
+        assertThat(String.valueOf(result.get("assistantText"))).doesNotContain("材质不确定");
+    }
+
+    @Test
+    void recommendationMessageWritesMaterialAndSizeIntoGenerationBrief() {
+        controller.chat(1L, Map.of(
+                "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"
+        ), claims);
+
+        Map<String, Object> result = controller.chat(1L, Map.of("message", "你帮我推荐"), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("material")).isEqualTo("合金");
+        assertThat(brief.get("productSize")).isEqualTo("60×60×4mm");
+        assertThat(result.get("stage")).isEqualTo("confirm_before_image");
+        assertThat(String.valueOf(result.get("assistantText"))).contains("写入图片生成提示词");
+    }
+
+    @Test
+    void sizeRecommendationDoesNotReplaceAnExplicitMaterial() {
+        controller.chat(1L, Map.of(
+                "message", "我想做一个合金冰箱贴，主题是白色的比熊"
+        ), claims);
+        controller.chat(1L, Map.of("message", "我要毛线"), claims);
+
+        Map<String, Object> result = controller.chat(1L, Map.of("message", "你帮我推荐尺寸"), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("material")).isEqualTo("毛线");
+        assertThat(brief.get("materialRecommended")).isEqualTo(false);
+        assertThat(brief.get("productSize")).isEqualTo("60×60×4mm");
+        assertThat(result.get("stage")).isEqualTo("confirm_before_image");
+        assertThat(String.valueOf(result.get("assistantText")))
+                .contains("60×60×4mm")
+                .doesNotContain("推荐材质");
+    }
+
+    @Test
+    void nonDimensionalCatalogSpecificationFallsBackToConcreteProductSize() {
+        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES ('souvenir-custom-display','souvenir','文化摆件','定制摆件','文化陈列产品','树脂','翻模','随型','摆件,陈列',1,'approved',2)");
+
+        Map<String, Object> first = controller.chat(1L, Map.of(
+                "message", "我想做一个树脂文化摆件，主题是金翅鸟"
+        ), claims);
+        assertThat(first.get("stage")).isEqualTo("need_size");
+
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "size");
+        action.put("value", "recommend");
+        Map<String, Object> result = controller.chat(1L, Map.of("action", action), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("productSize")).isEqualTo("150×150×200mm");
+        assertThat(result.get("stage")).isEqualTo("confirm_before_image");
+        assertThat(String.valueOf(result.get("assistantText"))).contains("150×150×200mm");
     }
 
     @Test
@@ -361,7 +433,7 @@ class ConversationalCreativeControllerTest {
         jdbc.update("INSERT INTO user(id,username,role,status) VALUES (1,'consumer','user','active')");
         jdbc.update("INSERT INTO creative_conversation_session(id,session_no,user_id,status) VALUES (1,'CCS-test',1,'draft')");
         jdbc.update("INSERT INTO selection_category(category_key,name,enabled,review_status) VALUES ('souvenir','纪念品',1,'approved')");
-        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES ('souvenir-alloy-magnet','souvenir','合金冰箱贴','景区纪念','文化纪念品','合金','压铸/烤漆','60×60×4mm','博物馆,景区,纪念',1,'approved',1)");
+        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES ('souvenir-alloy-magnet','souvenir','合金冰箱贴','景区纪念','文化纪念品','合金','压铸/烤漆','4-8cm','博物馆,景区,纪念',1,'approved',1)");
     }
 
     private void chooseRecommendedSize() {

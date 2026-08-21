@@ -1242,7 +1242,7 @@ async function optimizeImagePrompt() {
   const r = await fetch('/api/creative/ai/prompt/tripo-optimize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: source, provider: 'jimeng', productCategory: productProfile.value.label, material: selectedMaterial.value }),
+    body: JSON.stringify({ prompt: source, provider: 'ark', productCategory: productProfile.value.label, material: selectedMaterial.value }),
   })
   if (!r.ok) {
     const err = await r.json().catch(() => null)

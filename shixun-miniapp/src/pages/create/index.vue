@@ -18,7 +18,7 @@
 
     <view class="card creation-card">
       <view class="field-group"><text class="label">作品名称</text><input v-model.trim="form.title" placeholder="给作品起一个名字（可选）" class="input" /></view>
-      <view class="field-group"><view class="prompt-label-row"><text class="label">创作描述</text><button v-if="canOptimizeImagePrompt" class="prompt-optimize" :loading="imagePromptOptimizing" :disabled="imagePromptOptimizing" @tap="optimizeCurrentImagePrompt">{{ imagePromptOptimizing ? '优化中' : 'AI 优化描述' }}</button></view><textarea v-model="form.prompt" placeholder="描述主题、材质、纹样、色彩与使用场景…" class="textarea" maxlength="800" /><view class="word-count"><text>{{ imagePromptGuide || '会自动带入纹样与材质方向' }}</text><text>{{ form.prompt.length }}/800</text></view></view>
+      <view class="field-group"><view class="prompt-label-row"><text class="label">创作描述</text><button v-if="canOptimizeImagePrompt" class="prompt-optimize" :loading="imagePromptOptimizing" :disabled="imagePromptOptimizing" @tap="optimizeCurrentImagePrompt">{{ imagePromptOptimizing ? '优化中' : 'AI 优化描述' }}</button></view><textarea v-model="form.prompt" placeholder="描述主题、材质、纹样、色彩与使用场景…" class="textarea" maxlength="800" @input="clearPreparedImagePrompt" /><view class="word-count"><text>{{ imagePromptGuide || '会自动带入纹样与材质方向' }}</text><text>{{ form.prompt.length }}/800</text></view></view>
 
       <view class="direction-panel">
         <view class="panel-head"><view><text>HERITAGE PATTERN</text><text>传统纹样灵感</text></view><text>点击加入描述</text></view>
@@ -122,7 +122,7 @@ import {
   type Tripo3dPromptTemplate,
   uploadReference,
 } from '../../api/creative'
-import { apiUrl, createReferenceToImage, createTextToImage } from '../../api/client'
+import { DEFAULT_SEEDREAM_IMAGE_SIZE, apiUrl, createReferenceToImage, createTextToImage } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
 import {
   findMaterialDefinition,
@@ -140,6 +140,30 @@ type FinishKey = 'glaze' | 'texture' | 'relief'
 type MultiViewKey = 'front' | 'left' | 'back' | 'right'
 type MultiViewSource = 'seedream' | 'manual'
 type LoadingAction = 'creation' | 'multiview' | 'model'
+
+const SEEDREAM_IMAGE_SIZE = DEFAULT_SEEDREAM_IMAGE_SIZE
+const REFERENCE_PROMPT_GUARD = 'The attached reference image is the primary visual source of truth. Preserve the same recognizable subject identity, silhouette, proportions, markings, dominant colors and distinctive motifs; transform it into the requested finished product instead of replacing it with an unrelated subject or copying the raw photo unchanged.'
+const REFERENCE_PRODUCT_ROLE_PROMPT = '【角色】你是专业产品设计师 + AI 图像工程师，正在为电商平台制作真实、可量产、可打样的文创产品主图。'
+const REFERENCE_PRODUCT_FRAME_GUARD = '【构图规则】一件完整成品居中，占画面约 75%（允许 70%-80%），边缘留白不超过 10%；使用正方形或 4:5 电商商品摄影构图，背景只能是纯白或浅灰。'
+const REFERENCE_PRODUCT_NEGATIVE = 'phone screenshot, smartphone, mobile screen, app interface, status bar, media player, playback controls, screenshot frame, raw screenshot, unchanged reference image, near duplicate, collage, split screen, flat poster, label sheet, tiny isolated motif, cropped product, incomplete product, excessive empty background, yellow cast, sepia, sky, cloud, mountain, unrelated object, watermark'
+const REFERENCE_PRODUCT_FORMS: Record<ProductCategoryKey, string> = {
+  magnet: '完整掌心尺寸的冰箱贴成品；正面是清晰文化图形或浅浮雕，边缘有合理厚度和圆角，背面有平整稳定的磁铁粘贴位；参考主体占据正面主要面积，不是平面海报或孤立 logo。',
+  stationery: '完整可使用的书签、明信片或纸品成品；明确纸张/板材厚度、裁切边、正面印刷和装订/挂穗结构；参考元素重新编排到成品表面，不直接复刻手机截图。',
+  plush: '完整立体填充毛绒玩具；使用布料裁片、柔软填充体积、合理缝线、短绒面和刺绣细节，明确头身、四肢等分件；参考主体成为玩具轮廓或表面主视觉，不能只做平面插画。',
+  pvc_figure: '完整立体 PVC/搪胶公仔；明确头身比例、分件、圆角、底座和真实涂装区域，参考主体重构为玩具轮廓与表面细节，不输出原雕像或平面海报。',
+  hard_plastic: '完整可量产的硬塑摆件；明确注塑分件、合理壁厚、圆角、凹槽、浅浮雕和稳定底座，参考主体成为产品主要结构或视觉细节。',
+  keychain: '完整可随身使用的钥匙扣；主体有清晰轮廓、耐用厚度、圆角、挂孔和连接环/链条，参考主体占据成品主要面积，不是独立小图标。',
+  gift_box: '完整可生产的文创礼盒；展示盒体、开合结构、纸张/木材厚度、裁切折线和内衬，参考元素作为盒面主视觉或压印/烫金工艺，不是平面海报。',
+}
+const REFERENCE_PRODUCT_SIZES: Record<ProductCategoryKey, string> = {
+  magnet: '60×60×4mm',
+  stationery: 'A5（148×210mm）',
+  plush: '高约130mm',
+  pvc_figure: '高约130mm',
+  hard_plastic: '150×150×200mm',
+  keychain: '50×50×4mm（主体，含挂环另计）',
+  gift_box: '200×150×80mm',
+}
 
 interface MultiViewSlot {
   key: MultiViewKey
@@ -182,6 +206,7 @@ const assessmentLoading = ref(false)
 const optimized3dTip = ref('')
 const imagePromptOptimizing = ref(false)
 const imagePromptGuide = ref('')
+const preparedImagePrompt = ref<{ source: string; optimized: string } | null>(null)
 const referencePolicyConfirmed = ref(false)
 const aiPolicyConfirmed = ref(false)
 const threeDimensionalPolicyConfirmed = ref(false)
@@ -309,14 +334,16 @@ function updateImageTaskProgress(job: { status?: string; jobType?: string; queue
       ? '正在生成一致的产品多视图，请稍候…'
       : job.jobType === 'image_to_image'
         ? '正在依据参考图生成产品视觉，请稍候…'
-        : '之间大模型正在生成产品图，请稍候…'
+        : 'Seedream 5.0 正在生成产品图，请稍候…'
   }
 }
 
-function selectMode(next: CreateMode) { mode.value = next; imagePromptGuide.value = '' }
+function clearPreparedImagePrompt() { preparedImagePrompt.value = null; imagePromptGuide.value = '' }
+function selectMode(next: CreateMode) { mode.value = next; imagePromptGuide.value = ''; clearPreparedImagePrompt() }
 function applyPattern(pattern: typeof patterns[number]) {
   selectedPatternId.value = pattern.id
   if (!form.prompt.includes(pattern.prompt)) form.prompt = `${form.prompt.replace(/[，,。；;\s]+$/, '')}，${pattern.prompt}`
+  clearPreparedImagePrompt()
 }
 function chooseProductCategory(key: ProductCategoryKey) {
   if (selectedProductKey.value === key) return
@@ -326,6 +353,7 @@ function chooseProductCategory(key: ProductCategoryKey) {
   form.modelMaterial = firstMaterial.modelLabel
   productionAssessment.value = null
   optimized3dTip.value = ''
+  clearPreparedImagePrompt()
 }
 
 function resolveMaterialDefinition(materialName?: string, modelMaterial?: string) {
@@ -355,6 +383,7 @@ function chooseMaterial(material: MaterialDefinition) {
   form.modelMaterial = material.modelLabel
   productionAssessment.value = null
   optimized3dTip.value = ''
+  clearPreparedImagePrompt()
 }
 function isRecommendedForSelectedProduct(material: MaterialDefinition) {
   return isRecommendedMaterial(selectedProductCategory.value, material)
@@ -392,6 +421,7 @@ async function pickImage() {
       const replacesCompleteViews = hasCompleteMultiView.value
       referencePath.value = selectedPath
       referenceAssetId.value = null
+      clearPreparedImagePrompt()
       clearMultiViewResult()
       if (replacesCompleteViews) uni.showToast({ title: '参考图已更新，请重新生成四视图', icon: 'none' })
     },
@@ -441,6 +471,24 @@ function buildPrompt() {
     .replace(/(?:，|,)?产品类别：[^。；;]*(?:[。；;]|$)/g, '')
     .replace(/[，,。；;\s]+$/, '')
   return `${source}，${direction}`
+}
+function buildReferenceProductPrompt(sourcePrompt: string) {
+  const product = selectedProductCategory.value
+  const productSize = REFERENCE_PRODUCT_SIZES[product.key]
+  const productForm = REFERENCE_PRODUCT_FORMS[product.key]
+  return [
+    REFERENCE_PRODUCT_ROLE_PROMPT,
+    `【任务】将上传参考图中的主体、轮廓、纹样、主要配色和文化识别点，完全重构为真实、可量产的「${product.label}」成品电商主图；不是原图复刻、轻微滤镜或简单贴图。`,
+    '【强制规则】',
+    '1. 参考图只提供主体身份和核心视觉元素；必须改变原始载体、原始场景和画面用途，让目标产品载体优先。',
+    `2. 【目标产品形态】${productForm}`,
+    `3. 【制造参数】材质为「${form.material || selectedMaterial.value.modelLabel}」；成品规格为「${productSize}」，这是实体规格，不是图片分辨率。`,
+    `4. ${REFERENCE_PRODUCT_FRAME_GUARD}`,
+    '5. 删除手机、播放器、状态栏、截图边框、天空、山、云和原始场景；保留主体识别特征、文化元素和主要配色。',
+    '6. 禁止输出原图不变、手机截图、海报、平面标签稿、孤立小图案、窄长手机构图或无关物体。',
+    '【用户补充方向】' + sourcePrompt,
+    '【交付前自检】确认产品形态、材质、完整轮廓、主体占比、白/浅灰背景和成品规格全部成立；不满足时优先重新构建设计。',
+  ].join('\n')
 }
 function modelMaterialPrompt() {
   return `${selectedMaterial.value.modelPrompt}; manufacturing material: ${form.material}; finish direction: ${finish.glaze}% gloss, ${finish.texture}% texture grain, ${finish.relief}% relief depth`
@@ -540,19 +588,55 @@ async function optimizeText3dPrompt(prompt: string) {
   }
 }
 
+async function resolveSeedreamPrompt(sourcePrompt: string) {
+  const original = sourcePrompt.trim()
+  if (preparedImagePrompt.value?.source === original) return preparedImagePrompt.value.optimized
+  preparedImagePrompt.value = null
+  // Initial reference-image conversion is intentionally single-pass. Sending
+  // the original pixels plus a deterministic product brief is more stable
+  // than asking Qwen to rewrite the visual source first.
+  if (mode.value === 'reference') {
+    const directPrompt = buildReferenceProductPrompt(original)
+    preparedImagePrompt.value = { source: original, optimized: directPrompt }
+    return directPrompt
+  }
+  const needsReferenceLock = mode.value === 'multiview'
+  const optimizerInput = needsReferenceLock ? `${original}\nReference-image constraint: ${REFERENCE_PROMPT_GUARD}` : original
+  try {
+    const result = await optimizeImagePrompt({
+      prompt: optimizerInput,
+      provider: 'ark',
+      productCategory: selectedProductCategory.value.label,
+      material: form.material,
+    })
+    const optimized = String(result?.prompt || '').trim()
+    if (!optimized) return original
+    const finalPrompt = needsReferenceLock ? `${optimized} ${REFERENCE_PROMPT_GUARD}` : optimized
+    preparedImagePrompt.value = { source: original, optimized: finalPrompt }
+    return finalPrompt
+  } catch {
+    // Qwen is an enhancement stage. A temporary prompt-service outage must
+    // never prevent Seedream from receiving the user's original description.
+    return original
+  }
+}
+
 async function optimizeCurrentImagePrompt() {
   if (!form.prompt.trim()) return uni.showToast({ title: '请先填写创作描述', icon: 'none' })
   imagePromptOptimizing.value = true
   try {
+    const source = buildPrompt()
     const result = await optimizeImagePrompt({
-      prompt: buildPrompt(),
-      provider: 'jimeng',
+      prompt: source,
+      provider: 'ark',
       productCategory: selectedProductCategory.value.label,
       material: form.material,
     })
     const prompt = String(result?.prompt || '').trim()
     if (!prompt) throw new Error('优化服务未返回有效描述')
     form.prompt = prompt
+    const prepared = mode.value === 'reference' ? buildReferenceProductPrompt(prompt) : prompt
+    preparedImagePrompt.value = { source: buildPrompt(), optimized: prepared }
     imagePromptGuide.value = result?.usageGuide ? '已同步产品结构、材质与使用场景' : '已优化为商业产品生成描述'
     uni.showToast({ title: '描述已优化', icon: 'success' })
   } catch (error: any) {
@@ -590,7 +674,7 @@ function modelQualityOptions() {
 async function generate() {
   if (!requireSession()) return
   if (!form.prompt.trim()) return uni.showToast({ title: '请填写创作描述', icon: 'none' })
-  if (needsReference.value && !referencePath.value) return uni.showToast({ title: '请先选择一张参考图片', icon: 'none' })
+  if (needsReference.value && !referencePath.value && !referenceAssetId.value) return uni.showToast({ title: '请先选择一张参考图片', icon: 'none' })
   if (!aiPolicyConfirmed.value && !(await confirmCreativePolicy('ai-output'))) return
   aiPolicyConfirmed.value = true
   if (is3dMode.value && !threeDimensionalPolicyConfirmed.value && !(await confirmCreativePolicy('three-dimensional'))) return
@@ -601,11 +685,15 @@ async function generate() {
   loadingAction.value = 'creation'
   try {
     let result: any
+    const imagePrompt = mode.value === 'image' || mode.value === 'reference'
+      ? await resolveSeedreamPrompt(prompt)
+      : prompt
     if (mode.value === 'image') {
       result = await createTextToImage({
         title: form.title || `${selectedProductCategory.value.label} · ${form.material}`,
-        prompt,
+        prompt: imagePrompt,
         rawPrompt: prompt,
+        imageSize: SEEDREAM_IMAGE_SIZE,
         scene: '文创产品',
         productType: selectedProductCategory.value.label,
         productCategory: selectedProductCategory.value.label,
@@ -615,10 +703,17 @@ async function generate() {
       const inputAssetId = await ensureReferenceAsset()
       result = await createReferenceToImage({
         title: form.title || `图文结合 · ${selectedProductCategory.value.label}`,
-        prompt,
+        prompt: imagePrompt,
+        rawPrompt: prompt,
+        negativePrompt: REFERENCE_PRODUCT_NEGATIVE,
         inputAssetId,
+        imageSize: SEEDREAM_IMAGE_SIZE,
         productCategory: selectedProductCategory.value.label,
+        productKey: selectedProductKey.value,
         material: form.material,
+        productSize: REFERENCE_PRODUCT_SIZES[selectedProductKey.value],
+        refinement: false,
+        refinementNote: buildReferenceProductPrompt(prompt),
       }, updateImageTaskProgress)
     } else {
       let inputAssetId: number | undefined
@@ -660,7 +755,7 @@ async function generate() {
 
 async function generateMultiView(prompt: string) {
   if (!requireSession()) return
-  if (!referencePath.value) return uni.showToast({ title: '请先选择一张参考图片', icon: 'none' })
+  if (!referencePath.value && !referenceAssetId.value) return uni.showToast({ title: '请先选择一张参考图片', icon: 'none' })
   if (!aiPolicyConfirmed.value && !(await confirmCreativePolicy('ai-output'))) return
   aiPolicyConfirmed.value = true
   loading.value = true
@@ -668,9 +763,13 @@ async function generateMultiView(prompt: string) {
   clearMultiViewResult()
   try {
     const inputAssetId = await ensureReferenceAsset()
+    const multiviewPrompt = await resolveSeedreamPrompt(prompt)
     const result = await createSeedreamMultiView({
       inputAssetId,
-      prompt,
+      prompt: multiviewPrompt,
+      productKey: selectedProductKey.value,
+      productCategory: selectedProductCategory.value.label,
+      material: form.material,
       size: multiViewSize.value,
       watermark: true,
     }, updateImageTaskProgress)

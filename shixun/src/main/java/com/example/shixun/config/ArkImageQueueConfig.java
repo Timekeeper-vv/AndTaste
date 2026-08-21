@@ -23,21 +23,6 @@ public class ArkImageQueueConfig {
         return executor;
     }
 
-    @Bean(name = "siliconflowImageGenerationExecutor")
-    public ThreadPoolTaskExecutor siliconflowImageGenerationExecutor(
-            @Value("${siliconflow.image.queue.concurrency:2}") int configuredConcurrency) {
-        int concurrency = Math.max(1, Math.min(configuredConcurrency, 8));
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(concurrency);
-        executor.setMaxPoolSize(concurrency);
-        executor.setQueueCapacity(concurrency);
-        executor.setThreadNamePrefix("siliconflow-image-");
-        executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(30);
-        executor.initialize();
-        return executor;
-    }
-
     /** Keeps existing @Async services independent from the provider-limited queue. */
     @Bean(name = "taskExecutor")
     public ThreadPoolTaskExecutor applicationTaskExecutor() {

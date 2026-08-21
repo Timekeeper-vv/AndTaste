@@ -97,7 +97,18 @@ const DESKTOP_MODEL_URL = 'https://www.zhijiansk.com/'
 const threeDimensionalPolicyConfirmed = ref(false)
 
 const bundleAssetIds = computed(() => new Set(multiviewBundles.value.flatMap(bundle => Array.isArray(bundle.images) ? bundle.images.map((item: any) => String(item.assetId)) : [])))
-const visibleAssets = computed(() => assets.value.filter(asset => !bundleAssetIds.value.has(String(asset.id))))
+// The image-inspiration flow creates a short-lived, model-generated
+// intermediate asset while it extracts the subject from the uploaded image.
+// Keep that asset available for the second Seedream pass, but do not present
+// it as a user-facing work. The tag is deliberately explicit so ordinary
+// uploads and final products remain visible.
+const isInternalReferenceAsset = (asset: any) => {
+  const tags = Array.isArray(asset?.tags)
+    ? asset.tags.map((tag: any) => typeof tag === 'string' ? tag : tag?.name).join(',')
+    : String(asset?.tags || '')
+  return /内部图片元素提炼|参考图预处理/.test(tags)
+}
+const visibleAssets = computed(() => assets.value.filter(asset => !isInternalReferenceAsset(asset) && !bundleAssetIds.value.has(String(asset.id))))
 const totalWorkCount = computed(() => visibleAssets.value.length + multiviewBundles.value.length)
 
 const isAiGenerated = (asset: any) => String(asset?.sourceType || '') === 'ai_generated'
@@ -160,7 +171,7 @@ function absoluteMediaUrl(value: string | undefined, assetId: string, accessToke
 }
 
 async function hydratePreviews(rows: any[]) {
-  const candidates = rows.filter((asset) => ['image', 'model'].includes(asset.assetType) && asset.id).slice(0, 12)
+  const candidates = rows.filter((asset) => !isInternalReferenceAsset(asset) && ['image', 'model'].includes(asset.assetType) && asset.id).slice(0, 12)
   const pairs = await Promise.all(candidates.map(async (asset) => {
     try {
       const access = await getAssetPreviewAccess(asset.id)

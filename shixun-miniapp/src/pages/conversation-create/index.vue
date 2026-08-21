@@ -23,7 +23,29 @@
         <view v-if="item.role === 'assistant'" class="message-avatar assistant-avatar">之</view>
         <view class="message-content">
           <view class="message-meta"><text>{{ item.role === 'assistant' ? '之间智造' : '我' }}</text><text v-if="item.role === 'assistant'">AI 助手</text></view>
-          <view class="bubble"><text>{{ item.text }}</text></view>
+          <view class="bubble" :class="{ 'image-bubble': item.imageUrl || item.imageAssetId }">
+            <image
+              v-if="item.imageUrl"
+              class="message-image"
+              :src="item.imageUrl"
+              mode="aspectFit"
+              @tap="previewMessageImage(item)"
+            />
+            <view v-else-if="item.imageAssetId" class="message-image-loading" @tap="previewMessageImage(item)">
+              <text>图片加载中</text>
+            </view>
+            <!-- selectable uses WeChat's native text-selection menu, which
+                 remains available even when the JS clipboard scope is not
+                 declared in the mini-program privacy guide. -->
+            <text v-if="item.text" class="message-text" selectable>{{ item.text }}</text>
+            <view v-if="item.text && !item.imageUrl && !item.imageAssetId" class="message-actions">
+              <text class="message-copy" aria-label="复制这段文字" @tap.stop="copyMessageText(item)">复制</text>
+            </view>
+            <view v-if="item.imageUrl || item.imageAssetId" class="message-image-footer">
+              <text :class="{ failed: item.imageState === 'failed' }">{{ item.imageState === 'uploading' ? '正在上传灵感图片…' : item.imageState === 'failed' ? '上传失败，请重新选择' : '已上传灵感图片 · 点击查看大图' }}</text>
+              <text v-if="item.role === 'user'" class="message-image-reselect" @tap.stop="pickInspirationImage">重新选择</text>
+            </view>
+          </view>
         </view>
         <view v-if="item.role === 'user'" class="message-avatar user-avatar">我</view>
       </view>
@@ -49,7 +71,7 @@
       <view v-if="phase === 'multiview'" id="multiview-output" class="output-surface">
         <view class="output-header"><view><text class="surface-kicker">MULTI-VIEW OUTPUT</text><text class="surface-title">三视图已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>3 张已保存</text></view></view>
         <text class="surface-note">正面、侧面和背面已作为一个作品包保存，审核时会整包查看，不会拆成三条作品。</text>
-        <view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFit" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><view class="view-label"><text>{{ item.label }}</text><text>已生成</text></view></view></view>
+        <view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card" @tap="previewMultiViewImage(item)"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFit" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><view class="view-label"><text>{{ item.label }}</text><text>查看大图 ›</text></view></view></view>
         <view class="bundle-review-state" :class="`bundle-${multiviewBundleStatus || 'draft'}`">
           <view><text class="bundle-review-label">作品包状态</text><text class="bundle-review-title">{{ multiviewBundleStatusText }}</text></view>
           <text v-if="multiviewBundleNo" class="bundle-review-no">{{ multiviewBundleNo }}</text>
@@ -81,8 +103,8 @@
 
     <view class="composer-dock">
       <view class="composer-context"><view class="context-live" /><text>{{ chatStageLabel }}</text><text v-if="selectedProduct" class="context-product">· {{ selectedProduct.name }}</text><text v-if="chatSending" class="context-working">处理中</text></view>
-      <scroll-view v-if="chatQuickReplies.length" scroll-x class="quick-reply-list" :show-scrollbar="false"><view class="quick-reply-track"><view v-for="item in chatQuickReplies" :key="`${item.type}-${item.value}-${item.label}`" class="quick-reply" :class="{ confirm: item.type === 'confirm_generate', secondary: item.type === 'add_detail', disabled: busy || chatSending }" :aria-label="item.label" @tap="handleQuickReply(item)"><text class="quick-reply-mark">{{ quickReplyMark(item.type) }}</text><text>{{ item.label }}</text></view></view></scroll-view>
-      <view class="chat-input-row"><button class="chat-upload-button" :disabled="busy || chatSending" aria-label="上传灵感图片" @tap="pickInspirationImage">＋</button><input v-model="chatInput" class="chat-input" maxlength="1200" confirm-type="send" placeholder="描述你的灵感，或直接回答上面的问题" @confirm="submitChatInput" /><button class="chat-send-button" :class="{ ready: chatInput.trim() }" :disabled="!chatInput.trim() || busy || chatSending" aria-label="发送" @tap="submitChatInput">↑</button></view>
+      <scroll-view v-if="chatQuickReplies.length" scroll-x class="quick-reply-list" :show-scrollbar="false"><view class="quick-reply-track"><view v-for="item in chatQuickReplies" :key="`${item.type}-${item.value}-${item.label}`" class="quick-reply" :class="{ confirm: item.type === 'confirm_generate', secondary: item.type === 'add_detail', disabled: busy || chatSending || quickReplySubmitting }" :aria-label="item.label" @tap="handleQuickReply(item)"><text class="quick-reply-mark">{{ quickReplyMark(item.type) }}</text><text>{{ item.label }}</text></view></view></scroll-view>
+      <view class="chat-input-row"><button class="chat-upload-button" :disabled="busy || chatSending || quickReplySubmitting" aria-label="上传灵感图片" @tap="pickInspirationImage">＋</button><input v-model="chatInput" class="chat-input" maxlength="1200" confirm-type="send" placeholder="描述你的灵感，或直接回答上面的问题" @confirm="submitChatInput" /><button class="chat-send-button" :class="{ ready: chatInput.trim() }" :disabled="!chatInput.trim() || busy || chatSending || quickReplySubmitting" aria-label="发送" @tap="submitChatInput">↑</button></view>
       <view class="composer-footer"><text>AI 生成内容 · 请在商业使用前人工复核</text><text>{{ chatInput.length }}/1200</text></view>
     </view>
 
@@ -126,18 +148,299 @@ import {
   type MultiViewBundle,
   type SeedreamMultiViewImage,
 } from '../../api/creative'
-import { apiUrl, createReferenceToImage, createTextToImage, getArkImageJob, readableErrorMessage, waitForArkImageJob } from '../../api/client'
+import { DEFAULT_SEEDREAM_IMAGE_SIZE, apiUrl, createReferenceToImage, createTextToImage, getArkImageJob, readableErrorMessage, waitForArkImageJob } from '../../api/client'
 import { CREATIVE_POLICY_VERSION, getCreativePolicy, type CreativePolicyKey } from '../../utils/compliance'
 import { requireSession } from '../../utils/session'
 
 type Phase = 'mode' | 'product' | 'inspiration' | 'image' | 'material' | 'size' | 'result' | 'multiview' | 'model'
 type Mode = 'template' | 'text' | 'image'
 type EditableBriefField = 'product' | 'inspiration' | 'material' | 'size'
-interface Message { id: number; role: 'assistant' | 'user'; text: string }
-interface ProductOption { key: string; name: string; mark: string; desc: string; process: string; categoryKey: string; categoryName: string; materials: MaterialOption[] }
+interface Message {
+  id: number
+  role: 'assistant' | 'user'
+  text: string
+  imageUrl?: string
+  imageAssetId?: number
+  imageState?: 'uploading' | 'ready' | 'failed'
+}
+interface ProductOption {
+  key: string
+  name: string
+  mark: string
+  desc: string
+  process: string
+  categoryKey: string
+  categoryName: string
+  materials: MaterialOption[]
+  /** Catalog specification used by the local "recommend size" fallback. */
+  specification?: string
+  recommendedSize?: string
+}
 interface MaterialOption { name: string; note: string; color: string }
 interface ModelTask { jobId: number; status: string; progress: number; assetId?: number | null; previewUrl?: string; errorMessage?: string }
 type CampaignContext = CreatorCampaign & { sessionId?: number }
+
+const SEEDREAM_IMAGE_SIZE = DEFAULT_SEEDREAM_IMAGE_SIZE
+const REFERENCE_PROMPT_GUARD = 'The attached reference image is the primary visual source of truth. Preserve the same recognizable subject identity, silhouette, proportions, markings, dominant colors and distinctive motifs; transform it into the requested finished product instead of replacing it with an unrelated subject or copying the raw photo unchanged.'
+const PRODUCT_ROLE_PROMPT = '【角色】你是专业产品设计师 + AI 图像工程师，正在为电商平台制作真实、可量产、可打样的文创产品主图。'
+const PRODUCT_PRESENTATION_GUARD = '【参考图转化原则】上传参考图只提供主体、轮廓、颜色、纹样和文化识别点；必须改变原始载体、原始场景和原始画面用途，把这些视觉元素重构到目标产品上。主体要成为产品的主要视觉或结构，不得只贴一个小 logo，也不得原图不变。'
+const PRODUCT_FRAME_GUARD = '【构图规则】一件完整成品居中，占画面约 75%（允许 70%-80%），边缘留白不超过 10%；使用正方形或 4:5 电商商品摄影构图。背景只能是纯白或浅灰，不保留天空、山、云、建筑、原始场景或手机截图比例。'
+const PRODUCT_OUTPUT_NEGATIVE = 'phone screenshot, smartphone, mobile screen, app interface, status bar, media player, playback controls, progress bar, interface buttons, black UI frame, screen frame, phone frame, raw screenshot, unchanged reference image, near duplicate, collage, split screen, flat poster, flat design board, label sheet, label-only artwork, tiny isolated motif, floating logo, cropped product, incomplete product, excessive empty background, narrow portrait strip, yellow cast, sepia, monochrome wash, sky, cloud, mountain, landscape scenery, unrelated object, external watermark'
+const PRODUCT_SELF_CHECK = '【交付前自检】确认目标产品形态、材质、完整轮廓、主体占比、白/浅灰背景和成品规格全部成立；不满足时优先重新构建设计，不要输出原图、截图、海报或平面标签稿。'
+const CLIENT_PROMPT_BUDGET = 1400
+
+interface ProductFormProfile {
+  key: string
+  prompt: string
+  negative: string
+  recommendedSize?: string
+}
+
+const DEFAULT_PRODUCT_FORM_PROFILE: ProductFormProfile = {
+  key: 'general',
+  prompt: '把它做成完整、可识别、可量产的真实实体文创产品，明确产品轮廓、功能结构、合理厚度、圆角和实际材质表面；参考图元素必须作为产品的主要视觉或结构细节，而不是孤立的小图案。',
+  negative: 'abstract pattern only, tiny isolated motif, flat poster, unfinished concept board, unclear product form, random material substitution',
+}
+
+const PRODUCT_FORM_PROFILES: Array<{ match: RegExp; profile: ProductFormProfile }> = [
+  {
+    // Keep this focused on the product identity.  The old `饮品` term also
+    // appeared in the food category label and made tea/chocolate products
+    // inherit a bottle form and bottle dimensions.
+    match: /矿泉水|瓶装水|饮用水|水瓶|果汁|饮料|汽水|water\s*bottle|beverage|juice/i,
+    profile: {
+      key: 'bottle',
+      recommendedSize: '500mL 圆柱瓶（直径约65mm，高约210mm）',
+      prompt: '完整、直立、可识别的圆柱瓶实体（cylindrical bottle）；瓶底、瓶身、瓶肩、瓶口和瓶盖完整可见，瓶身有真实液体与环绕瓶标，参考图中的主体/核心视觉元素要作为瓶标主视觉或瓶身大面积印花，不能缩成角落小 logo；展示 3/4 角度的真实商品摄影，保持可灌装、可量产结构。',
+      negative: 'flat label sheet, flat poster, label-only artwork, tiny logo on a blank bottle, incomplete bottle, cropped bottle, box-only packaging, pouch, carton, wide flat package, yellow cast, sepia',
+    },
+  },
+  {
+    match: /毛绒钥匙扣|毛绒挂件/i,
+    profile: {
+      key: 'plush_keychain',
+      recommendedSize: '高约100mm（含挂环）',
+      prompt: '完整立体填充毛绒挂件/钥匙扣；使用布料裁片、填充体积、短绒面、缝线、刺绣或印花五官，并带真实挂环和连接位；把参考主体转成玩具轮廓与表面图案，不能只生成平面插画。',
+      negative: 'flat illustration, flat poster, hard plastic statue, metal badge, label sheet, missing ring, tiny motif only',
+    },
+  },
+  {
+    // “毛绒” can describe a pen or pencil case in the catalog. Require the
+    // product carrier (toy/doll/plush) so a material adjective cannot replace
+    // the selected product form.
+    match: /毛绒玩具|毛绒公仔|毛绒娃娃|毛绒玩偶|布偶|plush\s*(toy|doll)|stuffed\s*(toy|animal)|soft\s*toy/i,
+    profile: {
+      key: 'plush',
+      recommendedSize: '高约130mm',
+      prompt: '完整立体填充毛绒玩具；使用布料裁片、柔软填充体积、合理缝线、短绒或超柔绒面、刺绣五官和安全软体结构，明确头身、四肢、耳朵/尾巴等分件；参考主体必须成为玩具的轮廓、刺绣或印花主视觉，不能只做平面海报。',
+      negative: 'flat illustration, flat poster, hard plastic shell, metal body, ceramic statue, glossy hard surface, tiny motif only',
+    },
+  },
+  {
+    match: /马克杯|咖啡杯|茶杯|水杯|mug|cup/i,
+    profile: {
+      key: 'mug',
+      recommendedSize: '直径约80mm，高约95mm',
+      prompt: '完整可使用的马克杯/饮品杯；杯体、开口、杯腔、杯底和真实把手完整可见，参考元素以环绕杯身的弧面印刷、釉上彩或浮雕呈现，展示真实器物的厚度、容积和稳定底部，不是平面海报或单独标签。',
+      negative: 'flat poster, flat label sheet, handle missing, incomplete cup, floating object, tiny motif only',
+    },
+  },
+  {
+    match: /明信片|贺卡|卡片|postcard|greeting card/i,
+    profile: {
+      key: 'postcard',
+      recommendedSize: 'A6（105×148mm）',
+      prompt: '一张真实可生产的明信片/卡片成品；展示完整卡纸轮廓、真实纸张厚度、裁切边和正面印刷构图，可有轻微立体透视或桌面商品摄影；把参考图元素重新编排为卡片正面设计，不直接复刻手机截图或原图载体。',
+      negative: 'phone screenshot, unchanged photo, smartphone frame, app controls, label sheet, poster mockup, missing card edges, cropped card',
+    },
+  },
+  {
+    match: /钥匙扣|挂件|keychain|key ring/i,
+    profile: {
+      key: 'keychain',
+      recommendedSize: '50×50×4mm（主体，含挂环另计）',
+      prompt: '完整可随身使用的钥匙扣/挂件；主体有清晰轮廓、合理耐用厚度、圆角、真实挂孔和连接环/链条，参考主体作为大面积图案或立体轮廓落在成品上，展示完整主体和挂环，不是独立小图标。',
+      negative: 'flat label sheet, poster, missing hanging hole, missing ring, tiny isolated motif, fragile paper-only sheet',
+    },
+  },
+  {
+    // `magnetic` is a material/property (for example a magnetic ruler), not
+    // a fridge magnet. Match the carrier word instead of that substring.
+    match: /冰箱贴|磁贴|fridge\s*magnet/i,
+    profile: {
+      key: 'magnet',
+      recommendedSize: '60×60×4mm',
+      prompt: '完整掌心尺寸的冰箱贴成品；正面是清晰的文化图形或浅浮雕，边缘有合理厚度和圆角，背面应有平整稳定的磁铁粘贴位；参考主体要占据正面主要面积，不是平面海报或孤立 logo。',
+      negative: 'flat poster, paper-only card, missing magnetic backing, tiny isolated motif, oversized sculpture',
+    },
+  },
+  {
+    match: /徽章|胸针|纪念章|贵金属章|贵金属币|徽章|badge|brooch|medal|coin|pin/i,
+    profile: {
+      key: 'badge',
+      recommendedSize: '直径约58mm、厚约3mm',
+      prompt: '完整可生产的徽章/纪念章/胸针；有明确金属外轮廓、合理厚度、浅浮雕或珐琅分色，背面有真实别针/固定结构（硬币则为稳定平面边缘）；参考主体应成为正面主要图案而不是小角落装饰。',
+      negative: 'flat poster, paper card, missing pin or edge, tiny isolated motif, soft plush body, food object',
+    },
+  },
+  {
+    match: /书签|bookmark/i,
+    profile: {
+      key: 'bookmark',
+      recommendedSize: '40×120×1.2mm',
+      prompt: '完整可使用的书签；保持细长平面比例、真实纸张/金属/亚克力厚度、圆润裁切边和可选挂穗孔，参考元素沿书签正面完整展开，不能变成厚重摆件或手机截图。',
+      negative: 'phone screenshot, thick statue, oversized 3D volume, missing bookmark silhouette, tiny isolated motif',
+    },
+  },
+  {
+    // Do not use bare “包/袋”: names such as “袋泡茶” and “贴纸包” are
+    // food/stationery products, not bags. Keep explicit carrier terms and
+    // the catalog's known pencil/lunch pouch names instead.
+    match: /帆布|手提袋|单肩包|腰包|背包|笔袋|餐包|毛毡包|杜邦纸包|收纳包|零钱包|托特包|购物袋|canvas\s*bag|bag|pouch/i,
+    profile: {
+      key: 'bag',
+      recommendedSize: '350×300×100mm',
+      prompt: '完整可使用的布包/手提袋/帆布包；展示真实布面、裁片、缝线、包边、提手、开口和容量，参考元素以大面积印花、刺绣或织唛落在包面，不能只生成一张平面图案稿。',
+      negative: 'flat poster, floating artwork, missing handles, impossible seamless structure, hard statue, tiny motif only',
+    },
+  },
+  {
+    match: /项链|颈链|手镯|手链|耳钉|耳坠|吊坠|首饰|jewelry|necklace|bracelet|earring/i,
+    profile: {
+      key: 'jewelry',
+      prompt: '完整可佩戴的首饰成品；展示真实金属/宝石/连接件、合理厚度、圆角和佩戴结构（链条、耳针或扣件），参考元素转为主要吊坠/纹样，不是孤立平面 logo 或海报。',
+      negative: 'flat poster, missing clasp or chain, oversized sculpture, tiny isolated motif, unrelated object',
+    },
+  },
+  {
+    match: /food|食品|巧克力|糖果|曲奇|饼干|月饼|糕点|甜品|冰淇淋|茶叶|咖啡/i,
+    profile: {
+      key: 'food',
+      prompt: '真实可食用的文创食品成品；使用食品级原料和可食用印花、压纹、糖霜或巧克力装饰，呈现可食用的形状、厚度、边缘与合理食品包装，不是金属/塑料摆件或单独平面标签。',
+      negative: 'metal ornament, plastic statue, badge, keychain, jewelry, inedible decoration, flat label sheet, tiny motif only',
+    },
+  },
+]
+
+const CATEGORY_PRODUCT_FORM_PROFILES: Record<string, ProductFormProfile> = {
+  stationery: {
+    key: 'paper_stationery',
+    recommendedSize: 'A5（148×210mm）',
+    prompt: '完整可使用的纸品/文具成品；明确纸张或板材厚度、裁切边、折叠/装订/夹持等功能结构，参考元素适合印刷、烫金、压凹凸或覆膜，不能只生成一张海报稿。',
+    negative: 'phone screenshot, flat poster only, missing paper edges, impossible 3D structure, tiny isolated motif',
+  },
+  toy: {
+    key: 'collectible_toy',
+    recommendedSize: '高约130mm',
+    prompt: '完整立体可量产的潮玩/玩具/手办；明确头身比例、稳定底部、分件、连接位和涂装表面，参考主体成为玩具轮廓与主要装饰，不是平面图案或随机物体。',
+    negative: 'flat illustration, flat poster, missing body or base, melted geometry, tiny isolated motif only',
+  },
+  tableware: {
+    key: 'tableware',
+    recommendedSize: '直径约80mm，高约95mm',
+    prompt: '完整可使用的餐饮器物；明确开口、容积、底部稳定性、合理壁厚和食品接触面，参考元素落在釉面、印花或浮雕区域，展示真实器物而不是雕塑。',
+    negative: 'flat poster, missing opening, unstable base, abstract sculpture, tiny isolated motif only',
+  },
+  apparel: {
+    key: 'apparel',
+    recommendedSize: '按常用成人尺码，图案安全边距清晰',
+    prompt: '完整可穿戴的服饰/配件；展示真实布料、裁片、缝线、领口/袖口/扣件或佩戴结构，参考元素以印花、刺绣、织唛或提花落在服饰表面，不能只生成平面图案稿。',
+    negative: 'flat poster, floating garment graphic, missing garment structure, hard statue, tiny isolated motif only',
+  },
+  daily: {
+    key: 'daily_use',
+    prompt: '完整可日常使用的生活用品；明确容器/握持/开合/支撑等功能结构、真实材质和可生产厚度，参考元素作为产品表面主视觉或结构细节，而不是孤立小图案。',
+    negative: 'flat poster, abstract pattern only, missing functional structure, random object, tiny isolated motif only',
+  },
+  craft: {
+    key: 'craft_object',
+    recommendedSize: '高约150mm，底部稳定',
+    prompt: '完整可陈列、可打样的工艺收藏品；明确主体轮廓、底座/支撑、材质工艺、厚度和安全边缘，参考元素要成为器物的主要造型或表面工艺，不是海报。',
+    negative: 'flat poster, floating parts, unstable base, impossible thin details, tiny isolated motif only',
+  },
+  precious: {
+    key: 'precious_collectible',
+    recommendedSize: '直径约40mm、厚约3mm',
+    prompt: '完整可生产的贵金属纪念收藏品；明确金属厚度、边缘、浮雕/压印和稳定轮廓，参考主体成为正面主要图案，展示真实金属成品而不是平面海报。',
+    negative: 'flat poster, paper card, soft plush, missing metal edge, tiny isolated motif only',
+  },
+}
+
+function productFormContext(product: ProductOption | null) {
+  if (!product) return ''
+  // Match the physical carrier from stable catalog identity fields. Free-form
+  // descriptions often contain words such as “包装” or “袋”, which can make a
+  // food product look like a bag if they are used as the primary classifier.
+  // Use stable identity fields only.  Display category labels are localized
+  // UI text (for example “食品饮品” or “饰品挂件”) and must never drive
+  // physical-form matching.
+  return `${product.key} ${product.name} ${product.categoryKey} ${product.materials.map(item => item.name).join(' ')}`
+}
+
+function matchedProductFormProfile(product: ProductOption | null) {
+  const context = productFormContext(product)
+  return PRODUCT_FORM_PROFILES.find(item => item.match.test(context))?.profile
+}
+
+function productFormProfile(product: ProductOption | null): ProductFormProfile {
+  const matched = matchedProductFormProfile(product)
+  if (matched) return matched
+  if (product?.categoryKey && CATEGORY_PRODUCT_FORM_PROFILES[product.categoryKey]) return CATEGORY_PRODUCT_FORM_PROFILES[product.categoryKey]
+  return DEFAULT_PRODUCT_FORM_PROFILE
+}
+
+function productAdaptationInstruction(profile: ProductFormProfile) {
+  const instructions: Record<string, string> = {
+    bottle: '【参考图使用方式】把主体转为瓶身大面积主视觉/环绕瓶标，不保留原雕像、原照片或原场景。',
+    mug: '【参考图使用方式】把主体转为杯身环绕印花、釉上彩或浮雕，优先呈现完整杯体结构。',
+    bag: '【参考图使用方式】把主体转为包面大面积印花、刺绣或织唛，优先呈现完整包体和提手。',
+    apparel: '【参考图使用方式】把主体转为服饰大面积印花、刺绣或提花，优先呈现完整可穿戴结构。',
+    jewelry: '【参考图使用方式】把主体重构为可佩戴的吊坠/纹样和连接结构，不输出原始雕像或照片。',
+    plush: '【参考图使用方式】保留主体可辨识轮廓并重构为柔软填充体、裁片和缝线，不输出硬质雕塑。',
+    plush_keychain: '【参考图使用方式】保留主体可辨识轮廓并重构为带挂环的柔软填充挂件，不输出平面插画。',
+    collectible_toy: '【参考图使用方式】保留主体可辨识轮廓并重构为有分件、底座和涂装的立体玩具。',
+    keychain: '【参考图使用方式】保留主体轮廓并重构为有厚度、挂孔和连接环的钥匙扣成品。',
+    postcard: '【参考图使用方式】把主体重新编排到完整卡纸正面，保留卡片边缘和纸张厚度，不输出原手机画面。',
+    bookmark: '【参考图使用方式】把主体沿完整书签正面重新编排，保持书签细长轮廓和真实厚度。',
+    paper_stationery: '【参考图使用方式】把主体编排到完整纸品/文具表面，保留裁切边、厚度和装订/夹持结构。',
+    badge: '【参考图使用方式】把主体转为金属徽章正面浅浮雕/珐琅图案，保留完整金属边缘和背部固定结构。',
+    magnet: '【参考图使用方式】把主体转为冰箱贴正面图形或浅浮雕，保留完整厚度、圆角和磁吸背面。',
+    precious_collectible: '【参考图使用方式】把主体转为贵金属成品正面浮雕/压印，保留金属边缘和稳定轮廓。',
+    food: '【参考图使用方式】把主体转为真实可食用的形状、印花、压纹或装饰，不输出金属/塑料摆件。',
+    tableware: '【参考图使用方式】把主体转为器物表面的印花、釉彩或浮雕，同时呈现完整可用结构。',
+    daily_use: '【参考图使用方式】把主体转为生活用品表面主视觉或结构细节，同时呈现完整功能结构。',
+    craft_object: '【参考图使用方式】保留主体文化识别点并重构为有支撑、厚度和安全边缘的工艺品。',
+    general: '【参考图使用方式】保留主体文化识别点并适配目标产品的轮廓、材质和功能结构。',
+  }
+  return instructions[profile.key] || instructions.general
+}
+
+function productFormConstraint(product: ProductOption | null = selectedProduct.value) {
+  const profile = productFormProfile(product)
+  const productName = product?.name || '文创产品'
+  const selectedMaterial = material.value || '适合该产品的制造材质'
+  const selectedSize = productSize.value || profile.recommendedSize || '按产品实际规格'
+  const referenceSource = isReferenceImageMode()
+    ? '上传参考图中的主体和核心视觉元素'
+    : '用户提供的灵感和核心视觉元素'
+  return [
+    PRODUCT_ROLE_PROMPT,
+    `【任务】将${referenceSource}完全重构为一件真实的「${productName}」成品，用于电商主图展示；不是对原图做轻微滤镜或简单贴图。`,
+    '【强制规则】',
+    `1. ${PRODUCT_PRESENTATION_GUARD}`,
+    `2. ${productAdaptationInstruction(profile)}`,
+    `3. 【目标产品形态】${profile.prompt}`,
+    `4. ${PRODUCT_FRAME_GUARD}`,
+    `5. 【制造参数】材质为「${selectedMaterial}」；成品规格为「${selectedSize}」。规格用于约束实体比例和结构，不是图片分辨率。`,
+    '6. 【原图处理】删除手机、播放器、状态栏、截图边框、天空、山、云和原始场景；保留主体识别特征、文化元素和主要配色。',
+    '7. 【禁止输出】原图不变、手机截图、海报、平面标签稿、孤立小图案、黄褐滤镜、窄长手机构图或无关物体。',
+    PRODUCT_SELF_CHECK,
+  ].join('\n')
+}
+
+function productFormNegative(product: ProductOption | null = selectedProduct.value) {
+  return productFormProfile(product).negative
+}
 
 const modeOptions = [
   { key: 'template' as Mode, mark: '例', title: '没有灵感（看看示例）', desc: '浏览示例并了解创作方式' },
@@ -155,6 +458,7 @@ const selectedProduct = ref<ProductOption | null>(null)
 const material = ref('')
 const materialChoice = ref<'recommend' | string>('recommend')
 const productSize = ref('')
+const productSizeRecommended = ref(false)
 const inspirationText = ref('')
 const referencePath = ref('')
 const referenceAssetId = ref<number | null>(null)
@@ -166,6 +470,7 @@ const pendingMultiViewJobId = ref<number | null>(null)
 const pendingMultiViewInputAssetId = ref<number | null>(null)
 const pendingMultiViewPrompt = ref('')
 const previewUrl = ref('')
+const referenceAnalysis = ref('')
 const multiviewImages = ref<SeedreamMultiViewImage[]>([])
 const multiviewBundleId = ref<number | null>(null)
 const multiviewBundleNo = ref('')
@@ -191,6 +496,7 @@ const chatQuickReplies = ref<ConversationQuickReply[]>([])
 const chatSending = ref(false)
 const quickReplySubmitting = ref(false)
 const chatThinking = ref(false)
+const imageGenerationStage = ref<'adapting_product' | ''>('')
 const thinkingLabel = ref('正在理解你的想法')
 const awaitingGenerationConfirmation = ref(false)
 const chatStage = ref('need_product')
@@ -258,7 +564,18 @@ const prompt = computed(() => {
   const campaignDirection = campaignContext.value
     ? `本作品参加平台优先征集「${campaignContext.value.title}」，面向${campaignContext.value.targetName}候选渠道；请重点遵循：${campaignContext.value.promptHint}。`
     : ''
-  return `${source}。产品：${product}；材质：${material.value}；成品尺寸：${productSize.value || '待确认'}。视觉气质与配色只依据用户灵感和产品形态协调，不强行套用固定风格或用途。必须按指定成品尺寸保持合理比例、可生产结构和适合商品展示的构图；不要把成品尺寸误解为图片分辨率。${campaignDirection}`
+  const size = productSize.value || '待确认'
+  const sizeSource = productSizeRecommended.value ? '（已按推荐规格确定）' : ''
+  const catalogHint = productSizeRecommended.value
+    ? catalogSpecificationHint(selectedProduct.value, productSize.value)
+    : ''
+  const catalogSpecification = catalogHint
+    ? `目录推荐规格参考（仅保留容量/件数信息，不覆盖已选成品规格）：${catalogHint}。`
+    : ''
+  // Image mode receives the structured role/task/rules block from
+  // productTransformationGuard. Avoid sending the same long block twice.
+  const formConstraint = isReferenceImageMode() ? '' : productFormConstraint(selectedProduct.value)
+  return `${source}。产品：${product}；材质：${material.value}；成品尺寸：${size}${sizeSource}。${catalogSpecification}视觉气质与配色只依据用户灵感和产品形态协调，不强行套用固定风格或用途。${formConstraint}${campaignDirection}`
 })
 const normalizedModelProgress = computed(() => Math.max(0, Math.min(100, Number(modelTask.value?.progress) || 0)))
 const isModelTaskSucceeded = computed(() => modelTask.value?.status === 'succeeded')
@@ -319,11 +636,49 @@ function quickReplyMark(type: string) {
   } as Record<string, string>)[type] || '→'
 }
 
+function productTransformationGuard() {
+  const product = selectedProduct.value?.name || '用户选择的文创产品'
+  const selectedMaterial = material.value || '适合该产品的制造材质'
+  const size = productSize.value || '已确认的成品规格'
+  const profile = productFormProfile(selectedProduct.value)
+  return [
+    PRODUCT_ROLE_PROMPT,
+    `【任务】将上传参考图中的非UI主体和核心视觉元素重构为真实、可量产的「${product}」电商主图；禁止原图复刻或只做滤镜。`,
+    '【强制规则】',
+    '1. 参考图只提供主体身份、关键纹样、文化识别点和主要配色；目标产品载体优先。',
+    `2. ${productAdaptationInstruction(profile)}`,
+    `3. 【产品形态】${profile.prompt}`,
+    `4. 【材质/规格】材质「${selectedMaterial}」；成品规格「${size}」，这是实体规格，不是图片分辨率。`,
+    `5. ${PRODUCT_FRAME_GUARD}`,
+    '6. 删除原始载体、原始场景、天空山云、手机/UI/播放器和截图边框；不得输出原图、海报、标签稿或孤立小图案。',
+    PRODUCT_SELF_CHECK,
+  ].join('\n')
+}
+
 function addMessage(role: Message['role'], text: string) {
   const id = ++messageId
   messages.value.push({ id, role, text })
   void nextTick(() => { scrollIntoView.value = `message-${id}` })
   return id
+}
+function addImageMessage(imageUrl: string, text = '已上传灵感图片', imageState: Message['imageState'] = 'ready', imageAssetId?: number) {
+  const id = ++messageId
+  messages.value.push({ id, role: 'user', text, imageUrl, imageAssetId, imageState })
+  void nextTick(() => { scrollIntoView.value = `message-${id}` })
+  return id
+}
+function updateImageMessage(id: number, values: Partial<Pick<Message, 'text' | 'imageUrl' | 'imageAssetId' | 'imageState'>>) {
+  const message = messages.value.find(item => item.id === id)
+  if (message) Object.assign(message, values)
+}
+function addAssistantMessage(text: string) {
+  const value = text.trim()
+  if (!value) return null
+  const recentAssistant = [...messages.value].reverse().find(item => item.role === 'assistant')
+  // Keep a broken planner from filling the transcript with the same template
+  // while the persisted brief still advances locally.
+  if (recentAssistant?.text === value) return null
+  return addMessage('assistant', value)
 }
 function addRestoredMessage(role: Message['role'], text: string) {
   const value = text.trim()
@@ -370,6 +725,133 @@ function isGenerationConfirmationText(message: string) {
     || /.*(直接|开始|确认).*(生成|出图).*/.test(value)
     || /^(没有|没有了|无|无了|就这样|不用补充)$/.test(value))
 }
+function isRecommendedSizeTurn(stageBeforeRequest: string, message: string, action?: { type: string; value?: string }) {
+  if (action?.type === 'size' && String(action.value || '').toLowerCase() === 'recommend') return true
+  const value = message.trim()
+  return stageBeforeRequest === 'need_size'
+    && value.length <= 32
+    && /(推荐|帮我选|你来选|按推荐规格)/.test(value)
+}
+function shouldPreserveRecommendedSizeAfterChat(action: { type: string; value?: string } | undefined, message: string) {
+  if (!productSizeRecommended.value || !productSize.value) return false
+  const type = String(action?.type || '')
+  const value = String(action?.value || '').toLowerCase()
+  // A new product or an explicit size edit invalidates the previous
+  // recommendation. Other turns (especially “我还要补充”) should retain it
+  // even if an older backend response omits productSize from its brief.
+  if (type === 'product' || type === 'category' || type === 'size' || (type === 'edit' && value === 'size')) return false
+  if (/(尺寸|规格|大小|做多大|改成|换成).*(?:\d|a[3-6]|推荐)/i.test(message)) return false
+  return true
+}
+function normalizeRecommendedSpecification(value: unknown) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ')
+  if (!normalized || /^(随型|定制|按规格|参考产品册|短袖常规尺码)$/i.test(normalized)) return ''
+  const hasStandardPaperSize = /\bA[3-6]\b/i.test(normalized)
+  const hasNumericSpec = /\d(?:\.\d+)?/.test(normalized)
+  const hasPhysicalOrCapacityUnit = /(?:mm|毫米|cm|厘米|mL|毫升|ml|g|克|kg|公斤|个|支|块|袋|盒|套|片|粒|根|英寸|in)/i.test(normalized)
+  // Selection specifications are often ranges or capacities (300-500ml,
+  // 4-8cm/个, 50g*8块). Keep them as recommendation data instead of silently
+  // falling back to a flat category size. The product-form profile below adds
+  // the missing geometry when the catalog only provides capacity/weight.
+  if (!hasStandardPaperSize && !(hasNumericSpec && hasPhysicalOrCapacityUnit)) return ''
+  return normalized.length > 120 ? normalized.slice(0, 120) : normalized
+}
+function defaultLocalSizeForProduct(product: ProductOption | null, includeCategoryDefault = true) {
+  const name = product?.name || ''
+  if (name.includes('冰箱贴')) return '60×60×4mm'
+  if (name.includes('钥匙扣')) return '50×50×4mm'
+  if (name.includes('徽章') || name.includes('胸针') || name.includes('纪念章') || name.endsWith('币')) return '58×58×3mm'
+  if (name.includes('书签')) return '40×120×1.2mm'
+  if (name.includes('明信片')) return 'A6（105×148mm）'
+  if (name.includes('贴纸')) return '50×50mm'
+  if (name.includes('本册') || name.includes('笔记本') || name.includes('打卡本')) return 'A5（148×210mm）'
+  if (name.includes('抱枕')) return '400×400×120mm'
+  if (name.includes('毛巾')) return '200×700mm'
+  if (name.includes('公仔') || name.includes('潮玩') || /毛绒玩具|毛绒公仔|毛绒娃娃|毛绒玩偶|布偶/.test(name)) return '高 130mm'
+  if (name.includes('杯垫')) return '100×100×5mm'
+  if (name.includes('马克杯')) return '直径 80mm、高 95mm'
+  if (name.includes('保温杯') || name.includes('随行杯')) return '直径 70mm、高 200mm'
+  if (name.includes('帆布') && name.includes('包') || name.includes('手提袋')) return '350×300×100mm'
+  if (name.includes('吊坠')) return '30×30×3mm'
+  if (name.includes('耳钉')) return '12×12×3mm'
+  if (name.includes('耳坠')) return '15×30×3mm'
+  if (name.includes('项链') || name.includes('颈链')) return '链长 450mm'
+  if (name.includes('手镯') || name.includes('手链')) return '周长 170mm'
+  if (name.includes('摆件') || name.includes('工艺品')) return '150×150×200mm'
+  if (!includeCategoryDefault) return ''
+  const categoryDefaults: Record<string, string> = {
+    food: '500g级食品包装或食品本体（按实际包装/模具定制）',
+    stationery: 'A5（148×210mm）',
+    daily: '300×300×80mm',
+    toy: '高 130mm',
+    tableware: '100×100×100mm',
+    souvenir: '60×60×4mm',
+    accessory: '35×35×3mm',
+    apparel: '350×300×100mm',
+    craft: '150×150×200mm',
+    precious: '40×40×3mm',
+  }
+  return categoryDefaults[product?.categoryKey || ''] || '80×80×8mm'
+}
+function localRecommendedProductSize(product: ProductOption | null) {
+  // A carrier-specific profile is authoritative (for example a 500mL bottle
+  // or A6 postcard). Category defaults are deliberately applied later so a
+  // catalog specification such as 15-20cm ruler or 3g*10 tea bags is not
+  // overwritten by the broad stationery/tableware fallback.
+  const formRecommendation = matchedProductFormProfile(product)?.recommendedSize
+  if (formRecommendation) return formRecommendation
+  const catalogSpecification = normalizeRecommendedSpecification(product?.recommendedSize || product?.specification)
+  // Keep catalog capacities, pack counts and ranges as explicit recommendation
+  // data. Product-form constraints supply the geometry where needed.
+  if (catalogSpecification) return catalogSpecification
+  const categoryRecommendation = product?.categoryKey
+    ? CATEGORY_PRODUCT_FORM_PROFILES[product.categoryKey]?.recommendedSize
+    : ''
+  // Prefer a product-name geometry (for example a tumbler) over a broad
+  // category recommendation (tableware's mug-sized fallback).
+  return defaultLocalSizeForProduct(product, false) || categoryRecommendation || defaultLocalSizeForProduct(product)
+}
+function catalogSpecificationHint(product: ProductOption | null, selectedSize: string) {
+  const catalog = normalizeRecommendedSpecification(product?.specification || product?.recommendedSize)
+  if (!catalog || catalog === selectedSize) return ''
+  // A physical-form profile is authoritative for geometry. Keep capacity,
+  // weight and pack-count data, but hide conflicting legacy dimensions.
+  if (productFormProfile(product).recommendedSize && /(?:mm|毫米|cm|厘米|英寸|in|×|x|直径|高度|宽|高|厚)/i.test(catalog)) return ''
+  return catalog
+}
+function hasCompleteLocalGenerationBrief() {
+  if (!selectedProduct.value || !material.value || !productSize.value) return false
+  if (isReferenceImageMode()) return Boolean(referenceAssetId.value)
+  if (!mode.value) return false
+  return mode.value === 'text' && Boolean(inspirationText.value.trim())
+}
+
+function hasReferenceImage() {
+  const assetId = Number(referenceAssetId.value)
+  return Number.isFinite(assetId) && assetId > 0
+}
+
+/**
+ * A saved reference image is the authoritative source for image generation.
+ * Chat planning can return a stale text mode, so every generation decision
+ * uses this derived state instead of trusting the planner's mode field alone.
+ */
+function isReferenceImageMode() {
+  return mode.value === 'image' || hasReferenceImage()
+}
+
+function activateReferenceImageMode() {
+  mode.value = 'image'
+  // Text entered before choosing an image is stale for the image-only path.
+  // Users can still add deliberate details after the upload completes.
+  inspirationText.value = ''
+}
+
+function preserveReferenceImageMode() {
+  if (!hasReferenceImage()) return false
+  mode.value = 'image'
+  return true
+}
 function setInitialChatReplies() {
   if (productOptions.value.length) {
     const seen = new Set<string>()
@@ -390,22 +872,40 @@ function setInitialChatReplies() {
   }
 }
 
-function applyChatBrief(brief: Record<string, any> | undefined) {
+function applyChatBrief(brief: Record<string, any> | undefined, preserveExisting = false, preserveRecommendedSize = false) {
   if (!brief) return
+  const previousSize = productSize.value
+  const previousSizeWasRecommended = productSizeRecommended.value
+  const localReferenceAssetId = hasReferenceImage() ? Number(referenceAssetId.value) : null
   const product = productByValue(brief.productName, brief.productKey)
-  selectedProduct.value = product
-  mode.value = ['template', 'text', 'image'].includes(String(brief.mode || '')) ? String(brief.mode) as Mode : ''
-  inspirationText.value = brief.inspiration && brief.inspirationSource !== 'image' ? String(brief.inspiration) : ''
-  referenceAssetId.value = Number(brief.referenceAssetId) > 0 ? Number(brief.referenceAssetId) : null
+  if (product || !preserveExisting) selectedProduct.value = product
+  const resolvedMode = ['template', 'text', 'image'].includes(String(brief.mode || '')) ? String(brief.mode) as Mode : ''
+  if (!localReferenceAssetId && (resolvedMode || !preserveExisting)) mode.value = resolvedMode
+  if (brief.inspiration && brief.inspirationSource !== 'image') inspirationText.value = String(brief.inspiration)
+  else if (!preserveExisting) inspirationText.value = ''
+  const resolvedReferenceAssetId = Number(brief.referenceAssetId) > 0 ? Number(brief.referenceAssetId) : null
+  if (localReferenceAssetId) referenceAssetId.value = localReferenceAssetId
+  else if (resolvedReferenceAssetId || !preserveExisting) referenceAssetId.value = resolvedReferenceAssetId
+  // Never let a planner response downgrade an uploaded reference into text
+  // generation or discard the asset ID that was just uploaded locally.
+  preserveReferenceImageMode()
   if (!referenceAssetId.value) referencePath.value = ''
   if (brief.material) {
     material.value = String(brief.material)
     materialChoice.value = brief.materialRecommended ? 'recommend' : material.value
-  } else {
+  } else if (!preserveExisting) {
     material.value = ''
     materialChoice.value = 'recommend'
   }
-  productSize.value = brief.productSize ? String(brief.productSize) : ''
+  if (brief.productSize) {
+    const resolvedSize = String(brief.productSize)
+    productSize.value = resolvedSize
+    productSizeRecommended.value = Boolean(brief.sizeRecommended)
+      || (preserveRecommendedSize && previousSizeWasRecommended && resolvedSize === previousSize)
+  } else if (!preserveExisting && !preserveRecommendedSize) {
+    productSize.value = ''
+    productSizeRecommended.value = false
+  }
 }
 
 async function handleQuickReply(item: ConversationQuickReply) {
@@ -445,8 +945,29 @@ async function handleQuickReply(item: ConversationQuickReply) {
       startRefinement()
       return
     }
+    if (type === 'size' && String(item.value || '').toLowerCase() === 'recommend') {
+      await chooseRecommendedSizeLocally(String(item.label || '按推荐规格'))
+      return
+    }
     if (type === 'template') {
       showTemplateDeveloping()
+      return
+    }
+    if (type === 'confirm_generate' && productSizeRecommended.value && hasCompleteLocalGenerationBrief() && !generatedAssetId.value) {
+      // A locally resolved recommendation already contains the complete brief;
+      // start generation directly instead of asking the planner to resolve the
+      // same size a second time.
+      addMessage('user', String(item.label || '没有补充，开始生成'))
+      awaitingGenerationConfirmation.value = false
+      chatStage.value = 'ready_for_image'
+      chatQuickReplies.value = []
+      addAssistantMessage('好的，我按当前推荐规格开始生成产品图。')
+      await saveCreativeEventBestEffort('chat', 'chat_user_message', {
+        message: '',
+        action: { type, value: String(item.value || ''), label: String(item.label || '') },
+        localGeneration: true,
+      })
+      await generateProductImage()
       return
     }
     if (type === 'confirm_generate' || type === 'add_detail') {
@@ -476,27 +997,130 @@ async function submitChatInput() {
   else if (!chatInput.value.trim()) chatInput.value = value
 }
 
-async function sendChatTurn(message: string, action?: { type: string; value?: string; label?: string }) {
+async function chooseRecommendedSizeLocally(label = '按推荐规格') {
+  if (!selectedProduct.value) {
+    uni.showToast({ title: '请先选择产品，再推荐成品规格', icon: 'none' })
+    return
+  }
+  const recommended = localRecommendedProductSize(selectedProduct.value)
+  productSize.value = recommended
+  productSizeRecommended.value = true
+  addMessage('user', label)
+  await saveCreativeEventBestEffort('size', 'size_selected', {
+    productKey: selectedProduct.value.key,
+    productType: selectedProduct.value.name,
+    productSize: recommended,
+    recommended: true,
+    source: 'miniapp_catalog',
+  })
+  chatStage.value = 'confirm_before_image'
+  awaitingGenerationConfirmation.value = true
+  setGenerationConfirmationReplies()
+  addAssistantMessage(`根据${selectedProduct.value.name}的常用打样规格，我推荐 ${recommended}，已为你设置并写入生成提示词。生成前还有需要补充的吗？`)
+  phase.value = 'size'
+}
+
+async function sendChatTurn(message: string, action?: { type: string; value?: string; label?: string }, options: { skipUserMessage?: boolean } = {}) {
   if (!(await ensureSession()) || !sessionId.value || chatSending.value) return false
   const visibleMessage = message.trim()
   const displayMessage = visibleMessage || String(action?.label || '').trim()
-  const optimisticMessageId = displayMessage ? addMessage('user', displayMessage) : null
+  const stageBeforeRequest = chatStage.value
+  const recommendedSizeTurn = isRecommendedSizeTurn(stageBeforeRequest, visibleMessage, action)
+  const preserveRecommendedSize = shouldPreserveRecommendedSizeAfterChat(action, visibleMessage)
+  const actionType = String(action?.type || '')
+  const actionValue = String(action?.value || '')
+  const productSizeBeforeChat = productSize.value
+  const productSizeWasRecommendedBeforeChat = productSizeRecommended.value
+  // An explicit source edit means the old image is no longer the brief being
+  // edited. Conversely, an image action must lock the source before the chat
+  // planner gets a chance to return a stale text mode.
+  if (actionType === 'edit' && actionValue === 'inspiration') {
+    referencePath.value = ''
+    referenceAssetId.value = null
+    inspirationText.value = ''
+  } else if (actionType === 'image' && Number(actionValue) > 0) {
+    activateReferenceImageMode()
+  }
+  // Size recommendation is a deterministic catalog operation. Resolve it on
+  // the miniapp even when the conversational planner is unavailable.
+  if (recommendedSizeTurn && selectedProduct.value) {
+    await chooseRecommendedSizeLocally(displayMessage || '按推荐规格')
+    return true
+  }
+  const productBeforeChat = selectedProduct.value
+  const optimisticMessageId = displayMessage && !options.skipUserMessage ? addMessage('user', displayMessage) : null
   let succeeded = false
   chatSending.value = true
   setChatThinking(true, thinkingLabelFor(action, visibleMessage))
   try {
     const result = await sendConversationChat(sessionId.value, { message: visibleMessage, action })
-    applyChatBrief(result.brief)
+    applyChatBrief(result.brief, recommendedSizeTurn, preserveRecommendedSize)
+    if (actionType === 'image' || hasReferenceImage()) {
+      // The uploaded pixels remain the source of truth even if the planner
+      // echoes a stale `mode: text` or a generated inspiration sentence.
+      preserveReferenceImageMode()
+      const explicitReferenceSupplement = actionType === 'text'
+        || actionType === 'add_detail'
+        || (!actionType && Boolean(visibleMessage))
+      if (!explicitReferenceSupplement) inspirationText.value = ''
+    }
+    const materialRecommendationTurn = actionType === 'material' && actionValue.toLowerCase() === 'recommend'
+    let materialRecommendationResolved = false
+    if (materialRecommendationTurn && selectedProduct.value
+      && (!productSizeBeforeChat || productSizeWasRecommendedBeforeChat)) {
+      const localSize = localRecommendedProductSize(selectedProduct.value)
+      if (localSize) {
+        productSize.value = localSize
+        productSizeRecommended.value = true
+        materialRecommendationResolved = true
+        await saveCreativeEventBestEffort('size', 'size_selected', {
+          productKey: selectedProduct.value.key,
+          productType: selectedProduct.value.name,
+          productSize: localSize,
+          recommended: true,
+          source: 'miniapp_catalog_material_recommend',
+        })
+      }
+    }
+    // The chat endpoint is allowed to return an incomplete planner response.
+    // Resolve the recommendation from the catalog already loaded by the
+    // miniapp so this interaction never falls into the interruption modal.
+    if (recommendedSizeTurn) {
+      if (!selectedProduct.value && productBeforeChat) selectedProduct.value = productBeforeChat
+      if (!productSize.value) productSize.value = localRecommendedProductSize(selectedProduct.value)
+      if (productSize.value) {
+        productSizeRecommended.value = true
+        await saveCreativeEventBestEffort('size', 'size_selected', {
+          productKey: selectedProduct.value?.key,
+          productType: selectedProduct.value?.name,
+          productSize: productSize.value,
+          recommended: true,
+          source: 'miniapp_catalog_fallback',
+        })
+      }
+    }
     chatStage.value = String(result.stage || 'understanding')
     chatQuickReplies.value = Array.isArray(result.quickReplies) ? result.quickReplies : []
-    if (result.assistantText) addMessage('assistant', result.assistantText)
+    const recommendedSizeResolved = (recommendedSizeTurn || preserveRecommendedSize || materialRecommendationResolved)
+      && result.stage !== 'need_additional_detail'
+      && hasCompleteLocalGenerationBrief()
+    if (recommendedSizeResolved) {
+      // The returned concrete size is authoritative. Do not let a stale stage
+      // or stale quick replies from an older service keep asking for size.
+      chatStage.value = 'confirm_before_image'
+      setGenerationConfirmationReplies()
+    }
+    const assistantText = recommendedSizeResolved
+      ? `根据${selectedProduct.value?.name || '当前产品'}的常用打样规格，我推荐 ${productSize.value}，已为你设置并写入生成提示词。生成前还有需要补充的吗？`
+      : String(result.assistantText || '')
+    if (assistantText) addAssistantMessage(assistantText)
     succeeded = true
     // Let the assistant reply settle in the transcript before showing the
     // separate, longer-running image-generation status.
     setChatThinking(false)
     const explicitlyConfirmed = action?.type === 'confirm_generate' || isGenerationConfirmationText(visibleMessage)
     const additionalDetailRequired = result.stage === 'need_additional_detail'
-    const confirmationRequired = !additionalDetailRequired && (Boolean(result.generationConfirmationRequired) || result.stage === 'confirm_before_image')
+    const confirmationRequired = !additionalDetailRequired && (recommendedSizeResolved || Boolean(result.generationConfirmationRequired) || result.stage === 'confirm_before_image')
     awaitingGenerationConfirmation.value = confirmationRequired
     if (confirmationRequired && !chatQuickReplies.value.length) setGenerationConfirmationReplies()
     if (result.readyToGenerate && explicitlyConfirmed && !generatedAssetId.value && phase.value !== 'result' && !autoGenerationInFlight.value) {
@@ -513,7 +1137,7 @@ async function sendChatTurn(message: string, action?: { type: string; value?: st
       awaitingGenerationConfirmation.value = true
       chatStage.value = 'confirm_before_image'
       setGenerationConfirmationReplies()
-      addMessage('assistant', '生成前确认一下，还有需要补充的吗？没有的话点击“没有补充，开始生成”。')
+      if (!recommendedSizeResolved) addAssistantMessage('生成前确认一下，还有需要补充的吗？没有的话点击“没有补充，开始生成”。')
     }
   } catch (error: any) {
     setChatThinking(false)
@@ -639,6 +1263,8 @@ function productFromSelection(option: SelectionOption): ProductOption {
     categoryKey: option.categoryKey,
     categoryName: categoryLabels[option.categoryKey] || option.categoryName || '其他',
     materials: [{ name: option.material, note: `${option.process} · ${option.specification}`, color: materialColor(option.material) }],
+    specification: option.specification,
+    recommendedSize: normalizeRecommendedSpecification(option.specification) || undefined,
   }
 }
 
@@ -748,6 +1374,7 @@ function clearGeneratedOutputForNewDirection() {
   pendingMultiViewInputAssetId.value = null
   pendingMultiViewPrompt.value = ''
   previewUrl.value = ''
+  referenceAnalysis.value = ''
   multiviewImages.value = []
   multiviewBundleId.value = null
   multiviewBundleNo.value = ''
@@ -780,10 +1407,16 @@ async function refreshRestoredPreviews() {
       return fresh ? { ...item, previewUrl: fresh } : item
     }))
   }
+  const imageMessages = messages.value.filter(item => item.imageAssetId && !item.imageUrl)
+  await Promise.all(imageMessages.map(async item => {
+    const fresh = await freshAssetPreview(Number(item.imageAssetId))
+    if (fresh) updateImageMessage(item.id, { imageUrl: fresh, imageState: 'ready' })
+  }))
 }
 
 async function restoreCurrentMultiViewBundle() {
-  if (!hasCompleteThreeViews.value || !generatedAssetId.value) return
+  const inputAssetId = generatedAssetId.value || pendingMultiViewInputAssetId.value
+  if (!hasCompleteThreeViews.value || !inputAssetId) return
   try {
     let bundle: MultiViewBundle | undefined
     if (multiviewBundleId.value) {
@@ -792,7 +1425,7 @@ async function restoreCurrentMultiViewBundle() {
     }
     if (!bundle) {
       bundle = await createMultiViewBundle({
-        inputAssetId: generatedAssetId.value,
+        inputAssetId,
         productKey: selectedProduct.value?.key,
         productName: selectedProduct.value?.name,
         material: material.value,
@@ -802,6 +1435,7 @@ async function restoreCurrentMultiViewBundle() {
       })
     }
     applyMultiViewBundle(bundle)
+    await refreshRestoredPreviews()
     updateMultiViewChatState()
   } catch (error: any) {
     uni.showToast({ title: error?.message || '三视图审核状态暂时无法读取', icon: 'none' })
@@ -816,6 +1450,7 @@ function resetViewState() {
   material.value = ''
   materialChoice.value = 'recommend'
   productSize.value = ''
+  productSizeRecommended.value = false
   inspirationText.value = ''
   referencePath.value = ''
   referenceAssetId.value = null
@@ -826,6 +1461,7 @@ function resetViewState() {
   pendingMultiViewInputAssetId.value = null
   pendingMultiViewPrompt.value = ''
   previewUrl.value = ''
+  referenceAnalysis.value = ''
   multiviewImages.value = []
   multiviewBundleId.value = null
   multiviewBundleNo.value = ''
@@ -860,11 +1496,14 @@ function restoreEvent(event: any) {
       material.value = ''
       materialChoice.value = 'recommend'
       productSize.value = ''
+      productSizeRecommended.value = false
       break
     case 'text_inspiration_submitted':
       inspirationText.value = String(payload.inspirationText || '')
       break
     case 'image_inspiration_uploaded':
+      mode.value = 'image'
+      inspirationText.value = ''
       referenceAssetId.value = Number(payload.inputAssetId) || null
       break
     case 'material_selected':
@@ -873,6 +1512,7 @@ function restoreEvent(event: any) {
       break
     case 'size_selected':
       productSize.value = String(payload.productSize || payload.size || payload.dimensions || productSize.value)
+      productSizeRecommended.value = Boolean(payload.recommended && productSize.value)
       break
     case 'campaign_selected':
       campaignAttached.value = true
@@ -896,10 +1536,12 @@ function restoreEvent(event: any) {
       pendingGenerationPrompt.value = ''
       generatedAssetId.value = Number(payload.generatedAssetId) || generatedAssetId.value
       previewUrl.value = imageUrl({ previewUrl: payload.previewUrl })
+      referenceAnalysis.value = String(payload.referenceAnalysis || referenceAnalysis.value || '')
       break
     case 'image_refined':
       generatedAssetId.value = Number(payload.generatedAssetId) || generatedAssetId.value
       previewUrl.value = imageUrl({ previewUrl: payload.previewUrl })
+      referenceAnalysis.value = String(payload.referenceAnalysis || referenceAnalysis.value || '')
       refinementNote.value = ''
       break
     case 'multiview_queued':
@@ -914,9 +1556,13 @@ function restoreEvent(event: any) {
       break
     case 'multiview_generated':
       pendingMultiViewJobId.value = null
-      pendingMultiViewInputAssetId.value = null
+      pendingMultiViewInputAssetId.value = Number(payload.inputAssetId) || null
       pendingMultiViewPrompt.value = ''
       multiviewImages.value = Array.isArray(payload.images) ? payload.images : []
+      // The generated product image is the source asset for the view package.
+      // Older events did not restore it, which left the bundle without an input
+      // asset and made the page appear empty after reopening the session.
+      if (!generatedAssetId.value && Number(payload.inputAssetId) > 0) generatedAssetId.value = Number(payload.inputAssetId)
       multiviewBundleId.value = Number(payload.bundleId) || multiviewBundleId.value
       multiviewBundleNo.value = String(payload.bundleNo || multiviewBundleNo.value || '')
       multiviewBundleStatus.value = String(payload.bundleStatus || multiviewBundleStatus.value || '')
@@ -977,7 +1623,7 @@ function restoreMessages(events: any[]) {
         addRestoredMessage('assistant', '我记下了这段灵感。接下来选择材质，我会把材质、结构和生产限制一起考虑。')
         break
       case 'image_inspiration_uploaded':
-        addRestoredMessage('user', '已上传一张灵感图片')
+        addRestoredImageMessage(Number(payload.inputAssetId), '已上传灵感图片')
         addRestoredMessage('assistant', '图片已收到。你希望它用什么材质？')
         break
       case 'material_selected':
@@ -1023,7 +1669,9 @@ function restoreMessages(events: any[]) {
         addRestoredMessage('assistant', '3D 建模没有完成，失败原因已保存。可以检查产品图后重新提交。')
         break
       case 'chat_user_message':
-        if (payload.message) addRestoredMessage('user', String(payload.message))
+        if (payload.action?.type === 'image' && Number(payload.action?.value) > 0) {
+          addRestoredImageMessage(Number(payload.action.value), '已上传灵感图片')
+        } else if (payload.message) addRestoredMessage('user', String(payload.message))
         else if (payload.action?.label) addRestoredMessage('user', String(payload.action.label))
         break
       case 'chat_assistant_message':
@@ -1040,6 +1688,14 @@ function restoreMessages(events: any[]) {
         break
     }
   }
+}
+
+function addRestoredImageMessage(assetId: number, text = '已上传灵感图片') {
+  if (!Number.isFinite(assetId) || assetId <= 0) return null
+  if (messages.value.some(item => item.imageAssetId === assetId)) return null
+  const id = ++messageId
+  messages.value.push({ id, role: 'user', text, imageAssetId: assetId, imageState: 'ready' })
+  return id
 }
 
 function restorePhase(events: any[]) {
@@ -1157,6 +1813,14 @@ async function chooseMode(value: Mode) {
     return
   }
   mode.value = value
+  if (value === 'image') {
+    inspirationText.value = ''
+  } else {
+    // Choosing a new non-image source starts a new direction. Do not let an
+    // earlier reference image silently force this turn back to image-to-image.
+    referencePath.value = ''
+    referenceAssetId.value = null
+  }
   addMessage('user', selectedModeTitle())
   addMessage('assistant', '好，我们先确定产品方向。你想把它做成什么？')
   await saveEvent('mode', 'mode_selected', { mode: value, modeName: selectedModeTitle() })
@@ -1167,6 +1831,7 @@ async function chooseProduct(value: ProductOption) {
   material.value = ''
   materialChoice.value = 'recommend'
   productSize.value = ''
+  productSizeRecommended.value = false
   addMessage('user', value.name)
   await saveEvent('product', 'product_selected', { productKey: value.key, productType: value.name, process: value.process })
   if (mode.value === 'template') {
@@ -1208,6 +1873,7 @@ async function pickInspirationImage() {
       uni.showToast({ title: '没有读取到图片，请重新选择', icon: 'none' })
       return
     }
+    activateReferenceImageMode()
     referencePath.value = path
     referenceAssetId.value = null
     void uploadInspirationImage(path)
@@ -1223,20 +1889,29 @@ async function pickInspirationImage() {
   } })
 }
 async function uploadInspirationImage(path: string) {
+  const imageMessageId = addImageMessage(path, '正在上传灵感图片…', 'uploading')
   busy.value = true
   try {
     const result = await uploadReference(path)
     const id = Number(result?.assetId)
     if (!Number.isFinite(id) || id <= 0) throw new Error('图片上传成功但没有返回作品编号')
+    activateReferenceImageMode()
     referenceAssetId.value = id
-    await saveEvent('inspiration', 'image_inspiration_uploaded', { productType: selectedProduct.value?.name, inputAssetId: id, fileType: 'image' })
+    // Show the local image immediately. Replace it with the server-controlled
+    // preview in the background so a slow media-token request cannot stall the
+    // conversation turn.
+    updateImageMessage(imageMessageId, { text: '已上传灵感图片', imageUrl: path, imageAssetId: id, imageState: 'ready' })
+    void freshAssetPreview(id).then(storedPreview => {
+      if (storedPreview) updateImageMessage(imageMessageId, { imageUrl: storedPreview, imageState: 'ready' })
+    })
+    await saveCreativeEventBestEffort('inspiration', 'image_inspiration_uploaded', { productType: selectedProduct.value?.name, inputAssetId: id, fileType: 'image' })
     uni.showToast({ title: '图片已留存', icon: 'success' })
     // The upload is complete before the chat turn starts. Release the upload
     // lock so a ready image conversation can enter the normal generation path.
     busy.value = false
-    await sendChatTurn('我已上传灵感图片', { type: 'image', value: String(id), label: '已上传灵感图片' })
+    await sendChatTurn('我已上传灵感图片', { type: 'image', value: String(id), label: '已上传灵感图片' }, { skipUserMessage: true })
   } catch (error: any) {
-    referencePath.value = ''
+    updateImageMessage(imageMessageId, { imageState: 'failed', text: '这张灵感图片上传失败' })
     const message = error?.message || '图片上传失败'
     // Toast 文案长度有限，网络上传错误改用弹窗，避免关键的微信错误被截断。
     uni.showModal({ title: '图片上传失败', content: message, showCancel: false })
@@ -1286,15 +1961,145 @@ async function generateImageAfterMaterialSelection() {
 
 function updateImageQueueMessage(job: { status?: string; jobType?: string; queuePosition?: number }) {
   if (job.status === 'queued') {
-    busyMessage.value = job.queuePosition && job.queuePosition > 0
+    const stageMessage = imageGenerationStage.value === 'adapting_product'
+      ? '产品化生成任务已排队，正在准备最终成品…'
+      : ''
+    busyMessage.value = stageMessage || (job.queuePosition && job.queuePosition > 0
       ? `已进入生成队列，前面还有 ${job.queuePosition - 1} 项任务…`
-      : '已进入生成队列，马上开始…'
+      : '已进入生成队列，马上开始…')
   } else if (job.status === 'running') {
-    busyMessage.value = job.jobType === 'multi_view'
+    busyMessage.value = imageGenerationStage.value === 'adapting_product'
+      ? '正在把参考图元素转译为目标文创产品，请稍候…'
+      : job.jobType === 'multi_view'
       ? '正在生成一致的产品多视图，请稍候…'
       : job.jobType === 'image_to_image'
         ? '正在依据参考图生成产品视觉，请稍候…'
-        : '之间大模型正在生成产品视觉，请稍候…'
+        : 'Seedream 5.0 正在生成产品视觉，请稍候…'
+  }
+}
+
+/**
+ * Keep the image-to-image prompt deterministic. A generic text optimizer can
+ * rewrite a visual reference into a flat poster brief, so the reference path
+ * sends the user's product brief plus immutable carrier/framing locks directly
+ * to Seedream. Text and multi-view prompts may still use Qwen as an enhancer,
+ * but the original requirements are retained alongside its candidate.
+ */
+async function resolveSeedreamPrompt(sourcePrompt: string, purpose: 'initial' | 'multiview' = 'initial') {
+  const original = sourcePrompt.trim()
+  if (!original || !selectedProduct.value) return original
+  const multiviewReferenceMode = purpose === 'multiview'
+  const productAdaptationMode = isReferenceImageMode() && !multiviewReferenceMode
+  const referenceConstraint = multiviewReferenceMode
+    ? REFERENCE_PROMPT_GUARD
+    : productAdaptationMode
+      ? productTransformationGuard()
+      : ''
+  const optimizerInput = referenceConstraint ? `${original}\nReference-image constraint: ${referenceConstraint}` : original
+  let optimized = original
+  if (!productAdaptationMode) {
+    busyMessage.value = '正在整理产品提示词…'
+    try {
+      const result = await optimizeImagePrompt({
+        prompt: optimizerInput,
+        provider: 'ark',
+        productCategory: selectedProduct.value.name,
+        material: material.value,
+        productSize: productSize.value,
+      })
+      const candidate = String(result?.prompt || '').trim()
+      if (candidate) {
+        // Do not let a candidate silently delete the user's product or
+        // cultural requirements. The immutable locks are appended below too.
+        const merged = `${candidate}\nCore user requirements that must remain: ${original}`
+        optimized = merged.length > 1600 ? `${candidate.slice(0, 1050)}\nCore user requirements that must remain: ${original.slice(0, 500)}` : merged
+      }
+      try {
+        await saveEvent('summary', 'prompt_optimized', {
+          purpose,
+          productType: selectedProduct.value.name,
+          material: material.value,
+          productSize: productSize.value,
+          sourcePrompt: original,
+          optimizerInput,
+          optimizedPrompt: optimized,
+          optimizer: 'siliconflow_qwen',
+          imageProvider: 'volcengine_ark_seedream_5',
+        })
+      } catch {
+        // Prompt telemetry must never block an otherwise valid image request.
+      }
+    } catch {
+      try {
+        await saveEvent('summary', 'prompt_optimization_fallback', {
+          purpose,
+          productType: selectedProduct.value.name,
+          material: material.value,
+          productSize: productSize.value,
+          sourcePrompt: original,
+          reason: 'optimization_unavailable',
+          imageProvider: 'volcengine_ark_seedream_5',
+        })
+      } catch {
+        // Keep the original prompt even when the event endpoint is unavailable.
+      }
+    }
+  } else {
+    // Initial image conversion is intentionally single-pass: the uploaded
+    // pixels remain the source of truth and are not replaced by a lossy
+    // intermediate image or a generic text-to-image rewrite.
+    await saveCreativeEventBestEffort('summary', 'prompt_optimization_skipped', {
+      purpose,
+      productType: selectedProduct.value.name,
+      material: material.value,
+      productSize: productSize.value,
+      reason: 'direct_reference_product_adaptation',
+    })
+  }
+  // Keep the selected finished-product specification in the actual image
+  // prompt even when the optimizer rewrites or shortens the user's wording.
+  // The same value is sent as structured request metadata below.
+  const productSizeGuard = productSize.value
+    ? `成品尺寸/规格必须严格按「${productSize.value}」执行；这是成品规格，不是图片分辨率。`
+    : ''
+  // Keep the carrier, framing and reference constraints in the final client
+  // payload as immutable guards. The server adds its own identity lock too.
+  const multiviewCarrierGuard = purpose === 'multiview'
+    ? [`【产品形态】${productFormProfile(selectedProduct.value).prompt}`, PRODUCT_FRAME_GUARD].join(' ')
+    : ''
+  const immutableGuard = productAdaptationMode
+    ? productTransformationGuard()
+    : [referenceConstraint, multiviewCarrierGuard].filter(Boolean).join(' ')
+  const immutableTail = [productSizeGuard, immutableGuard].filter(Boolean).join(' ')
+  return composeBoundedPrompt(optimized, immutableTail)
+}
+
+/**
+ * Keep the client payload conservative because the server adds its own
+ * product-identity lock before calling Seedream. The task/rules tail wins;
+ * optional user prose is the first part shortened. If a future profile grows
+ * beyond the budget, preserve both its opening task and closing size/check.
+ */
+function composeBoundedPrompt(core: string, immutableTail: string, budget = CLIENT_PROMPT_BUDGET) {
+  const normalizedCore = core.trim()
+  const normalizedTail = immutableTail.trim()
+  if (!normalizedTail) return normalizedCore.slice(0, budget)
+  if (normalizedTail.length >= budget) {
+    const headLength = Math.floor(budget * 0.68)
+    const tailLength = Math.max(1, budget - headLength - 20)
+    return `${normalizedTail.slice(0, headLength)}\n...\n${normalizedTail.slice(-tailLength)}`
+  }
+  const coreLength = Math.max(0, budget - normalizedTail.length - 1)
+  const boundedCore = normalizedCore.slice(0, coreLength)
+  return [boundedCore, normalizedTail].filter(Boolean).join(' ')
+}
+
+async function saveCreativeEventBestEffort(step: string, eventType: string, payload: Record<string, any> = {}) {
+  if (!sessionId.value) return
+  try {
+    await saveEvent(step, eventType, payload)
+  } catch (error) {
+    console.warn('[conversation-create] event persistence skipped', { step, eventType, error })
   }
 }
 
@@ -1305,8 +2110,9 @@ async function completeGeneratedProductImage(result: any, generationPrompt: stri
   pendingImageJobId.value = null
   pendingGenerationPrompt.value = ''
   generatedAssetId.value = assetId
-  previewUrl.value = imageUrl(result)
-  await saveEvent('image', 'image_generated', { jobId: result?.jobId, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
+  previewUrl.value = imageUrl(result) || await freshAssetPreview(assetId)
+  referenceAnalysis.value = String(result?.referenceAnalysis || '')
+  await saveCreativeEventBestEffort('image', 'image_generated', { jobId: result?.jobId, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, mode: mode.value, referenceAssetId: referenceAssetId.value, inspirationText: inspirationText.value, referenceStrategy: isReferenceImageMode() ? 'direct_single_pass' : 'text_to_image', productForm: productFormProfile(selectedProduct.value).key, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
   addMessage('assistant', '产品视觉已经生成并保存。下一步请生成三视图或 3D 原型，完成后才能提交审核和申请打样。')
   chatStage.value = 'image_ready'
   chatQuickReplies.value = [
@@ -1340,48 +2146,74 @@ async function generateProductImage() {
   busyMessage.value = '正在保存创作参数…'
   let queueEventPromise: Promise<void> | null = null
   try {
-    await saveEvent('summary', 'generation_started', { productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, prompt: prompt.value })
-    let generationPrompt = prompt.value
-    if (mode.value !== 'image') {
-      busyMessage.value = '正在整理产品提示词…'
-      try {
-        const optimized = await optimizeImagePrompt({ prompt: prompt.value, provider: 'tripo', productCategory: selectedProduct.value.name, material: material.value, productSize: productSize.value })
-        if (String(optimized?.prompt || '').trim()) {
-        generationPrompt = String(optimized.prompt).trim()
-        await saveEvent('summary', 'prompt_optimized', { productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, sourcePrompt: prompt.value, optimizedPrompt: generationPrompt })
-        }
-      } catch {
-        await saveEvent('summary', 'prompt_optimization_fallback', { productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, sourcePrompt: prompt.value, reason: 'optimization_unavailable' })
-      }
-    }
+    await saveCreativeEventBestEffort('summary', 'generation_started', {
+      productType: selectedProduct.value.name,
+      material: material.value,
+      productSize: productSize.value,
+      prompt: prompt.value,
+      mode: mode.value,
+      referenceAssetId: referenceAssetId.value,
+      inspirationText: inspirationText.value,
+      imageElementTranslation: isReferenceImageMode(),
+      referenceStrategy: isReferenceImageMode() ? 'direct_single_pass' : 'text_to_image',
+      productForm: productFormProfile(selectedProduct.value).key,
+    })
+    const generationPrompt = await resolveSeedreamPrompt(prompt.value)
     let result: any
-    if (mode.value === 'image') {
+    if (isReferenceImageMode()) {
       if (!referenceAssetId.value) throw new Error('参考图片还没有保存完成，请重新上传后再生成')
-      busyMessage.value = '正在依据参考图生成产品视觉，预计需要 1-3 分钟…'
-      result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, inputAssetId: referenceAssetId.value, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value, productSize: productSize.value }, (job) => {
+      // The API accepts one reference asset. Keep the original upload as that
+      // asset: a generated cleanup image can shrink, recolor or flatten the
+      // subject, and the second i2i pass cannot recover those lost pixels.
+      const referenceInputAssetId = referenceAssetId.value
+      const adaptationGuard = productTransformationGuard()
+      imageGenerationStage.value = 'adapting_product'
+      busyMessage.value = `正在依据参考图生成${selectedProduct.value.name}产品，预计需要 1-3 分钟…`
+      result = await createReferenceToImage({
+        title: `${selectedProduct.value.name} · 对话创作`,
+        prompt: generationPrompt,
+        rawPrompt: prompt.value,
+        negativePrompt: `${PRODUCT_OUTPUT_NEGATIVE}, ${productFormNegative(selectedProduct.value)}`,
+        imageSize: SEEDREAM_IMAGE_SIZE,
+        inputAssetId: referenceInputAssetId,
+        productKey: selectedProduct.value.key,
+        productCategory: selectedProduct.value.name,
+        material: material.value,
+        productSize: productSize.value,
+        // This is an initial product conversion, not a revision of an already
+        // generated product. The normal reference-preserving path gives the
+        // target carrier priority without locking the intermediate composition.
+        refinement: false,
+        refinementNote: adaptationGuard,
+      }, (job) => {
         updateImageQueueMessage(job)
         const jobId = Number(job.jobId)
         if (Number.isFinite(jobId) && jobId > 0 && pendingImageJobId.value !== jobId) {
           pendingImageJobId.value = jobId
           pendingGenerationPrompt.value = generationPrompt
-          queueEventPromise = saveEvent('image', 'image_generation_queued', {
+          queueEventPromise = saveCreativeEventBestEffort('image', 'image_generation_queued', {
             jobId,
             productType: selectedProduct.value?.name,
             material: material.value,
             productSize: productSize.value,
+            sourceReferenceAssetId: referenceAssetId.value,
+            designSourceAssetId: referenceInputAssetId,
+            mode: mode.value,
+            inspirationText: inspirationText.value,
+            referenceStrategy: 'direct_single_pass',
             prompt: generationPrompt,
           })
         }
       })
     } else {
-      busyMessage.value = '正在提交之间大模型生成任务…'
-      result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, productType: selectedProduct.value.name, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value, productSize: productSize.value }, (job) => {
+      busyMessage.value = '正在提交 Seedream 5.0 生图任务…'
+      result = await createTextToImage({ title: `${selectedProduct.value.name} · 对话创作`, prompt: generationPrompt, rawPrompt: inspirationText.value || prompt.value, negativePrompt: `${PRODUCT_OUTPUT_NEGATIVE}, ${productFormNegative(selectedProduct.value)}`, imageSize: SEEDREAM_IMAGE_SIZE, productType: selectedProduct.value.name, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value, productSize: productSize.value }, (job) => {
         updateImageQueueMessage(job)
         const jobId = Number(job.jobId)
         if (Number.isFinite(jobId) && jobId > 0 && pendingImageJobId.value !== jobId) {
           pendingImageJobId.value = jobId
           pendingGenerationPrompt.value = generationPrompt
-          queueEventPromise = saveEvent('image', 'image_generation_queued', {
+          queueEventPromise = saveCreativeEventBestEffort('image', 'image_generation_queued', {
             jobId,
             productType: selectedProduct.value?.name,
             material: material.value,
@@ -1397,7 +2229,11 @@ async function generateProductImage() {
     const message = generationFailureMessage(error)
     uni.showModal({ title: '产品图未生成', content: message, showCancel: false })
   }
-  finally { busy.value = false; busyMessage.value = '正在保存创作过程并调用 AI，请稍候…' }
+  finally {
+    busy.value = false
+    imageGenerationStage.value = ''
+    busyMessage.value = '正在保存创作过程并调用 AI，请稍候…'
+  }
 }
 
 async function resumePendingImageGeneration() {
@@ -1442,9 +2278,125 @@ function generationFailureMessage(error: any) {
   return raw || '生成服务暂时不可用，请稍后重试。'
 }
 function imageUrl(item: any) {
-  const raw = String(item?.previewUrl || item?.imageUrl || item?.fileUrl || '')
+  const raw = String(item?.previewUrl || item?.imageUrl || item?.fileUrl || item?.url || item?.accessUrl || '')
   if (/^https?:\/\//i.test(raw)) return raw
   return raw.startsWith('/') ? apiUrl(raw) : ''
+}
+async function previewMessageImage(item: Message) {
+  let url = item.imageUrl || ''
+  if (!url && item.imageAssetId) url = await freshAssetPreview(item.imageAssetId)
+  if (!url) {
+    uni.showToast({ title: item.imageState === 'failed' ? '图片上传失败，请重新选择' : '图片还在加载，请稍候', icon: 'none' })
+    return
+  }
+  if (!item.imageUrl) updateImageMessage(item.id, { imageUrl: url, imageState: 'ready' })
+  uni.previewImage({ current: url, urls: [url] })
+}
+let copyingMessageText = false
+
+function clipboardText(value: unknown) {
+  // Keep line breaks/tabs, but remove control characters that can make the
+  // native clipboard reject an otherwise valid string.
+  return String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim()
+}
+
+function invokeClipboardApi(api: { setClipboardData: (options: WechatClipboardOptions) => void }, data: string) {
+  return new Promise<void>((resolve, reject) => {
+    try {
+      const options: WechatClipboardOptions = {
+        data,
+        success: () => resolve(),
+        fail: (error) => reject(error),
+      }
+      api.setClipboardData(options)
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
+async function writeClipboardText(data: string) {
+  let firstError: unknown
+  // In the WeChat mini program, call the host API directly first. This avoids
+  // an adapter mismatch in older uni runtimes while retaining a uni fallback
+  // for H5/App and newer runtimes.
+  try {
+    const nativeWx = typeof wx !== 'undefined' ? wx : undefined
+    if (nativeWx && typeof nativeWx.setClipboardData === 'function') {
+      await invokeClipboardApi({ setClipboardData: nativeWx.setClipboardData.bind(nativeWx) }, data)
+      return true
+    }
+  } catch (error) {
+    firstError = error
+    // wx and uni both reach the same host API in a mini program. Retrying a
+    // privacy-scope rejection only duplicates the warning and cannot change
+    // the platform-side declaration.
+    if (isClipboardPrivacyError(error)) throw error
+  }
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      try {
+        uni.setClipboardData({
+          data,
+          showToast: false,
+          success: () => resolve(),
+          fail: (error) => reject(error),
+        })
+      } catch (error) {
+        reject(error)
+      }
+    })
+    return false
+  } catch (error) {
+    throw firstError || error
+  }
+}
+
+function isClipboardPrivacyError(error: unknown) {
+  // This scope is controlled by the WeChat admin-side privacy guide, not the
+  // location-only `requiredPrivateInfos` app.json setting.
+  const raw = String((error as any)?.errMsg || (error as any)?.message || '')
+  return /privacy agreement|privacy policy|scope is not declared|隐私协议|隐私指引/i.test(raw)
+}
+
+function clipboardFailureMessage(error: any) {
+  const raw = String(error?.errMsg || error?.message || '').trim()
+  console.warn('[clipboard] setClipboardData failed', { errMsg: raw, errCode: error?.errCode })
+  if (isClipboardPrivacyError(error)) {
+    return '小程序隐私指引尚未声明剪贴板，请联系管理员配置；也可长按文字复制'
+  }
+  if (/not support|not available|undefined|not a function|navigator\.clipboard/i.test(raw)) {
+    return '当前环境不支持复制，请在微信小程序中操作'
+  }
+  if (/auth|permission|denied|forbidden|拒绝/i.test(raw)) {
+    return '剪贴板权限被系统拒绝，请允许后重试'
+  }
+  return '复制失败，可长按文字复制'
+}
+
+async function copyMessageText(item: Message) {
+  const value = clipboardText(item.text)
+  if (!value || copyingMessageText) return
+  copyingMessageText = true
+  try {
+    const nativeToastShown = await writeClipboardText(value)
+    if (!nativeToastShown) uni.showToast({ title: '已复制', icon: 'success' })
+  } catch (error) {
+    uni.showToast({ title: clipboardFailureMessage(error), icon: 'none' })
+  } finally {
+    copyingMessageText = false
+  }
+}
+async function previewMultiViewImage(item: SeedreamMultiViewImage) {
+  let current = imageUrl(item)
+  if (!current && Number(item.assetId) > 0) current = await freshAssetPreview(Number(item.assetId))
+  if (!current) {
+    uni.showToast({ title: '视图还在加载，请稍候', icon: 'none' })
+    return
+  }
+  const urls = multiviewImages.value.map(imageUrl).filter(Boolean)
+  uni.previewImage({ current, urls: urls.length ? urls : [current] })
 }
 function previewImage() { if (previewUrl.value) uni.previewImage({ current: previewUrl.value, urls: [previewUrl.value] }) }
 function startRefinement() {
@@ -1480,15 +2432,25 @@ async function regenerateWithRefinement() {
     } catch {
       // The edit request remains usable when prompt optimization is temporarily unavailable.
     }
+    const refinementGuard = productTransformationGuard()
+    refinementPrompt = composeBoundedPrompt(refinementPrompt, refinementGuard)
     busyMessage.value = '正在基于当前产品图生成新方案，请稍候…'
-    await saveEvent('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, optimizedPrompt: refinementPrompt, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value })
-    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, inputAssetId: sourceAssetId, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value, productSize: productSize.value, refinement: true, refinementNote: note }, updateImageQueueMessage)
+    await saveCreativeEventBestEffort('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, optimizedPrompt: refinementPrompt, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value })
+    const result = await createReferenceToImage({ title: `${selectedProduct.value.name} · 修改方案`, prompt: refinementPrompt, rawPrompt: note, negativePrompt: `${PRODUCT_OUTPUT_NEGATIVE}, ${productFormNegative(selectedProduct.value)}`, imageSize: SEEDREAM_IMAGE_SIZE, inputAssetId: sourceAssetId, productKey: selectedProduct.value.key, productCategory: selectedProduct.value.name, material: material.value, productSize: productSize.value, refinement: true, refinementNote: `${note}\n${refinementGuard}` }, updateImageQueueMessage)
     const newAssetId = Number(result?.assetId || result?.id)
     if (!Number.isFinite(newAssetId) || newAssetId <= 0) throw new Error('修改后的产品图没有保存成功，请重试')
     generatedAssetId.value = newAssetId
-    previewUrl.value = imageUrl(result)
+    previewUrl.value = imageUrl(result) || await freshAssetPreview(newAssetId)
+    referenceAnalysis.value = String(result?.referenceAnalysis || referenceAnalysis.value || '')
     multiviewImages.value = []
-    await saveEvent('image', 'image_refined', { previousAssetId: sourceAssetId, generatedAssetId: newAssetId, previewUrl: previewUrl.value, refinementNote: note, optimizedPrompt: refinementPrompt, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value })
+    multiviewBundleId.value = null
+    multiviewBundleNo.value = ''
+    multiviewBundleStatus.value = ''
+    multiviewBundleComment.value = ''
+    stopModelPolling()
+    modelTask.value = null
+    modelInputMode.value = 'single'
+    await saveCreativeEventBestEffort('image', 'image_refined', { previousAssetId: sourceAssetId, generatedAssetId: newAssetId, previewUrl: previewUrl.value, refinementNote: note, optimizedPrompt: refinementPrompt, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
     addMessage('user', `补充修改：${note}`)
     addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
     cancelRefinement()
@@ -1578,18 +2540,19 @@ async function generateMultiView() {
   const inputAssetId = generatedAssetId.value
   let queueEventPromise: Promise<void> | null = null
   try {
-    await saveEvent('multiview', 'multiview_started', { inputAssetId, productType: selectedProduct.value?.name, material: material.value, productSize: productSize.value })
-    const result = await createSeedreamMultiView({ inputAssetId, prompt: prompt.value, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, productSize: productSize.value, viewCount: 3, size: '2K', watermark: true }, (job) => {
+    await saveCreativeEventBestEffort('multiview', 'multiview_started', { inputAssetId, productType: selectedProduct.value?.name, material: material.value, productSize: productSize.value })
+    const multiviewPrompt = await resolveSeedreamPrompt(prompt.value, 'multiview')
+    const result = await createSeedreamMultiView({ inputAssetId, prompt: multiviewPrompt, productKey: selectedProduct.value?.key, productCategory: selectedProduct.value?.name, material: material.value, productSize: productSize.value, viewCount: 3, size: SEEDREAM_IMAGE_SIZE, watermark: true }, (job) => {
       updateImageQueueMessage(job)
       const jobId = Number(job.jobId)
       if (Number.isFinite(jobId) && jobId > 0 && pendingMultiViewJobId.value !== jobId) {
         pendingMultiViewJobId.value = jobId
         pendingMultiViewInputAssetId.value = inputAssetId
-        pendingMultiViewPrompt.value = prompt.value
-        queueEventPromise = saveEvent('multiview', 'multiview_queued', {
+        pendingMultiViewPrompt.value = multiviewPrompt
+        queueEventPromise = saveCreativeEventBestEffort('multiview', 'multiview_queued', {
           jobId,
           inputAssetId,
-          prompt: prompt.value,
+          prompt: multiviewPrompt,
           productType: selectedProduct.value?.name,
           material: material.value,
           productSize: productSize.value,
@@ -1607,11 +2570,24 @@ async function completeGeneratedMultiView(result: any, inputAssetId: number) {
   // provider response also contains a right view, keep only the contractual
   // front/left/back set so bundle creation cannot fail on an unexpected extra
   // image.
-  const requiredViews = new Set(['front', 'left', 'back'])
+  const viewOrder = ['front', 'left', 'back'] as const
+  const labels: Record<string, string> = { front: '正面', left: '侧面', back: '背面' }
   const images = ((Array.isArray(result?.images) ? result.images : []) as SeedreamMultiViewImage[])
-    .filter(item => requiredViews.has(String(item?.view || '').toLowerCase()) && Number(item?.assetId) > 0)
-  multiviewImages.value = images
-  if (!hasCompleteThreeViews.value) throw new Error('三视图没有完整返回正面、侧面和背面，请稍后重试')
+    .filter(item => viewOrder.includes(String(item?.view || '').toLowerCase() as typeof viewOrder[number]) && Number(item?.assetId) > 0)
+    .map(item => ({
+      ...item,
+      view: String(item.view).toLowerCase() as SeedreamMultiViewImage['view'],
+      label: item.label || labels[String(item.view).toLowerCase()] || '视图',
+      assetId: Number(item.assetId),
+    }))
+    .sort((left, right) => viewOrder.indexOf(left.view as typeof viewOrder[number]) - viewOrder.indexOf(right.view as typeof viewOrder[number]))
+  const returnedViews = new Set(images.map(item => item.view))
+  if (!viewOrder.every(view => returnedViews.has(view))) throw new Error('三视图没有完整返回正面、侧面和背面，请稍后重试')
+  const hydratedImages = await Promise.all(images.map(async item => {
+    const fresh = await freshAssetPreview(item.assetId)
+    return fresh ? { ...item, previewUrl: fresh } : item
+  }))
+  multiviewImages.value = hydratedImages
   const bundle = await createMultiViewBundle({
     inputAssetId,
     productKey: selectedProduct.value?.key,
@@ -1619,13 +2595,13 @@ async function completeGeneratedMultiView(result: any, inputAssetId: number) {
     material: material.value,
     productSize: productSize.value,
     viewCount: 3,
-    images: images.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })),
+    images: hydratedImages.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })),
   })
   applyMultiViewBundle(bundle)
   pendingMultiViewJobId.value = null
   pendingMultiViewInputAssetId.value = null
   pendingMultiViewPrompt.value = ''
-  await saveEvent('multiview', 'multiview_generated', {
+  await saveCreativeEventBestEffort('multiview', 'multiview_generated', {
     jobId: result?.jobId,
     inputAssetId,
     productSize: productSize.value,
@@ -1633,7 +2609,7 @@ async function completeGeneratedMultiView(result: any, inputAssetId: number) {
     bundleNo: bundle.bundleNo,
     bundleStatus: bundle.status,
     bundleComment: bundle.reviewComment,
-    images: images.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })),
+    images: hydratedImages.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })),
   })
   addMessage('assistant', '正面、侧面和背面已保存为一个作品包。先提交整包审核，审核通过后就可以申请打样；如果审核未通过，我会把原因保留在这里。')
   updateMultiViewChatState()
@@ -1644,11 +2620,14 @@ async function completeGeneratedMultiView(result: any, inputAssetId: number) {
 function applyMultiViewBundle(bundle: MultiViewBundle | null | undefined) {
   if (!bundle) return
   multiviewBundleId.value = Number(bundle.id || bundle.bundleId) || multiviewBundleId.value
+  if (!generatedAssetId.value && Number(bundle.inputAssetId) > 0) generatedAssetId.value = Number(bundle.inputAssetId)
   multiviewBundleNo.value = String(bundle.bundleNo || multiviewBundleNo.value || '')
   multiviewBundleStatus.value = String(bundle.status || multiviewBundleStatus.value || 'draft')
   multiviewBundleComment.value = String(bundle.reviewComment || '')
   if (Array.isArray(bundle.images) && bundle.images.length) {
-    multiviewImages.value = bundle.images.map(item => ({ ...item })) as SeedreamMultiViewImage[]
+    multiviewImages.value = bundle.images
+      .filter(item => Number(item?.assetId) > 0)
+      .map(item => ({ ...item, assetId: Number(item.assetId) })) as SeedreamMultiViewImage[]
   }
 }
 
@@ -1887,7 +2866,7 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .chat {
   height: 100vh;
   box-sizing: border-box;
-  padding: 24rpx 28rpx calc(296rpx + env(safe-area-inset-bottom));
+  padding: 24rpx 28rpx calc(332rpx + env(safe-area-inset-bottom));
 }
 .workspace-intro { margin: 6rpx 0 18rpx; }
 .workspace-intro-top { justify-content: space-between; gap: 10rpx; }
@@ -1913,21 +2892,31 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .message-avatar { display: grid; place-items: center; flex: 0 0 46rpx; width: 46rpx; height: 46rpx; border-radius: 14rpx; font-family: "Songti SC", "STSong", serif; font-size: 22rpx; font-weight: 850; }
 .assistant-avatar { background: var(--green); color: #fff; box-shadow: 0 5rpx 12rpx rgba(54, 93, 74, .18); }
 .user-avatar { background: #f7e5dc; color: #a45d48; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; font-size: 16rpx; }
-.message-content { display: flex; min-width: 0; max-width: 78%; flex-direction: column; align-items: flex-start; }
+.message-content { display: flex; min-width: 0; max-width: 82%; flex-direction: column; align-items: flex-start; }
 .user .message-content { align-items: flex-end; }
-.message-meta { display: flex; align-items: center; gap: 7rpx; margin: 0 4rpx 6rpx; color: #849089; font-size: 12rpx; }
+.message-meta { display: flex; align-items: center; gap: 8rpx; margin: 0 4rpx 8rpx; color: #849089; font-size: 19rpx; }
 .message-meta text:last-child { color: #a5afa9; }
-.bubble { max-width: 100%; box-sizing: border-box; padding: 14rpx 16rpx; border: 1rpx solid #e1e8e2; border-radius: 7rpx 16rpx 16rpx 16rpx; background: var(--surface); box-shadow: 0 6rpx 17rpx rgba(51, 72, 60, .045); }
-.bubble text { color: #46534b; font-size: 18rpx; line-height: 1.65; }
+.bubble { max-width: 100%; box-sizing: border-box; padding: 18rpx 20rpx; border: 1rpx solid #e1e8e2; border-radius: 7rpx 16rpx 16rpx 16rpx; background: var(--surface); box-shadow: 0 6rpx 17rpx rgba(51, 72, 60, .045); }
+.bubble text { color: #3f4d45; font-size: 28rpx; line-height: 1.65; }
 .user .bubble { border-color: #c3d5c8; border-radius: 16rpx 7rpx 16rpx 16rpx; background: #e8f2eb; }
 .user .bubble text { color: #436052; }
+.image-bubble { width: 100%; max-width: 540rpx; padding: 10rpx; }
+.message-image, .message-image-loading { display: block; width: 100%; height: 360rpx; overflow: hidden; border-radius: 10rpx; background: #dfe9e1; }
+.message-image-loading { display: flex; align-items: center; justify-content: center; color: #759080; font-size: 20rpx; }
+.message-image-footer { display: flex; align-items: center; justify-content: space-between; gap: 10rpx; padding: 9rpx 3rpx 1rpx; }
+.message-image-footer text:first-child { overflow: hidden; color: #6f8176; font-size: 18rpx; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.message-image-footer text:first-child.failed { color: #b46350; }
+.message-image-reselect { flex: 0 0 auto; color: #a16f59 !important; font-size: 18rpx !important; font-weight: 800; }
+.message-actions { display: flex; justify-content: flex-end; margin-top: 8rpx; }
+.message-copy { padding: 3rpx 2rpx; color: #789184 !important; font-size: 18rpx !important; line-height: 1.3 !important; }
+.message-copy:active { color: #4f7561 !important; opacity: .72; }
 
 .thinking-row { display: flex; align-items: flex-start; gap: 10rpx; margin: 20rpx 0; animation: thinking-enter .24s ease-out; }
-.thinking-content { display: flex; min-width: 0; max-width: 78%; flex-direction: column; }
+.thinking-content { display: flex; min-width: 0; max-width: 82%; flex-direction: column; }
 .thinking-bubble { padding: 13rpx 16rpx; border: 1rpx solid #d7e5da; border-radius: 7rpx 16rpx 16rpx 16rpx; background: #f9fcf9; box-shadow: 0 7rpx 17rpx rgba(62, 103, 76, .07); }
 .thinking-title-row { display: flex; align-items: center; gap: 10rpx; }
-.thinking-title { color: var(--green); font-size: 17rpx; font-weight: 850; }
-.thinking-detail { display: block; margin-top: 5rpx; color: #91a097; font-size: 14rpx; line-height: 1.4; }
+.thinking-title { color: var(--green); font-size: 25rpx; font-weight: 850; }
+.thinking-detail { display: block; margin-top: 7rpx; color: #84958b; font-size: 22rpx; line-height: 1.5; }
 .thinking-dots { display: flex; align-items: center; gap: 4rpx; height: 22rpx; }
 .thinking-dot { width: 7rpx; height: 7rpx; border-radius: 50%; background: #78a58a; animation: thinking-dot-bounce 1.25s ease-in-out infinite; }
 .thinking-dot:nth-child(2) { animation-delay: .16s; }
@@ -2014,26 +3003,26 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .refinement-panel .dark-button { height: 58rpx; margin: 0; padding: 0 13rpx; font-size: 15rpx; line-height: 58rpx; }
 
 .composer-dock { position: fixed; z-index: 25; right: 0; bottom: calc(88rpx + env(safe-area-inset-bottom)); left: 0; box-sizing: border-box; padding: 13rpx 22rpx 9rpx; border-top: 1rpx solid #dfe7e1; background: rgba(255, 255, 255, .97); box-shadow: 0 -10rpx 24rpx rgba(44, 62, 51, .07); backdrop-filter: blur(18rpx); }
-.composer-context { min-width: 0; gap: 7rpx; color: #6f8076; font-size: 13rpx; }
+.composer-context { min-width: 0; gap: 7rpx; color: #64776c; font-size: 20rpx; }
 .context-live { width: 9rpx; height: 9rpx; border-radius: 50%; background: #70a481; }
 .context-product { overflow: hidden; max-width: 260rpx; color: #96a29b; text-overflow: ellipsis; white-space: nowrap; }
-.context-working { margin-left: auto; color: var(--orange); font-size: 12rpx; }
+.context-working { margin-left: auto; color: var(--orange); font-size: 19rpx; }
 .quick-reply-list { width: 100%; margin-top: 10rpx; white-space: nowrap; }
 .quick-reply-track { display: flex; gap: 8rpx; }
-.quick-reply { display: inline-flex; align-items: center; gap: 6rpx; flex: 0 0 auto; height: 50rpx; padding: 0 11rpx; border: 1rpx solid #d8e5db; border-radius: 10rpx; background: #f6faf7; color: #527062; font-size: 14rpx; line-height: 50rpx; }
+.quick-reply { display: inline-flex; align-items: center; gap: 7rpx; flex: 0 0 auto; min-height: 64rpx; padding: 0 15rpx; border: 1rpx solid #d8e5db; border-radius: 10rpx; background: #f6faf7; color: #456655; font-size: 24rpx; line-height: 1.35; }
 .quick-reply.confirm { border-color: #9fc3a9; background: #eaf5ed; color: #3f7052; font-weight: 850; }
 .quick-reply.secondary { border-color: #e6d5ca; background: #fff9f5; color: #9b6b57; }
 .quick-reply.disabled { opacity: .55; }
 .quick-reply:active { opacity: .75; }
-.quick-reply-mark { display: inline-grid; place-items: center; width: 25rpx; height: 25rpx; border-radius: 7rpx; background: #dcebe0; color: #4e7860; font-size: 11rpx; font-weight: 900; line-height: 25rpx; }
+.quick-reply-mark { display: inline-grid; place-items: center; flex: 0 0 32rpx; width: 32rpx; height: 32rpx; border-radius: 7rpx; background: #dcebe0; color: #4e7860; font-size: 18rpx; font-weight: 900; line-height: 32rpx; }
 .quick-reply.confirm .quick-reply-mark { background: #4f8563; color: #fff; }
 .quick-reply.secondary .quick-reply-mark { background: #f3dfd3; color: #a66751; }
 .chat-input-row { display: flex; align-items: center; gap: 8rpx; margin-top: 10rpx; }
-.chat-upload-button, .chat-send-button { flex: 0 0 auto; height: 62rpx; margin: 0; border-radius: 12rpx; line-height: 62rpx; }
-.chat-upload-button { width: 62rpx; padding: 0; border: 1rpx solid #d9e2db; background: #f8faf8; color: #658073; font-size: 28rpx; }
-.chat-send-button { width: 62rpx; padding: 0; background: #dfe7e1; color: #91a099; font-size: 27rpx; font-weight: 900; }
+.chat-upload-button, .chat-send-button { flex: 0 0 auto; height: 76rpx; margin: 0; border-radius: 12rpx; line-height: 76rpx; }
+.chat-upload-button { width: 76rpx; padding: 0; border: 1rpx solid #d9e2db; background: #f8faf8; color: #658073; font-size: 34rpx; }
+.chat-send-button { width: 76rpx; padding: 0; background: #dfe7e1; color: #91a099; font-size: 32rpx; font-weight: 900; }
 .chat-send-button.ready { background: var(--green); color: #fff; }
-.chat-input { flex: 1; min-width: 0; height: 62rpx; box-sizing: border-box; padding: 0 15rpx; border: 1rpx solid #d9e2db; border-radius: 12rpx; background: #f8faf8; color: #3e4c44; font-size: 16rpx; }
+.chat-input { flex: 1; min-width: 0; height: 76rpx; box-sizing: border-box; padding: 0 17rpx; border: 1rpx solid #d9e2db; border-radius: 12rpx; background: #f8faf8; color: #33463b; font-size: 26rpx; }
 .chat-input:focus { border-color: #9cbea7; background: #fff; }
 .chat-send-button::after, .chat-upload-button::after { border: 0; }
 .chat-send-button[disabled], .chat-upload-button[disabled] { opacity: .65; }

@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,10 +40,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class ArkImageQueueIntegrationTest {
+    private static final ObjectMapper providerMapper = new ObjectMapper();
     private static final AtomicInteger activeProviderRequests = new AtomicInteger();
     private static final AtomicInteger maxProviderRequests = new AtomicInteger();
     private static final AtomicInteger rateLimitedResponses = new AtomicInteger();
     private static final AtomicInteger failedResponses = new AtomicInteger();
+    private static final AtomicBoolean sawSeedreamModel = new AtomicBoolean();
+    private static final AtomicBoolean sawReferenceImagePayload = new AtomicBoolean();
+    private static final AtomicBoolean sawArkImageFields = new AtomicBoolean();
+    private static final AtomicBoolean sawSiliconFlowAuthorization = new AtomicBoolean();
     private static final ExecutorService providerExecutor = Executors.newCachedThreadPool(runnable -> {
         Thread thread = new Thread(runnable, "ark-provider-test");
         thread.setDaemon(true);
@@ -66,12 +72,6 @@ class ArkImageQueueIntegrationTest {
         registry.add("volcengine.ark.queue.retry-delay-seconds", () -> 1);
         registry.add("volcengine.ark.queue.dispatch-interval-ms", () -> 50);
         registry.add("siliconflow.api.key", () -> "test-siliconflow-api-key");
-        registry.add("siliconflow.images.base-url", () -> providerUrl("/api/v3/images/generations"));
-        registry.add("siliconflow.vision.enabled", () -> false);
-        registry.add("siliconflow.image.queue.concurrency", () -> 1);
-        registry.add("siliconflow.image.queue.retry-attempts", () -> 2);
-        registry.add("siliconflow.image.queue.retry-delay-seconds", () -> 1);
-        registry.add("siliconflow.image.queue.dispatch-interval-ms", () -> 50);
         registry.add("creative.asset.private-root", assetRoot::toString);
         registry.add("tripo.poll.initial-delay-ms", () -> 600000);
     }
@@ -96,6 +96,10 @@ class ArkImageQueueIntegrationTest {
         maxProviderRequests.set(0);
         rateLimitedResponses.set(1);
         failedResponses.set(0);
+        sawSeedreamModel.set(false);
+        sawReferenceImagePayload.set(false);
+        sawArkImageFields.set(false);
+        sawSiliconFlowAuthorization.set(false);
     }
 
     @AfterAll
@@ -125,6 +129,8 @@ class ArkImageQueueIntegrationTest {
                 Duration.ofSeconds(15));
 
         assertThat(maxProviderRequests.get()).isEqualTo(1);
+        assertThat(sawSeedreamModel).as("all image requests use Seedream 5.0").isTrue();
+        assertThat(sawSiliconFlowAuthorization).as("image requests never use SiliconFlow credentials").isFalse();
         assertThat(jdbc.queryForObject("SELECT attempt_count FROM ai_generation_job WHERE id=?", Integer.class,
                 firstSubmission.path("jobId").asLong())).isEqualTo(2);
         assertThat(jdbc.queryForObject("SELECT format FROM digital_asset WHERE id=(SELECT output_asset_id FROM ai_generation_job WHERE id=?)",
@@ -167,14 +173,16 @@ class ArkImageQueueIntegrationTest {
         JsonNode multiView = postQueuedMultiView(multiViewUser.token(), multiViewAsset);
         assertThat(edit.path("jobType").asText()).isEqualTo("image_to_image");
         assertThat(multiView.path("jobType").asText()).isEqualTo("multi_view");
+        assertThat(edit.path("provider").asText()).isEqualTo("volcengine_ark");
+        assertThat(multiView.path("provider").asText()).isEqualTo("volcengine_ark");
         assertThat(edit.path("assetId").asLong()).isZero();
 
         try {
-            waitUntil(() -> count("SELECT COUNT(*) FROM ai_generation_job WHERE provider='siliconflow' AND status='succeeded'") == 2,
+            waitUntil(() -> count("SELECT COUNT(*) FROM ai_generation_job WHERE provider='volcengine_ark' AND status='succeeded'") == 2,
                     Duration.ofSeconds(20));
         } catch (AssertionError error) {
-            throw new AssertionError("SiliconFlow queue did not finish: " + jdbc.queryForList(
-                    "SELECT id,job_type,status,error_message,attempt_count FROM ai_generation_job WHERE provider='siliconflow' ORDER BY id"), error);
+            throw new AssertionError("Seedream queue did not finish: " + jdbc.queryForList(
+                    "SELECT id,provider,job_type,status,error_message,attempt_count FROM ai_generation_job ORDER BY id"), error);
         }
 
         JsonNode completedEdit = getImageJob(editor.token(), edit.path("jobId").asLong());
@@ -189,6 +197,10 @@ class ArkImageQueueIntegrationTest {
         assertThat(completedViews.path("images").get(0).path("previewUrl").asText()).contains("access_token=");
         assertThat(count("SELECT COUNT(*) FROM digital_asset WHERE parent_asset_id=" + multiViewAsset +
                 " AND source_type='ai_generated' AND title='之间智造效果图'")).isEqualTo(3);
+        assertThat(sawSeedreamModel).isTrue();
+        assertThat(sawReferenceImagePayload).as("image-to-image and multiview send the source image to Seedream").isTrue();
+        assertThat(sawArkImageFields).as("Seedream payload includes the Ark image fields").isTrue();
+        assertThat(sawSiliconFlowAuthorization).isFalse();
         assertThat(maxProviderRequests.get()).isEqualTo(1);
     }
 
@@ -319,6 +331,19 @@ class ArkImageQueueIntegrationTest {
         int active = activeProviderRequests.incrementAndGet();
         maxProviderRequests.accumulateAndGet(active, Math::max);
         try {
+            byte[] requestBytes = exchange.getRequestBody().readAllBytes();
+            JsonNode request = providerMapper.readTree(requestBytes);
+            if ("doubao-seedream-5-0-pro-260628".equals(request.path("model").asText())) {
+                sawSeedreamModel.set(true);
+            }
+            if (request.hasNonNull("image")) sawReferenceImagePayload.set(true);
+            if (request.has("response_format") && request.has("size") && request.has("stream") && request.has("watermark")) {
+                sawArkImageFields.set(true);
+            }
+            String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+            if (authorization != null && authorization.contains("test-siliconflow-api-key")) {
+                sawSiliconFlowAuthorization.set(true);
+            }
             if (rateLimitedResponses.getAndUpdate(value -> Math.max(0, value - 1)) > 0) {
                 respond(exchange, 429, "application/json",
                         "{\"error\":{\"code\":\"RateLimitExceeded\",\"message\":\"concurrency limit\"}}".getBytes(StandardCharsets.UTF_8));
