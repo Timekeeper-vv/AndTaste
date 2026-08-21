@@ -996,12 +996,16 @@ public class CreativeAiController {
             arkQueueTableVerified.set(true);
         }
         if (legacyImageJobsMigrated.compareAndSet(false, true)) {
-            // Older releases stored image edits and multiview jobs as
-            // SiliconFlow tasks. Keep those unfinished jobs alive, but make
-            // the provider boundary explicit before dispatching them.
+            // Only the previous SiliconFlow image queue was replaced by this
+            // Ark queue. Never rewrite jobs owned by another provider: those
+            // providers may still have their own poller or paid request in
+            // flight, and changing their provider here would orphan/duplicate
+            // the request. SiliconFlow text/image jobs are safe to resume via
+            // the compatible Ark worker after this release.
             jdbc.update("UPDATE ai_generation_job SET provider='volcengine_ark',model_name=?,status='queued'," +
                             "progress=0,started_at=NULL,error_message='已切换到火山方舟 Seedream 5.0 队列' " +
-                            "WHERE provider<>'volcengine_ark' AND job_type IN ('text_to_image','image_to_image','multi_view') " +
+                            "WHERE provider='siliconflow' AND job_type IN ('text_to_image','image_to_image','multi_view') " +
+                            "AND (job_type='text_to_image' OR request_payload_json IS NOT NULL) " +
                             "AND status IN ('queued','running') AND output_asset_id IS NULL",
                     volcengineArkSeedreamImageModel);
         }
