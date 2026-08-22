@@ -237,7 +237,7 @@ function bringToCreate() {
   const product = selectedProduct.value
   const material = selectedMaterial.value
   uni.setStorageSync('miniapp_atelier_draft', {
-    mode: 'image',
+    mode: 'text',
     title: title.value.trim() || `${composition.value.styleName || selectedStyle.value?.name || '文化创意'} · ${product.label}`,
     prompt: composition.value.prompt,
     negativePrompt: composition.value.negativePrompt,
@@ -249,7 +249,7 @@ function bringToCreate() {
     material: material.name,
     modelMaterial: material.modelLabel,
   })
-  uni.navigateTo({ url: '/pages/create/index?mode=image' })
+  uni.navigateTo({ url: '/pages/create/index?mode=text' })
 }
 
 onLoad(() => { void loadStyles() })

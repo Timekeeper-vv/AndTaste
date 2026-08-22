@@ -1,4 +1,4 @@
-import { DEFAULT_SEEDREAM_IMAGE_SIZE, request, uploadFile, waitForImageGenerationJob, type ImageGenerationJobProgress, type SeedreamImageSize } from './client'
+import { DEFAULT_SEEDREAM_IMAGE_SIZE, buildCreativeGenerationRequest, request, uploadFile, waitForImageGenerationJob, type CreativeGenerationRequest, type ImageGenerationJobProgress, type SeedreamImageSize } from './client'
 
 export interface ConversationSession {
   id: number
@@ -220,7 +220,7 @@ export const optimizeImageEditPrompt = (body: ImageEditPromptOptimizeRequest) =>
   { method: 'POST', data: body, timeout: 30000, header: { 'content-type': 'application/json' } },
 )
 
-export interface SeedreamMultiViewRequest {
+export interface SeedreamMultiViewRequest extends CreativeGenerationRequest {
   /** 用户上传并已归属到当前账号的单张参考图资产。 */
   inputAssetId: number | string
   /** 产品/角色描述。服务端会为正、左、背、右四个真实请求补齐视角约束。 */
@@ -259,8 +259,9 @@ export interface SeedreamMultiViewResult {
  * 四张图，并把每张图都保存为当前用户可访问的资产。它不会伪造本地预览结果。
  */
 export async function createSeedreamMultiView(body: SeedreamMultiViewRequest, onProgress?: (job: ImageGenerationJobProgress) => void) {
+  const normalized = buildCreativeGenerationRequest(body)
   const queued = await request<ImageGenerationJobProgress>('/api/creative/ai/volcengine/seedream/multiview', {
-    method: 'POST', data: { ...body, size: body?.size || DEFAULT_SEEDREAM_IMAGE_SIZE, provider: 'ark', queue: true }, timeout: 30000, header: { 'content-type': 'application/json' },
+    method: 'POST', data: { ...normalized, size: body?.size || DEFAULT_SEEDREAM_IMAGE_SIZE, provider: 'ark', queue: true }, timeout: 30000, header: { 'content-type': 'application/json' },
   })
   return waitForImageGenerationJob(queued, onProgress) as Promise<SeedreamMultiViewResult>
 }

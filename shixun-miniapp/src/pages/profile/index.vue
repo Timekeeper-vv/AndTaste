@@ -63,11 +63,6 @@
         <view class="menu-copy"><text>专业作品提交</text><text>上传 ZIP 作品包，查看评审进度</text></view>
         <text class="arrow">›</text>
       </view>
-      <view class="menu-row" @tap="go('/pages/style-lab/index')">
-        <view class="menu-icon style">风</view>
-        <view class="menu-copy"><text>灵感风格工作台</text><text>组合品牌风格、文化约束与产品提示词</text></view>
-        <text class="arrow">›</text>
-      </view>
     </view>
 
     <view v-if="loggedIn" class="section-heading market-heading">
@@ -108,7 +103,7 @@
     <button v-if="loggedIn" class="logout" @tap="logout">退出当前账号</button>
     <view class="bottom-nav">
       <view @tap="goHome"><text>⌂</text><text>首页</text></view>
-      <view @tap="go('/pages/create/index?mode=image')"><text>✦</text><text>创作</text></view>
+      <view @tap="go('/pages/create/index?mode=text')"><text>✦</text><text>创作</text></view>
       <view @tap="go('/pages/works/index')"><text>▣</text><text>作品</text></view>
       <view class="active"><text>◉</text><text>我的</text></view>
     </view>

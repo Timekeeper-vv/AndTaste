@@ -151,8 +151,10 @@ function materialFor(option: SelectionOption) {
 function makeProduct(option: SelectionOption) {
   const material = materialFor(option)
   const prompt = `以${filters.theme || '地方文化与馆藏纹样'}为主题，设计一款${option.name}。${option.description}建议材质：${option.material}；建议工艺：${option.process}；规格参考：${option.specification}。请保留文化符号的识别度，形成适合${filters.audience || '年轻游客和文创爱好者'}的商品视觉。`
-  uni.setStorageSync('miniapp_atelier_draft', { mode: 'image', title: `${filters.theme || '文化主题'} · ${option.name}`, prompt, productKey: productKeyFor(option), material: material.name, modelMaterial: material.modelMaterial })
-  uni.navigateTo({ url: '/pages/create/index?mode=image' })
+  // This entry has a generated text brief, not an uploaded reference asset.
+  // Keep it on the text-to-image path; `image` is reserved for true image-to-image.
+  uni.setStorageSync('miniapp_atelier_draft', { mode: 'text', title: `${filters.theme || '文化主题'} · ${option.name}`, prompt, productKey: productKeyFor(option), material: material.name, modelMaterial: material.modelMaterial })
+  uni.navigateTo({ url: '/pages/create/index?mode=text' })
 }
 
 function openDemand(option: SelectionOption) {

@@ -2,6 +2,7 @@ package com.example.shixun.controller;
 
 import com.example.shixun.model.User;
 import com.example.shixun.security.JwtService;
+import com.example.shixun.service.ProductPromptPolicy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -190,10 +191,15 @@ class ArkImageQueueIntegrationTest {
         assertThat(completedEdit.path("status").asText()).isEqualTo("succeeded");
         assertThat(completedEdit.path("assetId").asLong()).isPositive();
         assertThat(completedEdit.path("referenceAnalysis").asText()).isNotBlank();
+        assertThat(completedEdit.path("compiledPrompt").asText()).isNotBlank();
+        assertThat(completedEdit.path("policyVersion").asText()).isEqualTo(ProductPromptPolicy.VERSION);
+        assertThat(completedEdit.path("creativeBrief").path("productKey").asText()).isEqualTo("magnet");
         assertThat(jdbc.queryForObject("SELECT title FROM digital_asset WHERE id=?", String.class,
                 completedEdit.path("assetId").asLong())).isEqualTo("之间智造效果图");
         assertThat(completedViews.path("status").asText()).isEqualTo("succeeded");
         assertThat(completedViews.path("images")).hasSize(3);
+        assertThat(completedViews.path("compiledPrompt").asText()).isNotBlank();
+        assertThat(completedViews.path("policyVersion").asText()).isEqualTo(ProductPromptPolicy.VERSION);
         assertThat(completedViews.path("images").get(0).path("previewUrl").asText()).contains("access_token=");
         assertThat(count("SELECT COUNT(*) FROM digital_asset WHERE parent_asset_id=" + multiViewAsset +
                 " AND source_type='ai_generated' AND title='之间智造效果图'")).isEqualTo(3);

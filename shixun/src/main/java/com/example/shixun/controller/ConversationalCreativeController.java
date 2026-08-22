@@ -653,6 +653,7 @@ public class ConversationalCreativeController {
         if (product.contains("本册") || product.contains("笔记本") || product.contains("打卡本")) return "A5（148×210mm）";
         if (product.contains("抱枕")) return "400×400×120mm";
         if (product.contains("毛巾")) return "200×700mm";
+        if (product.contains("冰淇淋") || product.contains("冰激凌")) return "成品约 80×45×12mm，天然实木棒 100-120mm";
         if (product.contains("公仔") || product.contains("潮玩") || product.contains("毛绒")) return "高 130mm";
         if (product.contains("杯垫")) return "100×100×5mm";
         if (product.contains("马克杯")) return "直径 80mm、高 95mm";

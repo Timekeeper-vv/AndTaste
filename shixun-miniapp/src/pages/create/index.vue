@@ -125,6 +125,12 @@ import {
 import { DEFAULT_SEEDREAM_IMAGE_SIZE, apiUrl, createReferenceToImage, createTextToImage } from '../../api/client'
 import { confirmCreativePolicy } from '../../utils/compliance'
 import {
+  buildReferenceRawPrompt,
+  compileCreativeImageRequest,
+  creativeProductSize,
+  type CreativeProductLike,
+} from '../../utils/creativeEngine'
+import {
   findMaterialDefinition,
   isRecommendedMaterial,
   materialCatalog,
@@ -135,35 +141,13 @@ import {
 } from '../../config/materials'
 import { requireSession } from '../../utils/session'
 
-type CreateMode = 'image' | 'reference' | 'text3d' | 'image3d' | 'multiview'
+type CreateMode = 'text' | 'image' | 'reference' | 'text3d' | 'image3d' | 'multiview'
 type FinishKey = 'glaze' | 'texture' | 'relief'
 type MultiViewKey = 'front' | 'left' | 'back' | 'right'
 type MultiViewSource = 'seedream' | 'manual'
 type LoadingAction = 'creation' | 'multiview' | 'model'
 
 const SEEDREAM_IMAGE_SIZE = DEFAULT_SEEDREAM_IMAGE_SIZE
-const REFERENCE_PROMPT_GUARD = 'The attached reference image is the primary visual source of truth. Preserve the same recognizable subject identity, silhouette, proportions, markings, dominant colors and distinctive motifs; transform it into the requested finished product instead of replacing it with an unrelated subject or copying the raw photo unchanged.'
-const REFERENCE_PRODUCT_ROLE_PROMPT = '【角色】你是专业产品设计师 + AI 图像工程师，正在为电商平台制作真实、可量产、可打样的文创产品主图。'
-const REFERENCE_PRODUCT_FRAME_GUARD = '【构图规则】一件完整成品居中，占画面约 75%（允许 70%-80%），边缘留白不超过 10%；使用正方形或 4:5 电商商品摄影构图，背景只能是纯白或浅灰。'
-const REFERENCE_PRODUCT_NEGATIVE = 'phone screenshot, smartphone, mobile screen, app interface, status bar, media player, playback controls, screenshot frame, raw screenshot, unchanged reference image, near duplicate, collage, split screen, flat poster, label sheet, tiny isolated motif, cropped product, incomplete product, excessive empty background, yellow cast, sepia, sky, cloud, mountain, unrelated object, watermark'
-const REFERENCE_PRODUCT_FORMS: Record<ProductCategoryKey, string> = {
-  magnet: '完整掌心尺寸的冰箱贴成品；正面是清晰文化图形或浅浮雕，边缘有合理厚度和圆角，背面有平整稳定的磁铁粘贴位；参考主体占据正面主要面积，不是平面海报或孤立 logo。',
-  stationery: '完整可使用的书签、明信片或纸品成品；明确纸张/板材厚度、裁切边、正面印刷和装订/挂穗结构；参考元素重新编排到成品表面，不直接复刻手机截图。',
-  plush: '完整立体填充毛绒玩具；使用布料裁片、柔软填充体积、合理缝线、短绒面和刺绣细节，明确头身、四肢等分件；参考主体成为玩具轮廓或表面主视觉，不能只做平面插画。',
-  pvc_figure: '完整立体 PVC/搪胶公仔；明确头身比例、分件、圆角、底座和真实涂装区域，参考主体重构为玩具轮廓与表面细节，不输出原雕像或平面海报。',
-  hard_plastic: '完整可量产的硬塑摆件；明确注塑分件、合理壁厚、圆角、凹槽、浅浮雕和稳定底座，参考主体成为产品主要结构或视觉细节。',
-  keychain: '完整可随身使用的钥匙扣；主体有清晰轮廓、耐用厚度、圆角、挂孔和连接环/链条，参考主体占据成品主要面积，不是独立小图标。',
-  gift_box: '完整可生产的文创礼盒；展示盒体、开合结构、纸张/木材厚度、裁切折线和内衬，参考元素作为盒面主视觉或压印/烫金工艺，不是平面海报。',
-}
-const REFERENCE_PRODUCT_SIZES: Record<ProductCategoryKey, string> = {
-  magnet: '60×60×4mm',
-  stationery: 'A5（148×210mm）',
-  plush: '高约130mm',
-  pvc_figure: '高约130mm',
-  hard_plastic: '150×150×200mm',
-  keychain: '50×50×4mm（主体，含挂环另计）',
-  gift_box: '200×150×80mm',
-}
 
 interface MultiViewSlot {
   key: MultiViewKey
@@ -177,7 +161,9 @@ interface ManualMultiViewAsset {
 }
 type CampaignContext = CreatorCampaign & { sessionId?: number }
 
-const mode = ref<CreateMode>('image')
+// Text is the non-upload default. The image tab is reserved for a real
+// reference asset so every upload request reaches Seedream image-to-image.
+const mode = ref<CreateMode>('text')
 const loading = ref(false)
 const loadingAction = ref<LoadingAction>('creation')
 const generationProgressMessage = ref('正在生成，请稍候…')
@@ -221,7 +207,8 @@ const multiViewSlots: MultiViewSlot[] = [
 const multiViewSizes: Array<'1K' | '2K'> = ['1K', '2K']
 
 const modeOptions: Array<{ key: CreateMode; mark: string; short: string; title: string; description: string; notice: string; cost: number }> = [
-  { key: 'image', mark: '墨', short: '灵感生图', title: '让灵感，先成为一张产品图。', description: '把文化、材质、纹样和使用场景交给 AI，生成后会自动进入作品库。', notice: '文字生成图片会把你的纹样、材质和表面效果方向一并交给 AI。', cost: 16 },
+  { key: 'text', mark: '字', short: '文字生图', title: '让灵感，先成为一张产品图。', description: '把文化、材质、纹样和使用场景交给 AI，生成后会自动进入作品库。', notice: '文字生成图片会把你的纹样、材质和表面效果方向一并交给 AI。', cost: 16 },
+  { key: 'image', mark: '图', short: '上传图生图', title: '让参考图，成为一件真实产品。', description: '上传草图、照片或灵感图，保留主体识别点并重构为目标文创产品。', notice: '上传图片会作为 Seedream 的参考图，材质、尺寸和补充描述会一并写入改造提示词。', cost: 16 },
   { key: 'reference', mark: '鉴', short: '参考图改造', title: '保留原有特征，重构文化语言。', description: '上传草图、普通产品图或灵感图，用文创设计重新组织它的材质与场景。', notice: '请使用你拥有版权或已获得授权的参考图片；生成结果会保留在你的作品库。', cost: 16 },
   { key: 'text3d', mark: '形', short: '文字 3D', title: '把一段描述，推向立体原型。', description: '清楚描述主体、材质和结构，生成后可在作品库发起 3D 安全预览。', notice: '3D 生成完成后，请先提交审核；审核通过的模型才能申请打样或生产。', cost: 60 },
   { key: 'image3d', mark: '立', short: '图片 3D', title: '从参考图，生成可预览的原型。', description: '上传主体清晰的图像，系统会生成可进入作品库继续推进的三维模型。', notice: '请尽量使用主体完整、背景干净的图片，以便获得更准确的 3D 结构；材质偏好会随本次作品工艺方向一并记录。', cost: 70 },
@@ -250,12 +237,12 @@ const recommendedMaterials = computed<MaterialDefinition[]>(() => selectedProduc
 const visibleMaterials = computed<MaterialDefinition[]>(() => showAllMaterials.value ? materialList : recommendedMaterials.value)
 const selectedMaterial = computed<MaterialDefinition>(() => materialList.find(item => item.name === form.material || item.modelLabel === form.modelMaterial)
   || materialCatalog.pvc)
-const needsReference = computed(() => mode.value === 'reference'
+const needsReference = computed(() => mode.value === 'image' || mode.value === 'reference'
   || mode.value === 'image3d'
   || (mode.value === 'multiview' && multiViewSource.value === 'seedream'))
 const isMultiViewMode = computed(() => mode.value === 'multiview')
 const is3dMode = computed(() => mode.value === 'text3d' || mode.value === 'image3d' || mode.value === 'multiview')
-const canOptimizeImagePrompt = computed(() => mode.value === 'image' || mode.value === 'reference')
+const canOptimizeImagePrompt = computed(() => mode.value === 'text' || mode.value === 'image' || mode.value === 'reference')
 const finishSummary = computed(() => `${finish.glaze}% 光泽`)
 const selectedModelTemplate = computed<Tripo3dPromptTemplate>(() => {
   const material = selectedMaterial.value.key
@@ -268,7 +255,7 @@ const selectedTemplateLabel = computed(() => modelTemplateLabels[selectedModelTe
 const materialPanelHint = computed(() => {
   if (showAllMaterials.value) return `全部 ${materialList.length} 种可选`
   if (mode.value === 'text3d') return '带入 3D 提示词'
-  if (mode.value === 'image' || mode.value === 'reference') return '带入生成描述'
+  if (mode.value === 'text' || mode.value === 'image' || mode.value === 'reference') return '带入生成描述'
   return '记录工艺方向'
 })
 const assessmentIssues = computed(() => Array.isArray(productionAssessment.value?.issues) ? productionAssessment.value!.issues : [])
@@ -280,7 +267,7 @@ const assessmentLevelClass = computed(() => {
   return 'revise'
 })
 const referencePanel = computed(() => {
-  if (mode.value === 'reference') return { eyebrow: 'REFERENCE REMIX', description: '上传产品、草图或灵感图，AI 会保留主体特征后进行文创改造。' }
+  if (mode.value === 'image' || mode.value === 'reference') return { eyebrow: 'REFERENCE REMIX', description: '上传产品、草图或灵感图，AI 会保留主体特征后进行文创改造。' }
   if (mode.value === 'multiview') return { eyebrow: 'MULTIVIEW SOURCE', description: '上传一张主体完整的产品图。系统会以它为唯一依据，补全正、左、背、右四个一致视角。' }
   return { eyebrow: 'IMAGE TO 3D', description: '上传主体清晰的产品图，生成可继续预览与打样的 3D 原型。' }
 })
@@ -339,7 +326,15 @@ function updateImageTaskProgress(job: { status?: string; jobType?: string; queue
 }
 
 function clearPreparedImagePrompt() { preparedImagePrompt.value = null; imagePromptGuide.value = '' }
-function selectMode(next: CreateMode) { mode.value = next; imagePromptGuide.value = ''; clearPreparedImagePrompt() }
+function selectMode(next: CreateMode) {
+  mode.value = next
+  imagePromptGuide.value = ''
+  clearPreparedImagePrompt()
+  if (next !== 'image' && next !== 'reference') {
+    referencePath.value = ''
+    referenceAssetId.value = null
+  }
+}
 function applyPattern(pattern: typeof patterns[number]) {
   selectedPatternId.value = pattern.id
   if (!form.prompt.includes(pattern.prompt)) form.prompt = `${form.prompt.replace(/[，,。；;\s]+$/, '')}，${pattern.prompt}`
@@ -414,7 +409,9 @@ async function pickImage() {
   referencePolicyConfirmed.value = true
   uni.chooseImage({
     count: 1,
-    sizeType: ['compressed'],
+    // Server-side normalization keeps the original subject details while
+    // preventing oversized uploads from reaching the image provider.
+    sizeType: ['original'],
     success: (result) => {
       const selectedPath = result.tempFilePaths?.[0]
       if (!selectedPath) return
@@ -433,7 +430,7 @@ async function pickManualMultiView(view: MultiViewKey) {
   referencePolicyConfirmed.value = true
   uni.chooseImage({
     count: 1,
-    sizeType: ['compressed'],
+    sizeType: ['original'],
     success: (result) => {
       const localPath = result.tempFilePaths?.[0]
       if (!localPath) return
@@ -471,24 +468,6 @@ function buildPrompt() {
     .replace(/(?:，|,)?产品类别：[^。；;]*(?:[。；;]|$)/g, '')
     .replace(/[，,。；;\s]+$/, '')
   return `${source}，${direction}`
-}
-function buildReferenceProductPrompt(sourcePrompt: string) {
-  const product = selectedProductCategory.value
-  const productSize = REFERENCE_PRODUCT_SIZES[product.key]
-  const productForm = REFERENCE_PRODUCT_FORMS[product.key]
-  return [
-    REFERENCE_PRODUCT_ROLE_PROMPT,
-    `【任务】将上传参考图中的主体、轮廓、纹样、主要配色和文化识别点，完全重构为真实、可量产的「${product.label}」成品电商主图；不是原图复刻、轻微滤镜或简单贴图。`,
-    '【强制规则】',
-    '1. 参考图只提供主体身份和核心视觉元素；必须改变原始载体、原始场景和画面用途，让目标产品载体优先。',
-    `2. 【目标产品形态】${productForm}`,
-    `3. 【制造参数】材质为「${form.material || selectedMaterial.value.modelLabel}」；成品规格为「${productSize}」，这是实体规格，不是图片分辨率。`,
-    `4. ${REFERENCE_PRODUCT_FRAME_GUARD}`,
-    '5. 删除手机、播放器、状态栏、截图边框、天空、山、云和原始场景；保留主体识别特征、文化元素和主要配色。',
-    '6. 禁止输出原图不变、手机截图、海报、平面标签稿、孤立小图案、窄长手机构图或无关物体。',
-    '【用户补充方向】' + sourcePrompt,
-    '【交付前自检】确认产品形态、材质、完整轮廓、主体占比、白/浅灰背景和成品规格全部成立；不满足时优先重新构建设计。',
-  ].join('\n')
 }
 function modelMaterialPrompt() {
   return `${selectedMaterial.value.modelPrompt}; manufacturing material: ${form.material}; finish direction: ${finish.glaze}% gloss, ${finish.texture}% texture grain, ${finish.relief}% relief depth`
@@ -592,28 +571,23 @@ async function resolveSeedreamPrompt(sourcePrompt: string) {
   const original = sourcePrompt.trim()
   if (preparedImagePrompt.value?.source === original) return preparedImagePrompt.value.optimized
   preparedImagePrompt.value = null
-  // Initial reference-image conversion is intentionally single-pass. Sending
-  // the original pixels plus a deterministic product brief is more stable
-  // than asking Qwen to rewrite the visual source first.
-  if (mode.value === 'reference') {
-    const directPrompt = buildReferenceProductPrompt(original)
-    preparedImagePrompt.value = { source: original, optimized: directPrompt }
-    return directPrompt
+  // Reference conversion and multi-view generation keep their image identity
+  // deterministic. The shared engine adds their respective rules later.
+  if (mode.value === 'image' || mode.value === 'reference' || mode.value === 'multiview') {
+    preparedImagePrompt.value = { source: original, optimized: original }
+    return original
   }
-  const needsReferenceLock = mode.value === 'multiview'
-  const optimizerInput = needsReferenceLock ? `${original}\nReference-image constraint: ${REFERENCE_PROMPT_GUARD}` : original
   try {
     const result = await optimizeImagePrompt({
-      prompt: optimizerInput,
+      prompt: original,
       provider: 'ark',
       productCategory: selectedProductCategory.value.label,
       material: form.material,
     })
     const optimized = String(result?.prompt || '').trim()
     if (!optimized) return original
-    const finalPrompt = needsReferenceLock ? `${optimized} ${REFERENCE_PROMPT_GUARD}` : optimized
-    preparedImagePrompt.value = { source: original, optimized: finalPrompt }
-    return finalPrompt
+    preparedImagePrompt.value = { source: original, optimized }
+    return optimized
   } catch {
     // Qwen is an enhancement stage. A temporary prompt-service outage must
     // never prevent Seedream from receiving the user's original description.
@@ -635,8 +609,7 @@ async function optimizeCurrentImagePrompt() {
     const prompt = String(result?.prompt || '').trim()
     if (!prompt) throw new Error('优化服务未返回有效描述')
     form.prompt = prompt
-    const prepared = mode.value === 'reference' ? buildReferenceProductPrompt(prompt) : prompt
-    preparedImagePrompt.value = { source: buildPrompt(), optimized: prepared }
+    preparedImagePrompt.value = { source: buildPrompt(), optimized: prompt }
     imagePromptGuide.value = result?.usageGuide ? '已同步产品结构、材质与使用场景' : '已优化为商业产品生成描述'
     uni.showToast({ title: '描述已优化', icon: 'success' })
   } catch (error: any) {
@@ -673,7 +646,11 @@ function modelQualityOptions() {
 
 async function generate() {
   if (!requireSession()) return
-  if (!form.prompt.trim()) return uni.showToast({ title: '请填写创作描述', icon: 'none' })
+  // A reference-image conversion can derive the subject directly from the
+  // uploaded pixels. Text is optional there; it remains required for pure
+  // text-to-image and text-to-3D requests.
+  const requiresTextBrief = mode.value !== 'image' && mode.value !== 'reference' && mode.value !== 'image3d' && mode.value !== 'multiview'
+  if (requiresTextBrief && !form.prompt.trim()) return uni.showToast({ title: '请填写创作描述', icon: 'none' })
   if (needsReference.value && !referencePath.value && !referenceAssetId.value) return uni.showToast({ title: '请先选择一张参考图片', icon: 'none' })
   if (!aiPolicyConfirmed.value && !(await confirmCreativePolicy('ai-output'))) return
   aiPolicyConfirmed.value = true
@@ -685,35 +662,67 @@ async function generate() {
   loadingAction.value = 'creation'
   try {
     let result: any
-    const imagePrompt = mode.value === 'image' || mode.value === 'reference'
+    const imagePrompt = mode.value === 'text' || mode.value === 'image' || mode.value === 'reference'
       ? await resolveSeedreamPrompt(prompt)
       : prompt
-    if (mode.value === 'image') {
-      result = await createTextToImage({
-        title: form.title || `${selectedProductCategory.value.label} · ${form.material}`,
-        prompt: imagePrompt,
-        rawPrompt: prompt,
-        imageSize: SEEDREAM_IMAGE_SIZE,
-        scene: '文创产品',
-        productType: selectedProductCategory.value.label,
-        productCategory: selectedProductCategory.value.label,
-        material: form.material,
-      }, updateImageTaskProgress)
-    } else if (mode.value === 'reference') {
+    if (mode.value === 'image' || mode.value === 'reference') {
       const inputAssetId = await ensureReferenceAsset()
+      // Reference requests use one canonical source brief. The finish sliders
+      // still travel through `material`, but must not become a second subject
+      // description that differs from the conversation upload path.
+      const referenceRawPrompt = buildReferenceRawPrompt(form.prompt)
+      const productSize = creativeProductSize({
+        product: selectedProductCategory.value as CreativeProductLike,
+        productKey: selectedProductKey.value,
+        productCategory: selectedProductCategory.value.label,
+        productType: selectedProductCategory.value.label,
+        material: form.material,
+      })
+      const imageRequest = compileCreativeImageRequest({
+        product: selectedProductCategory.value as CreativeProductLike,
+        productKey: selectedProductKey.value,
+        productCategory: selectedProductCategory.value.label,
+        productType: selectedProductCategory.value.label,
+        material: form.material,
+        prompt: referenceRawPrompt,
+        rawPrompt: referenceRawPrompt,
+        optimizedPrompt: referenceRawPrompt,
+        // The independent page has no conversational size step. Use the
+        // shared product profile's recommendation so its request remains
+        // structurally equivalent to an upload-first conversation flow.
+        productSize,
+        inputAssetId,
+        purpose: 'reference',
+      })
       result = await createReferenceToImage({
         title: form.title || `图文结合 · ${selectedProductCategory.value.label}`,
-        prompt: imagePrompt,
-        rawPrompt: prompt,
-        negativePrompt: REFERENCE_PRODUCT_NEGATIVE,
-        inputAssetId,
+        ...imageRequest,
         imageSize: SEEDREAM_IMAGE_SIZE,
-        productCategory: selectedProductCategory.value.label,
+      }, updateImageTaskProgress)
+    } else if (mode.value === 'text') {
+      const imageRequest = compileCreativeImageRequest({
+        product: selectedProductCategory.value as CreativeProductLike,
         productKey: selectedProductKey.value,
+        productCategory: selectedProductCategory.value.label,
+        productType: selectedProductCategory.value.label,
         material: form.material,
-        productSize: REFERENCE_PRODUCT_SIZES[selectedProductKey.value],
-        refinement: false,
-        refinementNote: buildReferenceProductPrompt(prompt),
+        prompt,
+        rawPrompt: prompt,
+        optimizedPrompt: imagePrompt,
+        productSize: creativeProductSize({
+          product: selectedProductCategory.value as CreativeProductLike,
+          productKey: selectedProductKey.value,
+          productCategory: selectedProductCategory.value.label,
+          productType: selectedProductCategory.value.label,
+          material: form.material,
+        }),
+        purpose: 'text',
+      })
+      result = await createTextToImage({
+        title: form.title || `${selectedProductCategory.value.label} · ${form.material}`,
+        ...imageRequest,
+        imageSize: SEEDREAM_IMAGE_SIZE,
+        scene: '文创产品',
       }, updateImageTaskProgress)
     } else {
       let inputAssetId: number | undefined
@@ -733,9 +742,9 @@ async function generate() {
       })
     }
     uni.removeStorageSync('miniapp_atelier_draft')
-    const generatedText = mode.value === 'image' || mode.value === 'reference' ? '作品已生成' : '3D 生成任务已创建'
+    const generatedText = mode.value === 'text' || mode.value === 'image' || mode.value === 'reference' ? '作品已生成' : '3D 生成任务已创建'
     const assetId = Number(result?.assetId || result?.id)
-    if (mode.value === 'image' || mode.value === 'reference') {
+    if (mode.value === 'text' || mode.value === 'image' || mode.value === 'reference') {
       uni.showModal({ title: '作品已生成', content: '可以先去作品库查看，也可以基于这张图继续做商品化选品方案。', cancelText: '去作品库', confirmText: '做成商品', success: (modal) => {
         if (modal.confirm) uni.navigateTo({ url: `/pages/commercial/index${Number.isFinite(assetId) && assetId > 0 ? `?assetId=${assetId}` : ''}` })
         else uni.navigateTo({ url: '/pages/works/index' })
@@ -763,13 +772,22 @@ async function generateMultiView(prompt: string) {
   clearMultiViewResult()
   try {
     const inputAssetId = await ensureReferenceAsset()
-    const multiviewPrompt = await resolveSeedreamPrompt(prompt)
-    const result = await createSeedreamMultiView({
-      inputAssetId,
-      prompt: multiviewPrompt,
+    const multiviewRequest = compileCreativeImageRequest({
+      product: selectedProductCategory.value as CreativeProductLike,
       productKey: selectedProductKey.value,
       productCategory: selectedProductCategory.value.label,
+      productType: selectedProductCategory.value.label,
       material: form.material,
+      prompt,
+      rawPrompt: prompt,
+      optimizedPrompt: await resolveSeedreamPrompt(prompt),
+      inputAssetId,
+      purpose: 'multiview',
+      refinement: false,
+    })
+    const result = await createSeedreamMultiView({
+      ...multiviewRequest,
+      inputAssetId,
       size: multiViewSize.value,
       watermark: true,
     }, updateImageTaskProgress)
@@ -840,7 +858,12 @@ onLoad((query: any) => {
   const nextMode = String(query?.mode || '') as CreateMode
   if (modeOptions.some(item => item.key === nextMode)) mode.value = nextMode
   const draft = uni.getStorageSync('miniapp_atelier_draft') || {}
-  if (draft.mode && modeOptions.some(item => item.key === draft.mode)) mode.value = draft.mode
+  if (draft.mode && modeOptions.some(item => item.key === draft.mode)) {
+    const draftHasReference = Number(draft.referenceAssetId || draft.inputAssetId) > 0 || Boolean(draft.referencePath)
+    // Drafts created by older selection/style pages used `image` for text
+    // briefs. Only keep that mode when the draft actually carries an asset.
+    mode.value = draft.mode === 'image' && !draftHasReference ? 'text' : draft.mode
+  }
   if (draft.title) form.title = String(draft.title)
   if (draft.prompt) form.prompt = String(draft.prompt)
   const draftProductKey = String(draft.productKey || '') as ProductCategoryKey

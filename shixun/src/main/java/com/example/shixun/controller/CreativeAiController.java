@@ -4,7 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
+import com.example.shixun.service.CreativeBrief;
+import com.example.shixun.service.CreativePromptCompiler;
+import com.example.shixun.service.GenerationCommand;
 import com.example.shixun.service.ProductPromptPolicy;
+import com.example.shixun.service.ReferenceImagePreparationService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -102,6 +106,8 @@ public class CreativeAiController {
     private final ObjectMapper mapper;
     private final JwtService jwtService;
     private final ThreadPoolTaskExecutor arkImageGenerationExecutor;
+    private final CreativePromptCompiler creativePromptCompiler;
+    private final ReferenceImagePreparationService referenceImagePreparationService;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).followRedirects(HttpClient.Redirect.NORMAL).build();
     private final Object arkQueueSubmissionLock = new Object();
     private final Set<Long> activeArkImageJobs = ConcurrentHashMap.newKeySet();
@@ -221,12 +227,16 @@ public class CreativeAiController {
 
     public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper, JwtService jwtService,
                                 PlatformTransactionManager transactionManager,
-                                @Qualifier("arkImageGenerationExecutor") ThreadPoolTaskExecutor arkImageGenerationExecutor) {
+                                @Qualifier("arkImageGenerationExecutor") ThreadPoolTaskExecutor arkImageGenerationExecutor,
+                                CreativePromptCompiler creativePromptCompiler,
+                                ReferenceImagePreparationService referenceImagePreparationService) {
         this.jdbc = jdbc;
         this.creditTransactions = new TransactionTemplate(transactionManager);
         this.mapper = mapper;
         this.jwtService = jwtService;
         this.arkImageGenerationExecutor = arkImageGenerationExecutor;
+        this.creativePromptCompiler = creativePromptCompiler;
+        this.referenceImagePreparationService = referenceImagePreparationService;
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
@@ -598,24 +608,43 @@ public class CreativeAiController {
 
     @PostMapping("/prompt/compose")
     public Map<String, Object> composePrompt(@RequestBody GenerateImageRequest req) {
+        GenerationCommand command = compileGenerationCommand(req);
         Map<String, Object> style = style(req.styleId);
-        String finalPrompt = buildPrompt(req.prompt, style, req.scene, req.productType);
-        String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
-        return Map.of("prompt", finalPrompt, "negativePrompt", negative, "styleName", style.get("name"), "guardrails", style.get("culturalGuardrails") == null ? "" : style.get("culturalGuardrails"));
+        String finalPrompt = buildPrompt(command.compiledPrompt(), style, req.scene, req.productType);
+        String negative = mergeNegative(req.negativePrompt,
+                mergeNegative(command.negativePrompt(), (String) style.get("negativePrompt")));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("prompt", finalPrompt);
+        result.put("negativePrompt", negative);
+        result.put("styleName", style.get("name"));
+        result.put("guardrails", style.get("culturalGuardrails") == null ? "" : style.get("culturalGuardrails"));
+        addGenerationCommandFields(result, command);
+        return result;
     }
 
 
 
     @PostMapping("/prompt/ai")
     public Map<String, Object> aiProductPrompt(@RequestBody GenerateImageRequest req) throws Exception {
+        if (req == null) throw new IllegalArgumentException("提示词参数不能为空");
+        String originalPrompt = firstNonBlank(req.rawPrompt, req.prompt);
+        req.rawPrompt = originalPrompt;
+        req.prompt = originalPrompt;
+        GenerationCommand sourceCommand = compileGenerationCommand(req);
+        assertCompliantPrompt(sourceCommand.rawPrompt(), sourceCommand.category());
+        if (blank(sourceCommand.rawPrompt())) throw new IllegalArgumentException("请先填写基础创意描述");
         Map<String, Object> style = style(req.styleId);
         String system = "You are a cultural creative product image prompt expert. Convert the user's requirements into a high-quality ENGLISH prompt for AI image generation. The prompt must be clear, executable, commercial, photorealistic or premium product-visual oriented. Output Chinese section markers only if required by the parser, but the positive prompt content itself must be English.";
         String user = "请根据以下信息生成一段用于AI生成文创产品原型图的中文提示词，并补充一段反向提示词。\n" +
                 "作品/产品名：" + nullToEmpty(req.title) + "\n" +
-                "产品类型：" + nullToEmpty(req.productType) + "\n" +
+                "产品标识：" + sourceCommand.productKey() + "\n" +
+                "产品类型：" + sourceCommand.category() + "\n" +
+                "制造材质：" + sourceCommand.material() + "\n" +
+                "成品物理尺寸：" + sourceCommand.productSize() + "\n" +
                 "使用场景：" + nullToEmpty(req.scene) + "\n" +
-                "用户想法：" + nullToEmpty(req.prompt) + "\n" +
+                "用户想法：" + sourceCommand.rawPrompt() + "\n" +
                 "品牌风格：" + style.get("name") + "；基础风格：" + style.get("basePrompt") + "\n" +
+                "产品生产约束：" + ProductPromptPolicy.optimizerRules(sourceCommand.category(), sourceCommand.material()) + "\n" +
                 "文化/版权要求：" + style.get("culturalGuardrails") + "\n\n" +
                 "输出格式必须如下：\n" +
                 "【正向提示词】\n" +
@@ -634,14 +663,20 @@ public class CreativeAiController {
             String aiNegative = content.substring(neg + negMark.length()).trim();
             negative = mergeNegative(aiNegative, negative);
         }
-        String finalPrompt = buildPrompt(positive, style, req.scene, req.productType);
-        return Map.of(
-                "prompt", finalPrompt,
-                "rawPrompt", positive,
-                "negativePrompt", negative,
-                "styleName", style.get("name"),
-                "source", "siliconflow:" + chatModel
-        );
+        req.prompt = positive;
+        req.rawPrompt = sourceCommand.rawPrompt();
+        GenerationCommand command = compileGenerationCommand(req);
+        String finalPrompt = buildPrompt(command.compiledPrompt(), style, req.scene, req.productType);
+        negative = mergeNegative(negative, command.negativePrompt());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("prompt", finalPrompt);
+        result.put("rawPrompt", sourceCommand.rawPrompt());
+        result.put("optimizedPrompt", positive);
+        result.put("negativePrompt", negative);
+        result.put("styleName", style.get("name"));
+        result.put("source", "siliconflow:" + chatModel);
+        addGenerationCommandFields(result, command);
+        return result;
     }
 
     @PostMapping("/prompt/tripo-3d-optimize")
@@ -822,8 +857,10 @@ public class CreativeAiController {
     @PostMapping("/volcengine/seedream/multiview")
     public Map<String,Object> volcengineSeedreamMultiview(@RequestBody MultiViewImageRequest req) throws Exception {
         Long ownerUserId = authenticatedUserId();
-        assertCompliantPrompt(req.prompt, null);
-        if (blank(req.prompt)) throw new IllegalArgumentException("请先填写要生成的产品或角色描述");
+        GenerationCommand command = compileGenerationCommand(req);
+        assertCompliantPrompt(command.brief().rawPrompt(), command.category());
+        assertCompliantPrompt(command.compiledPrompt(), command.category());
+        if (blank(command.brief().rawPrompt())) throw new IllegalArgumentException("请先填写要生成的产品或角色描述");
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先上传一张产品参考图，再生成多视图");
         requireAssetAccess(req.inputAssetId);
         if (blank(resolvedArkApiKey())) {
@@ -836,7 +873,11 @@ public class CreativeAiController {
         // the queue flag.
         req.queue = true;
         if (req.watermark == null) req.watermark = true;
-        if (Boolean.TRUE.equals(req.queue)) return queueArkMultiView(req, ownerUserId);
+        if (Boolean.TRUE.equals(req.queue)) {
+            Map<String, Object> response = queueArkMultiView(req, ownerUserId);
+            addGenerationCommandFields(response, command);
+            return response;
+        }
         List<String> views = req.viewCount != null && req.viewCount == 3
                 ? List.of("front", "left", "back")
                 : List.of("front", "left", "back", "right");
@@ -921,39 +962,127 @@ public class CreativeAiController {
         return result;
     }
 
+    /**
+     * Adapt the legacy request DTO to the provider-neutral brief. Keeping this
+     * adapter at the controller boundary lets older clients continue sending
+     * productCategory/productType while the queue receives one canonical form.
+     */
+    private GenerationCommand compileGenerationCommand(GenerateImageRequest req) {
+        if (req == null) throw new IllegalArgumentException("生图参数不能为空");
+        String category = effectiveProductCategory(req.productCategory, req.productType);
+        String rawPrompt = firstNonBlank(req.rawPrompt, req.prompt);
+        CreativeBrief brief = new CreativeBrief(
+                req.productKey,
+                category,
+                req.material,
+                req.productSize,
+                rawPrompt,
+                req.inputAssetId,
+                Boolean.TRUE.equals(req.refinement));
+        return creativePromptCompiler.compileWithCandidate(brief, req.prompt);
+    }
+
+    private GenerationCommand compileGenerationCommand(MultiViewImageRequest req) {
+        if (req == null) throw new IllegalArgumentException("多视图参数不能为空");
+        String category = effectiveProductCategory(req.productCategory, req.productType);
+        String rawPrompt = firstNonBlank(req.rawPrompt, req.prompt);
+        CreativeBrief brief = new CreativeBrief(
+                req.productKey,
+                category,
+                req.material,
+                req.productSize,
+                rawPrompt,
+                req.inputAssetId,
+                Boolean.TRUE.equals(req.refinement));
+        // Multi-view is a turnaround operation on an already selected
+        // product. Compile the product/material/size locks, but leave the
+        // ordinary one-shot i2i conversion contract to the turnaround worker;
+        // otherwise "do not redesign" and "transform into a product" are
+        // emitted together and can conflict.
+        CreativeBrief promptBrief = new CreativeBrief(
+                brief.productKey(), brief.category(), brief.material(), brief.productSize(),
+                brief.rawPrompt(), null, false);
+        GenerationCommand compiled = creativePromptCompiler.compileWithCandidate(promptBrief, req.prompt);
+        return new GenerationCommand(brief, compiled.compiledPrompt(), compiled.negativePrompt(), compiled.policyVersion());
+    }
+
+    /**
+     * The catalog category is intentionally broad (for example 食品饮品),
+     * while the product name carries the physical form (冰淇淋, 曲奇, bottle).
+     * Keep both in the brief so policy resolution cannot fall back to generic
+     * food rules and lose a product-specific template.
+     */
+    private String effectiveProductCategory(String category, String productType) {
+        String broad = firstNonBlank(category, productType, "文创产品");
+        String type = nullToEmpty(productType).trim();
+        if (blank(type) || broad.equals(type) || broad.contains(type)) return broad;
+        return broad + " / " + type;
+    }
+
+    private void addGenerationCommandFields(Map<String, Object> response, GenerationCommand command) {
+        if (response == null || command == null) return;
+        response.put("policyVersion", command.policyVersion());
+        response.put("compiledPrompt", command.compiledPrompt());
+        // Prompt composition endpoints may already have merged user, style,
+        // or optimizer-provided negative terms. Keep those richer results and
+        // use the policy contract only when no response value exists.
+        Object existingNegative = response.get("negativePrompt");
+        if (existingNegative == null || blank(String.valueOf(existingNegative))) {
+            response.put("negativePrompt", command.negativePrompt());
+        }
+        response.put("creativeBrief", creativeBriefMap(command.brief()));
+    }
+
+    private Map<String, Object> creativeBriefMap(CreativeBrief brief) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("productKey", brief.productKey());
+        result.put("category", brief.category());
+        result.put("material", brief.material());
+        result.put("productSize", brief.productSize());
+        result.put("rawPrompt", brief.rawPrompt());
+        result.put("referenceAssetId", brief.referenceAssetId());
+        result.put("refinement", brief.refinement());
+        return result;
+    }
+
     @PostMapping("/ark/text-to-image")
     public Map<String, Object> arkTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
         Long ownerUserId = authenticatedUserId();
         Long consumerUserId = currentConsumerUserIdOrNull();
-        assertCompliantPrompt(req.prompt, req.productCategory);
+        GenerationCommand command = compileGenerationCommand(req);
+        CreativeBrief brief = command.brief();
+        assertCompliantPrompt(brief.rawPrompt(), brief.category());
+        assertCompliantPrompt(command.compiledPrompt(), brief.category());
         if (blank(resolvedArkApiKey())) throw new IllegalStateException("未配置火山方舟 Ark API Key，请联系平台管理员完成 VOLCENGINE_ARK_API_KEY 配置");
-        if (blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
+        if (blank(brief.rawPrompt())) throw new IllegalArgumentException("请先填写或生成生图提示词");
 
-        String productSize = normalizedProductSize(req.productSize);
-        String prompt = applyProductSizeConstraint(
-                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), productSize);
+        String productSize = brief.productSize();
+        String prompt = command.compiledPrompt();
         Map<String, Object> style = style(req.styleId);
         String finalPrompt = buildPrompt(prompt, style, req.scene, req.productType);
-        if (finalPrompt.length() > 3500) finalPrompt = finalPrompt.substring(0, 3500);
+        finalPrompt = boundedPromptPreservingEnds(finalPrompt, 3500);
         String size = Set.of("1K", "2K").contains(nullToEmpty(req.imagenImageSize)) ? req.imagenImageSize : "2K";
         String format = "jpg".equalsIgnoreCase(nullToEmpty(req.imagenOutputFormat)) ? "jpg" : "png";
-        String negative = mergeNegative(req.negativePrompt, (String) style.get("negativePrompt"));
+        String negative = mergeNegative(req.negativePrompt,
+                mergeNegative(command.negativePrompt(), (String) style.get("negativePrompt")));
         synchronized (arkQueueSubmissionLock) {
             List<Map<String, Object>> active = jdbc.queryForList(
-                    "SELECT id,prompt,product_key productKey FROM ai_generation_job " +
+                    "SELECT id,job_type jobType,prompt,product_key productKey FROM ai_generation_job " +
                     "WHERE created_by=? AND provider='volcengine_ark' " +
                             "AND job_type IN ('text_to_image','image_to_image','multi_view') " +
                             "AND status IN ('queued','running') AND output_asset_id IS NULL ORDER BY id LIMIT 1",
                     ownerUserId);
             if (!active.isEmpty()) {
                 Map<String, Object> existing = active.get(0);
-                boolean sameRequest = finalPrompt.equals(str(existing.get("prompt")))
-                        && Objects.equals(nullToEmpty(req.productKey), nullToEmpty(str(existing.get("productKey"))));
+                boolean sameRequest = "text_to_image".equals(str(existing.get("jobType")))
+                        && finalPrompt.equals(str(existing.get("prompt")))
+                        && Objects.equals(nullToEmpty(brief.productKey()), nullToEmpty(str(existing.get("productKey"))));
                 if (!sameRequest) {
                     throw new IllegalStateException("你已有一项图片正在排队或生成，请等待完成后再提交新作品");
                 }
                 Map<String, Object> response = arkImageJobResponse(((Number) existing.get("id")).longValue());
                 response.put("reused", true);
+                addGenerationCommandFields(response, command);
                 return response;
             }
 
@@ -964,16 +1093,23 @@ public class CreativeAiController {
             requestPayload.put("title", req.title);
             requestPayload.put("requestedFormat", format);
             requestPayload.put("productSize", productSize);
+            requestPayload.put("rawPrompt", brief.rawPrompt());
+            requestPayload.put("creativeBrief", creativeBriefMap(brief));
+            requestPayload.put("compiledPrompt", command.compiledPrompt());
+            requestPayload.put("compiledNegativePrompt", command.negativePrompt());
+            requestPayload.put("policyVersion", command.policyVersion());
             Long jobId;
             try {
                 jobId = createArkQueuedJob(jobNo, "text_to_image", req.styleId, null, finalPrompt, negative, size,
-                        req.productKey, req.productCategory, req.material, ownerUserId, creditTxId, requestPayload);
+                        brief.productKey(), brief.category(), brief.material(), ownerUserId, creditTxId, requestPayload);
                 linkCreditTransaction(creditTxId, jobId, null);
             } catch (Exception e) {
                 refundConsumerCredit(creditTxId, safeMessage(e));
                 throw e;
             }
-            return arkImageJobResponse(jobId);
+            Map<String, Object> response = arkImageJobResponse(jobId);
+            addGenerationCommandFields(response, command);
+            return response;
         }
     }
 
@@ -1005,7 +1141,6 @@ public class CreativeAiController {
             jdbc.update("UPDATE ai_generation_job SET provider='volcengine_ark',model_name=?,status='queued'," +
                             "progress=0,started_at=NULL,error_message='已切换到火山方舟 Seedream 5.0 队列' " +
                             "WHERE provider='siliconflow' AND job_type IN ('text_to_image','image_to_image','multi_view') " +
-                            "AND (job_type='text_to_image' OR request_payload_json IS NOT NULL) " +
                             "AND status IN ('queued','running') AND output_asset_id IS NULL",
                     volcengineArkSeedreamImageModel);
         }
@@ -1084,7 +1219,7 @@ public class CreativeAiController {
             if ("text_to_image".equals(jobType)) {
                 generated = createArkTextImage(str(job.get("prompt")), normalizedArkImageSize(job.get("exportFormats")), str(job.get("negativePrompt")));
             } else if ("image_to_image".equals(jobType)) {
-                GenerateImageRequest request = readQueuedImageRequest(job.get("requestPayloadJson"), GenerateImageRequest.class);
+                GenerateImageRequest request = restoreQueuedGenerateRequest(job);
                 Map<String, Object> result = generateArkImageToImage(job, request);
                 jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,result_payload_json=?,status='succeeded'," +
                                 "progress=100,error_message=NULL,finished_at=NOW() WHERE id=?",
@@ -1092,7 +1227,7 @@ public class CreativeAiController {
                 completeConsumerCredit(creditTxId, jobId, numberAsLong(result.get("assetId")));
                 return;
             } else if ("multi_view".equals(jobType)) {
-                MultiViewImageRequest request = readQueuedImageRequest(job.get("requestPayloadJson"), MultiViewImageRequest.class);
+                MultiViewImageRequest request = restoreQueuedMultiViewRequest(job);
                 Map<String, Object> result = generateArkMultiView(job, request);
                 jdbc.update("UPDATE ai_generation_job SET output_asset_id=NULL,result_payload_json=?,status='succeeded'," +
                                 "progress=100,error_message=NULL,finished_at=NOW() WHERE id=?",
@@ -1133,6 +1268,8 @@ public class CreativeAiController {
             metadata.put("imageSize", normalizedArkImageSize(job.get("exportFormats")));
             metadata.put("watermark", true);
             metadata.put("aiGenerated", true);
+            String policyVersion = requestPayloadText(job.get("requestPayloadJson"), "policyVersion");
+            if (!blank(policyVersion)) metadata.put("policyVersion", policyVersion);
             addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")),
                     str(job.get("productMaterial")), requestPayloadText(job.get("requestPayloadJson"), "productSize"));
             if (ownerUserId != null) {
@@ -1213,7 +1350,7 @@ public class CreativeAiController {
                 "SELECT id,job_no jobNo,provider,model_name modelName,output_asset_id outputAssetId," +
                         "product_key productKey,product_name productName,product_material productMaterial," +
                         "status,progress,attempt_count attemptCount,error_message errorMessage," +
-                        "job_type jobType,result_payload_json resultPayloadJson,created_by createdBy," +
+                        "job_type jobType,result_payload_json resultPayloadJson,request_payload_json requestPayloadJson,created_by createdBy," +
                         "credit_transaction_id creditTransactionId," +
                         "created_at createdAt,started_at startedAt,finished_at finishedAt " +
                         "FROM ai_generation_job WHERE id=?",
@@ -1239,6 +1376,12 @@ public class CreativeAiController {
         out.put("finishedAt", job.get("finishedAt"));
         out.put("source", imageJobSource(provider, jobType));
         out.put("queueConcurrency", imageQueueConcurrency(provider, jobType));
+        Map<String, Object> requestPayload = jobJsonMap(job.get("requestPayloadJson"));
+        String policyVersion = requestPayloadText(job.get("requestPayloadJson"), "policyVersion");
+        String compiledPrompt = requestPayloadText(job.get("requestPayloadJson"), "compiledPrompt");
+        if (!blank(policyVersion)) out.put("policyVersion", policyVersion);
+        if (!blank(compiledPrompt)) out.put("compiledPrompt", compiledPrompt);
+        copyJobResultValue(requestPayload, out, "rawPrompt", "productSize", "creativeBrief");
         if ("queued".equals(status)) {
             Integer position = queuedImageJobPosition(provider, jobType, jobId);
             out.put("queuePosition", position == null ? 1 : position);
@@ -1269,6 +1412,7 @@ public class CreativeAiController {
                     addSignedAssetFields(out, assetId, "image");
                 }
                 copyJobResultValue(resultPayload, out, "referenceAnalysis", "referenceAnalysisSource");
+                copyJobResultValue(resultPayload, out, "creativeBrief", "rawPrompt", "productSize", "compiledPrompt", "policyVersion");
                 out.put("message", blank(str(resultPayload.get("message")))
                         ? "AI 产品图已生成并保存到作品库。"
                         : str(resultPayload.get("message")));
@@ -1430,7 +1574,7 @@ public class CreativeAiController {
     }
 
     private JsonNode createArkSeedreamImage(String prompt, Long inputAssetId, String size,
-                                             boolean watermark, String negativePrompt) throws Exception {
+                                             boolean watermark, String negativePrompt, Long seed) throws Exception {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("model", volcengineArkSeedreamImageModel);
         payload.put("prompt", prompt);
@@ -1440,6 +1584,7 @@ public class CreativeAiController {
         payload.put("stream", false);
         payload.put("watermark", watermark);
         if (!blank(negativePrompt)) payload.put("negative_prompt", negativePrompt);
+        if (seed != null && seed >= 0) payload.put("seed", seed);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(volcengineArkImagesUrl))
                 .timeout(Duration.ofSeconds(150))
@@ -1464,33 +1609,46 @@ public class CreativeAiController {
         Long inputAssetId = numberAsLong(job.get("inputAssetId"));
         Long ownerUserId = numberAsLong(job.get("createdBy"));
         if (inputAssetId == null) throw new IllegalStateException("图改图任务缺少参考图");
-        String requestedPrompt = applyProductSizeConstraint(
-                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), req.productSize);
+        GenerationCommand command = persistedGenerationCommand(job, req, inputAssetId);
+        CreativeBrief brief = command.brief();
+        if (!Objects.equals(brief.referenceAssetId(), inputAssetId)) {
+            // Older queued payloads did not persist inputAssetId inside the
+            // request JSON; the authorized job column remains authoritative.
+            brief = new CreativeBrief(brief.productKey(), brief.category(), brief.material(),
+                    brief.productSize(), brief.rawPrompt(), inputAssetId, brief.refinement());
+            command = new GenerationCommand(brief, command.compiledPrompt(), command.negativePrompt(), command.policyVersion());
+        }
+        String requestedPrompt = command.compiledPrompt();
         Map<String, Object> style = style(req.styleId);
         ReferenceImageAnalysis referenceAnalysis = analyzeReferenceImage(inputAssetId, true);
-        boolean refinement = Boolean.TRUE.equals(req.refinement);
+        boolean refinement = command.refinement();
         String finalPrompt = refinement
-                ? buildBalancedRefinementPrompt(requestedPrompt, req.productCategory, req.material,
+                ? buildBalancedRefinementPrompt(requestedPrompt, brief.category(), brief.material(),
                 referenceAnalysis.visualBrief, req.refinementNote)
                 : buildReferencePreservingPrompt(buildPrompt(requestedPrompt, style, req.scene, req.productType),
-                req.productCategory, req.material, referenceAnalysis.visualBrief);
-        String negative = mergeNegative(mergeNegative(req.negativePrompt, (String) style.get("negativePrompt")),
+                brief.category(), brief.material(), referenceAnalysis.visualBrief);
+        String negative = mergeNegative(mergeNegative(req.negativePrompt, command.negativePrompt()),
+                (String) style.get("negativePrompt"));
+        negative = mergeNegative(negative,
                 refinement
                         ? "unrelated subject, unrelated theme, random extra object, near duplicate, unchanged raw photo, unreadable form, low detail, distorted anatomy, broken product structure, text, watermark"
                         : "different species, different character, unrelated mascot, unrelated object, replacement design, unchanged raw photo, changed identity, lost markings, generic product, random decoration, extra main subject, text, logo");
+        finalPrompt = boundedPromptPreservingEnds(finalPrompt, 3500);
+        negative = boundedPromptPreservingEnds(negative, 2000);
         String size = normalizedArkImageSize(firstNonBlank(req.imagenImageSize, req.imageSize, "2K"));
-        JsonNode generated = createArkSeedreamImage(finalPrompt, inputAssetId, size, true, negative);
+        JsonNode generated = createArkSeedreamImage(finalPrompt, inputAssetId, size, true, negative, req.seed);
         String remoteUrl = extractImageUrl(generated);
         String format = normalizedArkOutputFormat(generated, "jpg");
         String localUrl = saveRemoteImage(remoteUrl, "ark-seedream-i2i-", "." + format);
         Map<String, Object> metadata = withProductIdentity(
                 withAssetOwner(referenceImageMetadata(remoteUrl, inputAssetId, referenceAnalysis, refinement), ownerUserId),
-                req.productKey, req.productCategory, req.material, req.productSize);
+                brief.productKey(), brief.category(), brief.material(), brief.productSize());
         metadata.put("provider", "volcengine_ark");
         metadata.put("model", volcengineArkSeedreamImageModel);
         metadata.put("imageSize", size);
         metadata.put("watermark", true);
         metadata.put("aiGenerated", true);
+        metadata.put("policyVersion", command.policyVersion());
         Long assetId = createAsset(
                 blank(req.title) ? GENERATED_IMAGE_TITLE : req.title.trim(),
                 "image", "ai_generated", localUrl, localUrl, finalPrompt, negative, req.styleId, inputAssetId,
@@ -1501,6 +1659,9 @@ public class CreativeAiController {
         result.put("model", volcengineArkSeedreamImageModel);
         result.put("prompt", finalPrompt);
         result.put("negativePrompt", negative);
+        result.put("policyVersion", command.policyVersion());
+        result.put("compiledPrompt", command.compiledPrompt());
+        result.put("creativeBrief", creativeBriefMap(brief));
         result.put("referenceAnalysis", referenceAnalysis.visualBrief);
         result.put("referenceAnalysisSource", referenceAnalysis.source);
         result.put("message", "Seedream 5.0 已完成图生图并保存到作品库。");
@@ -1512,6 +1673,14 @@ public class CreativeAiController {
         Long inputAssetId = numberAsLong(job.get("inputAssetId"));
         Long ownerUserId = numberAsLong(job.get("createdBy"));
         if (jobId == null || inputAssetId == null) throw new IllegalStateException("多视图任务缺少参考图");
+        GenerationCommand command = persistedGenerationCommand(job, req, inputAssetId);
+        if (!Objects.equals(command.referenceAssetId(), inputAssetId)) {
+            CreativeBrief brief = command.brief();
+            command = new GenerationCommand(new CreativeBrief(
+                    brief.productKey(), brief.category(), brief.material(), brief.productSize(),
+                    brief.rawPrompt(), inputAssetId, brief.refinement()), command.compiledPrompt(),
+                    command.negativePrompt(), command.policyVersion());
+        }
         String size = normalizedArkImageSize(firstNonBlank(req.size, "2K"));
         List<String> views = req.viewCount != null && req.viewCount == 3
                 ? List.of("front", "left", "back")
@@ -1520,8 +1689,7 @@ public class CreativeAiController {
         List<Map<String, Object>> images = storedMultiViewImages(jobId);
         Set<String> completedViews = new HashSet<>();
         for (Map<String, Object> image : images) completedViews.add(str(image.get("view")));
-        String basePrompt = applyProductSizeConstraint(
-                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), req.productSize);
+        String basePrompt = command.compiledPrompt();
         for (String view : views) {
             if (completedViews.contains(view)) continue;
             String viewPrompt = "PRODUCT TURNAROUND IMAGE EDIT. The attached reference image is the single source of truth. "
@@ -1530,9 +1698,12 @@ public class CreativeAiController {
                     + "Infer only unseen surfaces needed for a physically coherent product; do not redesign the product. "
                     + "The view must show the entire centered product on a light neutral background, with no collage, no split screen, no extra object, no person, no packaging mockup, no text, no logo. "
                     + "Product direction: " + basePrompt;
-            String negative = "different subject, different species or character, changed markings, changed silhouette, collage, split screen, extra object, person, hand, text, logo, watermark, cropped product, blurry, distorted structure";
+            String negative = mergeNegative(command.negativePrompt(),
+                    "different subject, different species or character, changed markings, changed silhouette, collage, split screen, extra object, person, hand, text, logo, watermark, cropped product, blurry, distorted structure");
+            viewPrompt = boundedPromptPreservingEnds(viewPrompt, 3500);
+            negative = boundedPromptPreservingEnds(negative, 2000);
             JsonNode generated = createArkSeedreamImage(viewPrompt, inputAssetId, size,
-                    Boolean.TRUE.equals(req.watermark), negative);
+                    Boolean.TRUE.equals(req.watermark), negative, req.seed);
             String remoteUrl = extractImageUrl(generated);
             String format = normalizedArkOutputFormat(generated, "jpg");
             String localUrl = saveRemoteImage(remoteUrl, "ark-seedream-multiview-" + view + "-", "." + format);
@@ -1544,7 +1715,8 @@ public class CreativeAiController {
             metadata.put("multiView", true);
             metadata.put("imageSize", size);
             metadata.put("watermark", Boolean.TRUE.equals(req.watermark));
-            addProductIdentity(metadata, req.productKey, req.productCategory, req.material, req.productSize);
+            addProductIdentity(metadata, command.productKey(), command.category(), command.material(), command.productSize());
+            metadata.put("policyVersion", command.policyVersion());
             if (ownerUserId != null) {
                 metadata.put("createdByUserId", ownerUserId);
                 if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
@@ -1560,23 +1732,43 @@ public class CreativeAiController {
             completedViews.add(view);
             persistImageJobResult(jobId, arkMultiViewResultPayload(images, true));
         }
-        return arkMultiViewResultPayload(images, false);
+        Map<String, Object> result = arkMultiViewResultPayload(images, false);
+        addGenerationCommandFields(result, command);
+        return result;
     }
 
     private Map<String, Object> queueArkImageToImage(GenerateImageRequest req, Long ownerUserId) throws Exception {
         requireArkImageConfiguration();
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先选择一张参考图");
+        GenerationCommand command = compileGenerationCommand(req);
+        // These optional fields are persisted inside the legacy request JSON
+        // so polling after a queue restart can still expose the same compiler
+        // contract without changing the request shape used by old clients.
+        req.compiledPrompt = command.compiledPrompt();
+        req.compiledNegativePrompt = command.negativePrompt();
+        req.policyVersion = command.policyVersion();
         String size = normalizedArkImageSize(firstNonBlank(req.imagenImageSize, req.imageSize, "2K"));
-        return enqueueArkImageJob("image_to_image", "I2A", req.styleId, req.inputAssetId,
-                req.prompt, req.negativePrompt, req.productKey, req.productCategory, req.material,
-                size, req, ownerUserId);
+        Map<String, Object> response = enqueueArkImageJob("image_to_image", "I2A", req.styleId,
+                req.inputAssetId, command.compiledPrompt(),
+                mergeNegative(req.negativePrompt, command.negativePrompt()), command.productKey(),
+                command.category(), command.material(), size, req, ownerUserId);
+        addGenerationCommandFields(response, command);
+        return response;
     }
 
     private Map<String, Object> queueArkMultiView(MultiViewImageRequest req, Long ownerUserId) throws Exception {
         requireArkImageConfiguration();
+        GenerationCommand command = compileGenerationCommand(req);
+        // Keep the original prompt fields in the durable payload so a worker
+        // restart recompiles the exact same brief. The compiled form is kept
+        // separately for observability and compatibility with old pollers.
+        req.compiledPrompt = command.compiledPrompt();
+        req.compiledNegativePrompt = command.negativePrompt();
+        req.policyVersion = command.policyVersion();
         String size = normalizedArkImageSize(firstNonBlank(req.size, "2K"));
-        return enqueueArkImageJob("multi_view", "MVQ", null, req.inputAssetId, req.prompt, null,
-                req.productKey, req.productCategory, req.material, size, req, ownerUserId);
+        return enqueueArkImageJob("multi_view", "MVQ", null, req.inputAssetId,
+                command.compiledPrompt(), command.negativePrompt(), command.productKey(),
+                command.category(), command.material(), size, req, ownerUserId);
     }
 
     private void requireArkImageConfiguration() {
@@ -1637,11 +1829,93 @@ public class CreativeAiController {
         }
     }
 
-    private <T> T readQueuedImageRequest(Object rawPayload, Class<T> type) throws Exception {
+    private <T> T readQueuedImageRequestOrNull(Object rawPayload, Class<T> type) throws Exception {
         JsonNode payload = storedJsonNode(rawPayload);
-        if (payload == null || payload.isNull()) throw new IllegalStateException("图片任务参数丢失，请重新提交");
+        if (payload == null || payload.isNull()) return null;
         if (!payload.isObject()) throw new IllegalStateException("图片任务参数格式异常，请重新提交");
         return mapper.treeToValue(payload, type);
+    }
+
+    /**
+     * Restore the request shape for jobs created before the durable request
+     * payload was introduced. The job columns are the trusted fallback; no
+     * user identity is reconstructed from the payload.
+     */
+    private GenerateImageRequest restoreQueuedGenerateRequest(Map<String, Object> job) throws Exception {
+        GenerateImageRequest req = readQueuedImageRequestOrNull(job.get("requestPayloadJson"), GenerateImageRequest.class);
+        if (req == null) req = new GenerateImageRequest();
+        req.inputAssetId = numberAsLong(job.get("inputAssetId"));
+        req.styleId = numberAsLong(job.get("styleId"));
+        req.prompt = firstNonBlank(req.prompt, str(job.get("prompt")));
+        req.rawPrompt = firstNonBlank(req.rawPrompt, req.prompt);
+        req.productKey = firstNonBlank(req.productKey, str(job.get("productKey")));
+        req.productCategory = firstNonBlank(req.productCategory, req.productType, str(job.get("productName")), "文创产品");
+        req.productType = firstNonBlank(req.productType, req.productCategory);
+        req.material = firstNonBlank(req.material, str(job.get("productMaterial")));
+        req.productSize = firstNonBlank(req.productSize, requestPayloadText(job.get("requestPayloadJson"), "productSize"));
+        req.negativePrompt = firstNonBlank(req.negativePrompt, str(job.get("negativePrompt")));
+        req.imageSize = firstNonBlank(req.imageSize, normalizedArkImageSize(job.get("exportFormats")));
+        if (req.refinement == null) req.refinement = false;
+        return req;
+    }
+
+    private MultiViewImageRequest restoreQueuedMultiViewRequest(Map<String, Object> job) throws Exception {
+        MultiViewImageRequest req = readQueuedImageRequestOrNull(job.get("requestPayloadJson"), MultiViewImageRequest.class);
+        if (req == null) req = new MultiViewImageRequest();
+        req.inputAssetId = numberAsLong(job.get("inputAssetId"));
+        req.prompt = firstNonBlank(req.prompt, str(job.get("prompt")));
+        req.rawPrompt = firstNonBlank(req.rawPrompt, req.prompt);
+        req.productKey = firstNonBlank(req.productKey, str(job.get("productKey")));
+        req.productCategory = firstNonBlank(req.productCategory, req.productType, str(job.get("productName")), "文创产品");
+        req.productType = firstNonBlank(req.productType, req.productCategory);
+        req.material = firstNonBlank(req.material, str(job.get("productMaterial")));
+        req.productSize = firstNonBlank(req.productSize, requestPayloadText(job.get("requestPayloadJson"), "productSize"));
+        req.size = firstNonBlank(req.size, normalizedArkImageSize(job.get("exportFormats")));
+        req.negativePrompt = firstNonBlank(req.negativePrompt, str(job.get("negativePrompt")));
+        if (req.refinement == null) req.refinement = false;
+        return req;
+    }
+
+    private GenerationCommand persistedGenerationCommand(Map<String, Object> job,
+                                                         GenerateImageRequest req,
+                                                         Long inputAssetId) {
+        String persistedPrompt = requestPayloadText(job.get("requestPayloadJson"), "compiledPrompt");
+        if (blank(persistedPrompt)) return compileGenerationCommand(req);
+        CreativeBrief brief = new CreativeBrief(
+                firstNonBlank(req.productKey, str(job.get("productKey"))),
+                firstNonBlank(req.productCategory, req.productType, str(job.get("productName")), "文创产品"),
+                firstNonBlank(req.material, str(job.get("productMaterial"))),
+                firstNonBlank(req.productSize, requestPayloadText(job.get("requestPayloadJson"), "productSize")),
+                firstNonBlank(req.rawPrompt, req.prompt, str(job.get("prompt"))),
+                inputAssetId,
+                Boolean.TRUE.equals(req.refinement));
+        String negative = firstNonBlank(
+                requestPayloadText(job.get("requestPayloadJson"), "compiledNegativePrompt"),
+                ProductPromptPolicy.negative(brief.category(), brief.material()));
+        return new GenerationCommand(brief, persistedPrompt, negative,
+                firstNonBlank(requestPayloadText(job.get("requestPayloadJson"), "policyVersion"),
+                        creativePromptCompiler.policyVersion()));
+    }
+
+    private GenerationCommand persistedGenerationCommand(Map<String, Object> job,
+                                                         MultiViewImageRequest req,
+                                                         Long inputAssetId) {
+        String persistedPrompt = requestPayloadText(job.get("requestPayloadJson"), "compiledPrompt");
+        if (blank(persistedPrompt)) return compileGenerationCommand(req);
+        CreativeBrief brief = new CreativeBrief(
+                firstNonBlank(req.productKey, str(job.get("productKey"))),
+                firstNonBlank(req.productCategory, req.productType, str(job.get("productName")), "文创产品"),
+                firstNonBlank(req.material, str(job.get("productMaterial"))),
+                firstNonBlank(req.productSize, requestPayloadText(job.get("requestPayloadJson"), "productSize")),
+                firstNonBlank(req.rawPrompt, req.prompt, str(job.get("prompt"))),
+                inputAssetId,
+                false);
+        String negative = firstNonBlank(
+                requestPayloadText(job.get("requestPayloadJson"), "compiledNegativePrompt"),
+                ProductPromptPolicy.negative(brief.category(), brief.material()));
+        return new GenerationCommand(brief, persistedPrompt, negative,
+                firstNonBlank(requestPayloadText(job.get("requestPayloadJson"), "policyVersion"),
+                        creativePromptCompiler.policyVersion()));
     }
 
     private List<Map<String, Object>> storedMultiViewImages(Long jobId) {
@@ -1689,13 +1963,18 @@ public class CreativeAiController {
     @PostMapping("/image-to-image")
     public Map<String, Object> imageToImage(@RequestBody GenerateImageRequest req) throws Exception {
         Long ownerUserId = authenticatedUserId();
-        assertCompliantPrompt(req.prompt, req.productCategory);
+        GenerationCommand command = compileGenerationCommand(req);
+        assertCompliantPrompt(command.rawPrompt(), command.category());
+        assertCompliantPrompt(command.compiledPrompt(), command.category());
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先选择一张参考图");
+        if (blank(command.rawPrompt())) throw new IllegalArgumentException("请填写你希望把参考图改造成什么产品或效果");
         requireAssetAccess(req.inputAssetId);
         // Image editing is always durable and serialized through the Ark
         // queue. This protects the account-level Seedream limit even for old
         // clients that do not send queue=true.
-        return queueArkImageToImage(req, ownerUserId);
+        Map<String, Object> response = queueArkImageToImage(req, ownerUserId);
+        addGenerationCommandFields(response, command);
+        return response;
     }
 
     @GetMapping("/jimeng/config")
@@ -2221,7 +2500,11 @@ public class CreativeAiController {
         }
         Path dir = creativeAssetRoot().resolve("uploads").normalize();
         Files.createDirectories(dir);
-        String fileName = "ref-" + System.currentTimeMillis() + ext;
+        // Uploads can arrive concurrently from retries or multiple devices;
+        // a millisecond timestamp alone can make two references overwrite one
+        // another before their generation jobs are queued.
+        String fileStem = "ref-" + UUID.randomUUID();
+        String fileName = fileStem + ext;
         Path target = dir.resolve(fileName);
         Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
         String url = "/uploads/" + fileName;
@@ -2229,6 +2512,40 @@ public class CreativeAiController {
         meta.put("uploadName", original); meta.put("size", file.getSize()); meta.put("contentType", file.getContentType() == null ? "" : file.getContentType());
         meta.put("createdByUserId", ownerUserId);
         if (currentConsumerUserIdOrNull() != null) meta.put("consumerReference",true);
+        ReferenceImagePreparationService.Preparation preparation;
+        try {
+            preparation = referenceImagePreparationService.prepare(target, dir, fileStem);
+        } catch (IOException e) {
+            Files.deleteIfExists(target);
+            throw e;
+        }
+        // JDK ImageIO does not decode WebP on every runtime. Keep a valid
+        // WebP upload available as the original provider input even when no
+        // local derivative can be produced; PNG/JPG failures are actionable
+        // upload errors instead of delayed generation failures.
+        if (!preparation.readable() && !".webp".equals(ext)) {
+            Files.deleteIfExists(target);
+            throw new IllegalArgumentException("图片文件无法读取，请重新选择 PNG、JPG 或 WEBP 图片");
+        }
+        if (!preparation.readable() && file.getSize() > ReferenceImagePreparationService.MAX_GENERATION_BYTES) {
+            Files.deleteIfExists(target);
+            throw new IllegalArgumentException("WebP 参考图不能超过 15MB，请压缩后重试");
+        }
+        Map<String, Object> storedQuality = referenceQualityMetadata(preparation, target, ext, file.getSize());
+        meta.put("referenceQuality", storedQuality);
+        meta.put("referenceQualityWarnings", preparation.warnings());
+        if (preparation.readable() && preparation.generationPath() != null
+                && !preparation.generationPath().equals(target)) {
+            String generationUrl = "/uploads/" + preparation.generationPath().getFileName();
+            // Keep both aliases because queued jobs from older deployments
+            // used generationUrl while the quality metadata contract calls it
+            // normalizedUrl.
+            meta.put("generationUrl", generationUrl);
+            meta.put("normalizedUrl", generationUrl);
+            storedQuality.put("generationUrl", generationUrl);
+            storedQuality.put("normalizedUrl", generationUrl);
+            meta.put("generationFormat", preparation.generationExtension().replace(".", ""));
+        }
         Long assetId = createAsset(
                 title == null || title.isBlank() ? original : title,
                 "image",
@@ -2246,11 +2563,64 @@ public class CreativeAiController {
         Map<String,Object> result = new LinkedHashMap<>();
         result.put("assetId", assetId);
         result.put("title", title == null || title.isBlank() ? original : title);
+        // Never expose private /uploads paths in the response.  The worker
+        // uses the richer stored metadata while clients receive dimensions,
+        // normalization state and actionable warnings only.
+        result.put("referenceQuality", publicReferenceQuality(storedQuality));
+        result.put("referenceQualityWarnings", preparation.warnings());
         addSignedAssetFields(result, assetId, "image");
         // `url` is retained as a backwards-compatible alias, but it is now a
         // short-lived signed URL rather than the private /uploads path.
         result.put("url", result.get("imageUrl"));
         return result;
+    }
+
+    /**
+     * Normalise the quality contract across the current preparation service
+     * and older upload rows.  The aliases are intentional: callers can use a
+     * compact width/height/bytes view while diagnostics retain source and
+     * generation dimensions.
+     */
+    private Map<String, Object> referenceQualityMetadata(
+            ReferenceImagePreparationService.Preparation preparation,
+            Path original,
+            String sourceExtension,
+            long sourceBytes) {
+        Map<String, Object> quality = new LinkedHashMap<>();
+        if (preparation != null && preparation.quality() != null) {
+            quality.putAll(preparation.quality());
+        }
+        int width = numberAsInt(quality.get("sourceWidth"));
+        int height = numberAsInt(quality.get("sourceHeight"));
+        quality.put("width", width > 0 ? width : null);
+        quality.put("height", height > 0 ? height : null);
+        quality.put("format", extensionFormat(sourceExtension));
+        quality.put("bytes", sourceBytes);
+        quality.put("byteSize", sourceBytes);
+        quality.put("normalized", preparation != null && preparation.generationPath() != null
+                && original != null && !preparation.generationPath().equals(original));
+        List<String> warnings = preparation == null || preparation.warnings() == null
+                ? List.of() : List.copyOf(preparation.warnings());
+        quality.put("qualityWarnings", warnings);
+        return quality;
+    }
+
+    private Map<String, Object> publicReferenceQuality(Map<String, Object> storedQuality) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (storedQuality != null) result.putAll(storedQuality);
+        result.remove("generationUrl");
+        result.remove("normalizedUrl");
+        return result;
+    }
+
+    private int numberAsInt(Object value) {
+        return value instanceof Number ? ((Number) value).intValue() : 0;
+    }
+
+    private String extensionFormat(String extension) {
+        String value = nullToEmpty(extension).toLowerCase(Locale.ROOT);
+        if (value.startsWith(".")) value = value.substring(1);
+        return "jpeg".equals(value) ? "jpg" : value;
     }
 
     @PostMapping(value = "/consumer-professional-submissions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -4252,6 +4622,13 @@ public class CreativeAiController {
     }
 
     private String buildPrompt(String userPrompt, Map<String, Object> style, String scene, String productType) {
+        // A locked carrier template is already a complete provider prompt.
+        // Do not prepend the generic brand/style wrapper: those words can
+        // steer Seedream toward packaging, labels, or extra text and dilute
+        // the fixed 2.5D ice-cream product form.
+        if (userPrompt != null && userPrompt.contains("<<ICE_CREAM_2_5D_TEMPLATE>>")) {
+            return userPrompt.trim();
+        }
         StringBuilder sb = new StringBuilder();
         sb.append(style.get("basePrompt"));
         if (scene != null && !scene.isBlank()) sb.append(", scene: ").append(scene.trim());
@@ -4264,11 +4641,35 @@ public class CreativeAiController {
     }
 
     /**
+     * Provider limits must not remove the product lock at the beginning or the
+     * size/reference contracts appended at the end of a compiled prompt.
+     */
+    private String boundedPromptPreservingEnds(String prompt, int maxLength) {
+        String value = nullToEmpty(prompt).trim();
+        if (maxLength <= 0 || value.length() <= maxLength) return value;
+        String separator = "\n...[中间描述已按模型长度限制压缩]...\n";
+        int available = Math.max(0, maxLength - separator.length());
+        int headLength = (int) Math.ceil(available * 0.58d);
+        int tailLength = available - headLength;
+        return value.substring(0, headLength) + separator + value.substring(value.length() - tailLength);
+    }
+
+    /**
      * Image-to-image is a product adaptation of the supplied asset, not a new
      * text-to-image concept. Keep this rule server-side so every client uses
      * the same preservation contract even when it sends a weak prompt.
      */
     private String buildReferencePreservingPrompt(String requestedPrompt, String productCategory, String material, String visualBrief) {
+        if (requestedPrompt != null && requestedPrompt.contains("<<ICE_CREAM_2_5D_TEMPLATE>>")) {
+            // Keep the fixed carrier template at the front of the final
+            // provider prompt. The reference contract follows it so identity
+            // is preserved without allowing generic i2i wording to replace
+            // the popsicle form.
+            return requestedPrompt.trim() + "\n"
+                    + "IMPORTANT IMAGE-TO-IMAGE IDENTITY LOCK: use the attached reference image as the single visual source of truth for the subject, silhouette, markings, colors and cultural motifs. "
+                    + "Transfer those visible elements into the locked 2.5D edible popsicle template above; do not return the unchanged source image, a screenshot, packaging, a cone, a cup or an unrelated product. "
+                    + "Reference facts available directly to Seedream: " + visualBrief;
+        }
         String product = blank(productCategory) ? "the requested cultural creative product" : productCategory.trim();
         String surface = blank(material) ? "the requested production material and finish" : material.trim();
         return "IMPORTANT IMAGE-TO-IMAGE IDENTITY LOCK: The attached reference image is the single primary visual source of truth. "
@@ -4286,13 +4687,23 @@ public class CreativeAiController {
     }
 
     private String buildBalancedRefinementPrompt(String optimizedEdit, String productCategory, String material, String visualBrief, String refinementNote) {
+        if (optimizedEdit != null && optimizedEdit.contains("<<ICE_CREAM_2_5D_TEMPLATE>>")) {
+            return optimizedEdit.trim() + "\n"
+                    + "BALANCED IMAGE EDIT FOR THE LOCKED 2.5D ICE-CREAM PRODUCT: preserve the same reference subject identity, silhouette, cultural motifs, edible popsicle carrier, embossed relief, natural wood stick, portrait 3:4 composition and pure white studio background. "
+                    + "Apply the mandatory change below visibly and locally; do not return the unchanged image, a generic dessert, packaging, cone, cup or unrelated product. "
+                    + "Reference facts available directly to Seedream: " + visualBrief + " "
+                    + "Mandatory user change (highest priority): " + nullToEmpty(refinementNote);
+        }
         String product = blank(productCategory) ? "the current cultural creative product" : productCategory.trim();
         String surface = blank(material) ? "its current production material and finish" : material.trim();
-        return "BALANCED IMAGE EDIT: Use the supplied image as the visual source. Keep the recognizable subject identity, cultural theme, dominant color family and key decorative motifs from the current image. "
-                + "Do not return a near-duplicate. The mandatory requested change below must be clearly visible in the finished image, including any requested change of shape, carrier, product form, structure or composition. "
+        return "BALANCED IMAGE EDIT: Use the supplied image as the visual source and current product version. "
+                + "Apply the smallest coherent edit that satisfies the mandatory request: preserve every unrelated property, including subject identity, camera angle, crop, composition, scale, background, lighting, dominant colors, material finish, dimensions and decorative motifs. "
+                + "Do not redesign the whole product, do not move unchanged elements, and do not return a generic new concept. "
+                + "Do not return a near-duplicate when the requested change is visible; the mandatory requested change below must be clearly visible in the finished image, including any requested change of shape, carrier, product form, structure or composition. "
                 + "Retain continuity with these reference facts where they do not conflict with the requested change: " + visualBrief + " "
                 + "Create one coherent, production-oriented " + product + " using " + surface + ". "
-                + "Mandatory user change: " + nullToEmpty(refinementNote) + " "
+                + "If the user did not specify a location, make the change localized and keep all other regions unchanged. "
+                + "Mandatory user change (highest priority): " + nullToEmpty(refinementNote) + " "
                 + "Optimized edit direction: " + optimizedEdit;
     }
 
@@ -4301,14 +4712,45 @@ public class CreativeAiController {
     }
 
     private ReferenceImageAnalysis analyzeReferenceImage(Long assetId, boolean trustedJob) {
-        // Seedream receives the original image in the same request that asks
-        // for the adaptation. A separate Qwen vision call used to summarize
-        // the image could lose the cat/bird identity before generation and
-        // violated the provider boundary. Keep this brief generic and let the
-        // multimodal Seedream request inspect the pixels directly.
+        // Seedream receives the prepared image in the same request that asks
+        // for the adaptation. A separate text-only Qwen call cannot reliably
+        // summarize the subject and can lose identity before generation. Keep
+        // the pixels authoritative and add only deterministic upload facts.
+        String quality = referenceQualityBrief(assetId);
         return new ReferenceImageAnalysis(
-                "Inspect the attached image directly. Preserve every visible non-UI subject, species or character identity, silhouette, proportions, face or body markings, dominant colors, motifs, material cues and distinctive details; remove only app chrome or screenshot controls.",
-                "seedream_direct_reference");
+                "Inspect the attached image directly. Preserve every visible non-UI subject, species or character identity, silhouette, proportions, face or body markings, dominant colors, motifs, material cues and distinctive details; remove only app chrome or screenshot controls. " + quality,
+                quality.isBlank() ? "seedream_direct_reference" : "seedream_direct_reference+asset_quality");
+    }
+
+    private String referenceQualityBrief(Long assetId) {
+        if (assetId == null) return "";
+        try {
+            Map<String, Object> row = jdbc.queryForMap("SELECT metadata_json metadataJson FROM digital_asset WHERE id=?", assetId);
+            if (row.get("metadataJson") == null) return "";
+            JsonNode metadata = storedJsonNode(row.get("metadataJson"));
+            JsonNode quality = metadata.path("referenceQuality");
+            if (!quality.isObject()) return "";
+            String width = firstNonBlank(quality.path("generationWidth").asText(""), quality.path("width").asText(""));
+            String height = firstNonBlank(quality.path("generationHeight").asText(""), quality.path("height").asText(""));
+            String ratio = firstNonBlank(quality.path("sourceAspectRatio").asText(""), quality.path("aspectRatio").asText(""));
+            JsonNode warningNode = quality.path("qualityWarnings").isArray()
+                    ? quality.path("qualityWarnings") : quality.path("warnings");
+            String warnings = warningNode.isArray() ? String.join(", ", toStringList(warningNode)) : "";
+            StringBuilder brief = new StringBuilder("Prepared reference facts: ");
+            if (!blank(width) && !blank(height)) brief.append(width).append("x").append(height).append(" pixels");
+            if (!blank(ratio)) brief.append(", source aspect ratio ").append(ratio);
+            if (!blank(warnings)) brief.append(", quality warnings ").append(warnings);
+            brief.append(". These facts describe input quality only; inspect the actual pixels for subject identity.");
+            return brief.toString();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private List<String> toStringList(JsonNode node) {
+        List<String> values = new ArrayList<>();
+        if (node != null && node.isArray()) node.forEach(item -> values.add(item.asText("")));
+        return values;
     }
 
     private Map<String,Object> referenceImageMetadata(String remoteUrl, Long inputAssetId, ReferenceImageAnalysis analysis, boolean refinement) {
@@ -4352,15 +4794,46 @@ public class CreativeAiController {
         // Access is checked at submission time. Queue workers do not carry an
         // HTTP principal, so they must read the already-authorized asset by
         // job ownership instead of calling requireAssetAccess again.
-        Map<String,Object> asset = jdbc.queryForMap("SELECT file_url fileUrl,preview_url previewUrl FROM digital_asset WHERE id=?", assetId);
-        Object url = asset.get("fileUrl") == null ? asset.get("previewUrl") : asset.get("fileUrl");
-        if (url == null || blank(String.valueOf(url))) throw new IOException("参考图文件地址为空");
-        Path image = resolvePublicAsset(String.valueOf(url));
+        Map<String,Object> asset = jdbc.queryForMap("SELECT file_url fileUrl,preview_url previewUrl,metadata_json metadataJson FROM digital_asset WHERE id=?", assetId);
+        List<String> candidates = new ArrayList<>();
+        String generationUrl = generationReferenceUrl(asset);
+        if (!blank(generationUrl)) candidates.add(generationUrl);
+        String originalUrl = asset.get("fileUrl") == null ? str(asset.get("previewUrl")) : str(asset.get("fileUrl"));
+        if (!blank(originalUrl) && !candidates.contains(originalUrl)) candidates.add(originalUrl);
+        Path image = null;
+        for (String candidate : candidates) {
+            try {
+                image = resolvePublicAsset(candidate);
+                break;
+            } catch (IOException ignored) {
+                // A stale derivative must never make an otherwise valid old
+                // upload unusable; fall back to its original file below.
+            }
+        }
+        if (image == null) throw new IOException("参考图文件地址为空或文件不存在");
         String name = image.getFileName().toString().toLowerCase(Locale.ROOT);
         String contentType = name.endsWith(".jpg") || name.endsWith(".jpeg") ? "image/jpeg" : name.endsWith(".webp") ? "image/webp" : "image/png";
         byte[] bytes = Files.readAllBytes(image);
-        if (bytes.length > 15L * 1024 * 1024) throw new IllegalArgumentException("参考图不能超过 15MB，请压缩后重试");
+        if (bytes.length > ReferenceImagePreparationService.MAX_GENERATION_BYTES) {
+            throw new IllegalArgumentException("参考图不能超过 15MB，请压缩后重试");
+        }
         return "data:" + contentType + ";base64," + Base64.getEncoder().encodeToString(bytes);
+    }
+
+    private String generationReferenceUrl(Map<String, Object> asset) {
+        if (asset == null || asset.get("metadataJson") == null) return null;
+        try {
+            JsonNode metadata = storedJsonNode(asset.get("metadataJson"));
+            if (metadata == null || !metadata.isObject()) return null;
+            String generationUrl = firstNonBlank(
+                    metadata.path("generationUrl").asText(""),
+                    metadata.path("normalizedUrl").asText(""),
+                    metadata.path("referenceQuality").path("generationUrl").asText(""),
+                    metadata.path("referenceQuality").path("normalizedUrl").asText(""));
+            return blank(generationUrl) ? null : generationUrl.trim();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String saveRemoteImage(String url, String prefix, String suffix) throws IOException, InterruptedException {
@@ -5158,6 +5631,8 @@ public class CreativeAiController {
         public String title;
         public String provider;
         public String prompt;
+        /** Original user wording retained beside an optimized provider prompt. */
+        public String rawPrompt;
         public String negativePrompt;
         public Long styleId;
         public String scene;
@@ -5183,22 +5658,38 @@ public class CreativeAiController {
         /** Opt in to the durable image task queue; retained as an opt-in for older clients. */
         public Boolean queue;
         public Long currentUserId;
+        /** Internal queue observability fields; ignored by older clients. */
+        public String compiledPrompt;
+        public String compiledNegativePrompt;
+        public String policyVersion;
     }
     public static class MultiViewImageRequest {
         public String prompt;
+        /** Original user brief retained separately from any legacy compiled prompt. */
+        public String rawPrompt;
         public String productCategory;
+        /** Compatibility alias used by the conversational and consumer clients. */
+        public String productType;
         public String productKey;
         public String material;
+        public String negativePrompt;
         /** Physical finished-product dimensions, separate from the 1K/2K image size. */
         public String productSize;
         public Long inputAssetId;
         public String size;
+        /** Optional deterministic Seedream seed for reproducible comparisons. */
+        public Long seed;
         /** Conversational creation uses 3 views; the professional page keeps 4. */
         public Integer viewCount;
         public Boolean watermark;
+        public Boolean refinement;
         /** Opt in to the durable image task queue; retained as an opt-in for older clients. */
         public Boolean queue;
         public Long currentUserId;
+        /** Internal queue observability fields; ignored by older clients. */
+        public String compiledPrompt;
+        public String compiledNegativePrompt;
+        public String policyVersion;
     }
 
     public static class Generate3dRequest {

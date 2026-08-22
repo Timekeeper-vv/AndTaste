@@ -30,6 +30,19 @@ class ProductPromptPolicyTest {
     }
 
     @Test
+    void iceCreamPromptUsesTheStandardized25dPopsicleTemplate() {
+        String prompt = ProductPromptPolicy.enforce("金凤凰主体，主色金红，祥云浮雕", "食品饮品 / 文创冰淇淋", "冰淇淋");
+
+        assertThat(prompt).contains("ICE_CREAM_2_5D_TEMPLATE");
+        assertThat(prompt).contains("Isometric view of a 2.5D cultural creative ice cream");
+        assertThat(prompt).contains("金凤凰主体，主色金红，祥云浮雕");
+        assertThat(prompt).contains("100-120mm natural solid wood stick support pole");
+        assertThat(prompt).contains("portrait 3:4 composition");
+        assertThat(prompt).contains("clean pure white background");
+        assertThat(prompt).doesNotContain("--ar 3:4");
+    }
+
+    @Test
     void metalProductsKeepManufacturableHardware() {
         String prompt = ProductPromptPolicy.enforce("青铜器守护兽", "锌合金徽章", "锌合金");
 

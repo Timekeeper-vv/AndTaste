@@ -250,7 +250,8 @@ const rankingPeriods: Array<{ value: RankingPeriod; label: string }> = [
 const activeRanking = computed(() => salesRankings[rankingPeriod.value])
 
 const modal = ref<'none' | 'login' | 'register'>('none')
-const entryChoice = ref<'website' | 'miniapp' | null>(isEmbeddedMiniapp() ? 'website' : null)
+// 网站端直接进入工作台首页，不再展示小程序/网站入口选择页。
+const entryChoice = ref<'website' | 'miniapp'>('website')
 
 const username = ref('')
 const password = ref('')
@@ -650,20 +651,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="entryChoice === null" class="entry-choice">
-    <div class="entry-choice-brand"><img :src="andTasteLogo" alt="之间智造 logo" /><span>之间智造</span></div>
-    <div class="entry-choice-copy"><span>AI 文创智造平台</span><h1>请选择进入方式</h1><p>小程序端适合手机触控创作，网站端适合电脑浏览与微信扫码登录。</p></div>
-    <div class="entry-choice-options">
-      <button type="button" class="entry-choice-option miniapp" @click="chooseMiniappEntry">
-        <span class="entry-choice-icon" aria-hidden="true">⌁</span><strong>小程序端</strong><small>手机端登录、触控创作与移动浏览</small><em>扫码进入手机端 <b>→</b></em>
-      </button>
-      <button type="button" class="entry-choice-option website" @click="chooseWebsiteEntry">
-        <span class="entry-choice-icon" aria-hidden="true">▣</span><strong>网站端</strong><small>电脑端工作台与微信扫码登录</small><em>进入网站登录 <b>→</b></em>
-      </button>
-    </div>
-  </div>
-
-  <div v-else class="landing">
+  <div class="landing">
 
     <!-- ══════════════════════════════════════
          HERO — premium animated pattern section
@@ -1255,7 +1243,6 @@ onUnmounted(() => {
 
 <style scoped>
 /* ── Reset ── */
-.entry-choice{display:flex;flex-direction:column;justify-content:center;min-height:100vh;padding:48px 24px;box-sizing:border-box;background:linear-gradient(145deg,#f7f4ec,#eef7f2);color:#17221d}.entry-choice-brand{display:flex;align-items:center;gap:12px;width:min(920px,100%);margin:0 auto}.entry-choice-brand img{width:42px;height:42px;object-fit:contain;border-radius:12px}.entry-choice-brand span{font-family:"STSong","Songti SC",serif;font-size:26px;font-weight:800}.entry-choice-copy{width:min(920px,100%);margin:clamp(56px,12vh,120px) auto 0}.entry-choice-copy>span{color:#4f806d;font-size:11px;font-weight:900;letter-spacing:.16em}.entry-choice-copy h1{margin:14px 0 12px;font-family:"STSong","Songti SC",serif;font-size:clamp(38px,6vw,70px);line-height:1.1;letter-spacing:0}.entry-choice-copy p{max-width:600px;margin:0;color:#718078;font-size:15px;line-height:1.75}.entry-choice-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;width:min(920px,100%);margin:38px auto 0}.entry-choice-option{display:flex;flex-direction:column;align-items:flex-start;min-height:230px;padding:26px;border:1px solid rgba(57,88,73,.18);border-radius:8px;background:rgba(255,255,255,.8);color:#203128;text-align:left;cursor:pointer;box-shadow:0 18px 42px rgba(52,76,62,.08);transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}.entry-choice-option:hover{transform:translateY(-4px);border-color:#5e9077;box-shadow:0 22px 48px rgba(52,76,62,.14)}.entry-choice-option.website{border-color:rgba(181,102,74,.22)}.entry-choice-icon{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;background:#dcefe4;color:#3e765a;font-size:25px}.entry-choice-option.website .entry-choice-icon{background:#fae5dc;color:#a65d43}.entry-choice-option strong{margin-top:25px;font-family:"STSong","Songti SC",serif;font-size:25px}.entry-choice-option small{margin-top:8px;color:#708077;font-size:13px;line-height:1.55}.entry-choice-option em{margin-top:auto;color:#4f806d;font-size:12px;font-style:normal;font-weight:850}.entry-choice-option.website em{color:#a65d43}.entry-choice-option em b{margin-left:5px;font-size:17px}@media(max-width:640px){.entry-choice{padding:32px 18px}.entry-choice-copy{margin-top:72px}.entry-choice-copy h1{font-size:42px}.entry-choice-options{grid-template-columns:1fr;margin-top:28px}.entry-choice-option{min-height:170px;padding:22px}.entry-choice-option strong{margin-top:18px}}
 .landing {
   font-family: var(--font);
   color: #0f172a;

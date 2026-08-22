@@ -163,15 +163,16 @@ export type SeedreamImageSize = '1K' | '2K'
 export const DEFAULT_SEEDREAM_IMAGE_SIZE: SeedreamImageSize = '2K'
 
 function seedreamRequestBody(body: any) {
-  const imageSize = body?.imageSize || DEFAULT_SEEDREAM_IMAGE_SIZE
+  const normalized: any = buildCreativeGenerationRequest(body || {})
+  const imageSize = normalized?.imageSize || DEFAULT_SEEDREAM_IMAGE_SIZE
   return {
-    ...(body || {}),
+    ...normalized,
     provider: 'ark',
     imageSize,
     // Older server DTOs exposed this field with the Imagen-era spelling.
     // Sending both keeps the selected Seedream resolution explicit across
     // compatible deployments.
-    imagenImageSize: body?.imagenImageSize || imageSize,
+    imagenImageSize: normalized?.imagenImageSize || imageSize,
   }
 }
 
@@ -213,6 +214,68 @@ export async function waitForImageGenerationJob(initial: ImageGenerationJobProgr
 }
 
 export const waitForArkImageJob = waitForImageGenerationJob
+
+/**
+ * Canonical client-side adapter for the creative generation contract.
+ *
+ * The server is the source of truth for prompt policy, but every entry point
+ * must send the same structured brief so a missing field cannot silently
+ * change an image-to-image request into a generic product request.
+ */
+export type CreativeGenerationRequest = Record<string, any> & {
+  prompt?: string
+  rawPrompt?: string
+  productKey?: string
+  productCategory?: string
+  productType?: string
+  material?: string
+  productSize?: string
+  negativePrompt?: string
+  inputAssetId?: number | string | null
+  refinement?: boolean
+  refinementNote?: string
+  /** Optional Seedream seed used to reproduce a comparison run. */
+  seed?: number | string | null
+}
+
+function normalizedBriefText(value: any, maxLength = 2400) {
+  return String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, maxLength)
+}
+
+function normalizedPromptText(value: any, maxLength = 6000) {
+  return String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(line => line.trim().replace(/[ \t]+/g, ' '))
+    .join('\n')
+    .trim()
+    .slice(0, maxLength)
+}
+
+export function buildCreativeGenerationRequest(body: CreativeGenerationRequest = {}) {
+  const prompt = normalizedPromptText(body.prompt, 6000)
+  const suppliedRawPrompt = normalizedPromptText(body.rawPrompt, 6000)
+  const rawPrompt = suppliedRawPrompt || prompt
+  const suppliedCategory = normalizedBriefText(body.productCategory, 160)
+  const suppliedType = normalizedBriefText(body.productType, 160)
+  const productCategory = suppliedCategory || suppliedType || '文创产品'
+  const productType = suppliedType || productCategory
+  const inputAssetId = Number(body.inputAssetId)
+  return {
+    ...body,
+    prompt,
+    rawPrompt,
+    productKey: normalizedBriefText(body.productKey, 120),
+    productCategory,
+    productType,
+    material: normalizedBriefText(body.material, 160),
+    productSize: normalizedBriefText(body.productSize, 120),
+    negativePrompt: normalizedPromptText(body.negativePrompt, 4000),
+    inputAssetId: Number.isFinite(inputAssetId) && inputAssetId > 0 ? inputAssetId : null,
+    refinement: body.refinement === true,
+    refinementNote: normalizedPromptText(body.refinementNote, 2400),
+  }
+}
 
 export async function createTextToImage(body: any, onProgress?: (job: ArkImageJobProgress) => void) {
   const queued = await request<ArkImageJobProgress>('/api/creative/ai/ark/text-to-image', {

@@ -7,6 +7,7 @@ import MaterialModelStudio from './MaterialModelStudio.vue'
 import CustomerSupportWidget from './CustomerSupportWidget.vue'
 import { requestAssetPreviewAccess, requestAssetPreviewUrl } from '../utils/assetAccess'
 import { isEmbeddedMiniapp, navigateToMiniappPage } from '../utils/miniappBridge'
+import { buildCreativeGenerationPayload } from '../utils/creativeGeneration'
 
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error']; logout: [] }>()
@@ -172,6 +173,21 @@ const productCategories = [
 const selectedProductKey = ref('magnet')
 const selectedMaterial = ref('PVC')
 const productProfile = computed(() => productCategories.find(item => item.key === selectedProductKey.value) || productCategories[0])
+// Keep a stable finished-product specification with the selected catalog item.
+// This is separate from Seedream's 1K/2K image resolution and is sent to every
+// image-generation route so a recommendation cannot disappear at the API edge.
+const recommendedProductSizes: Record<string, string> = {
+  icecream: '500mL 圆柱杯/包装（直径约70mm，高约150mm）',
+  candy: '约80×50×25mm 单盒',
+  blindbox: '约80×80×100mm 盲盒礼盒',
+  magnet: '60×60×4mm',
+  plush: '高约130mm',
+  pvc: '高约130mm',
+  hardplastic: '高约120mm',
+  keychain: '50×50×4mm（主体，含挂环另计）',
+  giftbox: '200×150×80mm',
+}
+const selectedProductSize = computed(() => recommendedProductSizes[selectedProductKey.value] || '按产品实际规格')
 const materialGenerationDirections: Record<string, string> = {
   PVC: 'PVC / vinyl soft plastic with a smooth slightly matte molded surface, rounded safe edges, clear printing, and tight production seams. Do not render ceramic, fabric, wood, or metal as the primary material.',
   搪胶: 'soft vinyl / rotocast rubber toy material with a velvety matte tactile surface, rounded safe edges, and clean paint separation. Do not render ceramic, fabric, or hard transparent plastic as the primary material.',
@@ -1255,15 +1271,20 @@ async function optimizeImagePrompt() {
 
 async function generateDoubaoMultiView() {
   setStage('正在提交多视图生成任务', 'generate')
-  const data = await submitQueuedImageAndWait('/api/creative/ai/volcengine/seedream/multiview', {
+  const data = await submitQueuedImageAndWait('/api/creative/ai/volcengine/seedream/multiview', buildCreativeGenerationPayload({
     prompt: withMaterialConstraint(imageForm.rawPrompt),
+    rawPrompt: imageForm.rawPrompt,
     inputAssetId: doubaoReferenceAssetId.value,
+    productKey: selectedProductKey.value,
+    productType: productProfile.value.label,
     productCategory: productProfile.value.label,
     material: selectedMaterial.value,
+    productSize: selectedProductSize.value,
+    refinement: false,
     size: '2K',
     watermark: true,
     queue: true,
-  })
+  }))
   const rawImages = Array.isArray(data.images) ? data.images : []
   doubaoMultiViewResult.value = await Promise.all(rawImages.map(async (item: any) => {
     try { return await secureAssetResult(item, 'image') } catch { return { ...item, previewUrl: '', fileUrl: '' } }
@@ -1341,10 +1362,33 @@ async function generateImage() {
       await generateDoubaoMultiView(); await nextTick(); imageAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return
     }
     if (imageForm.generationMode === 'single' && !imageConfig.value.configured) throw new Error('火山方舟 Doubao-Seedream-5.0-pro 未配置，请联系管理员配置 Ark API Key 并开通模型')
-    await optimizeImagePrompt(); setStage(imageForm.generationMode === 'image_to_image' ? '正在融合参考图与文字描述' : '正在生成图片', 'generate')
+    // A first-pass reference conversion must keep the user's brief intact.
+    // Qwen remains useful for text-only generation, but rewriting an i2i
+    // brief here can turn a product conversion into a near-copy of the source.
+    if (imageForm.generationMode === 'single') await optimizeImagePrompt()
+    else imageForm.prompt = withMaterialConstraint(imageForm.rawPrompt)
+    setStage(imageForm.generationMode === 'image_to_image' ? '正在融合参考图与文字描述' : '正在生成图片', 'generate')
     const endpoint = imageForm.generationMode === 'image_to_image' ? '/api/creative/ai/image-to-image' : '/api/creative/ai/ark/text-to-image'
     const finalImagePrompt = withMaterialConstraint(imageForm.prompt || imageForm.rawPrompt)
-    const payload = imageForm.generationMode === 'image_to_image' ? { title: `图文结合 · ${productProfile.value.label}`, prompt: finalImagePrompt, inputAssetId: imageForm.inputAssetId, productCategory: productProfile.value.label, material: selectedMaterial.value } : { provider: 'ark', rawPrompt: withMaterialConstraint(imageForm.rawPrompt), prompt: finalImagePrompt, productCategory: productProfile.value.label, material: selectedMaterial.value, imagenAspectRatio: imageForm.imagenAspectRatio, imagenImageSize: imageForm.imagenImageSize, imagenOutputFormat: imageForm.imagenOutputFormat }
+    const payload = buildCreativeGenerationPayload({
+      provider: 'ark',
+      title: `${imageForm.generationMode === 'image_to_image' ? '图文结合' : '文字创意'} · ${productProfile.value.label}`,
+      rawPrompt: imageForm.rawPrompt,
+      prompt: finalImagePrompt,
+      productKey: selectedProductKey.value,
+      productType: productProfile.value.label,
+      productCategory: productProfile.value.label,
+      material: selectedMaterial.value,
+      productSize: selectedProductSize.value,
+      negativePrompt: imageForm.generationMode === 'image_to_image' ? 'unchanged raw photo, unrelated object, text, logo, UI overlay' : '',
+      inputAssetId: imageForm.generationMode === 'image_to_image' ? imageForm.inputAssetId : null,
+      refinement: false,
+      refinementNote: imageForm.rawPrompt,
+      imagenAspectRatio: imageForm.imagenAspectRatio,
+      imagenImageSize: imageForm.imagenImageSize,
+      imagenOutputFormat: imageForm.imagenOutputFormat,
+      queue: true,
+    })
     const d = imageForm.generationMode === 'single'
       ? await submitArkImageAndWait(payload)
       : imageForm.generationMode === 'image_to_image'
@@ -2112,7 +2156,7 @@ function closeModelPreview() {
         <div><span>IMAGE LAB · 01</span><h2>用一句话，<strong>生成一张想被带走的产品图。</strong></h2><p>把文化、材质、图案和使用场景交给 AI，生成后自动进入你的作品库。</p></div>
         <aside><i>16</i><span>积分 / 次</span><small>生成成功才入库</small></aside>
       </header>
-      <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small class="material-prompt-proof">已写入 AI 生成提示词 · {{ materialPromptSummary }}</small><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
+      <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small class="material-prompt-proof">已写入 AI 生成提示词 · {{ materialPromptSummary }}</small><small>推荐成品规格 · {{ selectedProductSize }}</small><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
       <div class="creation-workspace">
         <div class="prompt-studio">
           <div class="prompt-studio-head"><span>创作描述</span><small>{{ imageForm.rawPrompt.length }} / 800</small></div>
@@ -2137,7 +2181,7 @@ function closeModelPreview() {
         <div><span>3D FORGE · 02</span><h2>从灵感到原型，<strong>让作品拥有立体形态。</strong></h2><p>上传产品图，或输入文字描述，生成可旋转预览、可继续打样的 3D 模型。</p></div>
         <aside class="green"><i>{{ modelCost }}</i><span>积分 / 次</span><small>支持图生 3D / 文生 3D</small></aside>
       </header>
-            <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small class="material-prompt-proof">已写入 AI 生成提示词 · {{ materialPromptSummary }}</small><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
+          <section class="product-brief" aria-label="产品与材质引导"><div class="product-brief-title"><span>STEP 01 · PRODUCT BLUEPRINT</span><b>先选要做什么，AI 才能按真实产品思路生成</b><small>类别、材质会联动案例、提示词、3D模板和生产初筛。</small></div><div class="brief-selectors"><div><span>产品类别</span><button v-for="item in productCategories" :key="item.key" :class="{active:selectedProductKey===item.key}" @click="selectProductCategory(item.key)">{{ item.label }}</button></div><div><span>具体材质</span><button v-for="item in productProfile.materials" :key="item" :class="{active:selectedMaterial===item}" @click="selectProductMaterial(item)">{{ item }}</button></div></div><aside><b>{{ productProfile.label }} · {{ selectedMaterial }}</b><p>{{ productProfile.image }}</p><small class="material-prompt-proof">已写入 AI 生成提示词 · {{ materialPromptSummary }}</small><small>推荐成品规格 · {{ selectedProductSize }}</small><small>AI 会自动加入可生产结构建议；原创设计、授权核验与最终打样仍由你确认。</small></aside></section>
       <div class="model-mode-switch three-modes"><button type="button" :class="{active:modelForm.mode==='image_to_model'}" @click="modelForm.mode='image_to_model'"><b>图片生成 3D</b><span>上传产品图，快速建立立体原型</span></button><button type="button" :class="{active:modelForm.mode==='multiview_to_model'}" @click="modelForm.mode='multiview_to_model'"><b>多视图生成 3D</b><span>上传多个视角，模型更完整</span></button><button type="button" :class="{active:modelForm.mode==='text_to_model'}" @click="modelForm.mode='text_to_model'"><b>文字生成 3D</b><span>用描述直接构建产品模型</span></button></div>
       <section class="material-picker"><div><span>表面材质偏好</span><b>选择模型的视觉材质与 PBR 表面质感</b><small>产品具体材质与这里的表面质感都会写入实际 3D 提示词；图生 / 多视图以输入图为主，材质目标会同步提交给建模任务。</small><small class="material-prompt-proof">3D 图案工艺约束已启用：扁平色块、矢量图案、粗描边、无渐变、贴纸化图案与正交参考视图；真实材质反光会保留。</small></div><div class="material-chips"><button v-for="item in materialOptions" :key="item.label" type="button" :class="{ active: modelForm.materialLabel===item.label }" @click="chooseModelMaterial(item.label)">{{ item.label }}</button></div></section>
       <section class="model-quality-picker" aria-label="3D 生成质量"><div><span>生成档位</span><b>先用轻量版确认造型，再按需生成打样高精版</b><small>快速预览更适合手机打开和换材质；打样高精版适合确认后审核、生产和留档。</small></div><div class="model-quality-options"><button v-for="item in modelQualityOptions" :key="item.key" type="button" :class="{ active: modelQuality===item.key }" @click="modelQuality=item.key"><b>{{ item.title }}</b><small>{{ item.desc }}</small></button></div></section>
