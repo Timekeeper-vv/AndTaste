@@ -2,6 +2,8 @@ import { DEFAULT_SEEDREAM_IMAGE_SIZE, buildCreativeGenerationRequest, request, u
 
 export interface ConversationSession {
   id: number
+  projectId?: number
+  versionId?: number
   sessionNo?: string
   mode?: 'template' | 'text' | 'image' | string
   productType?: string
@@ -23,7 +25,7 @@ export const createConversation = (mode?: 'template' | 'text' | 'image') => requ
 })
 export const getConversations = () => request<ConversationSession[]>('/api/creative/ai/conversations')
 export const getConversation = (id: number | string) => request<ConversationSession>(`/api/creative/ai/conversations/${encodeURIComponent(String(id))}`)
-export const saveConversationEvent = (id: number | string, body: { step: string; eventType: string; payload?: Record<string, any> }) => request<ConversationSession>(
+export const saveConversationEvent = (id: number | string, body: { step: string; eventType: string; payload?: Record<string, any>; idempotencyKey?: string }) => request<ConversationSession>(
   `/api/creative/ai/conversations/${encodeURIComponent(String(id))}/events`,
   { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
 )
@@ -270,7 +272,12 @@ export const createModel = (body: any) => request<any>('/api/creative/ai/tripo/g
 export const getTripoModelTask = (jobId: number | string) => request<any>(
   `/api/creative/ai/tripo/tasks/${encodeURIComponent(String(jobId))}`,
 )
-export const uploadReference = (filePath: string) => uploadFile<any>('/api/creative/ai/assets/upload', filePath)
+export const uploadReference = (filePath: string, projectId?: number | string | null, versionId?: number | string | null) => uploadFile<any>(
+  '/api/creative/ai/assets/upload', filePath, 'file', {
+    ...(projectId ? { projectId: String(projectId) } : {}),
+    ...(versionId ? { versionId: String(versionId) } : {}),
+  },
+)
 
 export interface ProfessionalSubmission {
   id?: number
@@ -334,6 +341,39 @@ export interface ProductionFeasibilityResult {
   disclaimer?: string
 }
 
+export interface CreativePreflightCheck {
+  key: string
+  label: string
+  status: 'passed' | 'needs_review' | 'blocked' | string
+  detail: string
+  blocking?: boolean
+}
+
+export interface CreativePreflightReport {
+  reportId?: number
+  projectId: number | string
+  versionId: number | string
+  status: 'passed' | 'needs_review' | 'blocked' | 'not_run' | string
+  score?: number
+  versionFreezeHash?: string
+  checks?: CreativePreflightCheck[]
+  issues?: string[]
+  suggestions?: string[]
+  context?: Record<string, any>
+  createdAt?: string
+  updatedAt?: string
+}
+
+/** 对指定项目版本运行可追溯的生产预检，结果会写入项目时间线。 */
+export const runCreativePreflight = (projectId: number | string, versionId: number | string, body?: { assetId?: number | string; bundleId?: number | string }) => request<CreativePreflightReport>(
+  `/api/creative/projects/${encodeURIComponent(String(projectId))}/versions/${encodeURIComponent(String(versionId))}/preflight`,
+  { method: 'POST', data: body || {}, header: { 'content-type': 'application/json' } },
+)
+
+export const getLatestCreativePreflight = (projectId: number | string, versionId: number | string) => request<CreativePreflightReport>(
+  `/api/creative/projects/${encodeURIComponent(String(projectId))}/versions/${encodeURIComponent(String(versionId))}/preflight/latest`,
+)
+
 /** 在提交 3D 前做非阻断的生产可行性初筛，最终仍以打样和工艺人员复核为准。 */
 export const assessProductionFeasibility = (body: ProductionFeasibilityRequest) => request<ProductionFeasibilityResult>(
   '/api/creative/ai/production-feasibility',
@@ -346,6 +386,8 @@ export interface ReviewSubmission {
   note?: string
   /** Selected from the public creator-task board; server verifies its channel. */
   campaignKey?: string
+  projectId?: number | string
+  versionId?: number | string
 }
 
 export const submitAssetReview = (assetId: number | string, body: ReviewSubmission) => request<any>(
@@ -361,6 +403,8 @@ export interface MultiViewBundleImage extends SeedreamMultiViewImage {
 export interface MultiViewBundle {
   id: number
   bundleId?: number
+  projectId?: number
+  versionId?: number
   bundleNo?: string
   inputAssetId?: number
   productKey?: string
@@ -384,6 +428,8 @@ export interface MultiViewBundle {
 
 export const createMultiViewBundle = (body: {
   inputAssetId: number | string
+  projectId?: number | string
+  versionId?: number | string
   productKey?: string
   productName?: string
   material?: string
@@ -404,6 +450,10 @@ export const submitMultiViewBundleReview = (bundleId: number | string, body: Rev
 export interface ProductionSubmission {
   assetId?: number
   bundleId?: number
+  projectId?: number | string
+  versionId?: number | string
+  /** Stable key kept by the submit page so a retry cannot create another request. */
+  idempotencyKey?: string
   requestType: 'sample' | 'bulk'
   title?: string
   quantity: number
@@ -429,6 +479,162 @@ export const createCommercialGuidancePaymentOrder = (guidanceId: number | string
 export const submitProductionRequest = (body: ProductionSubmission) => request<any>('/api/creative/ai/consumer-production/submit', {
   method: 'POST', data: body, header: { 'content-type': 'application/json' },
 })
+
+export interface CreativeWorkflowBlocker {
+  code: string
+  label: string
+  reason?: string
+  action?: string
+}
+
+export interface CreativeWorkflowFlow {
+  code?: string
+  label?: string
+  phase?: string
+  phaseLabel?: string
+  nextAction?: string
+  nextActionCode?: string
+  blocked?: boolean
+  blockers?: CreativeWorkflowBlocker[]
+  availableActions?: string[]
+  progressPercent?: number
+  updatedAt?: string
+}
+
+/** One read model for review, payment, sampling, feedback, logistics and bulk handoff. */
+export interface CreativeWorkflowDetail {
+  request?: Record<string, any> | null
+  project?: Record<string, any> | null
+  version?: Record<string, any> | null
+  snapshot?: Record<string, any> | null
+  preflight?: Record<string, any> | null
+  review?: Record<string, any> | null
+  payment?: Record<string, any> | null
+  sample?: { events?: SampleLifecycleEvent[]; count?: number } | null
+  logistics?: SampleLogistics | null
+  timeline?: Array<Record<string, any>>
+  flow?: CreativeWorkflowFlow
+}
+
+export const getCreativeWorkflowDetail = (requestId: number | string) => request<CreativeWorkflowDetail>(
+  `/api/creative/workflow/requests/${encodeURIComponent(String(requestId))}`,
+)
+
+export interface SampleLifecycleEvent {
+  id: number | string
+  requestId?: number | string
+  eventType?: string
+  decision?: 'accept' | 'revision_required' | 'reject' | string
+  rating?: number | null
+  comment?: string
+  issueTagsJson?: string | string[] | null
+  evidenceAssetIdsJson?: string | string[] | null
+  payloadJson?: string | Record<string, any> | null
+  createdBy?: number | string
+  createdAt?: string
+}
+
+export interface SampleLifecycle {
+  id: number | string
+  requestNo?: string
+  requestType?: 'sample' | 'bulk' | string
+  title?: string
+  assetId?: number | string
+  bundleId?: number | string
+  status?: string
+  samplePaymentStatus?: string
+  projectId?: number | string
+  versionId?: number | string
+  sampleWorkflowStatus?: 'not_started' | 'received' | 'revision_required' | 'rejected' | 'accepted' | 'bulk_unlocked' | string
+  sampleReceivedAt?: string
+  sampleAcceptedAt?: string
+  sampleRevisionCount?: number
+  bulkUnlockedAt?: string
+  bulkUnlockedBy?: number | string
+  events?: SampleLifecycleEvent[]
+}
+
+/** Request-scoped sample shipment projection shared by factory and C端. */
+export interface SampleLogisticsTrace {
+  id: number | string
+  logisticsId?: number | string
+  requestId?: number | string
+  eventType?: string
+  status?: string
+  alertLevel?: 'normal' | 'warning' | 'exception' | string
+  location?: string
+  content?: string
+  payloadJson?: string | Record<string, any> | null
+  createdBy?: number | string
+  createdAt?: string
+}
+
+export interface SampleLogistics {
+  id?: number | string
+  logisticsId?: number | string
+  requestId?: number | string
+  requestNo?: string
+  userId?: number | string
+  carrierCode?: string
+  carrierName?: string
+  trackingNo?: string
+  status?: 'pending' | 'shipped' | 'in_transit' | 'delivering' | 'signed' | 'exception' | 'returned' | string
+  latestTrace?: string
+  alertLevel?: 'normal' | 'warning' | 'exception' | string
+  alertStatus?: 'open' | 'acknowledged' | 'resolved' | string
+  exceptionNote?: string
+  shippedAt?: string
+  signedAt?: string
+  estimatedArrival?: string
+  lastSyncedAt?: string
+  createdAt?: string
+  updatedAt?: string
+  traces?: SampleLogisticsTrace[]
+}
+
+function sampleLifecyclePath(projectId: number | string, versionId: number | string, requestId: number | string, action = '') {
+  const base = `/api/creative/projects/${encodeURIComponent(String(projectId))}/versions/${encodeURIComponent(String(versionId))}/sample-lifecycle/${encodeURIComponent(String(requestId))}`
+  return action ? `${base}/${action}` : base
+}
+
+/** 查询样品打样后的收货、反馈、返修、验收与量产解锁状态。 */
+export const getSampleLifecycle = (projectId: number | string, versionId: number | string, requestId: number | string) => request<SampleLifecycle>(
+  sampleLifecyclePath(projectId, versionId, requestId),
+)
+
+/** Query shipment and exception state for the current user's sample request. */
+export const getSampleLogistics = (projectId: number | string, versionId: number | string, requestId: number | string) => request<SampleLogistics>(
+  sampleLifecyclePath(projectId, versionId, requestId, 'logistics'),
+)
+
+export interface SampleFeedbackPayload {
+  decision: 'accept' | 'revision_required' | 'reject'
+  rating?: number
+  comment?: string
+  issueTags?: string[]
+  evidenceAssetIds?: Array<number | string>
+}
+
+/** 提交样品反馈；accept 建议使用 acceptSample，以便记录正式验收时间。 */
+export const submitSampleFeedback = (projectId: number | string, versionId: number | string, requestId: number | string, body: SampleFeedbackPayload) => request<SampleLifecycle>(
+  sampleLifecyclePath(projectId, versionId, requestId, 'feedback'),
+  { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
+)
+
+export const requestSampleRevision = (projectId: number | string, versionId: number | string, requestId: number | string, body: Omit<SampleFeedbackPayload, 'decision' | 'rating'>) => request<SampleLifecycle>(
+  sampleLifecyclePath(projectId, versionId, requestId, 'revision'),
+  { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
+)
+
+export const acceptSample = (projectId: number | string, versionId: number | string, requestId: number | string, body: Pick<SampleFeedbackPayload, 'rating' | 'comment' | 'evidenceAssetIds'> = {}) => request<SampleLifecycle>(
+  sampleLifecyclePath(projectId, versionId, requestId, 'accept'),
+  { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
+)
+
+export const unlockSampleBulkProduction = (projectId: number | string, versionId: number | string, requestId: number | string, body: Pick<SampleFeedbackPayload, 'comment' | 'evidenceAssetIds'> = {}) => request<SampleLifecycle>(
+  sampleLifecyclePath(projectId, versionId, requestId, 'bulk-unlock'),
+  { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
+)
 
 /** 申请只读、5 分钟有效且绑定单个作品的媒体访问地址。 */
 export const getAssetPreviewAccess = (assetId: number | string) => request<{ url?: string; previewUrl?: string; accessToken?: string; expiresIn?: number }>(

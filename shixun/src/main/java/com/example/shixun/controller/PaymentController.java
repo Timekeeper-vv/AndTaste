@@ -5,6 +5,7 @@ import com.example.shixun.security.JwtService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.shixun.service.CreativeProjectService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -80,6 +81,7 @@ public class PaymentController {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final TransactionTemplate transactions;
+    private final CreativeProjectService creativeProjects;
     // One thread-safe client is shared by all payment requests so TCP/TLS and
     // HTTP/2 connections are reused under concurrent checkout traffic.
     private final HttpClient http = HttpClient.newBuilder()
@@ -118,10 +120,12 @@ public class PaymentController {
             new CreditPackage("credit_1000", "生产预备包", "适合博物馆售卖方向的批量创作", 10000, new BigDecimal("1000"))
     );
 
-    public PaymentController(JdbcTemplate jdbc, ObjectMapper mapper, PlatformTransactionManager transactionManager) {
+    public PaymentController(JdbcTemplate jdbc, ObjectMapper mapper, PlatformTransactionManager transactionManager,
+                             CreativeProjectService creativeProjects) {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.transactions = new TransactionTemplate(transactionManager);
+        this.creativeProjects = creativeProjects;
     }
 
     @GetMapping("/packages")
@@ -2424,6 +2428,26 @@ public class PaymentController {
                 long requestId = Long.parseLong(productCode.substring("sample_fee_".length()));
                 int linked = jdbc.update("UPDATE consumer_production_request SET sample_payment_status='paid',sample_paid_at=NOW(),status='processing' WHERE id=? AND sample_payment_order_no=? AND sample_payment_status IN ('pending','manual_review') AND status='approved'", requestId, orderNo);
                 if (linked != 1) throw new IllegalStateException("打样支付订单未关联到可生产申请");
+                List<Map<String,Object>> requests = jdbc.queryForList(
+                        "SELECT user_id userId,asset_id assetId FROM consumer_production_request WHERE id=?",
+                        requestId);
+                if (!requests.isEmpty()) {
+                    Map<String,Object> request = requests.get(0);
+                    request.putAll(optionalProjectVersion("consumer_production_request", "id", requestId));
+                    Long owner = nullableLong(request.get("userId"));
+                    Long projectId = nullableLong(request.get("projectId"));
+                    Long versionId = nullableLong(request.get("versionId"));
+                    if (owner != null && projectId != null && versionId != null) {
+                        try {
+                            creativeProjects.transitionProject(projectId, versionId, owner,
+                                    "sampling", "sample_payment_paid", "system", null,
+                                    Map.of("requestId", requestId, "orderNo", orderNo));
+                        } catch (RuntimeException ignored) {
+                            // Payment remains authoritative; an old request
+                            // without a valid project timeline is still paid.
+                        }
+                    }
+                }
             } catch (NumberFormatException ignored) {
                 throw new IllegalStateException("打样支付订单关联申请无效");
             }
@@ -2645,6 +2669,26 @@ public class PaymentController {
     private String requiredText(Map<String, Object> values, String key) { String value = nullableText(required(values, key)); if (blank(value)) throw new IllegalArgumentException("缺少微信字段 " + key); return value; }
     private String nullableText(Object value) { return value == null ? "" : String.valueOf(value).trim(); }
     private long toLong(Object value) { try { return new BigDecimal(String.valueOf(value)).longValueExact(); } catch (Exception e) { throw new IllegalArgumentException("金额字段无效"); } }
+    private Long nullableLong(Object value) {
+        if (value == null || String.valueOf(value).trim().isEmpty()) return null;
+        try { return new BigDecimal(String.valueOf(value)).longValueExact(); }
+        catch (Exception ignored) { return null; }
+    }
+
+    /**
+     * Project/version columns were introduced after payment requests already
+     * existed. A payment callback must remain authoritative on an older node,
+     * so absence of these optional columns only skips workflow advancement.
+     */
+    private Map<String, Object> optionalProjectVersion(String table, String idColumn, Long id) {
+        if (id == null) return Map.of();
+        try {
+            return jdbc.queryForMap("SELECT project_id projectId,version_id versionId FROM " + table
+                    + " WHERE " + idColumn + "=?", id);
+        } catch (org.springframework.dao.DataAccessException ignored) {
+            return Map.of();
+        }
+    }
     private BigDecimal decimal(Object value) { try { return value instanceof BigDecimal ? (BigDecimal) value : new BigDecimal(String.valueOf(value)); } catch (Exception e) { throw new IllegalArgumentException("金额字段无效"); } }
     private HttpRequest.Builder httpRequest(URI uri, Duration timeout) {
         return HttpRequest.newBuilder(uri).timeout(timeout);

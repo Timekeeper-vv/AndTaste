@@ -18,7 +18,7 @@ import {
   type CreativeEngineInput,
   type CreativeImageRequest,
   type CreativeProductLike,
-} from '../utils/creativeEngine'
+} from '../utils/creativeEngineRuntime'
 
 type ReadonlyValue<T> = { readonly value: T }
 
@@ -31,6 +31,8 @@ export interface MultiViewGenerationOptions {
   productSize: ReadonlyValue<string>
   prompt: ReadonlyValue<string>
   generatedAssetId: Ref<number | null>
+  projectId?: ReadonlyValue<number | null>
+  versionId?: ReadonlyValue<number | null>
   busy: Ref<boolean>
   busyMessage: Ref<string>
   multiviewImages: Ref<SeedreamMultiViewImage[]>
@@ -221,6 +223,8 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     let queueEventPromise: Promise<void> | null = null
     try {
       const request = compileMultiViewRequest({ inputAssetId, prompt: options.prompt.value, rawPrompt: options.prompt.value })
+      request.projectId = options.projectId?.value || undefined
+      request.versionId = options.versionId?.value || undefined
       const generationPrompt = request.prompt
       await options.saveEventBestEffort('multiview', 'multiview_started', {
         inputAssetId,
@@ -331,6 +335,8 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
       if (existing) return existing
       return createBundle({
         inputAssetId,
+        projectId: options.projectId?.value || undefined,
+        versionId: options.versionId?.value || undefined,
         productKey: options.productKey.value,
         productName: options.productType.value,
         material: options.material.value,
@@ -378,6 +384,8 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
       const response = await submitMultiViewBundleReview(options.multiviewBundleId.value, {
         purpose,
         museumId,
+        projectId: options.projectId?.value || undefined,
+        versionId: options.versionId?.value || undefined,
         note: '由对话式创作提交的三视图作品包',
         ...(campaign?.key ? { campaignKey: campaign.key } : {}),
       })
@@ -398,7 +406,9 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
   function applyMultiViewProduction() {
     if (!options.multiviewBundleId.value || options.multiviewBundleStatus.value !== 'approved') return
     const title = options.productType.value || '三视图作品'
-    uni.navigateTo({ url: `/pages/production/index?bundleId=${encodeURIComponent(String(options.multiviewBundleId.value))}&title=${encodeURIComponent(title)}` })
+    const projectQuery = options.projectId?.value ? `&projectId=${encodeURIComponent(String(options.projectId.value))}` : ''
+    const versionQuery = options.versionId?.value ? `&versionId=${encodeURIComponent(String(options.versionId.value))}` : ''
+    uni.navigateTo({ url: `/pages/production/index?bundleId=${encodeURIComponent(String(options.multiviewBundleId.value))}&title=${encodeURIComponent(title)}${projectQuery}${versionQuery}` })
   }
 
   function clearPendingMultiView() {

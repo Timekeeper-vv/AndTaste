@@ -53,6 +53,11 @@
         <view class="menu-copy"><text>打样费支付</text><text>审核通过后在这里完成支付</text></view>
         <text class="menu-arrow">›</text>
       </view>
+      <view class="menu-row" @tap="go('/pages/production-requests/index')">
+        <view class="menu-icon production">流</view>
+        <view class="menu-copy"><text>我的生产申请</text><text>审核、支付、制作和样品反馈统一查看</text></view>
+        <text class="arrow">›</text>
+      </view>
       <view class="menu-row" @tap="go('/pages/purpose/index')">
         <view class="menu-icon purpose">向</view>
         <view class="menu-copy"><text>切换创作模式与用途</text><text>{{ creatorModeLabel }} · 个人创作或景区、博物馆售卖</text></view>
@@ -173,7 +178,7 @@ function logout() {
 .menu-row:last-child { border-bottom: 0; }
 .menu-row:active { background: #f8f4ed; }
 .menu-icon { display: flex; align-items: center; justify-content: center; flex: none; width: 58rpx; height: 58rpx; margin-right: 19rpx; border-radius: 18rpx; font-family: "Songti SC", "STSong", serif; font-size: 27rpx; font-weight: 800; }
-.artwork { color: #55796a; background: #e8f0e9; }.credit { color: #b56b46; background: #f9ebdf; }.purpose { color: #8d7655; background: #f4efe2; }.professional { color: #a45f48; background: #f6e9e1; }.style { color: #667b95; background: #e8edf5; }.market { color: #5d7e70; background: #e6f0e8; }.orders { color: #a06249; background: #f8ebe2; }.service { color: #4f8374; background: #e4f2ed; }.rights { color: #a26047; background: #f6e9e2; }
+.artwork { color: #55796a; background: #e8f0e9; }.credit { color: #b56b46; background: #f9ebdf; }.purpose { color: #8d7655; background: #f4efe2; }.professional { color: #a45f48; background: #f6e9e1; }.style { color: #667b95; background: #e8edf5; }.market { color: #5d7e70; background: #e6f0e8; }.orders { color: #a06249; background: #f8ebe2; }.service { color: #4f8374; background: #e4f2ed; }.rights { color: #a26047; background: #f6e9e2; }.production { color: #5d7c91; background: #e7eef4; }
 .menu-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .menu-copy text:first-child { color: #33352f; font-size: 29rpx; font-weight: 700; }
 .menu-copy text:last-child { overflow: hidden; margin-top: 7rpx; color: #909087; font-size: 20rpx; text-overflow: ellipsis; white-space: nowrap; }

@@ -5,12 +5,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
 import com.example.shixun.service.CreativeBrief;
+import com.example.shixun.service.CreativeProjectService;
 import com.example.shixun.service.CreativePromptCompiler;
 import com.example.shixun.service.GenerationCommand;
 import com.example.shixun.service.ProductPromptPolicy;
 import com.example.shixun.service.ReferenceImagePreparationService;
+import com.example.shixun.service.ai.ArkImageQueueService;
+import com.example.shixun.service.ai.ArkImageWorkflowService;
+import com.example.shixun.service.ai.SeedreamProviderClient;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +23,8 @@ import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -27,7 +32,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -57,9 +61,6 @@ import java.time.LocalDateTime;
 import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -105,15 +106,14 @@ public class CreativeAiController {
     private final TransactionTemplate creditTransactions;
     private final ObjectMapper mapper;
     private final JwtService jwtService;
-    private final ThreadPoolTaskExecutor arkImageGenerationExecutor;
     private final CreativePromptCompiler creativePromptCompiler;
     private final ReferenceImagePreparationService referenceImagePreparationService;
+    private final SeedreamProviderClient seedreamProviderClient;
+    private final ArkImageQueueService arkImageQueueService;
+    private final ArkImageWorkflowService arkImageWorkflowService;
+    private final CreativeProjectService creativeProjects;
+    private final com.example.shixun.service.CreativePreflightService creativePreflight;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).followRedirects(HttpClient.Redirect.NORMAL).build();
-    private final Object arkQueueSubmissionLock = new Object();
-    private final Set<Long> activeArkImageJobs = ConcurrentHashMap.newKeySet();
-    private final AtomicBoolean arkQueueRecovered = new AtomicBoolean(false);
-    private final AtomicBoolean legacyImageJobsMigrated = new AtomicBoolean(false);
-    private final AtomicBoolean arkQueueTableVerified = new AtomicBoolean(false);
 
     @Value("${siliconflow.api.key:}")
     private String siliconflowApiKey;
@@ -188,14 +188,8 @@ public class CreativeAiController {
     @Value("${volcengine.ark.api.key:${VOLCENGINE_ARK_API_KEY:}}")
     private String volcengineArkApiKey;
 
-    @Value("${volcengine.ark.images.base-url:https://ark.cn-beijing.volces.com/api/v3/images/generations}")
-    private String volcengineArkImagesUrl;
-
     @Value("${volcengine.ark.seedream.image.model:${VOLCENGINE_ARK_SEEDREAM_IMAGE_MODEL:doubao-seedream-5-0-pro-260628}}")
     private String volcengineArkSeedreamImageModel;
-
-    @Value("${volcengine.ark.queue.concurrency:1}")
-    private int arkQueueConcurrency;
 
     @Value("${volcengine.ark.queue.retry-attempts:3}")
     private int arkQueueRetryAttempts;
@@ -227,16 +221,24 @@ public class CreativeAiController {
 
     public CreativeAiController(JdbcTemplate jdbc, ObjectMapper mapper, JwtService jwtService,
                                 PlatformTransactionManager transactionManager,
-                                @Qualifier("arkImageGenerationExecutor") ThreadPoolTaskExecutor arkImageGenerationExecutor,
                                 CreativePromptCompiler creativePromptCompiler,
-                                ReferenceImagePreparationService referenceImagePreparationService) {
+                                ReferenceImagePreparationService referenceImagePreparationService,
+                                SeedreamProviderClient seedreamProviderClient,
+                                ArkImageQueueService arkImageQueueService,
+                                ArkImageWorkflowService arkImageWorkflowService,
+                                CreativeProjectService creativeProjects,
+                                com.example.shixun.service.CreativePreflightService creativePreflight) {
         this.jdbc = jdbc;
         this.creditTransactions = new TransactionTemplate(transactionManager);
         this.mapper = mapper;
         this.jwtService = jwtService;
-        this.arkImageGenerationExecutor = arkImageGenerationExecutor;
         this.creativePromptCompiler = creativePromptCompiler;
         this.referenceImagePreparationService = referenceImagePreparationService;
+        this.seedreamProviderClient = seedreamProviderClient;
+        this.arkImageQueueService = arkImageQueueService;
+        this.arkImageWorkflowService = arkImageWorkflowService;
+        this.creativeProjects = creativeProjects;
+        this.creativePreflight = creativePreflight;
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
@@ -317,6 +319,131 @@ public class CreativeAiController {
                 ? principal.userId() : null;
     }
 
+    /**
+     * Project/version ids are client-visible references, so validate ownership
+     * before they reach an asynchronous job or an asset row. The service also
+     * fills in the current version when a legacy client sends only projectId.
+     */
+    private CreativeProjectService.ProjectRef resolveProjectRef(Long projectId, Long versionId, Long userId) {
+        try {
+            return creativeProjects.resolveOwnedRef(projectId, versionId, userId);
+        } catch (NoSuchElementException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        }
+    }
+
+    /**
+     * Resolve the canonical project/version from a request or an already
+     * linked asset. Review and production boundaries use this one helper so a
+     * stale client cannot silently attach a new record to another version.
+     */
+    private CreativeProjectService.ProjectRef resolveWorkflowProject(Long projectId, Long versionId,
+                                                                      Long assetId, Long userId) {
+        CreativeProjectService.ProjectRef explicit = resolveProjectRef(projectId, versionId, userId);
+        if (explicit != null) {
+            if (assetId != null) {
+                try {
+                    List<Map<String, Object>> rows = jdbc.queryForList(
+                            "SELECT project_id projectId,version_id versionId FROM digital_asset WHERE id=? AND created_by=?",
+                            assetId, userId);
+                    if (!rows.isEmpty()) {
+                        Long assetProject = numberAsLong(rows.get(0).get("projectId"));
+                        Long assetVersion = numberAsLong(rows.get(0).get("versionId"));
+                        if ((assetProject != null && assetProject.longValue() != explicit.projectId())
+                                || (assetVersion != null && assetVersion.longValue() != explicit.versionId())) {
+                            throw new IllegalArgumentException("作品资产与项目版本不一致");
+                        }
+                    }
+                } catch (org.springframework.dao.DataAccessException ignored) {
+                    // Optional project columns may not exist during a rolling
+                    // migration; explicit ownership still remains validated.
+                }
+            }
+            return explicit;
+        }
+        if (assetId == null) return null;
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT project_id projectId,version_id versionId FROM digital_asset WHERE id=? AND created_by=?",
+                    assetId, userId);
+            if (rows.isEmpty()) return null;
+            Long inheritedProject = numberAsLong(rows.get(0).get("projectId"));
+            Long inheritedVersion = numberAsLong(rows.get(0).get("versionId"));
+            return resolveProjectRef(inheritedProject, inheritedVersion, userId);
+        } catch (org.springframework.dao.DataAccessException ignored) {
+            // Rolling deployments may not have the optional project columns.
+            return null;
+        }
+    }
+
+    private CreativeProjectService.ProjectRef resolveWorkflowProjectFromBundle(Map<String, Object> bundle,
+                                                                                Long userId) {
+        if (bundle == null) return null;
+        Long projectId = numberAsLong(bundle.get("projectId"));
+        Long versionId = numberAsLong(bundle.get("versionId"));
+        Long assetId = numberAsLong(bundle.get("inputAssetId"));
+        return resolveWorkflowProject(projectId, versionId, assetId, userId);
+    }
+
+    /**
+     * Project/version links were added after the original production schema.
+     * Keep the link lookup behind this small compatibility boundary so a
+     * rolling deployment can still review legacy assets and requests while the
+     * migration is being applied.  The table/column names are constants at all
+     * call sites; values remain parameterized.
+     */
+    private Map<String, Object> optionalProjectVersion(String table, String idColumn, Long id) {
+        if (id == null) return Map.of();
+        try {
+            return jdbc.queryForMap("SELECT project_id projectId,version_id versionId FROM " + table
+                    + " WHERE " + idColumn + "=?", id);
+        } catch (org.springframework.dao.DataAccessException ignored) {
+            return Map.of();
+        }
+    }
+
+    private void recordWorkflowEvent(CreativeProjectService.ProjectRef project, Long userId,
+                                     String eventType, String actorType, Long actorId,
+                                     Map<String, Object> payload) {
+        if (project == null) return;
+        creativeProjects.recordWorkflowEvent(project.projectId(), project.versionId(), userId,
+                eventType, actorType, actorId, payload);
+    }
+
+    private void advanceGeneration(CreativeProjectService.ProjectRef project, Long userId,
+                                   String phase, String eventType, Map<String, Object> payload) {
+        if (project == null) return;
+        creativeProjects.transitionProject(project.projectId(), project.versionId(), userId,
+                phase, eventType, "user", userId, payload == null ? Map.of() : payload);
+    }
+
+    private void normalizeProjectRef(GenerateImageRequest request, Long userId) {
+        if (request == null) return;
+        CreativeProjectService.ProjectRef ref = resolveProjectRef(request.projectId, request.versionId, userId);
+        if (ref != null) {
+            request.projectId = ref.projectId();
+            request.versionId = ref.versionId();
+        }
+    }
+
+    private void normalizeProjectRef(MultiViewImageRequest request, Long userId) {
+        if (request == null) return;
+        CreativeProjectService.ProjectRef ref = resolveProjectRef(request.projectId, request.versionId, userId);
+        if (ref != null) {
+            request.projectId = ref.projectId();
+            request.versionId = ref.versionId();
+        }
+    }
+
+    private void normalizeProjectRef(Generate3dRequest request, Long userId) {
+        if (request == null) return;
+        CreativeProjectService.ProjectRef ref = resolveProjectRef(request.projectId, request.versionId, userId);
+        if (ref != null) {
+            request.projectId = ref.projectId();
+            request.versionId = ref.versionId();
+        }
+    }
+
     private void requireAssetAccess(Long assetId) {
         if (assetId == null) throw new IllegalArgumentException("缺少作品ID");
         JwtService.Claims principal = authenticatedPrincipal();
@@ -324,8 +451,35 @@ public class CreativeAiController {
         Long userId = requirePersistedAuthenticatedUser();
         Long ownerId = assetOwnerId(assetId);
         if (ownerId == null || !ownerId.equals(userId)) {
+            if (isSampleLifecycleEvidenceAsset(assetId, userId)) return;
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权访问其他用户的作品");
         }
+    }
+
+    /** Factory evidence is uploaded by a staff account but is visible only to
+     * the customer who owns the sample lifecycle event that references it. */
+    private boolean isSampleLifecycleEvidenceAsset(Long assetId, Long userId) {
+        if (assetId == null || userId == null) return false;
+        try {
+            List<String> rawValues = jdbc.queryForList(
+                    "SELECT evidence_asset_ids_json FROM creative_sample_lifecycle_event "
+                            + "WHERE user_id=? AND evidence_asset_ids_json IS NOT NULL",
+                    String.class, userId);
+            for (String raw : rawValues) {
+                JsonNode values = storedJsonNode(raw);
+                if (values == null || !values.isArray()) continue;
+                for (JsonNode value : values) {
+                    if ((value.isNumber() && value.longValue() == assetId)
+                            || (value.isTextual() && String.valueOf(assetId).equals(value.asText()))) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // A rolling deployment may not have the lifecycle table yet; fail
+            // closed and keep the normal owner check authoritative.
+        }
+        return false;
     }
 
     /**
@@ -857,6 +1011,7 @@ public class CreativeAiController {
     @PostMapping("/volcengine/seedream/multiview")
     public Map<String,Object> volcengineSeedreamMultiview(@RequestBody MultiViewImageRequest req) throws Exception {
         Long ownerUserId = authenticatedUserId();
+        normalizeProjectRef(req, ownerUserId);
         GenerationCommand command = compileGenerationCommand(req);
         assertCompliantPrompt(command.brief().rawPrompt(), command.category());
         assertCompliantPrompt(command.compiledPrompt(), command.category());
@@ -868,6 +1023,11 @@ public class CreativeAiController {
         }
         String size = blank(req.size) ? "2K" : req.size.trim();
         if (!Set.of("1K", "2K").contains(size)) throw new IllegalArgumentException("多视图仅支持 1K 或 2K 尺寸");
+        CreativeProjectService.ProjectRef workflowProject = resolveProjectRef(req.projectId, req.versionId, ownerUserId);
+        advanceGeneration(workflowProject, ownerUserId, "generation", "generation_started",
+                Map.of("inputAssetId", req.inputAssetId, "mode", "multi_view"));
+        advanceGeneration(workflowProject, ownerUserId, "multiview", "multiview_generation_started",
+                Map.of("inputAssetId", req.inputAssetId, "viewCount", req.viewCount == null ? 4 : req.viewCount));
         // Seedream is account-limited; every multiview request must use the
         // durable single-concurrency queue, including older clients that omit
         // the queue flag.
@@ -894,34 +1054,22 @@ public class CreativeAiController {
                     + "Show the full centered product at the same scale on a clean light-neutral studio background. "
                     + "No collage, no split screen, no extra object, no human, no packaging mockup, no text, no logo, no watermark. "
                     + "Product direction: " + basePrompt;
-            Map<String,Object> payload = new LinkedHashMap<>();
-            payload.put("model", volcengineArkSeedreamImageModel);
-            payload.put("prompt", viewPrompt);
-            payload.put("image", referenceImage);
-            payload.put("response_format", "url");
-            payload.put("stream", false);
-            payload.put("watermark", Boolean.TRUE.equals(req.watermark));
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(volcengineArkImagesUrl))
-                    .header("Authorization", "Bearer " + resolvedArkApiKey())
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
-                    .build();
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw arkImageHttpError(response.statusCode(), response.body());
-            }
-            String remoteUrl = extractImageUrl(mapper.readTree(response.body()));
+            JsonNode generated = seedreamProviderClient.createImageToImage(
+                    resolvedArkApiKey(), viewPrompt, referenceImage, size,
+                    Boolean.TRUE.equals(req.watermark), null, null);
+            String remoteUrl = extractImageUrl(generated);
             if (blank(remoteUrl)) throw new IllegalStateException("多视图服务未返回" + labels.get(view) + "图地址");
             String localUrl = saveRemoteImage(remoteUrl, "ark-seedream-multiview-" + view + "-", ".jpg");
             Map<String,Object> metadata = new LinkedHashMap<>();
             metadata.put("provider", "volcengine_ark"); metadata.put("model", volcengineArkSeedreamImageModel);
             metadata.put("view", view); metadata.put("remoteUrl", remoteUrl); metadata.put("multiView", true);
             addProductIdentity(metadata, req.productKey, req.productCategory, req.material, req.productSize);
+            addProjectIdentity(metadata, req.projectId, req.versionId);
             metadata.put("createdByUserId", ownerUserId);
             if (currentConsumerUserIdOrNull() != null) metadata.put("consumerWork", true);
             Long assetId = createAsset("AI 多视图参考 · " + labels.get(view), "image", "ai_generated", localUrl, localUrl,
                     viewPrompt, null, null, req.inputAssetId, "jpg", "AI生成,火山方舟,Seedream,多视图,3D参考," + labels.get(view), metadata);
+            creativeProjects.bindAsset(assetId, req.projectId, req.versionId, req.inputAssetId);
             Map<String,Object> item = new LinkedHashMap<>();
             item.put("view", view); item.put("label", labels.get(view)); item.put("assetId", assetId);
             addSignedAssetFields(item, assetId, "image");
@@ -1048,6 +1196,7 @@ public class CreativeAiController {
     @PostMapping("/ark/text-to-image")
     public Map<String, Object> arkTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
         Long ownerUserId = authenticatedUserId();
+        normalizeProjectRef(req, ownerUserId);
         Long consumerUserId = currentConsumerUserIdOrNull();
         GenerationCommand command = compileGenerationCommand(req);
         CreativeBrief brief = command.brief();
@@ -1065,7 +1214,12 @@ public class CreativeAiController {
         String format = "jpg".equalsIgnoreCase(nullToEmpty(req.imagenOutputFormat)) ? "jpg" : "png";
         String negative = mergeNegative(req.negativePrompt,
                 mergeNegative(command.negativePrompt(), (String) style.get("negativePrompt")));
-        synchronized (arkQueueSubmissionLock) {
+        String queuedPrompt = finalPrompt;
+        String queuedNegative = negative;
+        CreativeProjectService.ProjectRef workflowProject = resolveProjectRef(req.projectId, req.versionId, ownerUserId);
+        advanceGeneration(workflowProject, ownerUserId, "generation", "generation_started",
+                Map.of("productKey", firstNonBlank(req.productKey, ""), "inputAssetId", req.inputAssetId == null ? 0L : req.inputAssetId));
+        return arkImageQueueService.withSubmissionLock(() -> {
             List<Map<String, Object>> active = jdbc.queryForList(
                     "SELECT id,job_type jobType,prompt,product_key productKey FROM ai_generation_job " +
                     "WHERE created_by=? AND provider='volcengine_ark' " +
@@ -1075,7 +1229,7 @@ public class CreativeAiController {
             if (!active.isEmpty()) {
                 Map<String, Object> existing = active.get(0);
                 boolean sameRequest = "text_to_image".equals(str(existing.get("jobType")))
-                        && finalPrompt.equals(str(existing.get("prompt")))
+                        && queuedPrompt.equals(str(existing.get("prompt")))
                         && Objects.equals(nullToEmpty(brief.productKey()), nullToEmpty(str(existing.get("productKey"))));
                 if (!sameRequest) {
                     throw new IllegalStateException("你已有一项图片正在排队或生成，请等待完成后再提交新作品");
@@ -1100,8 +1254,10 @@ public class CreativeAiController {
             requestPayload.put("policyVersion", command.policyVersion());
             Long jobId;
             try {
-                jobId = createArkQueuedJob(jobNo, "text_to_image", req.styleId, null, finalPrompt, negative, size,
+                jobId = arkImageQueueService.createQueuedJob(jobNo, volcengineArkSeedreamImageModel,
+                        "text_to_image", req.styleId, null, queuedPrompt, queuedNegative, size,
                         brief.productKey(), brief.category(), brief.material(), ownerUserId, creditTxId, requestPayload);
+                creativeProjects.bindJob(jobId, req.projectId, req.versionId, null);
                 linkCreditTransaction(creditTxId, jobId, null);
             } catch (Exception e) {
                 refundConsumerCredit(creditTxId, safeMessage(e));
@@ -1110,7 +1266,7 @@ public class CreativeAiController {
             Map<String, Object> response = arkImageJobResponse(jobId);
             addGenerationCommandFields(response, command);
             return response;
-        }
+        });
     }
 
     @GetMapping("/ark/image-jobs/{jobId}")
@@ -1127,214 +1283,72 @@ public class CreativeAiController {
 
     @Scheduled(fixedDelayString = "${volcengine.ark.queue.dispatch-interval-ms:1000}")
     public void dispatchArkImageQueue() {
-        if (!arkQueueTableVerified.get()) {
-            if (!arkQueueTableAvailable()) return;
-            arkQueueTableVerified.set(true);
-        }
-        if (legacyImageJobsMigrated.compareAndSet(false, true)) {
-            // Only the previous SiliconFlow image queue was replaced by this
-            // Ark queue. Never rewrite jobs owned by another provider: those
-            // providers may still have their own poller or paid request in
-            // flight, and changing their provider here would orphan/duplicate
-            // the request. SiliconFlow text/image jobs are safe to resume via
-            // the compatible Ark worker after this release.
-            jdbc.update("UPDATE ai_generation_job SET provider='volcengine_ark',model_name=?,status='queued'," +
-                            "progress=0,started_at=NULL,error_message='已切换到火山方舟 Seedream 5.0 队列' " +
-                            "WHERE provider='siliconflow' AND job_type IN ('text_to_image','image_to_image','multi_view') " +
-                            "AND status IN ('queued','running') AND output_asset_id IS NULL",
-                    volcengineArkSeedreamImageModel);
-        }
-        if (arkQueueRecovered.compareAndSet(false, true)) {
-            jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
-                            "error_message='服务重启后已自动恢复排队' WHERE provider='volcengine_ark' " +
-                            "AND job_type IN ('text_to_image','image_to_image','multi_view') " +
-                            "AND status='running' AND output_asset_id IS NULL");
-        }
-        int concurrency = normalizedArkQueueConcurrency();
-        int available = concurrency - activeArkImageJobs.size();
-        if (available <= 0) return;
-        List<Long> queued = jdbc.queryForList(
-                "SELECT id FROM ai_generation_job WHERE provider='volcengine_ark' " +
-                        "AND job_type IN ('text_to_image','image_to_image','multi_view') " +
-                        "AND status='queued' AND output_asset_id IS NULL " +
-                        "ORDER BY id LIMIT " + available,
-                Long.class);
-        for (Long jobId : queued) {
-            int claimed = jdbc.update("UPDATE ai_generation_job SET status='running',progress=10," +
-                            "started_at=COALESCE(started_at,NOW()),error_message=NULL " +
-                            "WHERE id=? AND status='queued'", jobId);
-            if (claimed != 1 || !activeArkImageJobs.add(jobId)) continue;
-            try {
-                arkImageGenerationExecutor.execute(() -> {
-                    try {
-                        processArkImageJob(jobId);
-                    } finally {
-                        activeArkImageJobs.remove(jobId);
-                    }
-                });
-            } catch (RuntimeException e) {
-                activeArkImageJobs.remove(jobId);
-                jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
-                        "error_message='生成执行器繁忙，已自动重新排队' WHERE id=? AND status='running'", jobId);
-            }
-        }
-    }
-
-    private boolean arkQueueTableAvailable() {
-        try {
-            Integer count = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM information_schema.tables WHERE LOWER(table_name)=LOWER(?)",
-                    Integer.class, "ai_generation_job");
-            return count != null && count > 0;
-        } catch (Exception ignored) {
-            return false;
-        }
+        arkImageQueueService.dispatch(volcengineArkSeedreamImageModel, this::processArkImageJob);
     }
 
     private void processArkImageJob(Long jobId) {
-        Map<String, Object> job;
-        try {
-            job = jdbc.queryForMap("SELECT id,job_no jobNo,model_name modelName,style_id styleId," +
-                            "job_type jobType,input_asset_id inputAssetId,prompt,negative_prompt negativePrompt,export_formats exportFormats," +
-                            "product_key productKey,product_name productName,product_material productMaterial," +
-                            "created_by createdBy,credit_transaction_id creditTransactionId," +
-                            "request_payload_json requestPayloadJson,attempt_count attemptCount,status " +
-                            "FROM ai_generation_job WHERE id=?", jobId);
-        } catch (Exception e) {
-            return;
-        }
-        if (!"running".equals(str(job.get("status")))) return;
-        Long creditTxId = numberAsLong(job.get("creditTransactionId"));
-        Long ownerUserId = numberAsLong(job.get("createdBy"));
-        try {
-            if (blank(resolvedArkApiKey())) throw new IllegalStateException("未配置火山方舟 Ark API Key");
-            int attempts = job.get("attemptCount") instanceof Number ? ((Number) job.get("attemptCount")).intValue() : 0;
-            int maxAttempts = Math.max(1, Math.min(arkQueueRetryAttempts, 6));
-            JsonNode generated = null;
-            while (attempts < maxAttempts) {
-                attempts++;
-                jdbc.update("UPDATE ai_generation_job SET attempt_count=?,progress=20,error_message=NULL WHERE id=?", attempts, jobId);
-                try {
-            String jobType = str(job.get("jobType"));
-            if ("text_to_image".equals(jobType)) {
-                generated = createArkTextImage(str(job.get("prompt")), normalizedArkImageSize(job.get("exportFormats")), str(job.get("negativePrompt")));
-            } else if ("image_to_image".equals(jobType)) {
-                GenerateImageRequest request = restoreQueuedGenerateRequest(job);
-                Map<String, Object> result = generateArkImageToImage(job, request);
-                jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,result_payload_json=?,status='succeeded'," +
-                                "progress=100,error_message=NULL,finished_at=NOW() WHERE id=?",
-                        numberAsLong(result.get("assetId")), mapper.writeValueAsString(result), jobId);
-                completeConsumerCredit(creditTxId, jobId, numberAsLong(result.get("assetId")));
-                return;
-            } else if ("multi_view".equals(jobType)) {
-                MultiViewImageRequest request = restoreQueuedMultiViewRequest(job);
-                Map<String, Object> result = generateArkMultiView(job, request);
-                jdbc.update("UPDATE ai_generation_job SET output_asset_id=NULL,result_payload_json=?,status='succeeded'," +
-                                "progress=100,error_message=NULL,finished_at=NOW() WHERE id=?",
-                        mapper.writeValueAsString(result), jobId);
-                return;
-            } else {
-                throw new IllegalStateException("不支持的 Seedream 图片任务：" + jobType);
-            }
-                    break;
-                } catch (ArkRateLimitException e) {
-                    if (attempts >= maxAttempts) throw e;
-                    long delaySeconds = Math.max(1, Math.min(arkQueueRetryDelaySeconds, 30)) * attempts;
-                    jdbc.update("UPDATE ai_generation_job SET progress=10,error_message=? WHERE id=?",
-                            "模型限流，" + delaySeconds + " 秒后自动重试（" + attempts + "/" + maxAttempts + "）", jobId);
-                    try {
-                        TimeUnit.SECONDS.sleep(delaySeconds);
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        jdbc.update("UPDATE ai_generation_job SET status='queued',progress=0,started_at=NULL," +
-                                "error_message='服务停止，任务已自动重新排队' WHERE id=? AND status='running'", jobId);
-                        return;
+        arkImageWorkflowService.process(jobId, resolvedArkApiKey(), arkQueueRetryAttempts,
+                arkQueueRetryDelaySeconds, new ArkImageWorkflowService.Operations() {
+                    @Override
+                    public Map<String, Object> generateImageToImage(Map<String, Object> job) throws Exception {
+                        return CreativeAiController.this.generateArkImageToImage(
+                                job, restoreQueuedGenerateRequest(job));
                     }
-                }
-            }
-            if (generated == null) throw new IllegalStateException("火山方舟未返回图片结果");
 
-            jdbc.update("UPDATE ai_generation_job SET progress=70,error_message=NULL WHERE id=?", jobId);
-            String remoteImage = extractImageUrl(generated);
-            String requestedFormat = requestPayloadText(job.get("requestPayloadJson"), "requestedFormat");
-            String format = normalizedArkOutputFormat(generated, requestedFormat);
-            String localImage = saveRemoteImage(remoteImage, "ark-seedream-", "." + format);
-            jdbc.update("UPDATE ai_generation_job SET progress=85 WHERE id=?", jobId);
+                    @Override
+                    public Map<String, Object> generateMultiView(Map<String, Object> job) throws Exception {
+                        return CreativeAiController.this.generateArkMultiView(
+                                job, restoreQueuedMultiViewRequest(job));
+                    }
 
-            Map<String, Object> metadata = new LinkedHashMap<>();
-            metadata.put("provider", "volcengine_ark");
-            metadata.put("model", str(job.get("modelName")));
-            metadata.put("remoteImage", remoteImage);
-            metadata.put("imageSize", normalizedArkImageSize(job.get("exportFormats")));
-            metadata.put("watermark", true);
-            metadata.put("aiGenerated", true);
-            String policyVersion = requestPayloadText(job.get("requestPayloadJson"), "policyVersion");
-            if (!blank(policyVersion)) metadata.put("policyVersion", policyVersion);
-            addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")),
-                    str(job.get("productMaterial")), requestPayloadText(job.get("requestPayloadJson"), "productSize"));
-            if (ownerUserId != null) {
-                metadata.put("createdByUserId", ownerUserId);
-                if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
-            }
-            String requestedTitle = requestPayloadText(job.get("requestPayloadJson"), "title");
-            String title = blank(requestedTitle) ? "之间智造AI效果图-" + str(job.get("jobNo")) : requestedTitle.trim();
-            Long styleId = numberAsLong(job.get("styleId"));
-            Long assetId = createAsset(title, "image", "ai_generated", localImage, localImage,
-                    str(job.get("prompt")), str(job.get("negativePrompt")), styleId, null, format,
-                    "AI生成,火山方舟,豆包Seedream,文创生图", metadata);
-            jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100," +
-                    "error_message=NULL,finished_at=NOW() WHERE id=?", assetId, jobId);
-            try {
-                completeConsumerCredit(creditTxId, jobId, assetId);
-            } catch (Exception creditError) {
-                jdbc.update("UPDATE ai_generation_job SET error_message=? WHERE id=?",
-                        "作品已生成，积分结算待核对：" + safeMessage(creditError), jobId);
-            }
-        } catch (Exception e) {
-            String error = safeMessage(e);
-            try {
-                refundConsumerCredit(creditTxId, error);
-                // Do not expose a terminal failure before its reserved credit
-                // is settled. Otherwise a polling client can show a failed
-                // generation while the user's balance is still frozen.
-                jdbc.update("UPDATE ai_generation_job SET status='failed',progress=0,error_message=?,finished_at=NOW() " +
-                        "WHERE id=? AND status<>'succeeded'", error, jobId);
-            } catch (Exception refundError) {
-                jdbc.update("UPDATE ai_generation_job SET status='failed',progress=0,error_message=?,finished_at=NOW() " +
-                                "WHERE id=? AND status<>'succeeded'",
-                        error + "；积分退回待核对：" + safeMessage(refundError), jobId);
-            }
-        }
+                    @Override
+                    public Long persistTextImage(Map<String, Object> job, JsonNode generated) throws Exception {
+                        return persistArkTextImage(job, generated);
+                    }
+
+                    @Override
+                    public void completeCredit(Long creditTransactionId, Long completedJobId, Long assetId) {
+                        completeConsumerCredit(creditTransactionId, completedJobId, assetId);
+                    }
+
+                    @Override
+                    public void refundCredit(Long creditTransactionId, String reason) {
+                        refundConsumerCredit(creditTransactionId, reason);
+                    }
+                });
     }
 
-    private Long createArkQueuedJob(String jobNo, String jobType, Long styleId, Long inputAssetId,
-                                    String prompt, String negative, String size, String productKey,
-                                    String productName, String material, Long ownerUserId,
-                                    Long creditTxId, Object requestPayload) throws Exception {
-        KeyHolder kh = new GeneratedKeyHolder();
-        String payloadJson = mapper.writeValueAsString(requestPayload == null ? Map.of() : requestPayload);
-        jdbc.update(con -> {
-            PreparedStatement ps = con.prepareStatement(
-                    "INSERT INTO ai_generation_job (job_no,job_type,provider,model_name,style_id,input_asset_id," +
-                            "product_key,product_name,product_material,prompt,negative_prompt,status,progress," +
-                            "error_message,export_formats,created_by,credit_transaction_id,request_payload_json,attempt_count) " +
-                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    Statement.RETURN_GENERATED_KEYS);
-            ps.setString(1, jobNo); ps.setString(2, jobType); ps.setString(3, "volcengine_ark");
-            ps.setString(4, volcengineArkSeedreamImageModel);
-            if (styleId == null) ps.setNull(5, java.sql.Types.BIGINT); else ps.setLong(5, styleId);
-            if (inputAssetId == null) ps.setNull(6, java.sql.Types.BIGINT); else ps.setLong(6, inputAssetId);
-            ps.setString(7, blank(productKey) ? null : productKey.trim());
-            ps.setString(8, blank(productName) ? null : productName.trim());
-            ps.setString(9, blank(material) ? null : material.trim());
-            ps.setString(10, prompt); ps.setString(11, negative); ps.setString(12, "queued"); ps.setInt(13, 0);
-            ps.setNull(14, java.sql.Types.LONGVARCHAR); ps.setString(15, size);
-            if (ownerUserId == null) ps.setNull(16, java.sql.Types.BIGINT); else ps.setLong(16, ownerUserId);
-            if (creditTxId == null) ps.setNull(17, java.sql.Types.BIGINT); else ps.setLong(17, creditTxId);
-            ps.setString(18, payloadJson); ps.setInt(19, 0);
-            return ps;
-        }, kh);
-        return Objects.requireNonNull(kh.getKey()).longValue();
+    private Long persistArkTextImage(Map<String, Object> job, JsonNode generated) throws Exception {
+        Long ownerUserId = numberAsLong(job.get("createdBy"));
+        String remoteImage = extractImageUrl(generated);
+        String requestedFormat = requestPayloadText(job.get("requestPayloadJson"), "requestedFormat");
+        String format = normalizedArkOutputFormat(generated, requestedFormat);
+        String localImage = saveRemoteImage(remoteImage, "ark-seedream-", "." + format);
+        jdbc.update("UPDATE ai_generation_job SET progress=85 WHERE id=?", numberAsLong(job.get("id")));
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("provider", "volcengine_ark");
+        metadata.put("model", str(job.get("modelName")));
+        metadata.put("remoteImage", remoteImage);
+        metadata.put("imageSize", normalizedArkImageSize(job.get("exportFormats")));
+        metadata.put("watermark", true);
+        metadata.put("aiGenerated", true);
+        String policyVersion = requestPayloadText(job.get("requestPayloadJson"), "policyVersion");
+        if (!blank(policyVersion)) metadata.put("policyVersion", policyVersion);
+        addProductIdentity(metadata, str(job.get("productKey")), str(job.get("productName")),
+                str(job.get("productMaterial")), requestPayloadText(job.get("requestPayloadJson"), "productSize"));
+        if (ownerUserId != null) {
+            metadata.put("createdByUserId", ownerUserId);
+            if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
+        }
+        String requestedTitle = requestPayloadText(job.get("requestPayloadJson"), "title");
+        String title = blank(requestedTitle) ? "之间智造AI效果图-" + str(job.get("jobNo")) : requestedTitle.trim();
+        Long styleId = numberAsLong(job.get("styleId"));
+        Long assetId = createAsset(title, "image", "ai_generated", localImage, localImage,
+                str(job.get("prompt")), str(job.get("negativePrompt")), styleId, null, format,
+                "AI生成,火山方舟,豆包Seedream,文创生图", metadata);
+        creativeProjects.bindAsset(assetId, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")), null);
+        return assetId;
     }
 
     private Map<String, Object> arkImageJobResponse(Long jobId) {
@@ -1356,6 +1370,14 @@ public class CreativeAiController {
                         "FROM ai_generation_job WHERE id=?",
                 jobId);
         Map<String, Object> out = new LinkedHashMap<>();
+        try {
+            Map<String, Object> identity = jdbc.queryForMap(
+                    "SELECT project_id projectId,version_id versionId FROM ai_generation_job WHERE id=?", jobId);
+            out.put("projectId", identity.get("projectId"));
+            out.put("versionId", identity.get("versionId"));
+        } catch (Exception ignored) {
+            // Old queued jobs can still be polled before the project migration.
+        }
         String status = str(job.get("status"));
         String provider = str(job.get("provider"));
         String jobType = str(job.get("jobType"));
@@ -1517,7 +1539,7 @@ public class CreativeAiController {
     }
 
     private int normalizedArkQueueConcurrency() {
-        return Math.max(1, Math.min(arkQueueConcurrency, 16));
+        return arkImageQueueService.normalizedConcurrency();
     }
 
     private String normalizedArkImageSize(Object value) {
@@ -1546,63 +1568,19 @@ public class CreativeAiController {
         return value instanceof Number ? ((Number) value).longValue() : null;
     }
 
-    private JsonNode createArkTextImage(String prompt, String size, String negativePrompt) throws Exception {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("model", volcengineArkSeedreamImageModel);
-        payload.put("prompt", prompt);
-        payload.put("response_format", "url");
-        payload.put("size", size);
-        payload.put("stream", false);
-        payload.put("watermark", true);
-        if (!blank(negativePrompt)) payload.put("negative_prompt", negativePrompt);
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(volcengineArkImagesUrl))
-                .timeout(Duration.ofSeconds(150))
-                .header("Authorization", "Bearer " + resolvedArkApiKey())
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
-                .build();
+    private Long generatedKeyId(KeyHolder holder) {
         try {
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) throw arkImageHttpError(response.statusCode(), response.body());
-            return mapper.readTree(response.body());
-        } catch (HttpTimeoutException e) {
-            throw new IllegalStateException("火山方舟生图请求超时，请稍后重试", e);
-        } catch (IOException e) {
-            throw new IllegalStateException("无法连接火山方舟生图服务：" + safeMessage(e), e);
+            Number key = holder.getKey();
+            if (key != null) return key.longValue();
+        } catch (org.springframework.dao.InvalidDataAccessApiUsageException ignored) {
+            // H2 may return generated timestamp columns together with ID.
         }
-    }
-
-    private JsonNode createArkSeedreamImage(String prompt, Long inputAssetId, String size,
-                                             boolean watermark, String negativePrompt, Long seed) throws Exception {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("model", volcengineArkSeedreamImageModel);
-        payload.put("prompt", prompt);
-        payload.put("image", buildArkReferenceImage(inputAssetId));
-        payload.put("response_format", "url");
-        payload.put("size", normalizedArkImageSize(size));
-        payload.put("stream", false);
-        payload.put("watermark", watermark);
-        if (!blank(negativePrompt)) payload.put("negative_prompt", negativePrompt);
-        if (seed != null && seed >= 0) payload.put("seed", seed);
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(volcengineArkImagesUrl))
-                .timeout(Duration.ofSeconds(150))
-                .header("Authorization", "Bearer " + resolvedArkApiKey())
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload), StandardCharsets.UTF_8))
-                .build();
-        try {
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw arkImageHttpError(response.statusCode(), response.body());
+        for (Map<String, Object> row : holder.getKeyList()) {
+            for (Map.Entry<String, Object> entry : row.entrySet()) {
+                if ("ID".equalsIgnoreCase(entry.getKey()) && entry.getValue() instanceof Number number) return number.longValue();
             }
-            return mapper.readTree(response.body());
-        } catch (HttpTimeoutException e) {
-            throw new IllegalStateException("火山方舟图生图请求超时，请稍后重试", e);
-        } catch (IOException e) {
-            throw new IllegalStateException("无法连接火山方舟图生图服务：" + safeMessage(e), e);
         }
+        return null;
     }
 
     private Map<String, Object> generateArkImageToImage(Map<String, Object> job, GenerateImageRequest req) throws Exception {
@@ -1636,7 +1614,9 @@ public class CreativeAiController {
         finalPrompt = boundedPromptPreservingEnds(finalPrompt, 3500);
         negative = boundedPromptPreservingEnds(negative, 2000);
         String size = normalizedArkImageSize(firstNonBlank(req.imagenImageSize, req.imageSize, "2K"));
-        JsonNode generated = createArkSeedreamImage(finalPrompt, inputAssetId, size, true, negative, req.seed);
+        JsonNode generated = seedreamProviderClient.createImageToImage(
+                resolvedArkApiKey(), finalPrompt, buildArkReferenceImage(inputAssetId),
+                size, true, negative, req.seed);
         String remoteUrl = extractImageUrl(generated);
         String format = normalizedArkOutputFormat(generated, "jpg");
         String localUrl = saveRemoteImage(remoteUrl, "ark-seedream-i2i-", "." + format);
@@ -1653,6 +1633,7 @@ public class CreativeAiController {
                 blank(req.title) ? GENERATED_IMAGE_TITLE : req.title.trim(),
                 "image", "ai_generated", localUrl, localUrl, finalPrompt, negative, req.styleId, inputAssetId,
                 format, blank(req.tags) ? "AI生成,火山方舟,Seedream,图生图" : req.tags + ",火山方舟,Seedream,图生图", metadata);
+        creativeProjects.bindAsset(assetId, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")), inputAssetId);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("assetId", assetId);
         result.put("provider", "volcengine_ark");
@@ -1702,7 +1683,8 @@ public class CreativeAiController {
                     "different subject, different species or character, changed markings, changed silhouette, collage, split screen, extra object, person, hand, text, logo, watermark, cropped product, blurry, distorted structure");
             viewPrompt = boundedPromptPreservingEnds(viewPrompt, 3500);
             negative = boundedPromptPreservingEnds(negative, 2000);
-            JsonNode generated = createArkSeedreamImage(viewPrompt, inputAssetId, size,
+            JsonNode generated = seedreamProviderClient.createImageToImage(
+                    resolvedArkApiKey(), viewPrompt, buildArkReferenceImage(inputAssetId), size,
                     Boolean.TRUE.equals(req.watermark), negative, req.seed);
             String remoteUrl = extractImageUrl(generated);
             String format = normalizedArkOutputFormat(generated, "jpg");
@@ -1716,6 +1698,7 @@ public class CreativeAiController {
             metadata.put("imageSize", size);
             metadata.put("watermark", Boolean.TRUE.equals(req.watermark));
             addProductIdentity(metadata, command.productKey(), command.category(), command.material(), command.productSize());
+            addProjectIdentity(metadata, req.projectId, req.versionId);
             metadata.put("policyVersion", command.policyVersion());
             if (ownerUserId != null) {
                 metadata.put("createdByUserId", ownerUserId);
@@ -1724,6 +1707,7 @@ public class CreativeAiController {
             Long assetId = createAsset("AI 多视图参考 · " + labels.get(view), "image", "ai_generated",
                     localUrl, localUrl, viewPrompt, null, null, inputAssetId, format,
                     "AI生成,火山方舟,Seedream,多视图,3D参考," + labels.get(view), metadata);
+            creativeProjects.bindAsset(assetId, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")), inputAssetId);
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("view", view);
             item.put("label", labels.get(view));
@@ -1748,10 +1732,14 @@ public class CreativeAiController {
         req.compiledNegativePrompt = command.negativePrompt();
         req.policyVersion = command.policyVersion();
         String size = normalizedArkImageSize(firstNonBlank(req.imagenImageSize, req.imageSize, "2K"));
-        Map<String, Object> response = enqueueArkImageJob("image_to_image", "I2A", req.styleId,
+        ArkImageQueueService.QueueSubmission submission = arkImageQueueService.enqueue(
+                no("I2A"), volcengineArkSeedreamImageModel, "image_to_image", req.styleId,
                 req.inputAssetId, command.compiledPrompt(),
-                mergeNegative(req.negativePrompt, command.negativePrompt()), command.productKey(),
-                command.category(), command.material(), size, req, ownerUserId);
+                mergeNegative(req.negativePrompt, command.negativePrompt()), size,
+                command.productKey(), command.category(), command.material(), ownerUserId, req);
+        creativeProjects.bindJob(submission.jobId(), req.projectId, req.versionId, req.inputAssetId);
+        Map<String, Object> response = imageGenerationJobResponse(submission.jobId());
+        if (submission.reused()) response.put("reused", true);
         addGenerationCommandFields(response, command);
         return response;
     }
@@ -1766,66 +1754,19 @@ public class CreativeAiController {
         req.compiledNegativePrompt = command.negativePrompt();
         req.policyVersion = command.policyVersion();
         String size = normalizedArkImageSize(firstNonBlank(req.size, "2K"));
-        return enqueueArkImageJob("multi_view", "MVQ", null, req.inputAssetId,
-                command.compiledPrompt(), command.negativePrompt(), command.productKey(),
-                command.category(), command.material(), size, req, ownerUserId);
+        ArkImageQueueService.QueueSubmission submission = arkImageQueueService.enqueue(
+                no("MVQ"), volcengineArkSeedreamImageModel, "multi_view", null,
+                req.inputAssetId, command.compiledPrompt(), command.negativePrompt(), size,
+                command.productKey(), command.category(), command.material(), ownerUserId, req);
+        creativeProjects.bindJob(submission.jobId(), req.projectId, req.versionId, req.inputAssetId);
+        Map<String, Object> response = imageGenerationJobResponse(submission.jobId());
+        if (submission.reused()) response.put("reused", true);
+        return response;
     }
 
     private void requireArkImageConfiguration() {
         if (blank(resolvedArkApiKey())) {
             throw new IllegalStateException("未配置火山方舟 Ark API Key，请联系平台管理员完成 VOLCENGINE_ARK_API_KEY 配置");
-        }
-    }
-
-    private Map<String, Object> enqueueArkImageJob(String jobType, String jobPrefix, Long styleId,
-                                                     Long inputAssetId, String prompt, String negative,
-                                                     String productKey, String productName, String material,
-                                                     String exportFormats, Object requestPayload,
-                                                     Long ownerUserId) throws Exception {
-        synchronized (arkQueueSubmissionLock) {
-            List<Map<String, Object>> active = jdbc.queryForList(
-                    "SELECT id,job_type jobType,input_asset_id inputAssetId,prompt FROM ai_generation_job " +
-                            "WHERE created_by=? AND provider='volcengine_ark' " +
-                            "AND job_type IN ('text_to_image','image_to_image','multi_view') " +
-                            "AND status IN ('queued','running') AND output_asset_id IS NULL ORDER BY id LIMIT 1",
-                    ownerUserId);
-            if (!active.isEmpty()) {
-                Map<String, Object> existing = active.get(0);
-                boolean sameRequest = jobType.equals(str(existing.get("jobType")))
-                        && Objects.equals(inputAssetId, numberAsLong(existing.get("inputAssetId")))
-                        && nullToEmpty(prompt).equals(nullToEmpty(str(existing.get("prompt"))));
-                if (!sameRequest) {
-                    throw new IllegalStateException("你已有一项 Seedream 图片任务正在排队或生成，请等待完成后再提交新任务");
-                }
-                Map<String, Object> response = imageGenerationJobResponse(numberAsLong(existing.get("id")));
-                response.put("reused", true);
-                return response;
-            }
-            Long jobId = createArkQueuedJob(no(jobPrefix), jobType, styleId, inputAssetId, prompt, negative,
-                    exportFormats, productKey, productName, material, ownerUserId, null, requestPayload);
-            return imageGenerationJobResponse(jobId);
-        }
-    }
-
-    private IllegalStateException arkImageHttpError(int status, String raw) {
-        try {
-            JsonNode root = mapper.readTree(raw);
-            String errorCode = root.path("error").path("code").asText("");
-            String detail = firstNonBlank(root.path("error").path("message").asText(""), root.path("message").asText(""), root.path("error").asText(""));
-            if (status == 401 || status == 403) return new IllegalStateException("火山方舟 API Key 无效、模型未开通或无调用权限：" + detail);
-            if ("SetLimitExceeded".equalsIgnoreCase(errorCode) || detail.contains("Safe Experience Mode")) {
-                return new IllegalStateException("火山方舟模型已因安全体验模式额度用尽而暂停。请在方舟控制台的模型开通页面提高额度或关闭安全体验模式后重试。");
-            }
-            if (status == 429) return new ArkRateLimitException("火山方舟模型触发调用频率限制：" + detail);
-            return new IllegalStateException("火山方舟生图接口失败 HTTP " + status + "：" + detail);
-        } catch (Exception ignored) {
-            return new IllegalStateException("火山方舟生图接口失败 HTTP " + status + "：" + raw);
-        }
-    }
-
-    private static final class ArkRateLimitException extends IllegalStateException {
-        private ArkRateLimitException(String message) {
-            super(message);
         }
     }
 
@@ -1963,12 +1904,16 @@ public class CreativeAiController {
     @PostMapping("/image-to-image")
     public Map<String, Object> imageToImage(@RequestBody GenerateImageRequest req) throws Exception {
         Long ownerUserId = authenticatedUserId();
+        normalizeProjectRef(req, ownerUserId);
         GenerationCommand command = compileGenerationCommand(req);
         assertCompliantPrompt(command.rawPrompt(), command.category());
         assertCompliantPrompt(command.compiledPrompt(), command.category());
         if (req.inputAssetId == null) throw new IllegalArgumentException("请先选择一张参考图");
         if (blank(command.rawPrompt())) throw new IllegalArgumentException("请填写你希望把参考图改造成什么产品或效果");
         requireAssetAccess(req.inputAssetId);
+        CreativeProjectService.ProjectRef workflowProject = resolveProjectRef(req.projectId, req.versionId, ownerUserId);
+        advanceGeneration(workflowProject, ownerUserId, "generation", "generation_started",
+                Map.of("inputAssetId", req.inputAssetId, "mode", "image_to_image"));
         // Image editing is always durable and serialized through the Ark
         // queue. This protects the account-level Seedream limit even for old
         // clients that do not send queue=true.
@@ -2222,6 +2167,7 @@ public class CreativeAiController {
     public Map<String,Object> tripoTextToImage(@RequestBody GenerateImageRequest req) throws Exception {
         if (legacyImageRoutesUseSeedream()) return arkTextToImage(req);
         Long ownerUserId = authenticatedUserId();
+        normalizeProjectRef(req, ownerUserId);
         if(blank(tripoApiKey) || tripoApiKey.contains("YOUR_")) throw new IllegalStateException("未配置Tripo API Key");
         if(blank(req.prompt)) throw new IllegalArgumentException("请先填写或生成生图提示词");
         if(req.prompt.trim().length()>1024) throw new IllegalArgumentException("Tripo生图提示词不能超过1024个字符");
@@ -2236,8 +2182,19 @@ public class CreativeAiController {
         String tripoNegative = mergeNegative(req.negativePrompt, ProductPromptPolicy.negative(req.productCategory, req.material));
         String jobNo=no("T2D"); Long jobId=createJob(jobNo,"text_to_image","tripo",model,req.styleId,null,tripoPrompt,tripoNegative,"running",null,req.imageSize);
         assignJobOwner(jobId, ownerUserId);
+        creativeProjects.bindJob(jobId, req.projectId, req.versionId, null);
         jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?",taskId,jobId);
-        return Map.of("jobId",jobId,"jobNo",jobNo,"taskId",taskId,"status","running","progress",0,"provider","tripo","model",model,"message","Tripo文本生图任务已提交");
+        Map<String,Object> response = new LinkedHashMap<>();
+        response.put("jobId", jobId);
+        response.put("jobNo", jobNo);
+        response.put("taskId", taskId);
+        response.put("status", "running");
+        response.put("progress", 0);
+        response.put("provider", "tripo");
+        response.put("model", model);
+        addProjectIdentity(response, req.projectId, req.versionId);
+        response.put("message", "Tripo文本生图任务已提交");
+        return response;
     }
 
     @GetMapping("/tripo/image-tasks/{jobId}")
@@ -2248,8 +2205,12 @@ public class CreativeAiController {
 
     private synchronized Map<String,Object> pollTripoImageTask(Long jobId) throws Exception {
         Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,output_asset_id outputAssetId,status,progress,error_message errorMessage,prompt,negative_prompt negativePrompt,style_id styleId,model_name modelName,created_by createdBy FROM ai_generation_job WHERE id=? AND provider='tripo'",jobId);
+        job.putAll(optionalProjectVersion("ai_generation_job", "id", jobId));
         String taskId=str(job.get("externalTaskId")); if(blank(taskId))throw new IllegalStateException("任务没有Tripo task_id");
-        if(job.get("outputAssetId")!=null)return completedTripoImageJob(jobId,job);
+        if(job.get("outputAssetId")!=null) {
+            inheritProjectVersionFromOutputAsset(job);
+            return completedTripoImageJob(jobId,job);
+        }
         String raw=tripoJson("GET","/tasks/"+URLEncoder.encode(taskId,StandardCharsets.UTF_8),null); JsonNode root=mapper.readTree(raw); ensureTripoOk(root,raw); JsonNode data=root.path("data");
         String remoteStatus=data.path("status").asText("unknown"); int progress=data.path("progress").asInt(0); String localStatus=mapTripoStatus(remoteStatus);
         String error=data.path("error").path("message").asText(data.path("message").asText(""));
@@ -2265,18 +2226,26 @@ public class CreativeAiController {
                 meta.put("createdByUserId", ownerUserId);
                 if (hasPersistedRole(ownerUserId, "user")) meta.put("consumerWork", true);
             }
+            addProjectIdentity(meta, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")));
             Long assetId=createAsset("Tripo 2D创意图","image","ai_generated",localImage,localImage,str(job.get("prompt")),str(job.get("negativePrompt")),styleId,null,suffixFromUrl(imageUrl,".png").replace(".",""),"Tripo,2D创意生图,AI生成",meta);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100,error_message=NULL WHERE id=?",assetId,jobId);
             job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,output_asset_id outputAssetId,status,progress,error_message errorMessage,model_name modelName FROM ai_generation_job WHERE id=?",jobId);
+            job.putAll(optionalProjectVersion("ai_generation_job", "id", jobId));
+            inheritProjectVersionFromOutputAsset(job);
             return completedTripoImageJob(jobId,job);
         }
-        Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);out.put("model",job.get("modelName"));return out;
+        Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);out.put("model",job.get("modelName"));addProjectIdentity(out, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")));return out;
     }
 
     @PostMapping({"/tripo/generate", "/tripo/image-to-3d"})
     public Map<String,Object> tripoGenerate(@RequestBody Generate3dRequest req) throws Exception {
         Long ownerUserId = authenticatedUserId();
+        normalizeProjectRef(req, ownerUserId);
         Long consumerUserId = currentConsumerUserIdOrNull();
+        // Older clients may send only inputAssetId. Resolve the project from
+        // that asset so the 3D job stays attached to the same design version.
+        CreativeProjectService.ProjectRef workflowProject = resolveWorkflowProject(
+                req.projectId, req.versionId, req.inputAssetId, ownerUserId);
         assertCompliantPrompt(req.prompt, req.productCategory);
         if(blank(tripoApiKey) || tripoApiKey.contains("YOUR_"))
             throw new IllegalStateException("未配置 tripo.api.key，请在服务器.env中填写TRIPO_API_KEY后重新部署");
@@ -2339,6 +2308,15 @@ public class CreativeAiController {
                 req.negativePrompt = null;
             }
 
+            // Multiview requests discover their primary input while preparing
+            // the provider payload, so resolve inheritance once more here.
+            if (workflowProject == null && primaryInputAssetId != null) {
+                workflowProject = resolveWorkflowProject(req.projectId, req.versionId, primaryInputAssetId, ownerUserId);
+            }
+            advanceGeneration(workflowProject, ownerUserId, "generation", "generation_started",
+                    Map.of("mode", firstNonBlank(req.mode, "image_to_model"),
+                            "inputAssetId", primaryInputAssetId == null ? 0L : primaryInputAssetId));
+
             applyTripoQualityOptions(taskBody, req, mode, selectedModel, consumerRequest);
             String generationPath = "text_to_model".equals(mode) ? "/generation/text-to-model" :
                     "multiview_to_model".equals(mode) ? "/generation/multiview-to-model" : "/generation/image-to-model";
@@ -2361,12 +2339,19 @@ public class CreativeAiController {
             storeJobProductIdentity(jobId, req.productKey, req.productCategory, req.material);
             storeJobProductSize(jobId, productSize);
             assignJobOwner(jobId, ownerUserId);
+            creativeProjects.bindJob(jobId,
+                    workflowProject == null ? req.projectId : workflowProject.projectId(),
+                    workflowProject == null ? req.versionId : workflowProject.versionId(),
+                    primaryInputAssetId);
             linkCreditTransaction(creditTxId,jobId,null);
             jdbc.update("UPDATE ai_generation_job SET external_task_id=?,progress=0 WHERE id=?", taskId, jobId);
             Map<String,Object> response = new LinkedHashMap<>();
             response.put("jobId", jobId); response.put("jobNo", jobNo); response.put("taskId", taskId);
             response.put("status", "running"); response.put("progress", 0); response.put("provider", "tripo");
             response.put("modelVersion", selectedModel); response.put("qualityPreset", isPSeriesModel(selectedModel)?"fast-preview":"production");
+            addProjectIdentity(response,
+                    workflowProject == null ? req.projectId : workflowProject.projectId(),
+                    workflowProject == null ? req.versionId : workflowProject.versionId());
             if(consumerUserId != null) response.put("creditAccount", creditAccountMap(consumerUserId));
             response.put("message", "Tripo "+selectedModel+"任务已提交");
             return response;
@@ -2427,8 +2412,12 @@ public class CreativeAiController {
 
     private synchronized Map<String,Object> pollTripoTask(Long jobId) throws Exception {
         Map<String,Object> job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,product_key productKey,product_name productName,product_material productMaterial,request_payload_json requestPayloadJson,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
+        job.putAll(optionalProjectVersion("ai_generation_job", "id", jobId));
         String taskId=str(job.get("externalTaskId")); if(blank(taskId))throw new IllegalStateException("任务没有Tripo task_id");
-        if(job.get("outputAssetId")!=null) return completedTripoJob(jobId,job);
+        if(job.get("outputAssetId")!=null) {
+            inheritProjectVersionFromOutputAsset(job);
+            return completedTripoJob(jobId,job);
+        }
         String response=tripoJson("GET","/tasks/"+URLEncoder.encode(taskId,StandardCharsets.UTF_8),null);
         JsonNode root=mapper.readTree(response); ensureTripoOk(root,response); JsonNode data=root.path("data");
         String remoteStatus=data.path("status").asText("unknown"); int progress=data.path("progress").asInt(0);
@@ -2450,24 +2439,42 @@ public class CreativeAiController {
                 metadata.put("createdByUserId", ownerUserId);
                 if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork",true);
             }
+            addProjectIdentity(metadata, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")));
             String productName = str(job.get("productName"));
             Long assetId=createAsset(blank(productName) ? "Tripo "+modelName+" 3D模型" : productName+" · 3D 原型","model","ai_generated",localModel,localPreview,String.valueOf(jdbc.queryForObject("SELECT prompt FROM ai_generation_job WHERE id=?",String.class,jobId)),null,null,inputId,suffixFromUrl(modelUrl,".glb").replace(".",""),"Tripo,3D模型,"+modelName,metadata);
             jdbc.update("UPDATE ai_generation_job SET output_asset_id=?,status='succeeded',progress=100 WHERE id=?",assetId,jobId);
             completeConsumerCredit(job.get("creditTransactionId") instanceof Number?((Number)job.get("creditTransactionId")).longValue():null,jobId,assetId);
             job=jdbc.queryForMap("SELECT id,job_no jobNo,external_task_id externalTaskId,input_asset_id inputAssetId,output_asset_id outputAssetId,product_key productKey,product_name productName,product_material productMaterial,request_payload_json requestPayloadJson,status,progress,error_message errorMessage,created_by createdBy,credit_transaction_id creditTransactionId FROM ai_generation_job WHERE id=?",jobId);
+            job.putAll(optionalProjectVersion("ai_generation_job", "id", jobId));
+            inheritProjectVersionFromOutputAsset(job);
             return completedTripoJob(jobId,job);
         }
-        Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);return out;
+        Map<String,Object> out=new LinkedHashMap<>();out.put("jobId",jobId);out.put("jobNo",job.get("jobNo"));out.put("taskId",taskId);out.put("status",localStatus);out.put("remoteStatus",remoteStatus);out.put("progress",progress);out.put("errorMessage",error);addProjectIdentity(out, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")));return out;
     }
 
     @PostMapping("/text-to-3d")
     public Map<String, Object> textTo3d(@RequestBody Generate3dRequest req) throws Exception {
         Long ownerUserId = authenticatedUserId();
+        normalizeProjectRef(req, ownerUserId);
         if (req.inputAssetId != null) requireAssetAccess(req.inputAssetId);
+        CreativeProjectService.ProjectRef workflowProject = resolveWorkflowProject(
+                req.projectId, req.versionId, req.inputAssetId, ownerUserId);
+        if (workflowProject != null) {
+            req.projectId = workflowProject.projectId();
+            req.versionId = workflowProject.versionId();
+        }
+        advanceGeneration(workflowProject, ownerUserId, "generation", "generation_started",
+                Map.of("mode", "text_to_model", "inputAssetId", req.inputAssetId == null ? 0L : req.inputAssetId));
         String prompt = "3D cultural creative product model, " + nullToEmpty(req.prompt) + ", export-ready mesh, clean topology, product prototype";
         String jobNo = no("T3D");
         Long jobId = createJob(jobNo, "text_to_3d", "siliconflow", chatModel, null, req.inputAssetId, prompt, null, "running", null, req.exportFormats == null ? "OBJ,STL,GLB" : req.exportFormats);
         assignJobOwner(jobId, ownerUserId);
+        creativeProjects.bindJob(jobId,
+                workflowProject == null ? req.projectId : workflowProject.projectId(),
+                workflowProject == null ? req.versionId : workflowProject.versionId(),
+                req.inputAssetId);
+        recordWorkflowEvent(workflowProject, ownerUserId, "specification_started", "system", ownerUserId,
+                Map.of("jobId", jobId, "inputAssetId", req.inputAssetId == null ? 0L : req.inputAssetId));
         try {
             String spec = callChat(
                     "你是文创产品3D建模指导专家。硅基流动当前在本系统用于生成3D建模规格书，不直接产出OBJ/STL文件。请输出可交给建模师或后续3D工具的结构化建模方案。",
@@ -2477,11 +2484,33 @@ public class CreativeAiController {
                     "请包含：造型拆解、尺寸建议、材质、工艺、建模步骤、打印/开模风险。"
             );
             Long assetId = createAsset("AI 3D建模规格书", "prompt", "ai_generated", null, null, spec, null, null, req.inputAssetId, "txt", "3D建模,硅基流动,文创打样",
-                    withAssetOwner(Map.of("provider", "siliconflow", "model", chatModel), ownerUserId));
+                    textTo3dMetadata(req, ownerUserId));
             jdbc.update("UPDATE ai_generation_job SET status='succeeded', output_asset_id=? WHERE id=?", assetId, jobId);
-            return Map.of("jobId", jobId, "jobNo", jobNo, "status", "succeeded", "assetId", assetId, "prompt", prompt, "aiDraft", spec, "source", "siliconflow:" + chatModel, "exportFormats", req.exportFormats == null ? "OBJ,STL,GLB" : req.exportFormats, "message", "已通过硅基流动生成3D建模规格书；如需真实OBJ/STL，后续仍需接入专业3D生成/建模工具。 ");
+            recordWorkflowEvent(workflowProject, ownerUserId, "specification_completed", "system", ownerUserId,
+                    Map.of("jobId", jobId, "assetId", assetId));
+            recordWorkflowEvent(workflowProject, ownerUserId, "generation_completed", "system", ownerUserId,
+                    Map.of("jobId", jobId, "assetId", assetId, "mode", "text_to_model"));
+            Map<String,Object> response = new LinkedHashMap<>();
+            response.put("jobId", jobId);
+            response.put("jobNo", jobNo);
+            response.put("status", "succeeded");
+            response.put("assetId", assetId);
+            addProjectIdentity(response,
+                    workflowProject == null ? req.projectId : workflowProject.projectId(),
+                    workflowProject == null ? req.versionId : workflowProject.versionId());
+            response.put("prompt", prompt);
+            response.put("aiDraft", spec);
+            response.put("source", "siliconflow:" + chatModel);
+            response.put("exportFormats", req.exportFormats == null ? "OBJ,STL,GLB" : req.exportFormats);
+            response.put("message", "已通过硅基流动生成3D建模规格书；如需真实OBJ/STL，后续仍需接入专业3D生成/建模工具。 ");
+            return response;
         } catch (Exception e) {
             jdbc.update("UPDATE ai_generation_job SET status='failed', error_message=? WHERE id=?", e.getMessage(), jobId);
+            Map<String,Object> failure = new LinkedHashMap<>();
+            failure.put("jobId", jobId);
+            failure.put("error", safeMessage(e));
+            recordWorkflowEvent(workflowProject, ownerUserId, "specification_failed", "system", ownerUserId, failure);
+            recordWorkflowEvent(workflowProject, ownerUserId, "generation_failed", "system", ownerUserId, failure);
             throw e;
         }
     }
@@ -2489,8 +2518,11 @@ public class CreativeAiController {
     @PostMapping(value = "/assets/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> uploadAsset(@RequestParam("file") MultipartFile file,
                                            @RequestParam(required = false) String title,
-                                           @RequestParam(required = false) String tags) throws Exception {
+                                           @RequestParam(required = false) String tags,
+                                           @RequestParam(required = false) Long projectId,
+                                           @RequestParam(required = false) Long versionId) throws Exception {
         Long ownerUserId = authenticatedUserId();
+        CreativeProjectService.ProjectRef project = resolveProjectRef(projectId, versionId, ownerUserId);
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("请选择要上传的图片");
         String original = file.getOriginalFilename() == null ? "upload.png" : file.getOriginalFilename();
         String lower = original.toLowerCase(Locale.ROOT);
@@ -2511,6 +2543,10 @@ public class CreativeAiController {
         Map<String,Object> meta=new LinkedHashMap<>();
         meta.put("uploadName", original); meta.put("size", file.getSize()); meta.put("contentType", file.getContentType() == null ? "" : file.getContentType());
         meta.put("createdByUserId", ownerUserId);
+        if (project != null) {
+            meta.put("projectId", project.projectId());
+            meta.put("versionId", project.versionId());
+        }
         if (currentConsumerUserIdOrNull() != null) meta.put("consumerReference",true);
         ReferenceImagePreparationService.Preparation preparation;
         try {
@@ -2901,6 +2937,7 @@ public class CreativeAiController {
     }
 
     @PutMapping("/consumer-assets/{id}/submit-review")
+    @Transactional
     public Map<String,Object> submitConsumerAssetReview(@PathVariable Long id,
                                                         @RequestBody(required=false) Map<String,String> body) {
         Long userId = requireCurrentConsumerUser();
@@ -2912,6 +2949,16 @@ public class CreativeAiController {
         if ("image".equals(String.valueOf(ownedAsset.get("assetType")))) {
             throw new IllegalStateException("单张产品图不能提交审核，请先生成三视图作品包或3D模型");
         }
+        CreativeProjectService.ProjectRef workflowProject = resolveWorkflowProject(null, null, id, userId);
+        CreativeProjectService.ProjectRef requestedProject = resolveProjectRef(
+                numberAsLong(body == null ? null : body.get("projectId")),
+                numberAsLong(body == null ? null : body.get("versionId")), userId);
+        if (requestedProject != null && workflowProject != null
+                && (requestedProject.projectId() != workflowProject.projectId()
+                || requestedProject.versionId() != workflowProject.versionId())) {
+            throw new IllegalArgumentException("提交审核的项目版本与作品不一致");
+        }
+        if (requestedProject != null) workflowProject = requestedProject;
         String purpose=body==null?"":nullToEmpty(body.get("purpose")).trim();
         if(!Set.of("personal","museum_sale").contains(purpose)) purpose="";
         String note=body==null?"":nullToEmpty(body.get("note"));
@@ -2948,6 +2995,11 @@ public class CreativeAiController {
             }
             return out;
         });
+        if (workflowProject != null) {
+            creativeProjects.transitionProject(workflowProject.projectId(), workflowProject.versionId(), userId,
+                    "human_review", "asset_review_submitted", "user", userId,
+                    Map.of("assetId", id, "purpose", purpose));
+        }
         return response==null?Map.of("success",true,"id",id,"status","review"):response;
     }
 
@@ -2961,15 +3013,27 @@ public class CreativeAiController {
         String comment=body==null?"":nullToEmpty(body.get("comment"));
         Map<String,Object> asset;
         try {
-            asset = jdbc.queryForMap("SELECT a.asset_type assetType FROM digital_asset a WHERE a.id=? AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')", id);
+            // project_id/version_id are optional during a rolling deployment;
+            // read the required ownership fields first and enrich below.
+            asset = jdbc.queryForMap("SELECT a.asset_type assetType,a.created_by createdBy FROM digital_asset a WHERE a.id=? AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')", id);
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new IllegalArgumentException("作品不存在或不是C端用户作品");
         }
+        asset.putAll(optionalProjectVersion("digital_asset", "id", id));
         if ("image".equals(String.valueOf(asset.get("assetType")))) {
             throw new IllegalStateException("单张产品图不能单独审核，请审核三视图作品包或3D模型");
         }
         int n=jdbc.update("UPDATE digital_asset a SET a.status=?, a.tags=CONCAT(COALESCE(a.tags,''), ?) WHERE a.id=? AND a.asset_type='model' AND EXISTS (SELECT 1 FROM user u WHERE u.id=a.created_by AND u.role='user')",status,";审核:"+status+(blank(comment)?"":"-"+comment),id);
         if(n==0) throw new IllegalArgumentException("作品不存在或不是C端用户作品");
+        Long assetOwner = numberAsLong(asset.get("createdBy"));
+        CreativeProjectService.ProjectRef workflowProject = assetOwner == null ? null
+                : resolveWorkflowProject(numberAsLong(asset.get("projectId")), numberAsLong(asset.get("versionId")), id, assetOwner);
+        if (workflowProject != null) {
+            String target = "approved".equals(status) ? "approved" : "rejected".equals(status) ? "needs_revision" : "human_review";
+            creativeProjects.transitionProject(workflowProject.projectId(), workflowProject.versionId(), assetOwner,
+                    target, "asset_review_" + status, "staff", authenticatedPrincipal().userId(),
+                    Map.of("assetId", id, "comment", comment));
+        }
         BigDecimal campaignReward = settleCampaignRewardForReview(id, status, blank(operator) ? "admin" : operator);
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("success", true); out.put("id", id); out.put("status", status); out.put("operator", blank(operator) ? "admin" : operator);
@@ -3019,6 +3083,13 @@ public class CreativeAiController {
         String productName = body == null ? "" : str(body.get("productName")).trim();
         String material = body == null ? "" : str(body.get("material")).trim();
         String productSize = normalizedProductSize(body == null ? "" : str(body.get("productSize")));
+        // Reuse the validated asset/bundle reference. A client commonly opens
+        // the production page with only an asset or bundle id; resolving the
+        // project a second time from optional body fields used to drop the
+        // project link from otherwise valid requests.
+        CreativeProjectService.ProjectRef project = resolveWorkflowProject(
+                numberAsLong(body == null ? null : body.get("projectId")),
+                numberAsLong(body == null ? null : body.get("versionId")), inputAssetId, userId);
         synchronized (this) {
             List<Map<String,Object>> existingRows = jdbc.queryForList(
                     "SELECT id,status FROM creative_multiview_bundle WHERE user_id=? AND input_asset_id=? ORDER BY id DESC LIMIT 1",
@@ -3063,6 +3134,9 @@ public class CreativeAiController {
                         Long.class, bundleNo);
                 insertMultiViewBundleItems(bundleId, assetIds);
             }
+            creativeProjects.bindBundle(bundleId,
+                    project == null ? null : project.projectId(),
+                    project == null ? null : project.versionId(), inputAssetId);
             return multiViewBundleResponse(bundleId);
         }
     }
@@ -3084,6 +3158,15 @@ public class CreativeAiController {
                                                                    @RequestBody(required=false) Map<String,String> body) {
         Long userId = requireCurrentConsumerUser();
         Map<String,Object> bundle = queryOwnedMultiViewBundle(id, userId);
+        CreativeProjectService.ProjectRef workflowProject = resolveWorkflowProjectFromBundle(bundle, userId);
+        CreativeProjectService.ProjectRef requestedProject = resolveProjectRef(
+                numberAsLong(body == null ? null : body.get("projectId")),
+                numberAsLong(body == null ? null : body.get("versionId")), userId);
+        if (requestedProject != null && workflowProject != null
+                && (requestedProject.projectId() != workflowProject.projectId()
+                || requestedProject.versionId() != workflowProject.versionId())) {
+            throw new IllegalArgumentException("提交审核的项目版本与三视图作品包不一致");
+        }
         String currentStatus = str(bundle.get("status"));
         if (!Set.of("draft", "rejected").contains(currentStatus)) {
             throw new IllegalStateException("该三视图作品包已经提交审核或审核通过，请勿重复提交");
@@ -3134,6 +3217,11 @@ public class CreativeAiController {
                     auditTag, assetId, userId);
         }
         if (campaign != null) createOrResetCampaignParticipationForBundle(userId, campaign, primaryAssetId);
+        if (workflowProject != null) {
+            creativeProjects.transitionProject(workflowProject.projectId(), workflowProject.versionId(), userId,
+                    "human_review", "multiview_review_submitted", "user", userId,
+                    Map.of("bundleId", id, "viewCount", viewCount, "purpose", purpose));
+        }
         Map<String,Object> out = multiViewBundleResponse(id);
         out.put("success", true);
         out.put("message", campaign == null ? "三视图作品包已提交人工审核" : "三视图作品包已提交优先征集审核，通过后积分将自动到账");
@@ -3174,10 +3262,11 @@ public class CreativeAiController {
         if ("rejected".equals(status) && blank(comment)) throw new IllegalArgumentException("三视图审核不通过时必须填写原因");
         Map<String,Object> bundle;
         try {
-            bundle = jdbc.queryForMap("SELECT id,status FROM creative_multiview_bundle WHERE id=?", id);
+            bundle = jdbc.queryForMap("SELECT id,user_id userId,input_asset_id inputAssetId,status FROM creative_multiview_bundle WHERE id=?", id);
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new IllegalArgumentException("三视图作品包不存在");
         }
+        bundle.putAll(optionalProjectVersion("creative_multiview_bundle", "id", id));
         String currentStatus = str(bundle.get("status"));
         if (Set.of("approved", "rejected").contains(status) && !"review".equals(currentStatus)) {
             throw new IllegalStateException("只有已提交的三视图作品包才能完成审核");
@@ -3194,6 +3283,16 @@ public class CreativeAiController {
         for (Long assetId : assetIds.values()) {
             jdbc.update("UPDATE digital_asset SET status=?,tags=CONCAT(COALESCE(tags,''),?) WHERE id=?",
                     status, ";三视图包审核=" + status + (blank(comment) ? "" : "-" + comment), assetId);
+        }
+        Long bundleOwner = numberAsLong(bundle.get("userId"));
+        CreativeProjectService.ProjectRef workflowProject = bundleOwner == null ? null
+                : resolveWorkflowProject(numberAsLong(bundle.get("projectId")), numberAsLong(bundle.get("versionId")),
+                numberAsLong(bundle.get("inputAssetId")), bundleOwner);
+        if (workflowProject != null) {
+            String target = "approved".equals(status) ? "approved" : "rejected".equals(status) ? "needs_revision" : "human_review";
+            creativeProjects.transitionProject(workflowProject.projectId(), workflowProject.versionId(), bundleOwner,
+                    target, "multiview_review_" + status, "staff", authenticatedPrincipal().userId(),
+                    Map.of("bundleId", id, "comment", comment));
         }
         BigDecimal reward = settleCampaignRewardForReview(assetIds.get("front"), status, blank(operator) ? "admin" : operator);
         Map<String,Object> out = multiViewBundleResponse(id);
@@ -3258,11 +3357,14 @@ public class CreativeAiController {
     private Map<String,Object> queryOwnedMultiViewBundle(Long id, Long userId) {
         List<Map<String,Object>> rows = jdbc.queryForList("SELECT id,view_count viewCount,status,product_name productName FROM creative_multiview_bundle WHERE id=? AND user_id=?", id, userId);
         if (rows.isEmpty()) throw new IllegalArgumentException("三视图作品包不存在或无权访问");
-        return jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment FROM creative_multiview_bundle b WHERE b.id=?", id);
+        Map<String,Object> result = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment FROM creative_multiview_bundle b WHERE b.id=?", id);
+        result.putAll(optionalProjectVersion("creative_multiview_bundle", "id", id));
+        return result;
     }
 
     private Map<String,Object> multiViewBundleResponse(Long bundleId) {
         Map<String,Object> row = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b WHERE b.id=?", bundleId);
+        row.putAll(optionalProjectVersion("creative_multiview_bundle", "id", bundleId));
         List<Map<String,Object>> items = jdbc.queryForList("SELECT i.view_key view,i.label,i.asset_id assetId,a.title assetTitle,a.status assetStatus FROM creative_multiview_bundle_item i JOIN digital_asset a ON a.id=i.asset_id WHERE i.bundle_id=? ORDER BY CASE i.view_key WHEN 'front' THEN 1 WHEN 'left' THEN 2 WHEN 'back' THEN 3 WHEN 'right' THEN 4 ELSE 5 END,i.id", bundleId);
         for (Map<String,Object> item : items) {
             Long assetId = numberAsLong(item.get("assetId"));
@@ -3495,16 +3597,59 @@ public class CreativeAiController {
     public List<Map<String,Object>> myConsumerProductionRequests(@RequestParam(required=false) String type,
                                                                  @RequestParam(required=false,defaultValue="100") int size) {
         Long userId = requireCurrentConsumerUser();
-        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo,b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id WHERE r.user_id=?");
         List<Object> args=new ArrayList<>();args.add(userId);
-        if(!blank(type)&&Set.of("sample","bulk").contains(type)){sql.append(" AND r.request_type=?");args.add(type);}
-        sql.append(" ORDER BY r.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,300)));
-        return enrichProductionRows(jdbc.queryForList(sql.toString(),args.toArray()));
+        StringBuilder where = new StringBuilder(" WHERE r.user_id=?");
+        if(!blank(type)&&Set.of("sample","bulk").contains(type)){where.append(" AND r.request_type=?");args.add(type);}
+        args.add(Math.max(1,Math.min(size,300)));
+        return queryProductionRequestRows(
+                productionRequestSelect(true, true) + where + " ORDER BY r.id DESC LIMIT ?",
+                productionRequestSelect(false, true) + where + " ORDER BY r.id DESC LIMIT ?",
+                args);
     }
 
     @PostMapping("/consumer-production/submit")
-    public Map<String,Object> submitConsumerProductionRequest(@RequestBody Map<String,Object> body) throws Exception {
+    @Transactional
+    public Map<String,Object> submitConsumerProductionRequest(
+            @RequestBody Map<String,Object> body,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyHeader) throws Exception {
         Long userId = requireCurrentConsumerUser();
+        if (body == null) throw new IllegalArgumentException("生产申请参数不能为空");
+        String clientRequestKey = firstNonBlank(
+                idempotencyHeader == null ? "" : idempotencyHeader.trim(),
+                body.get("idempotencyKey") == null ? "" : String.valueOf(body.get("idempotencyKey")).trim());
+        if (!blank(clientRequestKey)) {
+            // The database key is bounded to 120 characters. Silently
+            // truncating a client key could make two distinct submissions
+            // resolve to the same request, so reject it explicitly.
+            if (clientRequestKey.length() > 120) throw new IllegalArgumentException("幂等键长度不能超过120个字符");
+            try {
+                // Lock the stable owner row before checking the nullable
+                // request key. A unique index protects the database, but the
+                // owner lock also prevents two concurrent requests from both
+                // advancing the same project before one insert loses the race.
+                jdbc.queryForList("SELECT id FROM user WHERE id=? FOR UPDATE", userId);
+                List<Map<String, Object>> existing = jdbc.queryForList(
+                        "SELECT id,request_no requestNo,status,sample_payment_status samplePaymentStatus,request_type requestType FROM consumer_production_request WHERE user_id=? AND client_request_key=? LIMIT 1 FOR UPDATE",
+                        userId, clientRequestKey);
+                if (!existing.isEmpty()) {
+                    Map<String, Object> row = existing.get(0);
+                    Map<String, Object> reused = new LinkedHashMap<>();
+                    reused.put("success", true);
+                    reused.put("id", row.get("id"));
+                    reused.put("requestNo", row.get("requestNo"));
+                    reused.put("status", row.get("status"));
+                    reused.put("requestType", row.get("requestType"));
+                    reused.put("samplePaymentStatus", row.get("samplePaymentStatus"));
+                    reused.put("idempotent", true);
+                    reused.put("message", "已返回之前提交的同一申请");
+                    return reused;
+                }
+            } catch (DataAccessException ignored) {
+                // The additive migration may still be applying during a
+                // rolling deployment; old nodes continue without dedupe.
+                clientRequestKey = "";
+            }
+        }
         Long bundleId=body==null?null:numberAsLong(body.get("bundleId"));
         Long assetId=body==null?null:numberAsLong(body.get("assetId"));
         Map<String,Object> bundle = null;
@@ -3523,6 +3668,7 @@ public class CreativeAiController {
         if(!Set.of("sample","bulk").contains(requestType)) throw new IllegalArgumentException("申请类型只能是打样或批量生产");
         if(bundleId != null && !"sample".equals(requestType)) throw new IllegalStateException("三视图作品包审核通过后需先申请打样，确认实物后再进入批量生产");
         Map<String,Object> asset=jdbc.queryForMap("SELECT id,title,asset_type assetType,status,created_by createdBy,metadata_json metadataJson FROM digital_asset WHERE id=?",assetId);
+        asset.putAll(optionalProjectVersion("digital_asset", "id", assetId));
         if(bundleId == null && !"model".equals(String.valueOf(asset.get("assetType")))) throw new IllegalStateException("单图流程仅支持审核通过的3D模型提交打样/生产申请");
         if(bundleId == null && !"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
@@ -3564,6 +3710,37 @@ public class CreativeAiController {
         if(selfQty>0 && museumQty>0) throw new IllegalArgumentException("同一申请不能同时分配给个人和博物馆，请按创作目的单一路径提交");
         if("museum_sale".equals(purpose) && museumQty!=quantity) throw new IllegalArgumentException("博物馆售卖用途必须将全部数量投放到所选博物馆");
         if("personal".equals(purpose) && selfQty!=quantity) throw new IllegalArgumentException("个人收藏/送礼用途必须将全部数量寄送给个人，不支持拆分");
+        CreativeProjectService.ProjectRef workflowProject = bundleId == null
+                ? resolveWorkflowProject(numberAsLong(body.get("projectId")), numberAsLong(body.get("versionId")), assetId, userId)
+                : resolveWorkflowProjectFromBundle(bundle, userId);
+        if ("bulk".equals(requestType)) {
+            requireUnlockedSampleForBulk(userId, assetId, bundleId);
+        }
+        Map<String,Object> versionSnapshot = null;
+        if (workflowProject != null) {
+            Map<String, Object> preflight = creativePreflight.run(workflowProject.projectId(), workflowProject.versionId(), userId,
+                    Map.of("assetId", assetId, "bundleId", bundleId == null ? 0L : bundleId));
+            if ("blocked".equals(String.valueOf(preflight.get("status")))) {
+                Object issue = preflight.get("issues") instanceof List<?> issues && !issues.isEmpty()
+                        ? issues.get(0) : "当前版本未通过生产预检";
+                throw new IllegalStateException("生产预检未通过：" + issue);
+            }
+            // A sampling request is the first downstream manufacturing record;
+            // freeze the exact version before persisting the request.
+            if ("sample".equals(requestType)) {
+                creativeProjects.transitionProject(workflowProject.projectId(), workflowProject.versionId(), userId,
+                        "sampling", "sampling_requested", "user", userId,
+                        Map.of("assetId", assetId, "bundleId", bundleId == null ? 0L : bundleId));
+            } else {
+                // A bulk request is submitted for review while the project is
+                // still in the accepted/bulk-unlocked phase. The phase moves
+                // to in_production only after staff approval.
+                recordWorkflowEvent(workflowProject, userId, "bulk_request_submitted", "user", userId,
+                        Map.of("assetId", assetId, "bundleId", bundleId == null ? 0L : bundleId));
+            }
+            versionSnapshot = creativeProjects.createProductionSnapshot(
+                    workflowProject.projectId(), workflowProject.versionId(), userId);
+        }
         String title=body==null||body.get("title")==null?"":String.valueOf(body.get("title"));
         if(blank(title)) title=("sample".equals(requestType)?"C端打样申请-":"C端批量生产申请-")+(bundleId == null ? asset.get("title") : firstNonBlank(str(bundle.get("productName")), "三视图作品"));
         String requestNo=no("sample".equals(requestType)?"CYP":"CPR");
@@ -3573,14 +3750,52 @@ public class CreativeAiController {
         String recipientPhone=body.get("recipientPhone")==null?"":String.valueOf(body.get("recipientPhone"));
         String recipientAddress=body.get("recipientAddress")==null?"":String.valueOf(body.get("recipientAddress"));
         String note=body.get("note")==null?"":String.valueOf(body.get("note"));
-        jdbc.update(con -> {
-            PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,multiview_bundle_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status,sample_product_name,sample_fee_yuan,sample_payment_status) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,?,'review',?,?,?)",Statement.NO_GENERATED_KEYS);
-            ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);if(finalBundleId==null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4,finalBundleId);ps.setString(5,finalRequestType);ps.setString(6,finalTitle);ps.setInt(7,finalQuantity);ps.setInt(8,finalSelfQty);ps.setString(9,distributionJson);ps.setString(10,recipientName);ps.setString(11,recipientPhone);ps.setString(12,recipientAddress);ps.setString(13,note);ps.setString(14,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(15, java.sql.Types.DECIMAL); else ps.setBigDecimal(15, finalSampleFeeYuan); ps.setString(16, "not_required");
-            return ps;
-        });
+        String finalClientRequestKey = blank(clientRequestKey) ? null : clientRequestKey;
+        if (finalClientRequestKey == null) {
+            // Keep legacy/manual test schemas and old rolling nodes usable;
+            // only keyed requests require the additive migration column.
+            jdbc.update(con -> {
+                PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,multiview_bundle_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status,sample_product_name,sample_fee_yuan,sample_payment_status) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,?,'review',?,?,?)",Statement.NO_GENERATED_KEYS);
+                ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);if(finalBundleId==null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4,finalBundleId);ps.setString(5,finalRequestType);ps.setString(6,finalTitle);ps.setInt(7,finalQuantity);ps.setInt(8,finalSelfQty);ps.setString(9,distributionJson);ps.setString(10,recipientName);ps.setString(11,recipientPhone);ps.setString(12,recipientAddress);ps.setString(13,note);ps.setString(14,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(15, java.sql.Types.DECIMAL); else ps.setBigDecimal(15, finalSampleFeeYuan); ps.setString(16, "not_required");
+                return ps;
+            });
+        } else {
+            jdbc.update(con -> {
+                PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,multiview_bundle_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,client_request_key,status,sample_product_name,sample_fee_yuan,sample_payment_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'review',?,?,?)",Statement.NO_GENERATED_KEYS);
+                ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);if(finalBundleId==null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4,finalBundleId);ps.setString(5,finalRequestType);ps.setString(6,finalTitle);ps.setInt(7,finalQuantity);ps.setInt(8,finalSelfQty);ps.setString(9,distributionJson);ps.setString(10,recipientName);ps.setString(11,recipientPhone);ps.setString(12,recipientAddress);ps.setString(13,note);ps.setString(14,finalClientRequestKey);ps.setString(15,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(16, java.sql.Types.DECIMAL); else ps.setBigDecimal(16, finalSampleFeeYuan); ps.setString(17, "not_required");
+                return ps;
+            });
+        }
         Long id=jdbc.queryForObject("SELECT id FROM consumer_production_request WHERE request_no=?", Long.class, requestNo);
+        // Reuse the validated asset/bundle reference. A client commonly opens
+        // the production page with only an asset or bundle id; resolving the
+        // project a second time from optional body fields used to drop the
+        // project link from otherwise valid requests.
+        CreativeProjectService.ProjectRef project = workflowProject != null ? workflowProject : resolveProjectRef(
+                numberAsLong(body == null ? null : body.get("projectId")),
+                numberAsLong(body == null ? null : body.get("versionId")), userId);
+        creativeProjects.bindProductionRequest(id,
+                project == null ? null : project.projectId(),
+                project == null ? null : project.versionId(), assetId);
+        if (workflowProject != null) {
+            try {
+                jdbc.update("UPDATE consumer_production_request SET version_snapshot_json=?,version_snapshot_hash=?,version_frozen_at=? WHERE id=?",
+                        mapper.writeValueAsString(mergeProductionSnapshot(versionSnapshot, assetId, bundleId, requestType, quantity)),
+                        String.valueOf(versionSnapshot.get("freezeHash")), versionSnapshot.get("frozenAt"), id);
+            } catch (org.springframework.dao.DataAccessException ignored) {
+                // Optional snapshot columns are added by the phase-two
+                // migration; keep rolling deployments compatible.
+            }
+            recordWorkflowEvent(workflowProject, userId, "production_request_submitted", "user", userId,
+                    Map.of("requestId", id, "requestType", requestType, "assetId", assetId));
+        }
         Map<String,Object> result = new LinkedHashMap<>();
         result.put("success",true); result.put("id",id); result.put("requestNo",requestNo); result.put("status","review");
+        if (project != null) {
+            result.put("projectId", project.projectId());
+            result.put("versionId", project.versionId());
+        }
+        if (!blank(finalClientRequestKey)) result.put("idempotencyKey", finalClientRequestKey);
         if (bundleId != null) { result.put("multiviewBundleId", bundleId); result.put("multiviewBundleNo", bundle.get("bundleNo")); }
         if ("sample".equals(requestType)) {
             result.put("sampleProductName", sampleProductName);
@@ -3607,22 +3822,81 @@ public class CreativeAiController {
         }
     }
 
+    private Map<String, Object> mergeProductionSnapshot(Map<String, Object> snapshot,
+                                                        Long assetId, Long bundleId,
+                                                        String requestType, int quantity) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (snapshot != null) out.putAll(snapshot);
+        out.put("assetId", assetId);
+        if (bundleId != null) out.put("bundleId", bundleId);
+        out.put("requestType", requestType);
+        out.put("quantity", quantity);
+        out.put("capturedAt", LocalDateTime.now().toString());
+        return out;
+    }
+
+    /**
+     * Bulk manufacturing is unlocked by an accepted physical sample. Keep
+     * this gate server-side so a caller cannot bypass the sample review by
+     * changing the request type in the mini-program payload.
+     */
+    private void requireUnlockedSampleForBulk(Long userId, Long assetId, Long bundleId) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT id FROM consumer_production_request WHERE user_id=? AND request_type='sample' "
+                        + "AND sample_workflow_status='bulk_unlocked'");
+        List<Object> args = new ArrayList<>();
+        args.add(userId);
+        if (bundleId != null) {
+            sql.append(" AND multiview_bundle_id=?");
+            args.add(bundleId);
+        } else {
+            sql.append(" AND asset_id=?");
+            args.add(assetId);
+        }
+        sql.append(" ORDER BY id DESC LIMIT 1");
+        try {
+            if (jdbc.queryForList(sql.toString(), args.toArray()).isEmpty()) {
+                throw new IllegalStateException("批量生产前必须先完成打样、验收并解锁量产");
+            }
+        } catch (BadSqlGrammarException schemaNotReady) {
+            // The lifecycle migration is additive. A legacy database cannot
+            // represent the unlock checkpoint yet, so keep its historical
+            // direct-bulk behavior until Flyway has added the new column.
+            if (!isMissingLifecycleSchema(schemaNotReady)) throw schemaNotReady;
+        }
+    }
+
+    private boolean isMissingLifecycleSchema(BadSqlGrammarException exception) {
+        String message = exception.getSQLException() == null
+                ? exception.getMessage()
+                : exception.getSQLException().getMessage();
+        String normalized = nullToEmpty(message).toLowerCase(Locale.ROOT);
+        return normalized.contains("unknown column")
+                || normalized.contains("column") && normalized.contains("not found")
+                || normalized.contains("table") && normalized.contains("doesn't exist")
+                || normalized.contains("table") && normalized.contains("not found");
+    }
+
     @GetMapping("/consumer-production/admin/review")
     public List<Map<String,Object>> consumerProductionReview(@RequestParam(required=false) String type,
                                                              @RequestParam(required=false) String status,
                                                              @RequestParam(required=false) Long userId,
                                                              @RequestParam(required=false,defaultValue="200") int size) {
         requireCreativeAdmin();
-        StringBuilder sql=new StringBuilder("SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo,b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.created_at createdAt,r.updated_at updatedAt FROM consumer_production_request r JOIN user u ON u.id=r.user_id JOIN digital_asset a ON a.id=r.asset_id LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id WHERE 1=1");
         List<Object> args=new ArrayList<>();
-        if(!blank(type)&&Set.of("sample","bulk").contains(type)){sql.append(" AND r.request_type=?");args.add(type);}
-        if(!blank(status)&&Set.of("review","approved","rejected").contains(status)){sql.append(" AND r.status=?");args.add(status);}
-        if(userId!=null){sql.append(" AND r.user_id=?");args.add(userId);}
-        sql.append(" ORDER BY r.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,500)));
-        return enrichProductionRows(jdbc.queryForList(sql.toString(),args.toArray()));
+        StringBuilder where = new StringBuilder(" WHERE 1=1");
+        if(!blank(type)&&Set.of("sample","bulk").contains(type)){where.append(" AND r.request_type=?");args.add(type);}
+        if(!blank(status)&&Set.of("review","approved","rejected").contains(status)){where.append(" AND r.status=?");args.add(status);}
+        if(userId!=null){where.append(" AND r.user_id=?");args.add(userId);}
+        args.add(Math.max(1,Math.min(size,500)));
+        return queryProductionRequestRows(
+                productionRequestSelect(true, true) + where + " ORDER BY r.id DESC LIMIT ?",
+                productionRequestSelect(false, true) + where + " ORDER BY r.id DESC LIMIT ?",
+                args);
     }
 
     @PutMapping("/consumer-production/admin/{id}/review")
+    @Transactional
     public Map<String,Object> reviewConsumerProduction(@PathVariable Long id,
                                                        @RequestBody Map<String,String> body) {
         requireCreativeAdmin();
@@ -3630,9 +3904,10 @@ public class CreativeAiController {
         if(!Set.of("approved","rejected","review").contains(status)) throw new IllegalArgumentException("审核状态只能是 approved / rejected / review");
         String comment=body==null?"":nullToEmpty(body.get("comment"));
         String operator = authenticatedPrincipal().username();
-        List<Map<String,Object>> rows = jdbc.queryForList("SELECT request_type,sample_payment_status FROM consumer_production_request WHERE id=? FOR UPDATE", id);
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT request_type,sample_payment_status,user_id userId,asset_id assetId FROM consumer_production_request WHERE id=? FOR UPDATE", id);
         if (rows.isEmpty()) throw new IllegalArgumentException("生产申请不存在");
         Map<String,Object> current = rows.get(0);
+        current.putAll(optionalProjectVersion("consumer_production_request", "id", id));
         String requestType = String.valueOf(current.get("request_type"));
         String paymentStatus = String.valueOf(current.get("sample_payment_status"));
         if ("sample".equals(requestType) && "paid".equals(paymentStatus) && !"approved".equals(status)) {
@@ -3649,6 +3924,18 @@ public class CreativeAiController {
         }
         int n=jdbc.update("UPDATE consumer_production_request SET status=?,sample_payment_status=?,review_comment=?,reviewed_by=?,reviewed_at=? WHERE id=?",status,paymentStatus,comment,blank(operator)?"admin":operator,"review".equals(status)?null:LocalDateTime.now(),id);
         if(n==0) throw new IllegalArgumentException("生产申请不存在");
+        Long requestOwner = numberAsLong(current.get("userId"));
+        CreativeProjectService.ProjectRef workflowProject = requestOwner == null ? null
+                : resolveWorkflowProject(numberAsLong(current.get("projectId")), numberAsLong(current.get("versionId")),
+                numberAsLong(current.get("assetId")), requestOwner);
+        if (workflowProject != null) {
+            String target = "rejected".equals(status) ? "needs_revision"
+                    : "approved".equals(status) ? ("sample".equals(requestType) ? "sampling" : "in_production")
+                    : "human_review";
+            creativeProjects.transitionProject(workflowProject.projectId(), workflowProject.versionId(), requestOwner,
+                    target, "production_review_" + status, "staff", authenticatedPrincipal().userId(),
+                    Map.of("requestId", id, "comment", comment));
+        }
         boolean paymentRequired = "sample".equals(requestType) && "approved".equals(status) && Set.of("unpaid", "pending", "manual_review").contains(paymentStatus);
         return Map.of("success",true,"id",id,"status",status,"samplePaymentStatus",paymentStatus,"paymentRequired",paymentRequired,"message","approved".equals(status)?(paymentRequired?"生产申请已通过，请通知用户支付打样费":"生产申请已通过"):"rejected".equals(status)?"生产申请已驳回":"已退回待审核");
     }
@@ -3658,6 +3945,19 @@ public class CreativeAiController {
         if (req.assetId == null) throw new IllegalArgumentException("assetId不能为空");
         requireAssetAccess(req.assetId);
         Map<String, Object> asset = jdbc.queryForMap("SELECT id, asset_no assetNo, title, asset_type assetType, file_url fileUrl, prompt, tags, metadata_json metadataJson FROM digital_asset WHERE id=?", req.assetId);
+        Long reviewOwner = assetOwnerId(req.assetId);
+        CreativeProjectService.ProjectRef workflowProject = reviewOwner == null ? null
+                : resolveWorkflowProject(null, null, req.assetId, reviewOwner);
+        if (workflowProject != null) {
+            try {
+                creativeProjects.transitionProject(workflowProject.projectId(), workflowProject.versionId(), reviewOwner,
+                        "ai_review", "ai_review_started", "system", authenticatedPrincipal().userId(),
+                        Map.of("assetId", req.assetId));
+            } catch (IllegalStateException ignored) {
+                recordWorkflowEvent(workflowProject, reviewOwner, "ai_review_started", "system",
+                        authenticatedPrincipal().userId(), Map.of("assetId", req.assetId));
+            }
+        }
         String reviewNo = no("REV");
         Long reviewId = insertReview(reviewNo, req.assetId);
 
@@ -4480,6 +4780,7 @@ public class CreativeAiController {
         r.put("status","succeeded"); r.put("progress",100); r.put("assetId",a.get("id"));
         r.put("format",a.get("format")); r.put("model",job.get("modelName"));
         r.put("source","Tripo "+str(job.get("modelName")));
+        addProjectIdentity(r, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")));
         addSignedAssetFields(r, ((Number)a.get("id")).longValue(), "image");
         return r;
     }
@@ -4489,6 +4790,7 @@ public class CreativeAiController {
         r.put("jobId",jobId); r.put("jobNo",job.get("jobNo")); r.put("taskId",job.get("externalTaskId"));
         r.put("status","succeeded"); r.put("progress",100); r.put("id",a.get("id")); r.put("assetId",a.get("id"));
         r.put("assetType",a.get("assetType")); r.put("sourceType",a.get("sourceType")); r.put("assetStatus",a.get("assetStatus")); r.put("format",a.get("format"));
+        addProjectIdentity(r, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")));
         addSignedAssetFields(r, ((Number)a.get("id")).longValue(), String.valueOf(a.get("assetType")));
         if(job.get("createdBy") instanceof Number&&hasPersistedRole(((Number)job.get("createdBy")).longValue(),"user"))r.put("creditAccount",creditAccountMap(((Number)job.get("createdBy")).longValue()));
         return r;
@@ -4505,7 +4807,9 @@ public class CreativeAiController {
             PreparedStatement ps = con.prepareStatement("INSERT INTO design_review (review_no, asset_id) VALUES (?,?)", Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, reviewNo); ps.setLong(2, assetId); return ps;
         }, kh);
-        return Objects.requireNonNull(kh.getKey()).longValue();
+        Long reviewId = generatedKeyId(kh);
+        creativeProjects.bindReview(reviewId, null, null, assetId);
+        return Objects.requireNonNull(reviewId);
     }
 
     private void insertAgentReview(Long reviewId, Map<String, String> agent, Map<String, Object> result) throws Exception {
@@ -4864,6 +5168,9 @@ public class CreativeAiController {
         Long assetId=Objects.requireNonNull(kh.getKey()).longValue();
         Object owner=meta==null?null:meta.get("createdByUserId");
         if(owner instanceof Number) assignAssetOwner(assetId,((Number)owner).longValue());
+        Long projectId = meta == null ? null : numberAsLong(meta.get("projectId"));
+        Long versionId = meta == null ? null : numberAsLong(meta.get("versionId"));
+        creativeProjects.bindAsset(assetId, projectId, versionId, parentAssetId);
         return assetId;
     }
 
@@ -4878,6 +5185,39 @@ public class CreativeAiController {
         if (!blank(material)) metadata.put("productMaterial", material.trim());
         String normalizedSize = normalizedProductSize(productSize);
         if (!blank(normalizedSize)) metadata.put("productSize", normalizedSize);
+    }
+
+    private void addProjectIdentity(Map<String, Object> metadata, Long projectId, Long versionId) {
+        if (metadata == null) return;
+        if (projectId != null) metadata.put("projectId", projectId);
+        if (versionId != null) metadata.put("versionId", versionId);
+    }
+
+    /**
+     * A rolling deployment may complete an older Tripo job after its job row
+     * was created without project columns. The generated asset is the durable
+     * source of truth in that case, so recover its project/version before
+     * returning the completed task response.
+     */
+    private void inheritProjectVersionFromOutputAsset(Map<String, Object> job) {
+        if (job == null) return;
+        Long assetId = numberAsLong(job.get("outputAssetId"));
+        if (assetId == null) return;
+        Long projectId = numberAsLong(job.get("projectId"));
+        Long versionId = numberAsLong(job.get("versionId"));
+        if (projectId != null && versionId != null) return;
+        Map<String, Object> assetRef = optionalProjectVersion("digital_asset", "id", assetId);
+        if (projectId == null) projectId = numberAsLong(assetRef.get("projectId"));
+        if (versionId == null) versionId = numberAsLong(assetRef.get("versionId"));
+        addProjectIdentity(job, projectId, versionId);
+    }
+
+    private Map<String, Object> textTo3dMetadata(Generate3dRequest request, Long ownerUserId) {
+        Map<String, Object> metadata = withAssetOwner(
+                new LinkedHashMap<>(Map.of("provider", "siliconflow", "model", chatModel)), ownerUserId);
+        addProjectIdentity(metadata, request == null ? null : request.projectId,
+                request == null ? null : request.versionId);
+        return metadata;
     }
 
     private Map<String, Object> withProductIdentity(Map<String, Object> metadata, String productKey, String productName, String material) {
@@ -4931,6 +5271,92 @@ public class CreativeAiController {
     private void assignJobOwner(Long jobId, Long userId) {
         if(jobId==null||userId==null) return;
         try { jdbc.update("UPDATE ai_generation_job SET created_by=? WHERE id=?", userId, jobId); } catch(Exception ignored) {}
+    }
+
+    /**
+     * The production request table is extended by several additive Flyway
+     * migrations. During a rolling deployment an old application node can
+     * briefly read the table before those columns are present. Keep list
+     * endpoints usable in that window by retrying with the original schema
+     * projection and explicit null/default lifecycle values.
+     */
+    private List<Map<String,Object>> queryProductionRequestRows(String sql,
+                                                                 String legacySql,
+                                                                 List<Object> args) {
+        try {
+            return enrichProductionRows(jdbc.queryForList(sql, args.toArray()));
+        } catch (DataAccessException richSchemaFailure) {
+            try {
+                List<Map<String, Object>> rows = jdbc.queryForList(legacySql, args.toArray());
+                return enrichProductionRows(withLegacyProductionDefaults(rows));
+            } catch (DataAccessException bundleSchemaFailure) {
+                // A very early production schema predates the multiview table
+                // as well. Keep the request list usable until all additive
+                // migrations have completed instead of returning a 500.
+                String basicSql = productionRequestSelect(false, false)
+                        + legacyWhereAndLimit(sql) + "";
+                List<Map<String, Object>> rows = jdbc.queryForList(basicSql, args.toArray());
+                return enrichProductionRows(withLegacyProductionDefaults(rows));
+            }
+        }
+    }
+
+    private String productionRequestSelect(boolean currentSchema, boolean includeBundle) {
+        String projectColumns = currentSchema
+                ? "r.project_id projectId,r.version_id versionId,"
+                : "NULL projectId,NULL versionId,";
+        String bundleColumns = includeBundle
+                ? "r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo,b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,"
+                : "NULL multiviewBundleId,NULL multiviewBundleNo,NULL multiviewViewCount,NULL multiviewBundleStatus,NULL multiviewProductName,NULL multiviewProductSize,NULL multiviewBundleComment,";
+        String lifecycleColumns = currentSchema
+                ? "r.sample_workflow_status sampleWorkflowStatus,r.sample_received_at sampleReceivedAt,r.sample_accepted_at sampleAcceptedAt,r.sample_revision_count sampleRevisionCount,r.bulk_unlocked_at bulkUnlockedAt,r.bulk_unlocked_by bulkUnlockedBy,"
+                : "NULL sampleWorkflowStatus,NULL sampleReceivedAt,NULL sampleAcceptedAt,NULL sampleRevisionCount,NULL bulkUnlockedAt,NULL bulkUnlockedBy,";
+        String bundleJoin = includeBundle ? " LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id" : "";
+        return "SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,"
+                + projectColumns + bundleColumns
+                + "a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,"
+                + "r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,"
+                + "r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,"
+                + "r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,"
+                + "r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,"
+                + "r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,"
+                + lifecycleColumns + "r.created_at createdAt,r.updated_at updatedAt "
+                + "FROM consumer_production_request r JOIN user u ON u.id=r.user_id "
+                + "LEFT JOIN digital_asset a ON a.id=r.asset_id" + bundleJoin;
+    }
+
+    /** Keep the same filters and limit when switching to the no-bundle query. */
+    private String legacyWhereAndLimit(String richSql) {
+        int from = richSql.indexOf(" WHERE ");
+        return from < 0 ? "" : richSql.substring(from);
+    }
+
+    private List<Map<String,Object>> withLegacyProductionDefaults(List<Map<String,Object>> rows) {
+        for (Map<String, Object> row : rows) {
+            row.putIfAbsent("projectId", null);
+            row.putIfAbsent("versionId", null);
+            row.putIfAbsent("multiviewBundleId", null);
+            row.putIfAbsent("multiviewBundleNo", null);
+            row.putIfAbsent("multiviewViewCount", null);
+            row.putIfAbsent("multiviewBundleStatus", null);
+            row.putIfAbsent("multiviewProductName", null);
+            row.putIfAbsent("multiviewProductSize", null);
+            row.putIfAbsent("multiviewBundleComment", null);
+            String requestStatus = str(row.get("status")).toLowerCase(Locale.ROOT);
+            String legacyWorkflow = switch (requestStatus) {
+                case "shipped" -> "shipped";
+                case "processing" -> "in_production";
+                case "completed" -> "sample_ready";
+                default -> "not_started";
+            };
+            row.putIfAbsent("sampleWorkflowStatus", legacyWorkflow);
+            row.putIfAbsent("sampleReceivedAt", null);
+            row.putIfAbsent("sampleAcceptedAt", null);
+            row.putIfAbsent("sampleRevisionCount", 0);
+            row.putIfAbsent("bulkUnlockedAt", null);
+            row.putIfAbsent("bulkUnlockedBy", null);
+        }
+        return rows;
     }
 
     private List<Map<String,Object>> enrichProductionRows(List<Map<String,Object>> rows) {
@@ -5646,6 +6072,9 @@ public class CreativeAiController {
         public Long seed;
         public String tags;
         public Long inputAssetId;
+        /** Unified creative project/version identity (optional for legacy clients). */
+        public Long projectId;
+        public Long versionId;
         public Boolean refinement;
         public String refinementNote;
         public String tripoImageModel;
@@ -5676,6 +6105,9 @@ public class CreativeAiController {
         /** Physical finished-product dimensions, separate from the 1K/2K image size. */
         public String productSize;
         public Long inputAssetId;
+        /** Unified creative project/version identity (optional for legacy clients). */
+        public Long projectId;
+        public Long versionId;
         public String size;
         /** Optional deterministic Seedream seed for reproducible comparisons. */
         public Long seed;
@@ -5707,6 +6139,9 @@ public class CreativeAiController {
         /** Physical finished-product dimensions retained with the 3D prototype. */
         public String productSize;
         public Long inputAssetId;
+        /** Unified creative project/version identity (optional for legacy clients). */
+        public Long projectId;
+        public Long versionId;
         public Map<String,Long> multiviewAssetIds;
         public String exportFormats;
         public Boolean texture;

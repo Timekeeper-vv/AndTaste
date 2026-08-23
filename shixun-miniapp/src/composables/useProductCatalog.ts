@@ -3,7 +3,7 @@ import { getSelectionOptions, type SelectionOption } from '../api/selection'
 import {
   resolveCreativeProductProfile,
   type CreativeProductLike,
-} from '../utils/creativeEngine'
+} from '../utils/creativeEngineRuntime'
 
 /**
  * Product data consumed by the conversation page.
@@ -144,12 +144,23 @@ export function normalizeRecommendedSpecification(value: unknown) {
 
 function productFormRecommendation(product: CatalogProductOption | null | undefined) {
   if (!product) return ''
-  return resolveCreativeProductProfile({
-    product: product as CreativeProductLike,
-    productKey: product.key,
-    productCategory: product.categoryName || product.categoryKey,
-    productType: product.name,
-  }).recommendedSize || ''
+  // The developer tool can briefly retain a page bundle while rebuilding its
+  // watched output directory. In that state `require(creativeEngineRuntime)`
+  // may be undefined even though the fresh file exists on disk. A size
+  // recommendation is local UI state and must never crash the whole flow.
+  try {
+    if (typeof resolveCreativeProductProfile === 'function') {
+      return resolveCreativeProductProfile({
+        product: product as CreativeProductLike,
+        productKey: product.key,
+        productCategory: product.categoryName || product.categoryKey,
+        productType: product.name,
+      }).recommendedSize || ''
+    }
+  } catch (error) {
+    console.warn('[product-catalog] creative engine profile unavailable; using local size fallback', error)
+  }
+  return ''
 }
 
 /** Product-name and category fallbacks used when the catalog has no spec. */

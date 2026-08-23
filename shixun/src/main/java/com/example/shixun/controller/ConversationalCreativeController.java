@@ -2,11 +2,13 @@ package com.example.shixun.controller;
 
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
+import com.example.shixun.service.CreativeProjectService;
 import com.example.shixun.service.SiliconFlowChatService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -55,11 +57,20 @@ public class ConversationalCreativeController {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final SiliconFlowChatService siliconFlow;
+    private final CreativeProjectService projects;
 
-    public ConversationalCreativeController(JdbcTemplate jdbc, ObjectMapper mapper, SiliconFlowChatService siliconFlow) {
+    @Autowired
+    public ConversationalCreativeController(JdbcTemplate jdbc, ObjectMapper mapper, SiliconFlowChatService siliconFlow,
+                                            CreativeProjectService projects) {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.siliconFlow = siliconFlow;
+        this.projects = projects;
+    }
+
+    /** Kept for focused unit tests and older embedders that construct the controller directly. */
+    public ConversationalCreativeController(JdbcTemplate jdbc, ObjectMapper mapper, SiliconFlowChatService siliconFlow) {
+        this(jdbc, mapper, siliconFlow, new CreativeProjectService(jdbc, mapper));
     }
 
     @PostMapping
@@ -68,18 +79,21 @@ public class ConversationalCreativeController {
         long userId = requireConsumer(principal);
         String mode = text(body == null ? null : body.get("mode"));
         if (mode != null && !MODES.contains(mode)) throw new IllegalArgumentException("创作方式无效");
+        CreativeProjectService.ProjectRef project = projects.createProject(userId, mode, text(body == null ? null : body.get("title")));
         String sessionNo = no("CCS");
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
-                    "INSERT INTO creative_conversation_session (session_no,user_id,mode,status) VALUES (?,?,?,'draft')",
+                    "INSERT INTO creative_conversation_session (session_no,user_id,mode,status,project_id,version_id) VALUES (?,?,?,'draft',?,?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, sessionNo);
             ps.setLong(2, userId);
             ps.setString(3, mode);
+            ps.setLong(4, project.projectId());
+            ps.setLong(5, project.versionId());
             return ps;
         }, keyHolder);
-        Number key = keyHolder.getKey();
+        Number key = generatedId(keyHolder);
         if (key == null) throw new IllegalStateException("创作会话创建失败");
         long sessionId = key.longValue();
         saveEvent(sessionId, userId, "welcome", "session_started", Map.of("mode", mode == null ? "" : mode));
@@ -90,7 +104,7 @@ public class ConversationalCreativeController {
     public List<Map<String, Object>> mine(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         long userId = requireConsumer(principal);
-        return jdbc.queryForList("SELECT id,session_no sessionNo,mode,product_type productType,material,product_size productSize,status,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE user_id=? ORDER BY updated_at DESC,id DESC LIMIT 30", userId);
+        return jdbc.queryForList("SELECT id,session_no sessionNo,mode,product_type productType,material,product_size productSize,status,project_id projectId,version_id versionId,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE user_id=? ORDER BY updated_at DESC,id DESC LIMIT 30", userId);
     }
 
     @GetMapping("/{id}")
@@ -103,7 +117,7 @@ public class ConversationalCreativeController {
     public Map<String, Object> event(@PathVariable long id, @RequestBody Map<String, Object> body,
                                      @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         long userId = requireConsumer(principal);
-        getOwnedSession(id, userId);
+        Map<String, Object> session = getOwnedSession(id, userId);
         if (body == null) throw new IllegalArgumentException("创作步骤不能为空");
         String step = text(body.get("step"));
         String eventType = text(body.get("eventType"));
@@ -113,8 +127,12 @@ public class ConversationalCreativeController {
         if (payload == null) payload = Map.of();
         String payloadJson = json(payload);
         if (payloadJson.length() > MAX_PAYLOAD_LENGTH) throw new IllegalArgumentException("本次创作内容过长，请精简后重试");
-        jdbc.update("INSERT INTO creative_conversation_event (session_id,user_id,step,event_type,payload_json) VALUES (?,?,?,?,?)", id, userId, step, eventType, payloadJson);
+        CreativeProjectService.ProjectRef project = projects.ensureForSession(id, userId, text(session.get("mode")));
+        jdbc.update("INSERT INTO creative_conversation_event (session_id,user_id,project_id,version_id,step,event_type,payload_json) VALUES (?,?,?,?,?,?,?)",
+                id, userId, project.projectId(), project.versionId(), step, eventType, payloadJson);
         updateSummary(id, userId, step, payload);
+        projects.appendEvent(project.projectId(), userId, project.versionId(), eventType, null,
+                projectStage(step, eventType), "user", userId, text(body.get("idempotencyKey")), payload);
         return getOwnedSession(id, userId);
     }
 
@@ -1040,14 +1058,20 @@ public class ConversationalCreativeController {
     private void saveEvent(long sessionId, long userId, String step, String eventType, Object payload) {
         String payloadJson = json(payload);
         if (payloadJson.length() > MAX_PAYLOAD_LENGTH) throw new IllegalArgumentException("本次创作内容过长，请精简后重试");
-        jdbc.update("INSERT INTO creative_conversation_event (session_id,user_id,step,event_type,payload_json) VALUES (?,?,?,?,?)",
-                sessionId, userId, step, eventType, payloadJson);
+        CreativeProjectService.ProjectRef project = projects.ensureForSession(sessionId, userId, null);
+        jdbc.update("INSERT INTO creative_conversation_event (session_id,user_id,project_id,version_id,step,event_type,payload_json) VALUES (?,?,?,?,?,?,?)",
+                sessionId, userId, project.projectId(), project.versionId(), step, eventType, payloadJson);
+        projects.appendEvent(project.projectId(), userId, project.versionId(), eventType, null,
+                projectStage(step, eventType), "user", userId, null, payload);
     }
 
     private Map<String, Object> getOwnedSession(long id, long userId) {
-        List<Map<String, Object>> sessions = jdbc.queryForList("SELECT id,session_no sessionNo,user_id userId,mode,product_type productType,material,product_size productSize,status,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE id=? AND user_id=?", id, userId);
+        List<Map<String, Object>> sessions = jdbc.queryForList("SELECT id,session_no sessionNo,user_id userId,mode,product_type productType,material,product_size productSize,status,project_id projectId,version_id versionId,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE id=? AND user_id=?", id, userId);
         if (sessions.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作会话不存在");
         Map<String, Object> result = new LinkedHashMap<>(sessions.get(0));
+        CreativeProjectService.ProjectRef project = projects.ensureForSession(id, userId, text(result.get("mode")));
+        result.put("projectId", project.projectId());
+        result.put("versionId", project.versionId());
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT id,step,event_type eventType,payload_json payloadJson,created_at createdAt FROM creative_conversation_event WHERE session_id=? AND user_id=? ORDER BY id ASC", id, userId);
         List<Map<String, Object>> events = new ArrayList<>();
         for (Map<String, Object> row : rows) {
@@ -1060,6 +1084,30 @@ public class ConversationalCreativeController {
         }
         result.put("events", events);
         return result;
+    }
+
+    private String projectStage(String step, String eventType) {
+        if ("image".equals(step) || "model".equals(step) || "generation_started".equals(eventType)) return "generating";
+        if ("commercial".equals(step) || "compliance".equals(step)) return "engineering_check";
+        if ("multiview".equals(step)) return "candidate_selected";
+        if ("navigation".equals(step) && (eventType != null && eventType.contains("review"))) return "human_review";
+        if ("summary".equals(step) || "size".equals(step) || "material".equals(step) || "product".equals(step) || "inspiration".equals(step)) return "brief_ready";
+        return "brief";
+    }
+
+    private Number generatedId(KeyHolder holder) {
+        try {
+            Number key = holder.getKey();
+            if (key != null) return key;
+        } catch (org.springframework.dao.InvalidDataAccessApiUsageException ignored) {
+            // H2 may include generated timestamp columns in the key row.
+        }
+        for (Map<String, Object> row : holder.getKeyList()) {
+            for (Map.Entry<String, Object> entry : row.entrySet()) {
+                if ("ID".equalsIgnoreCase(entry.getKey()) && entry.getValue() instanceof Number number) return number;
+            }
+        }
+        return null;
     }
 
     private long requireConsumer(JwtService.Claims principal) {

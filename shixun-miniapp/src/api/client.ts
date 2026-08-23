@@ -1,4 +1,21 @@
-import { clearSession, getSession } from '../utils/session'
+// Keep the request layer self-contained. WeChat DevTools can briefly expose an
+// incomplete imported module while it is rebuilding the watched output tree;
+// authentication must still work during that window. This is the same storage
+// key used by utils/session.ts, so login/logout semantics remain unchanged.
+const MINI_SESSION_KEY = 'smart_pig_auth'
+
+function readStoredSession(): any | null {
+  try {
+    const value = uni.getStorageSync(MINI_SESSION_KEY)
+    return value && typeof value === 'object' ? value : null
+  } catch {
+    return null
+  }
+}
+
+function clearStoredSession() {
+  try { uni.removeStorageSync(MINI_SESSION_KEY) } catch { /* Storage is optional during bootstrap. */ }
+}
 
 // 小程序正式发布时，填写 .env 的 VITE_API_BASE_URL，例如 https://api.example.com
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://api.example.com').replace(/\/$/, '')
@@ -80,6 +97,17 @@ export class ApiError extends Error {
   }
 }
 
+export const AUTH_SESSION_EXPIRED_CODE = 'AUTH_SESSION_EXPIRED'
+
+export function isAuthenticationError(error: any) {
+  const statusCode = Number(error?.statusCode || error?.status || 0)
+  const code = String(error?.code || '')
+  const message = String(error?.message || error?.errMsg || '')
+  return statusCode === 401
+    || code === AUTH_SESSION_EXPIRED_CODE
+    || /unauthorized|登录已过期|登录状态已失效|请先登录/i.test(message)
+}
+
 export function apiUrl(path: string) {
   return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
@@ -87,9 +115,57 @@ export function apiUrl(path: string) {
 export type RequestOptions = Omit<UniApp.RequestOptions, 'url'>
 
 const DEFAULT_REQUEST_TIMEOUT = 20000
+let authenticationRedirectBlockedUntil = 0
+
+function currentReturnRoute() {
+  try {
+    const pages = getCurrentPages()
+    const current = pages[pages.length - 1] as any
+    const route = String(current?.route || '').replace(/^\//, '')
+    if (!route || route === 'pages/login/index') return ''
+    const query = Object.entries(current?.options || {})
+      // Reopening a conversation with new=1 would discard the project the user
+      // was working on when the token expired. Let the page restore the latest
+      // persisted conversation after login instead.
+      .filter(([key, value]) => !(route === 'pages/conversation-create/index' && key === 'new') && value !== undefined && value !== null && String(value) !== '')
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+      .join('&')
+    return `/${route}${query ? `?${query}` : ''}`
+  } catch {
+    return ''
+  }
+}
+
+function expireSessionAndRedirectToLogin() {
+  clearStoredSession()
+  const now = Date.now()
+  if (now < authenticationRedirectBlockedUntil) return
+  authenticationRedirectBlockedUntil = now + 3000
+  const returnRoute = currentReturnRoute()
+  const loginUrl = returnRoute
+    ? `/pages/login/index?redirect=${encodeURIComponent(returnRoute)}`
+    : '/pages/login/index'
+  uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+  setTimeout(() => uni.reLaunch({ url: loginUrl }), 500)
+}
+
+function authenticationError(data: any, fallback = '登录状态已失效，请重新登录后继续') {
+  return new ApiError(fallback, 401, stringValue(data?.code) || AUTH_SESSION_EXPIRED_CODE)
+}
+
+function isCredentialAuthenticationRequest(path: string) {
+  const endpoint = path.split('?')[0]
+  return [
+    '/api/users/login',
+    '/api/users/wechat-login',
+    '/api/users/wechat-phone-login',
+    '/api/users/email-register',
+    '/api/users/email-verification',
+  ].includes(endpoint)
+}
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const session = getSession()
+  const session = readStoredSession()
   const { timeout = DEFAULT_REQUEST_TIMEOUT, ...requestOptions } = options
   const headers: Record<string, string> = { ...(requestOptions.header as Record<string, string> || {}) }
   // Some endpoints (such as public consumer registration) must deliberately
@@ -107,10 +183,14 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
   const data: any = parsePayload(response.data)
   if (response.statusCode === 401) {
-    clearSession()
-    uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
-    setTimeout(() => uni.reLaunch({ url: '/pages/login/index' }), 500)
-    throw new Error('登录已过期')
+    const sentBearerToken = /^Bearer\s+\S+/i.test(String(headers.Authorization || ''))
+    // A rejected username/password or WeChat credential is a login validation
+    // error, not proof that an existing protected session expired.
+    if (sentBearerToken && !isCredentialAuthenticationRequest(path)) {
+      expireSessionAndRedirectToLogin()
+      throw authenticationError(data)
+    }
+    throw new ApiError(messageOf(data, '请先登录后继续'), 401, data?.code)
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
     const requestId = (response as any).header?.['X-Request-Id'] || (response as any).header?.['x-request-id'] || ''
@@ -122,7 +202,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 }
 
 export async function uploadFile<T>(path: string, filePath: string, name = 'file', formData?: Record<string, string>): Promise<T> {
-  const session = getSession()
+  const session = readStoredSession()
   let response: UniApp.UploadFileSuccessCallbackResult
   try {
     response = await uni.uploadFile({
@@ -136,10 +216,11 @@ export async function uploadFile<T>(path: string, filePath: string, name = 'file
   }
   const data: any = parsePayload(response.data || '{}')
   if (response.statusCode === 401) {
-    clearSession()
-    uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
-    setTimeout(() => uni.reLaunch({ url: '/pages/login/index' }), 500)
-    throw new Error('登录已过期')
+    if (session?.token) {
+      expireSessionAndRedirectToLogin()
+      throw authenticationError(data)
+    }
+    throw new ApiError(messageOf(data, '请先登录后继续'), 401, data?.code)
   }
   if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(messageOf(data, `上传失败（${response.statusCode}）`))
   return data as T

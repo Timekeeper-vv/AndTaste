@@ -5,6 +5,7 @@ import {
   getConversations,
   saveConversationEvent,
   type ConversationEvent,
+  type ConversationSession,
 } from '../api/creative'
 
 type ReadonlyValue<T> = { readonly value: T }
@@ -22,6 +23,7 @@ export interface ConversationSessionOptions {
   restoreMessages: (events: ConversationEvent[]) => void
   restorePhase: (events: ConversationEvent[]) => void
   refreshRestoredPreviews: () => Promise<void>
+  onSessionLoaded?: (session: ConversationSession) => void
   onCreateError?: (error: any) => void
 }
 
@@ -38,6 +40,7 @@ export function useConversationSession(options: ConversationSessionOptions) {
       const events = Array.isArray(detail.events) ? detail.events : []
       options.resetViewState()
       options.sessionId.value = Number(detail.id)
+      options.onSessionLoaded?.(detail)
       for (const event of events) options.restoreEvent(event)
       options.restoreMessages(events)
       options.restorePhase(events)
@@ -75,6 +78,7 @@ export function useConversationSession(options: ConversationSessionOptions) {
         }
         const session = await createConversation()
         options.sessionId.value = Number(session.id)
+        options.onSessionLoaded?.(session)
         options.resetViewState()
         return Boolean(options.sessionId.value)
       } catch (error: any) {

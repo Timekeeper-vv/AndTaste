@@ -4,18 +4,19 @@ import {
   createReferenceToImage,
   createTextToImage,
   getArkImageJob,
+  isAuthenticationError,
   waitForArkImageJob,
   type ImageGenerationJobProgress,
 } from '../api/client'
 import { optimizeImageEditPrompt, optimizeImagePrompt } from '../api/creative'
 import {
-  compileCreativeImageRequest,
   buildReferenceRawPrompt,
+  compileCreativeImageRequest,
   resolveCreativeProductProfile,
   type CreativeEngineInput,
   type CreativeImageRequest,
   type CreativeProductLike,
-} from '../utils/creativeEngine'
+} from '../utils/creativeEngineRuntime'
 
 export type ImageGenerationMode = 'text' | 'reference'
 type ReadonlyValue<T> = { readonly value: T }
@@ -31,6 +32,8 @@ export interface ImageGenerationOptions {
   inspirationText: ReadonlyValue<string>
   mode: ReadonlyValue<ImageGenerationMode | string>
   referenceAssetId: ReadonlyValue<number | null>
+  projectId?: ReadonlyValue<number | null>
+  versionId?: ReadonlyValue<number | null>
   generatedAssetId: ReadonlyValue<number | null>
   previewUrl: Ref<string>
   referenceAnalysis: Ref<string>
@@ -47,6 +50,101 @@ export interface ImageGenerationOptions {
   updateImageQueueMessage?: (job: ImageGenerationJobProgress) => void
   onGenerated: (result: any, generationPrompt: string) => Promise<void>
   onRefined?: (result: any, generationPrompt: string, refinementNote: string) => Promise<void>
+}
+
+/**
+ * The WeChat developer tool may evaluate a page while its watched output is
+ * between two rebuilds. Keep the generation path usable if that transient
+ * module record is empty; the next clean build still uses the full shared
+ * compiler from `creativeEngineRuntime.ts`.
+ */
+function fallbackProductForm(input: CreativeEngineInput) {
+  const context = [
+    input.product?.key,
+    input.product?.name,
+    input.product?.label,
+    input.productKey,
+    input.productCategory,
+    input.productType,
+  ].filter(Boolean).join(' ')
+  if (/冰淇淋|冰激凌|ice\s*cream|gelato/i.test(context)) return 'ice_cream'
+  if (/毛绒|布偶|plush|stuffed|soft\s*toy/i.test(context)) return 'plush'
+  if (/抱枕|靠垫|cushion|pillow/i.test(context)) return 'cushion'
+  if (/钥匙扣|key\s*chain|keychain/i.test(context)) return 'keychain'
+  if (/冰箱贴|磁贴|magnet/i.test(context)) return 'magnet'
+  if (/明信片|书签|贴纸|笔记本|notebook|postcard|bookmark|sticker/i.test(context)) return 'paper_stationery'
+  return 'general'
+}
+
+function fallbackCompiledRequest(input: CreativeEngineInput): CreativeImageRequest {
+  const purpose = input.purpose || (input.refinement ? 'refinement' : Number(input.inputAssetId) > 0 ? 'reference' : 'text')
+  const productType = String(input.product?.name || input.product?.label || input.productType || input.productCategory || '文创产品').trim().slice(0, 160)
+  const material = String(input.material || '适合该产品的制造材质').trim().slice(0, 160)
+  const productSize = String(input.productSize || '按产品实际规格').trim().slice(0, 120)
+  const source = String(input.optimizedPrompt || input.prompt || input.rawPrompt || `为${productType}设计一套适合量产打样的产品视觉`).trim().slice(0, 6000)
+  const reference = purpose === 'reference' || purpose === 'refinement' || Number(input.inputAssetId) > 0
+  const form = fallbackProductForm(input)
+  const shape = form === 'ice_cream'
+    ? '标准化 2.5D 浮雕冰淇淋冰棒，单个完整扁平轮廓，正面浅浮雕，底部有 100-120mm 天然实木棒。'
+    : form === 'plush'
+      ? '完整立体填充毛绒玩具，布料裁片、柔软填充体积、缝线和刺绣细节清晰可见。'
+      : form === 'cushion'
+        ? '完整可拥抱的异形抱枕，具有柔软填充体积、布料裁片、包边和缝线。'
+        : '完整、可识别、可量产的真实实体文创产品，具有明确轮廓、合理厚度、圆角和实际材质结构。'
+  const prompt = [
+    '【角色】你是专业产品设计师 + AI 图像工程师，正在为电商平台制作真实、可量产、可打样的文创产品主图。',
+    `【任务】将${reference ? '上传参考图中的主体和核心视觉元素' : '用户提供的灵感'}完全重构为一件真实的「${productType}」成品；不是原图复刻、滤镜或简单贴图。`,
+    `【产品形态】${shape}`,
+    `【制造参数】材质为「${material}」；成品规格为「${productSize}」。`,
+    '【构图规则】单个完整产品居中，占画面约 75%，背景纯白或浅灰，边缘清晰，禁止手机截图、海报、平面标签稿和无关场景。',
+    reference ? '【参考图转化原则】参考图只提供主体、轮廓、颜色、纹样和文化识别点；必须改变原始载体和场景，把元素重构到目标产品上，不得原图不变。' : '',
+    `【用户方向】${source}`,
+  ].filter(Boolean).join('\n')
+  const numericAssetId = Number(input.inputAssetId)
+  return {
+    prompt,
+    rawPrompt: String(input.rawPrompt || input.prompt || '').trim().slice(0, 6000),
+    negativePrompt: 'phone screenshot, smartphone, mobile screen, app interface, status bar, unchanged reference image, near duplicate, flat poster, label-only artwork, tiny isolated motif, cropped product, incomplete product, unrelated object, external watermark',
+    productKey: String(input.product?.key || input.productKey || '').trim().slice(0, 120),
+    productCategory: String(input.product?.categoryName || input.productCategory || input.product?.categoryKey || '文创产品').trim().slice(0, 160),
+    productType,
+    material,
+    productSize,
+    inputAssetId: Number.isFinite(numericAssetId) && numericAssetId > 0 ? numericAssetId : null,
+    refinement: input.refinement === true || purpose === 'refinement',
+    refinementNote: String(input.refinementNote || '').trim().slice(0, 2400),
+    seed: input.seed ?? null,
+    productForm: form,
+    creativeEngineVersion: 'miniapp-creative-engine-runtime-fallback-v2',
+  }
+}
+
+function compileWithRuntimeFallback(input: CreativeEngineInput): CreativeImageRequest {
+  try {
+    if (typeof compileCreativeImageRequest === 'function') return compileCreativeImageRequest(input)
+  } catch (error) {
+    console.warn('[image-generation] creative engine compiler unavailable; using local fallback', error)
+  }
+  return fallbackCompiledRequest(input)
+}
+
+function productFormWithRuntimeFallback(input: CreativeEngineInput) {
+  try {
+    if (typeof resolveCreativeProductProfile === 'function') return resolveCreativeProductProfile(input).key
+  } catch (error) {
+    console.warn('[image-generation] creative engine profile unavailable; using local fallback', error)
+  }
+  return fallbackProductForm(input)
+}
+
+function buildReferencePromptWithRuntimeFallback(supplement?: string) {
+  try {
+    if (typeof buildReferenceRawPrompt === 'function') return buildReferenceRawPrompt(supplement)
+  } catch (error) {
+    console.warn('[image-generation] creative engine reference builder unavailable; using local fallback', error)
+  }
+  const detail = String(supplement || '').trim()
+  return detail ? `上传参考图中的主体、轮廓、颜色和文化识别元素。用户补充方向：${detail}` : '上传参考图中的主体、轮廓、颜色和文化识别元素。'
 }
 
 export function useImageGeneration(options: ImageGenerationOptions) {
@@ -67,7 +165,7 @@ export function useImageGeneration(options: ImageGenerationOptions) {
   }
 
   function compileCurrentCreativeImageRequest(overrides: Partial<CreativeEngineInput>): CreativeImageRequest {
-    return compileCreativeImageRequest(currentCreativeEngineInput(overrides))
+    return compileWithRuntimeFallback(currentCreativeEngineInput(overrides))
   }
 
   function updateImageQueueMessage(job: ImageGenerationJobProgress) {
@@ -92,7 +190,7 @@ export function useImageGeneration(options: ImageGenerationOptions) {
     if (!original || !options.selectedProduct.value) return original
     // Ice-cream generation has a deterministic 2.5D carrier template. Do not
     // spend an optimizer call or feed a second expanded prompt into it.
-    if (resolveCreativeProductProfile(currentCreativeEngineInput()).key === 'ice_cream') return original
+    if (productFormWithRuntimeFallback(currentCreativeEngineInput()) === 'ice_cream') return original
     const shouldOptimize = purpose === 'initial' && options.mode.value !== 'image' && options.referenceAssetId.value === null
     if (!shouldOptimize) return original
     options.busyMessage.value = '正在整理产品提示词…'
@@ -117,7 +215,8 @@ export function useImageGeneration(options: ImageGenerationOptions) {
         imageProvider: 'volcengine_ark_seedream_5',
       })
       return optimized
-    } catch {
+    } catch (error) {
+      if (isAuthenticationError(error)) throw error
       await options.saveEventBestEffort('summary', 'prompt_optimization_fallback', {
         purpose,
         productType: options.productType.value,
@@ -133,6 +232,7 @@ export function useImageGeneration(options: ImageGenerationOptions) {
 
   function generationFailureMessage(error: any) {
     const raw = String(error?.message || error?.errMsg || '').trim()
+    if (/cannot (?:read (?:property|properties)|access).*resolveCreativeProductProfile.*(?:undefined|null)/i.test(raw)) return '小程序创作组件加载异常，请重新进入创作页后再试。若仍失败，请把开发者工具控制台中的 image-generation 日志发给管理员。'
     if (/timeout|timed out|超时/i.test(raw)) return '生成请求等待超时。之间大模型生成通常需要 1-3 分钟，请检查网络后重新提交；本次失败不会扣除未成功生成的积分。'
     if (/登录已过期|请先登录|401/i.test(raw)) return '登录状态已失效，请重新登录后再生成。'
     if (/安全体验模式|SetLimitExceeded|模型.*暂停/i.test(raw)) return '方舟模型的安全体验额度已用尽，服务已暂停。请联系平台管理员在火山方舟控制台提高额度或关闭安全体验模式后重试。'
@@ -150,6 +250,7 @@ export function useImageGeneration(options: ImageGenerationOptions) {
     if (!await options.ensureAiPolicy()) return
     options.busy.value = true
     options.busyMessage.value = '正在保存创作参数…'
+    let failureStage = 'saving_generation_brief'
     let queueEventPromise: Promise<void> | null = null
     try {
       const product = options.selectedProduct.value
@@ -168,9 +269,10 @@ export function useImageGeneration(options: ImageGenerationOptions) {
       // gives Seedream a stable subject slot and keeps all products on the same
       // image-to-image contract, including the fixed ice-cream template.
       const rawPrompt = referenceMode
-        ? buildReferenceRawPrompt(options.inspirationText.value)
+        ? buildReferencePromptWithRuntimeFallback(options.inspirationText.value)
         : options.inspirationText.value.trim() || options.prompt.value
       const optimizedPrompt = await resolveSeedreamPrompt(referenceMode ? rawPrompt : options.prompt.value)
+      failureStage = 'compiling_product_prompt'
       let generationPrompt = ''
       let result: any
       const handleQueue = (job: ImageGenerationJobProgress) => {
@@ -193,20 +295,37 @@ export function useImageGeneration(options: ImageGenerationOptions) {
         const inputAssetId = Number(options.referenceAssetId.value)
         if (!Number.isFinite(inputAssetId) || inputAssetId <= 0) throw new Error('参考图片还没有保存完成，请重新上传后再生成')
         const request = compileCurrentCreativeImageRequest({ prompt: options.prompt.value, rawPrompt, optimizedPrompt, inputAssetId, purpose: 'reference', refinement: false })
+        request.projectId = options.projectId?.value || undefined
+        request.versionId = options.versionId?.value || undefined
         generationPrompt = request.prompt
+        failureStage = 'submitting_reference_generation'
         imageGenerationStage.value = 'adapting_product'
         options.busyMessage.value = `正在依据参考图生成${product?.name || '产品'}，预计需要 1-3 分钟…`
         result = await createReferenceToImage({ title: `${product?.name || '产品'} · 对话创作`, ...request, imageSize: DEFAULT_SEEDREAM_IMAGE_SIZE }, handleQueue)
       } else {
         const request = compileCurrentCreativeImageRequest({ prompt: options.prompt.value, rawPrompt, optimizedPrompt, purpose: 'text', refinement: false })
+        request.projectId = options.projectId?.value || undefined
+        request.versionId = options.versionId?.value || undefined
         generationPrompt = request.prompt
+        failureStage = 'submitting_text_generation'
         options.busyMessage.value = '正在提交 Seedream 5.0 生图任务…'
         result = await createTextToImage({ title: `${product?.name || '产品'} · 对话创作`, ...request, imageSize: DEFAULT_SEEDREAM_IMAGE_SIZE }, handleQueue)
       }
       if (queueEventPromise) await queueEventPromise
       pendingImageJobId.value = null
       pendingGenerationPrompt.value = ''
+      failureStage = 'saving_generated_result'
       await options.onGenerated(result, generationPrompt)
+    } catch (error: any) {
+      console.error('[image-generation] failed', {
+        stage: failureStage,
+        name: String(error?.name || ''),
+        message: String(error?.message || error?.errMsg || error || ''),
+        stack: String(error?.stack || ''),
+        statusCode: Number(error?.statusCode || error?.status || 0),
+        code: String(error?.code || ''),
+      })
+      throw error
     } finally {
       options.busy.value = false
       imageGenerationStage.value = ''
@@ -229,11 +348,13 @@ export function useImageGeneration(options: ImageGenerationOptions) {
       pendingGenerationPrompt.value = ''
       await options.onGenerated(job, resumePrompt)
     } catch (error) {
+      if (isAuthenticationError(error)) throw error
       let failedJob: ImageGenerationJobProgress | null = null
       try {
         const latest = await getArkImageJob(jobId)
         if (latest.status === 'failed') failedJob = latest
-      } catch {
+      } catch (latestError) {
+        if (isAuthenticationError(latestError)) throw latestError
         // Keep the job attached when only the progress request is unavailable.
       }
       if (failedJob) {
@@ -261,10 +382,13 @@ export function useImageGeneration(options: ImageGenerationOptions) {
       try {
         const optimized = await optimizeImageEditPrompt({ prompt: options.prompt.value, refinementNote: refinementPrompt, productCategory: options.productType.value, material: options.material.value, productSize: options.productSize.value })
         if (String(optimized?.prompt || '').trim()) refinementPrompt = String(optimized.prompt).trim()
-      } catch {
+      } catch (error) {
+        if (isAuthenticationError(error)) throw error
         // The direct edit remains usable when optimization is unavailable.
       }
       const request = compileCurrentCreativeImageRequest({ prompt: refinementPrompt, rawPrompt: note, optimizedPrompt: refinementPrompt, inputAssetId: sourceAssetId, purpose: 'refinement', refinement: true, refinementNote: note })
+      request.projectId = options.projectId?.value || undefined
+      request.versionId = options.versionId?.value || undefined
       options.busyMessage.value = '正在基于当前产品图生成新方案，请稍候…'
       await options.saveEventBestEffort('image', 'image_refinement_started', { inputAssetId: sourceAssetId, refinementNote: note, optimizedPrompt: request.prompt, productType: options.productType.value, material: options.material.value, productSize: options.productSize.value })
       const result = await createReferenceToImage({ title: `${options.productType.value || '产品'} · 修改方案`, ...request, imageSize: DEFAULT_SEEDREAM_IMAGE_SIZE }, updateImageQueueMessage)

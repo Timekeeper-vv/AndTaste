@@ -139,6 +139,7 @@ class ProductProgressWorkflowIntegrationTest {
         JsonNode production = request(post("/api/creative/ai/consumer-production/submit"), creator.token(), Map.of(
                 "assetId", modelAssetId,
                 "requestType", "sample",
+                "idempotencyKey", "workflow-submit-1",
                 "quantity", 1,
                 "purpose", "personal",
                 "recipientName", "测试用户",
@@ -152,6 +153,20 @@ class ProductProgressWorkflowIntegrationTest {
                 .isEqualTo("合金冰箱贴");
         assertThat(jdbc.queryForObject("SELECT sample_fee_yuan FROM consumer_production_request WHERE request_no=?", BigDecimal.class, productionNo))
                 .isEqualByComparingTo("2000.00");
+
+        JsonNode replayedProduction = request(post("/api/creative/ai/consumer-production/submit"), creator.token(), Map.of(
+                "assetId", modelAssetId,
+                "requestType", "sample",
+                "idempotencyKey", "workflow-submit-1",
+                "quantity", 1,
+                "purpose", "personal",
+                "recipientName", "测试用户",
+                "recipientPhone", "13800138000",
+                "recipientAddress", "北京市东城区测试路 1 号"));
+        assertThat(replayedProduction.path("id").asLong()).isEqualTo(production.path("id").asLong());
+        assertThat(replayedProduction.path("idempotent").asBoolean()).isTrue();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM consumer_production_request WHERE user_id=?", Integer.class, creator.id()))
+                .isEqualTo(1);
 
         JsonNode progress = request(get("/api/commercial/consumer/requests"), creator.token(), null);
         assertThat(progress.path("quoteRequests").size()).isEqualTo(1);
@@ -551,9 +566,11 @@ class ProductProgressWorkflowIntegrationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS commercial_professional_guidance_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,guidance_no VARCHAR(80) NOT NULL UNIQUE,application_type VARCHAR(30) NOT NULL,application_id BIGINT NOT NULL,user_id BIGINT NOT NULL,asset_id BIGINT,product_template_id BIGINT,request_note VARCHAR(1200),status VARCHAR(30) NOT NULL DEFAULT 'requested',quoted_fee_yuan DECIMAL(12,2),quoted_lead_time VARCHAR(120),operator_comment VARCHAR(1200),guidance_result VARCHAR(3000),payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',payment_order_no VARCHAR(64),paid_at TIMESTAMP,quoted_by VARCHAR(80),quoted_at TIMESTAMP,completed_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS payment_order (id BIGINT AUTO_INCREMENT PRIMARY KEY,order_no VARCHAR(64) NOT NULL UNIQUE,user_id BIGINT NOT NULL,product_code VARCHAR(100) NOT NULL,amount_fen BIGINT NOT NULL DEFAULT 0,credit_amount DECIMAL(12,2) NOT NULL DEFAULT 0,channel VARCHAR(40) NOT NULL,status VARCHAR(30) NOT NULL,provider_order_no VARCHAR(128),provider_response CLOB,paid_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_sample_fee_catalog (id BIGINT AUTO_INCREMENT PRIMARY KEY,product_name VARCHAR(120) NOT NULL UNIQUE,fee_yuan DECIMAL(10,2) NOT NULL,active TINYINT NOT NULL DEFAULT 1)");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_multiview_bundle (id BIGINT AUTO_INCREMENT PRIMARY KEY,bundle_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,input_asset_id BIGINT,product_key VARCHAR(120),product_name VARCHAR(180),material VARCHAR(180),product_size VARCHAR(120),view_count INT NOT NULL DEFAULT 3,status VARCHAR(30) NOT NULL DEFAULT 'draft',purpose VARCHAR(30),museum_id VARCHAR(80),museum_name VARCHAR(200),campaign_key VARCHAR(100),note VARCHAR(1200),review_comment VARCHAR(1200),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS creative_multiview_bundle (id BIGINT AUTO_INCREMENT PRIMARY KEY,bundle_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,project_id BIGINT,version_id BIGINT,input_asset_id BIGINT,product_key VARCHAR(120),product_name VARCHAR(180),material VARCHAR(180),product_size VARCHAR(120),view_count INT NOT NULL DEFAULT 3,status VARCHAR(30) NOT NULL DEFAULT 'draft',purpose VARCHAR(30),museum_id VARCHAR(80),museum_name VARCHAR(200),campaign_key VARCHAR(100),note VARCHAR(1200),review_comment VARCHAR(1200),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        jdbc.execute("ALTER TABLE creative_multiview_bundle ADD COLUMN IF NOT EXISTS project_id BIGINT");
+        jdbc.execute("ALTER TABLE creative_multiview_bundle ADD COLUMN IF NOT EXISTS version_id BIGINT");
         jdbc.execute("CREATE TABLE IF NOT EXISTS creative_multiview_bundle_item (id BIGINT AUTO_INCREMENT PRIMARY KEY,bundle_id BIGINT NOT NULL,view_key VARCHAR(20) NOT NULL,asset_id BIGINT NOT NULL,label VARCHAR(40) NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-        jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,request_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT NOT NULL,multiview_bundle_id BIGINT,request_type VARCHAR(20) NOT NULL,title VARCHAR(200),quantity INT NOT NULL,self_ship_quantity INT NOT NULL,museum_distribution_json CLOB,recipient_name VARCHAR(80),recipient_phone VARCHAR(80),recipient_address VARCHAR(500),note VARCHAR(1000),status VARCHAR(30) NOT NULL DEFAULT 'review',review_comment VARCHAR(1000),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,sample_product_name VARCHAR(120),sample_fee_yuan DECIMAL(10,2),sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',sample_payment_order_no VARCHAR(64),sample_paid_at TIMESTAMP,created_at TIMESTAMP,updated_at TIMESTAMP)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_production_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,request_no VARCHAR(80) NOT NULL UNIQUE,user_id BIGINT NOT NULL,asset_id BIGINT NOT NULL,project_id BIGINT,version_id BIGINT,multiview_bundle_id BIGINT,request_type VARCHAR(20) NOT NULL,title VARCHAR(200),quantity INT NOT NULL,self_ship_quantity INT NOT NULL,museum_distribution_json CLOB,recipient_name VARCHAR(80),recipient_phone VARCHAR(80),recipient_address VARCHAR(500),note VARCHAR(1000),client_request_key VARCHAR(120),status VARCHAR(30) NOT NULL DEFAULT 'review',review_comment VARCHAR(1000),reviewed_by VARCHAR(80),reviewed_at TIMESTAMP,sample_product_name VARCHAR(120),sample_fee_yuan DECIMAL(10,2),sample_payment_status VARCHAR(24) NOT NULL DEFAULT 'not_required',sample_payment_order_no VARCHAR(64),sample_paid_at TIMESTAMP,sample_workflow_status VARCHAR(32) NOT NULL DEFAULT 'not_started',sample_received_at TIMESTAMP,sample_accepted_at TIMESTAMP,sample_revision_count INT NOT NULL DEFAULT 0,bulk_unlocked_at TIMESTAMP,bulk_unlocked_by BIGINT,created_at TIMESTAMP,updated_at TIMESTAMP,UNIQUE(user_id,client_request_key))");
     }
 
     private record TestUser(long id, String token) { }

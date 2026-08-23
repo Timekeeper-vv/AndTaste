@@ -2,7 +2,7 @@
   <view class="page chat-experience">
     <scroll-view class="chat" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
       <view class="workspace-intro">
-        <view class="workspace-intro-top"><view class="online-mark"><view class="online-dot" /><text>AI 工作台</text></view><text class="workspace-ref">{{ sessionId ? `项目 ${sessionId}` : '新项目' }}</text></view>
+        <view class="workspace-intro-top"><view class="online-mark"><view class="online-dot" /><text>AI 工作台</text></view><text class="workspace-ref">{{ projectId ? `项目 ${projectId}` : '新项目' }}</text></view>
         <text class="workspace-title">把灵感说出来，剩下的交给我</text>
         <text class="workspace-subtitle">我会帮你整理产品方向、生成视觉，并继续推进三视图、3D 和打样。</text>
         <view v-if="selectedProduct || material" class="brief-strip">
@@ -132,12 +132,12 @@ import {
   type CreatorCampaign,
   type SeedreamMultiViewImage,
 } from '../../api/creative'
-import { apiUrl } from '../../api/client'
+import { apiUrl, isAuthenticationError } from '../../api/client'
 import {
   resolveCreativeProductProfile,
   type CreativeProductLike,
   type CreativeProductProfile,
-} from '../../utils/creativeEngine'
+} from '../../utils/creativeEngineRuntime'
 import { requireSession } from '../../utils/session'
 import { useImageGeneration } from '../../composables/useImageGeneration'
 import { useMultiViewGeneration } from '../../composables/useMultiViewGeneration'
@@ -195,6 +195,8 @@ const inspirationText = ref('')
 const referencePath = ref('')
 const referenceAssetId = ref<number | null>(null)
 const sessionId = ref<number | null>(null)
+const projectId = ref<number | null>(null)
+const versionId = ref<number | null>(null)
 const generatedAssetId = ref<number | null>(null)
 const pendingImageJobId = ref<number | null>(null)
 const pendingGenerationPrompt = ref('')
@@ -779,6 +781,10 @@ const conversationSession = useConversationSession({
   sessionReady,
   saving,
   forceNewSession,
+  onSessionLoaded: session => {
+    projectId.value = Number(session.projectId) > 0 ? Number(session.projectId) : null
+    versionId.value = Number(session.versionId) > 0 ? Number(session.versionId) : null
+  },
   campaignSessionId: () => Number(campaignContext.value?.sessionId) || 0,
   requireSession: () => Boolean(requireSession()),
   isNotFound,
@@ -901,7 +907,7 @@ async function uploadInspirationImage(path: string) {
   const imageMessageId = addImageMessage(path, '正在上传灵感图片…', 'uploading')
   busy.value = true
   try {
-    const result = await uploadReference(path)
+    const result = await uploadReference(path, projectId.value, versionId.value)
     const id = Number(result?.assetId)
     if (!Number.isFinite(id) || id <= 0) throw new Error('图片上传成功但没有返回作品编号')
     activateReferenceImageMode()
@@ -994,7 +1000,15 @@ async function completeGeneratedProductImage(result: any, generationPrompt: stri
   generatedAssetId.value = assetId
   previewUrl.value = imageUrl(result) || await freshAssetPreview(assetId)
   referenceAnalysis.value = String(result?.referenceAnalysis || '')
-  await saveCreativeEventBestEffort('image', 'image_generated', { jobId: result?.jobId, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, mode: mode.value, referenceAssetId: referenceAssetId.value, inspirationText: inspirationText.value, referenceStrategy: isReferenceImageMode() ? 'direct_single_pass' : 'text_to_image', productForm: sharedProductFormProfile(selectedProduct.value).key, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
+  let productForm = selectedProduct.value.key || 'general'
+  try {
+    productForm = sharedProductFormProfile(selectedProduct.value).key || productForm
+  } catch (error) {
+    // Event metadata must never turn a successfully saved image into a
+    // misleading generation failure. Keep the catalog key as a safe fallback.
+    console.warn('[conversation-create] product profile metadata fallback', error)
+  }
+  await saveCreativeEventBestEffort('image', 'image_generated', { jobId: result?.jobId, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, mode: mode.value, referenceAssetId: referenceAssetId.value, inspirationText: inspirationText.value, referenceStrategy: isReferenceImageMode() ? 'direct_single_pass' : 'text_to_image', productForm, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
   addMessage('assistant', '产品视觉已经生成并保存。下一步请生成三视图或 3D 原型，完成后才能提交审核和申请打样。')
   chatStage.value = 'image_ready'
   chatQuickReplies.value = [
@@ -1049,6 +1063,8 @@ const imageGeneration = useImageGeneration({
   inspirationText,
   mode,
   referenceAssetId,
+  projectId,
+  versionId,
   generatedAssetId,
   previewUrl,
   referenceAnalysis,
@@ -1070,6 +1086,7 @@ async function generateProductImage() {
   try {
     await imageGeneration.generateProductImage()
   } catch (error: any) {
+    if (isAuthenticationError(error)) return
     uni.showModal({ title: '产品图未生成', content: imageGeneration.generationFailureMessage(error), showCancel: false })
   }
 }
@@ -1078,6 +1095,7 @@ async function resumePendingImageGeneration() {
   try {
     await imageGeneration.resumePendingImageGeneration()
   } catch (error: any) {
+    if (isAuthenticationError(error)) return
     uni.showModal({ title: '生成进度暂时无法读取', content: imageGeneration.generationFailureMessage(error), showCancel: false })
   }
 }
@@ -1110,6 +1128,8 @@ const multiViewGeneration = useMultiViewGeneration({
   productSize,
   prompt,
   generatedAssetId,
+  projectId,
+  versionId,
   busy,
   busyMessage,
   multiviewImages,
@@ -1179,6 +1199,8 @@ const modelGeneration = useModelGeneration({
   productSize,
   prompt,
   generatedAssetId,
+  projectId,
+  versionId,
   multiviewImages,
   hasCompleteThreeViews,
   multiviewBundleStatus,
@@ -1276,7 +1298,10 @@ const conversationChat = useConversationChat({
   removeOptimisticMessage: id => { messages.value = messages.value.filter(item => item.id !== id) },
   clearChatDraft,
   onMissingText: () => { uni.showToast({ title: '请在下方输入框告诉我你的想法', icon: 'none' }) },
-  onChatError: message => { uni.showModal({ title: '对话暂时中断', content: message, showCancel: false }) },
+  onChatError: (message, error) => {
+    if (isAuthenticationError(error)) return
+    uni.showModal({ title: '对话暂时中断', content: message, showCancel: false })
+  },
 })
 const {
   sendChatTurn,
@@ -1288,6 +1313,7 @@ async function regenerateWithRefinement() {
   try {
     await imageGeneration.regenerateWithRefinement(refinementNote.value)
   } catch (error: any) {
+    if (isAuthenticationError(error)) return
     uni.showToast({ title: error?.message || '重新生成失败，请稍后重试', icon: 'none' })
   }
 }
@@ -1657,8 +1683,8 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .context-live { width: 9rpx; height: 9rpx; border-radius: 50%; background: #70a481; }
 .context-product { overflow: hidden; max-width: 260rpx; color: #96a29b; text-overflow: ellipsis; white-space: nowrap; }
 .context-working { margin-left: auto; color: var(--orange); font-size: 19rpx; }
-.quick-reply-list { width: 100%; margin-top: 10rpx; white-space: nowrap; }
-.quick-reply-track { display: flex; gap: 8rpx; }
+.quick-reply-list { display: block; width: 100%; height: 64rpx; min-height: 64rpx; margin-top: 10rpx; overflow: hidden; white-space: nowrap; }
+.quick-reply-track { display: flex; align-items: center; height: 64rpx; gap: 8rpx; white-space: nowrap; }
 .quick-reply { display: inline-flex; align-items: center; gap: 7rpx; flex: 0 0 auto; min-height: 64rpx; padding: 0 15rpx; border: 1rpx solid #d8e5db; border-radius: 10rpx; background: #f6faf7; color: #456655; font-size: 24rpx; line-height: 1.35; }
 .quick-reply.confirm { border-color: #9fc3a9; background: #eaf5ed; color: #3f7052; font-weight: 850; }
 .quick-reply.secondary { border-color: #e6d5ca; background: #fff9f5; color: #9b6b57; }

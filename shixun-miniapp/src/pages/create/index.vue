@@ -129,7 +129,7 @@ import {
   compileCreativeImageRequest,
   creativeProductSize,
   type CreativeProductLike,
-} from '../../utils/creativeEngine'
+} from '../../utils/creativeEngineRuntime'
 import {
   findMaterialDefinition,
   isRecommendedMaterial,

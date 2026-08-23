@@ -5,7 +5,7 @@ import {
   type SeedreamMultiViewImage,
 } from '../api/creative'
 import { apiUrl } from '../api/client'
-import type { CreativeProductLike } from '../utils/creativeEngine'
+import type { CreativeProductLike } from '../utils/creativeEngineRuntime'
 
 type ReadonlyValue<T> = { readonly value: T }
 
@@ -63,6 +63,8 @@ export interface ModelGenerationOptions {
   productSize: ReadonlyValue<string>
   prompt: ReadonlyValue<string>
   generatedAssetId: ReadonlyValue<number | null>
+  projectId?: ReadonlyValue<number | null>
+  versionId?: ReadonlyValue<number | null>
   multiviewImages: ReadonlyValue<SeedreamMultiViewImage[]>
   hasCompleteThreeViews: ReadonlyValue<boolean>
   multiviewBundleStatus: ReadonlyValue<string>
@@ -224,6 +226,8 @@ export function useModelGeneration(options: ModelGenerationOptions) {
       rawPrompt: options.prompt.value,
       mode: useMultiview ? 'multiview_to_model' : 'image_to_model',
       inputAssetId,
+      projectId: options.projectId?.value || undefined,
+      versionId: options.versionId?.value || undefined,
       productKey: options.productKey.value || options.selectedProduct.value?.key,
       productCategory: productType,
       material: options.material.value,

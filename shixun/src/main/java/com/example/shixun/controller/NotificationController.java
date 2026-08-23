@@ -34,8 +34,10 @@ public class NotificationController {
     public List<Map<String, Object>> getNotifications() {
         List<Map<String, Object>> list = new ArrayList<>();
         addWorkflowAlerts(list);
+        addConsumerProductionAlerts(list);
         addWarehouseAlerts(list);
         addLogisticsAlerts(list);
+        addSampleLogisticsAlerts(list);
         addPickTaskAlerts(list);
         addInquiryAlerts(list);
         addQuoteAlerts(list);
@@ -52,6 +54,55 @@ public class NotificationController {
                         "category", "workflow",
                         "title", "审批待办",
                         "message", "当前有 " + pending + " 条待审批申请，请进入“审批中心”处理"
+                ));
+            }
+        } catch (Exception ignored) { }
+    }
+
+    /**
+     * Production requests have their own review and sample state machine, so
+     * they do not appear in the legacy workflow_application queue. Keep the
+     * actionable counts in the same notification feed used by the backend
+     * shell so operators do not have to discover a second queue manually.
+     */
+    private void addConsumerProductionAlerts(List<Map<String, Object>> list) {
+        try {
+            Long review = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM consumer_production_request WHERE status='review'", Long.class);
+            if (review != null && review > 0) {
+                list.add(Map.of(
+                        "type", "warning",
+                        "category", "consumer_production_review",
+                        "title", "C端生产申请待审核",
+                        "message", "当前有 " + review + " 条打样/量产申请等待人工审核"
+                ));
+            }
+        } catch (Exception ignored) { }
+
+        try {
+            Long payment = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM consumer_production_request WHERE request_type='sample' AND sample_payment_status='manual_review'",
+                    Long.class);
+            if (payment != null && payment > 0) {
+                list.add(Map.of(
+                        "type", "warning",
+                        "category", "sample_payment_review",
+                        "title", "打样费待人工核验",
+                        "message", "当前有 " + payment + " 条打样费支付结果需要核对"
+                ));
+            }
+        } catch (Exception ignored) { }
+
+        try {
+            Long revision = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM consumer_production_request WHERE request_type='sample' AND sample_workflow_status='revision_required'",
+                    Long.class);
+            if (revision != null && revision > 0) {
+                list.add(Map.of(
+                        "type", "warning",
+                        "category", "sample_revision",
+                        "title", "样品返修待工厂处理",
+                        "message", "当前有 " + revision + " 个样品收到用户返修意见，等待工厂开始处理"
                 ));
             }
         } catch (Exception ignored) { }
@@ -87,6 +138,29 @@ public class NotificationController {
                         "category", "logistics",
                         "title", "物流异常待处理",
                         "message", str(r.get("carrierName")) + " " + str(r.get("trackingNo")) + "：" + str(r.get("latestTrace"))
+                ));
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private void addSampleLogisticsAlerts(List<Map<String, Object>> list) {
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT request_no requestNo, sample_product_name sampleProductName, carrier_name carrierName, tracking_no trackingNo, latest_trace latestTrace, alert_level alertLevel, exception_note exceptionNote "
+                            + "FROM creative_sample_logistics l JOIN consumer_production_request r ON r.id=l.request_id "
+                            + "WHERE l.alert_status IN ('open','acknowledged') AND l.alert_level IN ('warning','exception') "
+                            + "ORDER BY FIELD(l.alert_level,'exception','warning'),l.updated_at DESC LIMIT 6");
+            for (Map<String, Object> row : rows) {
+                String level = str(row.get("alertLevel"));
+                String product = str(row.get("sampleProductName"));
+                String tracking = str(row.get("trackingNo"));
+                String reason = str(row.get("exceptionNote"));
+                if (reason.isBlank()) reason = str(row.get("latestTrace"));
+                list.add(Map.of(
+                        "type", "exception".equals(level) ? "warning" : "info",
+                        "category", "sample_logistics",
+                        "title", "exception".equals(level) ? "样品物流严重异常" : "样品物流预警",
+                        "message", product + "（" + str(row.get("requestNo")) + ") " + tracking + "：" + reason
                 ));
             }
         } catch (Exception ignored) { }
