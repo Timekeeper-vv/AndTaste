@@ -58,6 +58,7 @@ CREATE TABLE creative_multiview_bundle (
     bundle_no VARCHAR(80) NOT NULL UNIQUE,
     user_id BIGINT NOT NULL,
     input_asset_id BIGINT,
+    simulation_asset_id BIGINT,
     product_key VARCHAR(120),
     product_name VARCHAR(180),
     material VARCHAR(180),

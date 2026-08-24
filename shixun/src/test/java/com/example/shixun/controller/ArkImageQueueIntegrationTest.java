@@ -20,6 +20,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -31,6 +32,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.image.BufferedImage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -198,11 +203,16 @@ class ArkImageQueueIntegrationTest {
                 completedEdit.path("assetId").asLong())).isEqualTo("之间智造效果图");
         assertThat(completedViews.path("status").asText()).isEqualTo("succeeded");
         assertThat(completedViews.path("images")).hasSize(3);
+        assertThat(completedViews.path("simulationAssetId").asLong()).isPositive();
+        assertThat(completedViews.path("simulationImage").path("previewUrl").asText()).contains("access_token=");
         assertThat(completedViews.path("compiledPrompt").asText()).isNotBlank();
         assertThat(completedViews.path("policyVersion").asText()).isEqualTo(ProductPromptPolicy.VERSION);
         assertThat(completedViews.path("images").get(0).path("previewUrl").asText()).contains("access_token=");
         assertThat(count("SELECT COUNT(*) FROM digital_asset WHERE parent_asset_id=" + multiViewAsset +
-                " AND source_type='ai_generated' AND title='之间智造效果图'")).isEqualTo(3);
+                " AND source_type='ai_generated' AND title='之间智造效果图'")).isEqualTo(1);
+        assertThat(count("SELECT COUNT(*) FROM digital_asset WHERE parent_asset_id="
+                + completedViews.path("simulationAssetId").asLong()
+                + " AND source_type='ai_generated' AND title='之间智造效果图'")).isEqualTo(3);
         assertThat(sawSeedreamModel).isTrue();
         assertThat(sawReferenceImagePayload).as("image-to-image and multiview send the source image to Seedream").isTrue();
         assertThat(sawArkImageFields).as("Seedream payload includes the Ark image fields").isTrue();
@@ -324,7 +334,8 @@ class ArkImageQueueIntegrationTest {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/api/v3/images/generations", ArkImageQueueIntegrationTest::handleGeneration);
-            server.createContext("/generated.jpg", exchange -> respond(exchange, 200, "image/jpeg", "test-jpeg".getBytes(StandardCharsets.UTF_8)));
+            byte[] generatedJpeg = createTestJpeg();
+            server.createContext("/generated.jpg", exchange -> respond(exchange, 200, "image/jpeg", generatedJpeg));
             server.setExecutor(providerExecutor);
             server.start();
             return server;
@@ -374,6 +385,17 @@ class ArkImageQueueIntegrationTest {
         exchange.sendResponseHeaders(status, body.length);
         exchange.getResponseBody().write(body);
         exchange.close();
+    }
+
+    private static byte[] createTestJpeg() throws IOException {
+        BufferedImage image = new BufferedImage(12, 6, BufferedImage.TYPE_INT_RGB);
+        for (int x = 0; x < image.getWidth(); x++) {
+            Color color = x < 4 ? Color.RED : x < 8 ? Color.GREEN : Color.BLUE;
+            for (int y = 0; y < image.getHeight(); y++) image.setRGB(x, y, color.getRGB());
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        if (!ImageIO.write(image, "jpg", output)) throw new IOException("无法生成测试 JPEG");
+        return output.toByteArray();
     }
 
     private static String providerUrl(String path) {

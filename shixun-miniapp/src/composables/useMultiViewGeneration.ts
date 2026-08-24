@@ -12,6 +12,7 @@ import {
   submitMultiViewBundleReview,
   type MultiViewBundle,
   type SeedreamMultiViewImage,
+  type SeedreamProductionSimulationImage,
 } from '../api/creative'
 import {
   compileCreativeImageRequest,
@@ -36,6 +37,9 @@ export interface MultiViewGenerationOptions {
   busy: Ref<boolean>
   busyMessage: Ref<string>
   multiviewImages: Ref<SeedreamMultiViewImage[]>
+  /** Complete horizontal production-simulation triptych, when supported. */
+  simulationAssetId?: Ref<number | null>
+  simulationImage?: Ref<SeedreamProductionSimulationImage | null>
   multiviewBundleId: Ref<number | null>
   multiviewBundleNo: Ref<string>
   multiviewBundleStatus: Ref<string>
@@ -138,8 +142,8 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
         : '已进入生成队列，马上开始…'
     } else if (job.status === 'running') {
       options.busyMessage.value = job.jobType === 'multi_view'
-        ? '正在生成一致的产品多视图，请稍候…'
-        : 'Seedream 5.0 正在生成产品多视图，请稍候…'
+        ? '正在生成标准化生产模拟图，请稍候…'
+        : 'Seedream 5.0 正在生成生产模拟图，请稍候…'
     }
   }
 
@@ -159,11 +163,28 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
       .sort((left, right) => VIEW_ORDER.indexOf(left.view as typeof VIEW_ORDER[number]) - VIEW_ORDER.indexOf(right.view as typeof VIEW_ORDER[number]))
   }
 
+  function normalizeSimulationImage(value: any, fallbackAssetId?: unknown): SeedreamProductionSimulationImage | null {
+    const assetId = positiveId(value?.assetId || value?.id || fallbackAssetId)
+    if (!assetId) return null
+    const raw = value && typeof value === 'object' ? value : {}
+    return {
+      ...raw,
+      assetId,
+      label: raw.label || '生产模拟图',
+    }
+  }
+
   async function hydrateImages(images: SeedreamMultiViewImage[]) {
     return Promise.all(images.map(async item => {
       const fresh = await options.freshAssetPreview(Number(item.assetId))
       return fresh ? { ...item, previewUrl: fresh } : item
     }))
+  }
+
+  async function hydrateSimulationImage(image: SeedreamProductionSimulationImage | null | undefined) {
+    if (!image || !positiveId(image.assetId)) return image || null
+    const fresh = await options.freshAssetPreview(Number(image.assetId))
+    return fresh ? { ...image, previewUrl: fresh } : image
   }
 
   function applyMultiViewBundle(bundle: MultiViewBundle | null | undefined) {
@@ -175,6 +196,10 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     options.multiviewBundleNo.value = String(bundle.bundleNo || options.multiviewBundleNo.value || '')
     options.multiviewBundleStatus.value = String(bundle.status || options.multiviewBundleStatus.value || 'draft')
     options.multiviewBundleComment.value = String(bundle.reviewComment || '')
+    const simulationAssetId = positiveId(bundle.simulationAssetId || bundle.simulationImage?.assetId)
+    if (options.simulationAssetId && simulationAssetId) options.simulationAssetId.value = simulationAssetId
+    const simulationImage = normalizeSimulationImage(bundle.simulationImage, simulationAssetId)
+    if (options.simulationImage && simulationImage) options.simulationImage.value = simulationImage
     if (Array.isArray(bundle.images) && bundle.images.length) {
       options.multiviewImages.value = bundle.images
         .filter(item => positiveId(item?.assetId))
@@ -186,11 +211,15 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     const images = normalizeImages(result)
     const returnedViews = new Set(images.map(item => item.view))
     if (!VIEW_ORDER.every(view => returnedViews.has(view))) {
-      throw new Error('三视图没有完整返回正面、侧面和背面，请稍后重试')
+      throw new Error('生产模拟图没有完整返回正面、侧面和背面切片，请稍后重试')
     }
     const hydratedImages = await hydrateImages(images)
+    const simulationAssetId = positiveId(result?.simulationAssetId || result?.simulationImage?.assetId)
+    const simulationImage = await hydrateSimulationImage(normalizeSimulationImage(result?.simulationImage, simulationAssetId))
+    if (options.simulationAssetId) options.simulationAssetId.value = simulationAssetId
+    if (options.simulationImage) options.simulationImage.value = simulationImage
     options.multiviewImages.value = hydratedImages
-    const bundle = await resolveBundle(inputAssetId, hydratedImages)
+    const bundle = await resolveBundle(inputAssetId, hydratedImages, simulationAssetId)
     const finalPrompt = generationPrompt || pendingMultiViewPrompt.value || compileMultiViewRequest({ inputAssetId }).prompt
     applyMultiViewBundle(bundle)
     pendingMultiViewJobId.value = null
@@ -205,6 +234,8 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
       bundleNo: bundle.bundleNo,
       bundleStatus: bundle.status,
       bundleComment: bundle.reviewComment,
+      simulationAssetId: simulationAssetId || bundle.simulationAssetId,
+      simulationImage: simulationImage || bundle.simulationImage,
       images: hydratedImages.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })),
     })
     options.updateMultiViewChatState?.()
@@ -219,7 +250,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     if (!await options.ensureAiPolicy()) return
 
     options.busy.value = true
-    options.busyMessage.value = '正在基于当前产品图生成正面、侧面和背面，请稍候…'
+    options.busyMessage.value = '正在生成一张包含正面、侧面和背面的生产模拟图，请稍候…'
     let queueEventPromise: Promise<void> | null = null
     try {
       const request = compileMultiViewRequest({ inputAssetId, prompt: options.prompt.value, rawPrompt: options.prompt.value })
@@ -271,13 +302,13 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     if (!jobId || !inputAssetId || hasCompleteThreeViews.value || options.busy.value) return
 
     options.busy.value = true
-    options.busyMessage.value = '正在恢复上次的三视图生成进度…'
+    options.busyMessage.value = '正在恢复上次的生产模拟图生成进度…'
     const generationPrompt = pendingMultiViewPrompt.value || compileMultiViewRequest({ inputAssetId }).prompt
     try {
       let job = await getImageJob(jobId)
       updateImageQueueMessage(job)
       if (job.status === 'queued' || job.status === 'running') job = await waitForImageJob(job, updateImageQueueMessage)
-      if (job.status === 'failed') throw new Error(job.errorMessage || job.message || '三视图生成失败')
+      if (job.status === 'failed') throw new Error(job.errorMessage || job.message || '生产模拟图生成失败')
       return await completeGeneratedMultiView(job, inputAssetId, generationPrompt)
     } catch (error) {
       let failedJob: ImageGenerationJobProgress | null = null
@@ -295,7 +326,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
           jobId,
           inputAssetId,
           prompt: generationPrompt,
-          errorMessage: failedJob.errorMessage || failedJob.message || '三视图生成失败',
+          errorMessage: failedJob.errorMessage || failedJob.message || '生产模拟图生成失败',
         })
       }
       throw failedJob || error
@@ -311,15 +342,16 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
 
     // Route restoration through the same serialized lookup/create path as a
     // just-completed job. This keeps onLoad/onShow from creating two bundles.
-    const bundle = await resolveBundle(inputAssetId, options.multiviewImages.value)
+    const bundle = await resolveBundle(inputAssetId, options.multiviewImages.value, options.simulationAssetId?.value || undefined)
     applyMultiViewBundle(bundle)
     options.multiviewImages.value = await hydrateImages(options.multiviewImages.value)
+    if (options.simulationImage?.value) options.simulationImage.value = await hydrateSimulationImage(options.simulationImage.value)
     options.updateMultiViewChatState?.()
     await options.onRestored?.(bundle)
     return bundle
   }
 
-  async function resolveBundle(inputAssetId: number, images: SeedreamMultiViewImage[]) {
+  async function resolveBundle(inputAssetId: number, images: SeedreamMultiViewImage[], simulationAssetId?: number | null) {
     if (bundleResolutionPromise) return bundleResolutionPromise
     bundleResolutionPromise = (async () => {
       const bundles = await listBundles()
@@ -343,6 +375,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
         productSize: options.productSize.value,
         viewCount: 3,
         images: images.map(item => ({ view: item.view, assetId: item.assetId, label: item.label })),
+        ...(simulationAssetId ? { simulationAssetId } : {}),
       })
     })()
     try {
@@ -359,7 +392,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     const museumId = purpose === 'museum_sale' ? String(context.museum?.id || '') : undefined
     const campaign = context.campaign && typeof context.campaign === 'object' ? context.campaign : null
     if (purpose === 'museum_sale' && !museumId) {
-      uni.showToast({ title: '请先选择服务博物馆，再提交三视图审核', icon: 'none' })
+      uni.showToast({ title: '请先选择服务博物馆，再提交生产模拟图审核', icon: 'none' })
       return
     }
     if (campaign?.key && (purpose !== 'museum_sale' || campaign.channelCode !== context.museum?.channelCode)) {
@@ -368,7 +401,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     }
     const confirmed = await new Promise<boolean>(resolve => {
       uni.showModal({
-        title: '提交三视图审核',
+        title: '提交生产模拟图审核',
         content: purpose === 'museum_sale'
           ? `将把正面、侧面和背面作为一个作品包提交给${context.museum?.name || '目标渠道'}审核。`
           : '三张图会作为一个完整作品包提交审核，审核通过后才能申请打样。',
@@ -386,7 +419,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
         museumId,
         projectId: options.projectId?.value || undefined,
         versionId: options.versionId?.value || undefined,
-        note: '由对话式创作提交的三视图作品包',
+        note: '由对话式创作提交的生产模拟图作品包',
         ...(campaign?.key ? { campaignKey: campaign.key } : {}),
       })
       applyMultiViewBundle(response)
@@ -396,7 +429,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
         status: response.status,
         purpose,
       })
-      uni.showToast({ title: response.message || '三视图已提交审核', icon: 'success' })
+      uni.showToast({ title: response.message || '生产模拟图已提交审核', icon: 'success' })
       return response
     } finally {
       options.multiviewBundleSubmitting.value = false
@@ -405,7 +438,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
 
   function applyMultiViewProduction() {
     if (!options.multiviewBundleId.value || options.multiviewBundleStatus.value !== 'approved') return
-    const title = options.productType.value || '三视图作品'
+    const title = options.productType.value || '生产模拟图作品'
     const projectQuery = options.projectId?.value ? `&projectId=${encodeURIComponent(String(options.projectId.value))}` : ''
     const versionQuery = options.versionId?.value ? `&versionId=${encodeURIComponent(String(options.versionId.value))}` : ''
     uni.navigateTo({ url: `/pages/production/index?bundleId=${encodeURIComponent(String(options.multiviewBundleId.value))}&title=${encodeURIComponent(title)}${projectQuery}${versionQuery}` })

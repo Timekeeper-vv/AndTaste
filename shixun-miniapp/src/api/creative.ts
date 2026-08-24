@@ -225,7 +225,7 @@ export const optimizeImageEditPrompt = (body: ImageEditPromptOptimizeRequest) =>
 export interface SeedreamMultiViewRequest extends CreativeGenerationRequest {
   /** 用户上传并已归属到当前账号的单张参考图资产。 */
   inputAssetId: number | string
-  /** 产品/角色描述。服务端会为正、左、背、右四个真实请求补齐视角约束。 */
+  /** 产品/角色描述。服务端会生成一张横向生产模拟图，并保存视角切片。 */
   prompt: string
   productKey?: string
   productCategory?: string
@@ -249,16 +249,34 @@ export interface SeedreamMultiViewImage {
   fileUrl?: string
 }
 
+/**
+ * The complete horizontal triptych returned by the production-simulation
+ * pipeline. It intentionally has no `view` field: it is one image containing
+ * front, left and back panels. Older servers simply omit this object.
+ */
+export interface SeedreamProductionSimulationImage {
+  assetId: number
+  label?: string
+  previewUrl?: string
+  imageUrl?: string
+  fileUrl?: string
+  width?: number
+  height?: number
+}
+
 export interface SeedreamMultiViewResult {
   provider?: string
   model?: string
   message?: string
   images: SeedreamMultiViewImage[]
+  /** Complete one-image triptych; optional for old queued jobs/servers. */
+  simulationAssetId?: number
+  simulationImage?: SeedreamProductionSimulationImage
 }
 
 /**
- * 用一张已上传的参考图真实调用 Doubao Seedream，服务端顺序生成正、左、背、右
- * 四张图，并把每张图都保存为当前用户可访问的资产。它不会伪造本地预览结果。
+ * 用一张已上传的参考图调用 Doubao Seedream，服务端生成一张横向生产模拟图，
+ * 同时保存正面、左侧和背面的视角切片。它不会伪造本地预览结果。
  */
 export async function createSeedreamMultiView(body: SeedreamMultiViewRequest, onProgress?: (job: ImageGenerationJobProgress) => void) {
   const normalized = buildCreativeGenerationRequest(body)
@@ -400,6 +418,11 @@ export interface MultiViewBundleImage extends SeedreamMultiViewImage {
   assetStatus?: string
 }
 
+export interface MultiViewBundleSimulationImage extends SeedreamProductionSimulationImage {
+  assetTitle?: string
+  assetStatus?: string
+}
+
 export interface MultiViewBundle {
   id: number
   bundleId?: number
@@ -424,6 +447,9 @@ export interface MultiViewBundle {
   createdAt?: string
   updatedAt?: string
   images: MultiViewBundleImage[]
+  /** Complete horizontal production-simulation image, optional on old bundles. */
+  simulationAssetId?: number
+  simulationImage?: MultiViewBundleSimulationImage
 }
 
 export const createMultiViewBundle = (body: {
@@ -436,6 +462,7 @@ export const createMultiViewBundle = (body: {
   productSize?: string
   viewCount: 3 | 4
   images: Array<{ view: string; assetId: number | string; label?: string }>
+  simulationAssetId?: number | string
 }) => request<MultiViewBundle>('/api/creative/ai/consumer-multiview-bundles', {
   method: 'POST', data: body, header: { 'content-type': 'application/json' },
 })

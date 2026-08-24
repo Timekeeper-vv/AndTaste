@@ -4,7 +4,7 @@
       <view class="workspace-intro">
         <view class="workspace-intro-top"><view class="online-mark"><view class="online-dot" /><text>AI 工作台</text></view><text class="workspace-ref">{{ projectId ? `项目 ${projectId}` : '新项目' }}</text></view>
         <text class="workspace-title">把灵感说出来，剩下的交给我</text>
-        <text class="workspace-subtitle">我会帮你整理产品方向、生成视觉，并继续推进三视图、3D 和打样。</text>
+        <text class="workspace-subtitle">我会帮你整理产品方向、生成视觉，并继续推进生产模拟图、3D 和打样。</text>
         <view v-if="selectedProduct || material" class="brief-strip">
           <view v-if="selectedProduct" class="brief-chip"><text>产品</text><text>{{ selectedProduct.name }}</text></view>
           <view v-if="material" class="brief-chip"><text>材质</text><text>{{ material }}</text></view>
@@ -17,7 +17,7 @@
         </view>
       </view>
 
-      <AiGeneratedNotice class="ai-disclosure" compact description="对话建议、提示词和后续生成的图片、三视图、3D 原型均可能由人工智能生成，仅供创作参考，商业使用前请人工复核。" />
+      <AiGeneratedNotice class="ai-disclosure" compact description="对话建议、提示词和后续生成的图片、生产模拟图、3D 原型均可能由人工智能生成，仅供创作参考，商业使用前请人工复核。" />
 
       <view v-for="item in messages" :id="`message-${item.id}`" :key="item.id" class="message-row" :class="item.role">
         <view v-if="item.role === 'assistant'" class="message-avatar assistant-avatar">之</view>
@@ -65,19 +65,22 @@
         <view class="visual-frame"><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFit" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view class="visual-badge">AI 生成</view></view>
         <view class="output-info"><view><text>{{ selectedProduct?.name || '文创产品' }}</text><text>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }} · {{ mode === 'image' ? '参考图改造' : '文字生图' }}</text></view><text class="output-open" @tap="previewImage">查看大图 ›</text></view>
         <view v-if="refiningImage" class="refinement-panel"><view class="refinement-heading"><view><text class="surface-kicker">REFINE THIS IMAGE</text><text>告诉我哪里不满意</text></view><text class="refinement-close" @tap="cancelRefinement">×</text></view><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：保留主体和构图，把边缘改得更简洁，去掉文字。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view></view>
-        <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成三视图</text><text>补全结构视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action disabled"><view class="action-icon gold">样</view><view><text>完成三视图或 3D 原型后打样</text><text>当前产品图仅用于继续创作</text></view></view></view>
+        <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成生产模拟图</text><text>一张图包含三个标准视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action disabled"><view class="action-icon gold">样</view><view><text>完成生产模拟图或 3D 原型后打样</text><text>当前产品图仅用于继续创作</text></view></view></view>
       </view>
 
       <view v-if="phase === 'multiview'" id="multiview-output" class="output-surface">
-        <view class="output-header"><view><text class="surface-kicker">MULTI-VIEW OUTPUT</text><text class="surface-title">三视图已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>3 张已保存</text></view></view>
-        <text class="surface-note">正面、侧面和背面已作为一个作品包保存，审核时会整包查看，不会拆成三条作品。</text>
+        <view class="output-header"><view><text class="surface-kicker">PRODUCTION SIMULATION</text><text class="surface-title">生产模拟图已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>已保存</text></view></view>
+        <text class="surface-note">一张横向图包含正面、侧面和背面，三个面板保持同一产品比例和基线；系统同时保存三张视角切片用于 3D 建模和审核。</text>
+        <view v-if="simulationImageUrl" class="simulation-frame" @tap="previewSimulationImage"><image :src="simulationImageUrl" mode="aspectFit" /><view class="visual-badge">生产模拟图</view></view>
+        <view v-else class="simulation-placeholder"><text>生产模拟图已保存</text><text>完整预览加载中，可先查看下方视角切片</text></view>
+        <view class="view-grid-heading"><text>视角切片</text><text>用于建模与审核</text></view>
         <view class="view-grid"><view v-for="item in multiviewImages" :key="item.assetId" class="view-card" @tap="previewMultiViewImage(item)"><image v-if="imageUrl(item)" :src="imageUrl(item)" mode="aspectFit" /><view v-else class="view-placeholder"><text>{{ item.label }}</text><text>已保存</text></view><view class="view-label"><text>{{ item.label }}</text><text>查看大图 ›</text></view></view></view>
         <view class="bundle-review-state" :class="`bundle-${multiviewBundleStatus || 'draft'}`">
           <view><text class="bundle-review-label">作品包状态</text><text class="bundle-review-title">{{ multiviewBundleStatusText }}</text></view>
           <text v-if="multiviewBundleNo" class="bundle-review-no">{{ multiviewBundleNo }}</text>
         </view>
         <text v-if="multiviewBundleStatus === 'rejected' && multiviewBundleComment" class="bundle-review-comment">未通过原因：{{ multiviewBundleComment }}</text>
-        <button v-if="canSubmitMultiViewReview" class="dark-button full-button" :loading="multiviewBundleSubmitting" @tap="submitMultiViewReview">提交三视图审核 <text>›</text></button>
+        <button v-if="canSubmitMultiViewReview" class="dark-button full-button" :loading="multiviewBundleSubmitting" @tap="submitMultiViewReview">提交生产模拟图审核 <text>›</text></button>
         <button v-else-if="multiviewBundleStatus === 'review'" class="outline-button full-button" disabled>审核中，请等待平台反馈</button>
         <template v-else-if="multiviewBundleStatus === 'approved'">
           <button class="dark-button full-button" @tap="applyMultiViewProduction">申请打样 <text>›</text></button>
@@ -131,6 +134,7 @@ import {
   type ConversationQuickReply,
   type CreatorCampaign,
   type SeedreamMultiViewImage,
+  type SeedreamProductionSimulationImage,
 } from '../../api/creative'
 import { apiUrl, isAuthenticationError } from '../../api/client'
 import {
@@ -206,6 +210,8 @@ const pendingMultiViewPrompt = ref('')
 const previewUrl = ref('')
 const referenceAnalysis = ref('')
 const multiviewImages = ref<SeedreamMultiViewImage[]>([])
+const simulationAssetId = ref<number | null>(null)
+const simulationImage = ref<SeedreamProductionSimulationImage | null>(null)
 const multiviewBundleId = ref<number | null>(null)
 const multiviewBundleNo = ref('')
 const multiviewBundleStatus = ref('')
@@ -275,7 +281,7 @@ const previousEditTarget = computed<EditableBriefField | null>(() => {
   return 'product'
 })
 const previousActionLabel = computed(() => {
-  if (phase.value === 'model') return multiviewImages.value.length >= 3 ? '返回三视图' : '返回产品图'
+  if (phase.value === 'model') return multiviewImages.value.length >= 3 ? '返回生产模拟图' : '返回产品图'
   if (phase.value === 'multiview') return '返回产品图'
   return ({ product: '修改产品', inspiration: '修改灵感', material: '修改材质', size: '修改尺寸' } as Record<EditableBriefField, string>)[previousEditTarget.value || 'product']
 })
@@ -306,10 +312,11 @@ const prompt = computed(() => {
 })
 const multiviewBundleStatusText = computed(() => ({
   draft: '待提交审核',
-  review: '三视图审核中',
+  review: '生产模拟图审核中',
   approved: '审核已通过',
   rejected: '审核未通过',
 }[multiviewBundleStatus.value] || '待创建审核包'))
+const simulationImageUrl = computed(() => imageUrl(simulationImage.value))
 const canSubmitMultiViewReview = computed(() => ['draft', 'rejected'].includes(multiviewBundleStatus.value))
 const chatStageLabel = computed(() => ({
   need_product: '先告诉我想做什么产品',
@@ -322,10 +329,10 @@ const chatStageLabel = computed(() => ({
   ready_for_image: '信息已足够，准备生成产品图',
   template_unavailable: '没有灵感示例功能正在开发中',
   image_ready: '产品图已完成，可以继续落地',
-  multiview_ready: '三视图已完成，请先整包提交审核',
-  multiview_review: '三视图正在人工审核',
-  multiview_approved: '三视图审核已通过，可以申请打样',
-  multiview_rejected: '三视图未通过，可根据原因修改后重提',
+  multiview_ready: '生产模拟图已完成，请先整包提交审核',
+  multiview_review: '生产模拟图正在人工审核',
+  multiview_approved: '生产模拟图审核已通过，可以申请打样',
+  multiview_rejected: '生产模拟图未通过，可根据原因修改后重提',
   model_running: '3D 原型正在生成',
   model_ready: '3D 原型已完成，可以申请打样',
 }[chatStage.value] || '告诉我你的创作想法'))
@@ -577,7 +584,7 @@ function previousPhase(current: Phase): Phase | null {
 function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
 function openCommercial() {
   if (phase.value === 'result') {
-    uni.showToast({ title: '请先生成三视图或 3D 原型', icon: 'none' })
+    uni.showToast({ title: '请先生成生产模拟图或 3D 原型', icon: 'none' })
     return
   }
   if (phase.value === 'model' && !isModelTaskSucceeded.value) {
@@ -649,6 +656,8 @@ function clearGeneratedOutputForNewDirection() {
   previewUrl.value = ''
   referenceAnalysis.value = ''
   multiviewImages.value = []
+  simulationAssetId.value = null
+  simulationImage.value = null
   multiviewBundleId.value = null
   multiviewBundleNo.value = ''
   multiviewBundleStatus.value = ''
@@ -682,6 +691,11 @@ async function refreshRestoredPreviews() {
       return fresh ? { ...item, previewUrl: fresh } : item
     }))
   }
+  if (simulationImage.value || simulationAssetId.value) {
+    const current = simulationImage.value || { assetId: simulationAssetId.value as number, label: '生产模拟图' }
+    const fresh = await freshAssetPreview(Number(current.assetId))
+    if (fresh) simulationImage.value = { ...current, previewUrl: fresh }
+  }
   const imageMessages = messages.value.filter(item => item.imageAssetId && !item.imageUrl)
   await Promise.all(imageMessages.map(async item => {
     const fresh = await freshAssetPreview(Number(item.imageAssetId))
@@ -710,6 +724,8 @@ function resetViewState() {
   previewUrl.value = ''
   referenceAnalysis.value = ''
   multiviewImages.value = []
+  simulationAssetId.value = null
+  simulationImage.value = null
   multiviewBundleId.value = null
   multiviewBundleNo.value = ''
   multiviewBundleStatus.value = ''
@@ -747,6 +763,8 @@ const conversationRestoration = useConversationRestoration({
   previewUrl,
   referenceAnalysis,
   multiviewImages,
+  simulationAssetId,
+  simulationImage,
   multiviewBundleId,
   multiviewBundleNo,
   multiviewBundleStatus,
@@ -1009,10 +1027,10 @@ async function completeGeneratedProductImage(result: any, generationPrompt: stri
     console.warn('[conversation-create] product profile metadata fallback', error)
   }
   await saveCreativeEventBestEffort('image', 'image_generated', { jobId: result?.jobId, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, mode: mode.value, referenceAssetId: referenceAssetId.value, inspirationText: inspirationText.value, referenceStrategy: isReferenceImageMode() ? 'direct_single_pass' : 'text_to_image', productForm, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
-  addMessage('assistant', '产品视觉已经生成并保存。下一步请生成三视图或 3D 原型，完成后才能提交审核和申请打样。')
+  addMessage('assistant', '产品视觉已经生成并保存。下一步请生成生产模拟图或 3D 原型，完成后才能提交审核和申请打样。')
   chatStage.value = 'image_ready'
   chatQuickReplies.value = [
-    { label: '满意，生成三视图', type: 'multiview', value: '' },
+    { label: '满意，生成生产模拟图', type: 'multiview', value: '' },
     { label: '不满意，告诉我怎么改', type: 'refine', value: '' },
     { label: '生成 3D 原型', type: 'model', value: '' },
   ]
@@ -1029,6 +1047,8 @@ async function completeRefinedProductImage(result: any, generationPrompt: string
   previewUrl.value = imageUrl(result) || await freshAssetPreview(newAssetId)
   referenceAnalysis.value = String(result?.referenceAnalysis || referenceAnalysis.value || '')
   multiviewImages.value = []
+  simulationAssetId.value = null
+  simulationImage.value = null
   multiviewBundleId.value = null
   multiviewBundleNo.value = ''
   multiviewBundleStatus.value = ''
@@ -1047,7 +1067,7 @@ async function completeRefinedProductImage(result: any, generationPrompt: string
     referenceAnalysisSource: result?.referenceAnalysisSource || '',
   })
   addMessage('user', `补充修改：${note}`)
-  addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
+  addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或生成生产模拟图和 3D。')
   cancelRefinement()
   await scrollToSection('result-output')
 }
@@ -1115,7 +1135,7 @@ function updateMultiViewChatState() {
     chatQuickReplies.value = [{ label: '重新提交审核', type: 'bundle_review', value: '' }]
   } else {
     chatStage.value = 'multiview_ready'
-    chatQuickReplies.value = [{ label: '提交三视图审核', type: 'bundle_review', value: '' }]
+    chatQuickReplies.value = [{ label: '提交生产模拟图审核', type: 'bundle_review', value: '' }]
   }
 }
 
@@ -1133,6 +1153,8 @@ const multiViewGeneration = useMultiViewGeneration({
   busy,
   busyMessage,
   multiviewImages,
+  simulationAssetId,
+  simulationImage,
   multiviewBundleId,
   multiviewBundleNo,
   multiviewBundleStatus,
@@ -1147,7 +1169,7 @@ const multiViewGeneration = useMultiViewGeneration({
   freshAssetPreview,
   updateMultiViewChatState,
   onGenerated: async () => {
-    addMessage('assistant', '正面、侧面和背面已保存为一个作品包。先提交整包审核，审核通过后就可以申请打样；如果审核未通过，我会把原因保留在这里。')
+    addMessage('assistant', '生产模拟图已保存为一个作品包：完整横向图用于查看，正面、侧面和背面切片用于建模。先提交整包审核，审核通过后就可以申请打样；如果审核未通过，我会把原因保留在这里。')
     phase.value = 'multiview'
     await scrollToSection('multiview-output')
   },
@@ -1159,7 +1181,7 @@ async function generateMultiView() {
   try {
     await multiViewGeneration.generateMultiView()
   } catch (error: any) {
-    uni.showToast({ title: error?.message || '三视图生成失败', icon: 'none' })
+    uni.showToast({ title: error?.message || '生产模拟图生成失败', icon: 'none' })
   }
 }
 
@@ -1167,7 +1189,7 @@ async function resumePendingMultiViewGeneration() {
   try {
     await multiViewGeneration.resumePendingMultiViewGeneration()
   } catch (error: any) {
-    uni.showToast({ title: error?.message || '三视图生成进度暂时无法读取', icon: 'none' })
+    uni.showToast({ title: error?.message || '生产模拟图生成进度暂时无法读取', icon: 'none' })
   }
 }
 
@@ -1175,7 +1197,7 @@ async function restoreCurrentMultiViewBundle() {
   try {
     await multiViewGeneration.restoreCurrentMultiViewBundle()
   } catch (error: any) {
-    uni.showToast({ title: error?.message || '三视图审核状态暂时无法读取', icon: 'none' })
+    uni.showToast({ title: error?.message || '生产模拟图审核状态暂时无法读取', icon: 'none' })
   }
 }
 
@@ -1183,7 +1205,7 @@ async function submitMultiViewReview() {
   try {
     await multiViewGeneration.submitMultiViewReview()
   } catch (error: any) {
-    uni.showToast({ title: error?.message || '提交三视图审核失败', icon: 'none' })
+    uni.showToast({ title: error?.message || '提交生产模拟图审核失败', icon: 'none' })
   }
 }
 
@@ -1216,7 +1238,7 @@ const modelGeneration = useModelGeneration({
   ensureThreeDimensionalPolicy,
   saveEvent,
   onSubmitted: async (_task, context) => {
-    const inputLabel = context.inputMode === 'multiview' ? '三视图建模' : '单图建模'
+    const inputLabel = context.inputMode === 'multiview' ? '生产模拟图建模' : '单图建模'
     addMessage('assistant', `${inputLabel}任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。`)
     chatStage.value = 'model_running'
     chatQuickReplies.value = [{ label: '查看我的作品', type: 'works', value: '' }]
@@ -1427,6 +1449,17 @@ async function previewMultiViewImage(item: SeedreamMultiViewImage) {
   uni.previewImage({ current, urls: urls.length ? urls : [current] })
 }
 
+async function previewSimulationImage() {
+  let current = simulationImageUrl.value
+  if (!current && simulationAssetId.value) current = await freshAssetPreview(simulationAssetId.value)
+  if (!current) {
+    uni.showToast({ title: '生产模拟图还在加载，请稍候', icon: 'none' })
+    return
+  }
+  if (simulationImage.value && !simulationImage.value.previewUrl) simulationImage.value = { ...simulationImage.value, previewUrl: current }
+  uni.previewImage({ current, urls: [current] })
+}
+
 function previewImage() { if (previewUrl.value) uni.previewImage({ current: previewUrl.value, urls: [previewUrl.value] }) }
 function startRefinement() {
   if (!generatedAssetId.value) {
@@ -1604,6 +1637,11 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .output-status { display: flex; align-items: center; gap: 5rpx; color: #6f8d7b; font-size: 12rpx; }
 .status-check { display: grid; place-items: center; width: 25rpx; height: 25rpx; border-radius: 50%; background: #e6f1e9; color: var(--green); font-size: 15rpx; font-weight: 900; }
 .visual-frame { position: relative; overflow: hidden; margin-top: 16rpx; border-radius: 13rpx; background: #edf0ed; }
+.simulation-frame { position: relative; overflow: hidden; margin-top: 15rpx; border: 1rpx solid #d3e1d6; border-radius: 13rpx; background: #edf3ee; }
+.simulation-frame image { display: block; width: 100%; height: 310rpx; background: #edf3ee; }
+.simulation-placeholder { display: flex; align-items: center; justify-content: center; min-height: 150rpx; margin-top: 15rpx; padding: 18rpx; flex-direction: column; gap: 6rpx; border: 1rpx dashed #b9cfbe; border-radius: 13rpx; background: #f4f8f4; color: #62806d; text-align: center; }
+.simulation-placeholder text:first-child { font-size: 17rpx; font-weight: 850; }
+.simulation-placeholder text:last-child { color: #8c9c91; font-size: 13rpx; }
 .result-image { display: block; width: 100%; height: 420rpx; background: #edf0ed; }
 .visual-badge { position: absolute; top: 12rpx; left: 12rpx; padding: 5rpx 8rpx; border: 1rpx solid rgba(255, 255, 255, .7); border-radius: 6rpx; background: rgba(35, 53, 43, .7); color: #fff; font-size: 11rpx; font-weight: 800; }
 .result-placeholder { display: flex; align-items: center; justify-content: center; height: 420rpx; flex-direction: column; gap: 8rpx; background: #e9f0eb; color: #5c7a68; }
@@ -1627,6 +1665,9 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .output-action view:nth-child(2) text:last-child { color: #8b9890; font-size: 13rpx; }
 .action-arrow { color: #a8b3ac; font-size: 28rpx; }
 .surface-note { display: block; margin-top: 10rpx; color: #7f8d84; font-size: 14rpx; line-height: 1.5; }
+.view-grid-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8rpx; margin-top: 15rpx; }
+.view-grid-heading text:first-child { color: #4c6152; font-size: 16rpx; font-weight: 850; }
+.view-grid-heading text:last-child { color: #93a097; font-size: 12rpx; }
 
 .view-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9rpx; margin-top: 15rpx; }
 .view-card { overflow: hidden; border: 1rpx solid #e0e8e1; border-radius: 12rpx; background: #fbfcfb; }

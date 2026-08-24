@@ -10,6 +10,7 @@ import com.example.shixun.service.CreativePromptCompiler;
 import com.example.shixun.service.GenerationCommand;
 import com.example.shixun.service.ProductPromptPolicy;
 import com.example.shixun.service.ReferenceImagePreparationService;
+import com.example.shixun.service.ProductionSimulationImageService;
 import com.example.shixun.service.ai.ArkImageQueueService;
 import com.example.shixun.service.ai.ArkImageWorkflowService;
 import com.example.shixun.service.ai.SeedreamProviderClient;
@@ -108,6 +109,7 @@ public class CreativeAiController {
     private final JwtService jwtService;
     private final CreativePromptCompiler creativePromptCompiler;
     private final ReferenceImagePreparationService referenceImagePreparationService;
+    private final ProductionSimulationImageService productionSimulationImageService;
     private final SeedreamProviderClient seedreamProviderClient;
     private final ArkImageQueueService arkImageQueueService;
     private final ArkImageWorkflowService arkImageWorkflowService;
@@ -223,6 +225,7 @@ public class CreativeAiController {
                                 PlatformTransactionManager transactionManager,
                                 CreativePromptCompiler creativePromptCompiler,
                                 ReferenceImagePreparationService referenceImagePreparationService,
+                                ProductionSimulationImageService productionSimulationImageService,
                                 SeedreamProviderClient seedreamProviderClient,
                                 ArkImageQueueService arkImageQueueService,
                                 ArkImageWorkflowService arkImageWorkflowService,
@@ -234,6 +237,7 @@ public class CreativeAiController {
         this.jwtService = jwtService;
         this.creativePromptCompiler = creativePromptCompiler;
         this.referenceImagePreparationService = referenceImagePreparationService;
+        this.productionSimulationImageService = productionSimulationImageService;
         this.seedreamProviderClient = seedreamProviderClient;
         this.arkImageQueueService = arkImageQueueService;
         this.arkImageWorkflowService = arkImageWorkflowService;
@@ -1026,8 +1030,9 @@ public class CreativeAiController {
         CreativeProjectService.ProjectRef workflowProject = resolveProjectRef(req.projectId, req.versionId, ownerUserId);
         advanceGeneration(workflowProject, ownerUserId, "generation", "generation_started",
                 Map.of("inputAssetId", req.inputAssetId, "mode", "multi_view"));
+        req.viewCount = 3;
         advanceGeneration(workflowProject, ownerUserId, "multiview", "multiview_generation_started",
-                Map.of("inputAssetId", req.inputAssetId, "viewCount", req.viewCount == null ? 4 : req.viewCount));
+                Map.of("inputAssetId", req.inputAssetId, "viewCount", 3));
         // Seedream is account-limited; every multiview request must use the
         // durable single-concurrency queue, including older clients that omit
         // the queue flag.
@@ -1038,47 +1043,13 @@ public class CreativeAiController {
             addGenerationCommandFields(response, command);
             return response;
         }
-        List<String> views = req.viewCount != null && req.viewCount == 3
-                ? List.of("front", "left", "back")
-                : List.of("front", "left", "back", "right");
-        Map<String,String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
-        List<Map<String,Object>> images = new ArrayList<>();
-        String basePrompt = applyProductSizeConstraint(
-                enforceMaterialConstraint(req.prompt, req.productCategory, req.material), req.productSize);
-        String referenceImage = buildArkReferenceImage(req.inputAssetId);
-        for (String view : views) {
-            String viewPrompt = "PRODUCT TURNAROUND IMAGE EDIT. Use the supplied reference image as the only source of truth. "
-                    + "Generate exactly one " + view + " view of the SAME product, not a redesign. "
-                    + "Strictly preserve its recognizable identity, silhouette, proportions, colors, material finish, motifs, accessories and all distinctive details. "
-                    + "For unseen surfaces, infer only the minimal structure needed to keep the same product consistent. "
-                    + "Show the full centered product at the same scale on a clean light-neutral studio background. "
-                    + "No collage, no split screen, no extra object, no human, no packaging mockup, no text, no logo, no watermark. "
-                    + "Product direction: " + basePrompt;
-            JsonNode generated = seedreamProviderClient.createImageToImage(
-                    resolvedArkApiKey(), viewPrompt, referenceImage, size,
-                    Boolean.TRUE.equals(req.watermark), null, null);
-            String remoteUrl = extractImageUrl(generated);
-            if (blank(remoteUrl)) throw new IllegalStateException("多视图服务未返回" + labels.get(view) + "图地址");
-            String localUrl = saveRemoteImage(remoteUrl, "ark-seedream-multiview-" + view + "-", ".jpg");
-            Map<String,Object> metadata = new LinkedHashMap<>();
-            metadata.put("provider", "volcengine_ark"); metadata.put("model", volcengineArkSeedreamImageModel);
-            metadata.put("view", view); metadata.put("remoteUrl", remoteUrl); metadata.put("multiView", true);
-            addProductIdentity(metadata, req.productKey, req.productCategory, req.material, req.productSize);
-            addProjectIdentity(metadata, req.projectId, req.versionId);
-            metadata.put("createdByUserId", ownerUserId);
-            if (currentConsumerUserIdOrNull() != null) metadata.put("consumerWork", true);
-            Long assetId = createAsset("AI 多视图参考 · " + labels.get(view), "image", "ai_generated", localUrl, localUrl,
-                    viewPrompt, null, null, req.inputAssetId, "jpg", "AI生成,火山方舟,Seedream,多视图,3D参考," + labels.get(view), metadata);
-            creativeProjects.bindAsset(assetId, req.projectId, req.versionId, req.inputAssetId);
-            Map<String,Object> item = new LinkedHashMap<>();
-            item.put("view", view); item.put("label", labels.get(view)); item.put("assetId", assetId);
-            addSignedAssetFields(item, assetId, "image");
-            images.add(item);
-        }
-        Map<String,Object> out = new LinkedHashMap<>();
-        out.put("provider", "volcengine_ark"); out.put("model", volcengineArkSeedreamImageModel); out.put("images", images);
-        out.put("viewCount", views.size());
-        out.put("message", "AI 图改图已生成 " + views.size() + " 个一致视角，可一键带入 Tripo 多视图建模");
+        TriptychGenerationResult generated = generateProductionSimulation(
+                req, command, ownerUserId, req.projectId, req.versionId, req.inputAssetId);
+        Map<String,Object> out = arkMultiViewResultPayload(generated.images(), false);
+        out.put("simulationAssetId", generated.simulationAssetId());
+        out.put("simulationImage", generated.simulationImage());
+        out.put("viewCount", generated.images().size());
+        out.put("message", "生产模拟图已生成，包含正面、侧面和背面，并保存三张视角切片用于建模");
         return out;
     }
 
@@ -1420,6 +1391,30 @@ public class CreativeAiController {
                 List<Map<String, Object>> images = signedMultiViewResultImages(resultPayload);
                 out.put("images", images);
                 out.put("viewCount", images.size());
+                Object rawSimulation = resultPayload.get("simulationImage");
+                if (rawSimulation instanceof Map<?, ?> source) {
+                    Map<String, Object> simulation = new LinkedHashMap<>();
+                    source.forEach((key, value) -> simulation.put(String.valueOf(key), value));
+                    Object rawSimulationAssetId = simulation.get("assetId") != null
+                            ? simulation.get("assetId") : resultPayload.get("simulationAssetId");
+                    Long simulationAssetId = numberAsLong(rawSimulationAssetId);
+                    if (simulationAssetId != null) {
+                        simulation.put("assetId", simulationAssetId);
+                        addSignedAssetFields(simulation, simulationAssetId, "image");
+                    }
+                    out.put("simulationImage", simulation);
+                    out.put("simulationAssetId", simulationAssetId);
+                } else {
+                    Long simulationAssetId = numberAsLong(resultPayload.get("simulationAssetId"));
+                    if (simulationAssetId != null) {
+                        Map<String, Object> simulation = new LinkedHashMap<>();
+                        simulation.put("assetId", simulationAssetId);
+                        simulation.put("label", "生产模拟图");
+                        addSignedAssetFields(simulation, simulationAssetId, "image");
+                        out.put("simulationAssetId", simulationAssetId);
+                        out.put("simulationImage", simulation);
+                    }
+                }
                 out.put("message", blank(str(resultPayload.get("message")))
                         ? "AI 多视图已生成并保存到作品库。"
                         : str(resultPayload.get("message")));
@@ -1662,64 +1657,132 @@ public class CreativeAiController {
                     brief.rawPrompt(), inputAssetId, brief.refinement()), command.compiledPrompt(),
                     command.negativePrompt(), command.policyVersion());
         }
+        TriptychGenerationResult generated = generateProductionSimulation(
+                req, command, ownerUserId, numberAsLong(job.get("projectId")),
+                numberAsLong(job.get("versionId")), inputAssetId);
+        Map<String, Object> result = arkMultiViewResultPayload(generated.images(), false);
+        result.put("simulationAssetId", generated.simulationAssetId());
+        result.put("simulationImage", generated.simulationImage());
+        result.put("viewCount", generated.images().size());
+        result.put("message", "生产模拟图已生成，包含正面、侧面和背面，并保存三张视角切片用于建模");
+        addGenerationCommandFields(result, command);
+        return result;
+    }
+
+    /**
+     * Seedream is called once for the user-facing production simulation. The
+     * resulting horizontal triptych is then split locally so the established
+     * front/left/back model and review contracts continue to receive real
+     * individual images.
+     */
+    private TriptychGenerationResult generateProductionSimulation(MultiViewImageRequest req,
+                                                                   GenerationCommand command,
+                                                                   Long ownerUserId,
+                                                                   Long projectId,
+                                                                   Long versionId,
+                                                                   Long inputAssetId) throws Exception {
         String size = normalizedArkImageSize(firstNonBlank(req.size, "2K"));
-        List<String> views = req.viewCount != null && req.viewCount == 3
-                ? List.of("front", "left", "back")
-                : List.of("front", "left", "back", "right");
-        Map<String, String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
-        List<Map<String, Object>> images = storedMultiViewImages(jobId);
-        Set<String> completedViews = new HashSet<>();
-        for (Map<String, Object> image : images) completedViews.add(str(image.get("view")));
-        String basePrompt = command.compiledPrompt();
-        for (String view : views) {
-            if (completedViews.contains(view)) continue;
-            String viewPrompt = "PRODUCT TURNAROUND IMAGE EDIT. The attached reference image is the single source of truth. "
-                    + "Generate exactly one clean studio " + view + " view of the SAME finished product. "
-                    + "Preserve the same subject identity, species or character, silhouette, proportions, markings, colors, material finish, motifs, accessories and scale. "
-                    + "Infer only unseen surfaces needed for a physically coherent product; do not redesign the product. "
-                    + "The view must show the entire centered product on a light neutral background, with no collage, no split screen, no extra object, no person, no packaging mockup, no text, no logo. "
-                    + "Product direction: " + basePrompt;
-            String negative = mergeNegative(command.negativePrompt(),
-                    "different subject, different species or character, changed markings, changed silhouette, collage, split screen, extra object, person, hand, text, logo, watermark, cropped product, blurry, distorted structure");
-            viewPrompt = boundedPromptPreservingEnds(viewPrompt, 3500);
-            negative = boundedPromptPreservingEnds(negative, 2000);
-            JsonNode generated = seedreamProviderClient.createImageToImage(
-                    resolvedArkApiKey(), viewPrompt, buildArkReferenceImage(inputAssetId), size,
-                    Boolean.TRUE.equals(req.watermark), negative, req.seed);
-            String remoteUrl = extractImageUrl(generated);
-            String format = normalizedArkOutputFormat(generated, "jpg");
-            String localUrl = saveRemoteImage(remoteUrl, "ark-seedream-multiview-" + view + "-", "." + format);
+        String basePrompt = applyProductSizeConstraint(
+                enforceMaterialConstraint(command.compiledPrompt(), command.category(), command.material()),
+                command.productSize());
+        String simulationPrompt = boundedPromptPreservingEnds(
+                "PRODUCTION SIMULATION TRIPTYCH. Use the supplied reference image as the only source of truth. "
+                        + "Generate exactly one clean horizontal three-panel production simulation sheet for the SAME finished product. "
+                        + "Arrange three equal-width panels from left to right: FRONT ORTHOGRAPHIC VIEW, LEFT SIDE ORTHOGRAPHIC VIEW, BACK ORTHOGRAPHIC VIEW. "
+                        + "The three panels must show the identical product with identical scale, baseline, proportions, silhouette, colors, materials, markings, motifs, accessories and physical construction. "
+                        + "Use near-orthographic product documentation views, no three-quarter perspective, no camera angle drift, no redesign, no missing panel. "
+                        + "Center the complete product in each panel on the same light neutral studio background with consistent lighting. "
+                        + "Do not add captions, dimensions, arrows, labels, logos, watermark text, packaging, people or any extra object. "
+                        + "This image is for production review; preserve manufacturable seams, joins, thickness and details. Product direction: " + basePrompt,
+                3500);
+        String negative = boundedPromptPreservingEnds(mergeNegative(command.negativePrompt(),
+                "three duplicate front views, repeated same angle, unchanged angle, missing panel, unequal panels, different product, different proportions, different colors, redesign, three-quarter perspective, oblique perspective, cropped product, extra object, person, packaging, text, captions, dimensions, arrows, logo, watermark, blurry, distorted structure"), 2000);
+        JsonNode generated = seedreamProviderClient.createImageToImage(
+                resolvedArkApiKey(), simulationPrompt, buildArkReferenceImage(inputAssetId), size,
+                Boolean.TRUE.equals(req.watermark), negative, req.seed);
+        String remoteUrl = extractImageUrl(generated);
+        if (blank(remoteUrl)) throw new IllegalStateException("生产模拟图服务未返回图片地址");
+        String format = normalizedArkOutputFormat(generated, "jpg");
+        String localUrl = saveRemoteImage(remoteUrl, "ark-seedream-production-simulation-", "." + format);
+        Path fullPath = resolvePublicAssetFile(localUrl, "生产模拟图文件不存在：");
+        ProductionSimulationImageService.Triptych triptych = productionSimulationImageService.split(
+                fullPath, creativeAssetRoot().resolve("generated").normalize(),
+                "ark-seedream-production-simulation-" + System.nanoTime());
+
+        Map<String, Object> fullMetadata = new LinkedHashMap<>();
+        fullMetadata.put("provider", "volcengine_ark");
+        fullMetadata.put("model", volcengineArkSeedreamImageModel);
+        fullMetadata.put("remoteUrl", remoteUrl);
+        fullMetadata.put("imageSize", size);
+        fullMetadata.put("watermark", Boolean.TRUE.equals(req.watermark));
+        fullMetadata.put("productionSimulation", true);
+        fullMetadata.put("layout", "triptych");
+        fullMetadata.put("viewCount", 3);
+        fullMetadata.put("simulationWidth", triptych.width());
+        fullMetadata.put("simulationHeight", triptych.height());
+        fullMetadata.put("policyVersion", command.policyVersion());
+        addProductIdentity(fullMetadata, command.productKey(), command.category(), command.material(), command.productSize());
+        addProjectIdentity(fullMetadata, projectId, versionId);
+        if (ownerUserId != null) {
+            fullMetadata.put("createdByUserId", ownerUserId);
+            if (hasPersistedRole(ownerUserId, "user")) fullMetadata.put("consumerWork", true);
+        }
+        Long simulationAssetId = createAsset("生产模拟图", "image", "ai_generated", localUrl, localUrl,
+                simulationPrompt, negative, null, inputAssetId, format,
+                "AI生成,火山方舟,Seedream,生产模拟图,三视图", fullMetadata);
+        creativeProjects.bindAsset(simulationAssetId, projectId, versionId, inputAssetId);
+
+        Map<String, String> labels = Map.of("front", "正面", "left", "侧面", "back", "背面");
+        List<Map<String, Object>> images = new ArrayList<>();
+        for (String view : List.of("front", "left", "back")) {
+            String sliceUrl = generatedUrl(Path.of(triptych.paths().get(view)));
             Map<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("provider", "volcengine_ark");
             metadata.put("model", volcengineArkSeedreamImageModel);
             metadata.put("view", view);
-            metadata.put("remoteUrl", remoteUrl);
             metadata.put("multiView", true);
+            metadata.put("productionSimulationView", true);
+            metadata.put("sourceSimulationAssetId", simulationAssetId);
+            metadata.put("layout", "triptych_slice");
             metadata.put("imageSize", size);
             metadata.put("watermark", Boolean.TRUE.equals(req.watermark));
             addProductIdentity(metadata, command.productKey(), command.category(), command.material(), command.productSize());
-            addProjectIdentity(metadata, req.projectId, req.versionId);
+            addProjectIdentity(metadata, projectId, versionId);
             metadata.put("policyVersion", command.policyVersion());
             if (ownerUserId != null) {
                 metadata.put("createdByUserId", ownerUserId);
                 if (hasPersistedRole(ownerUserId, "user")) metadata.put("consumerWork", true);
             }
-            Long assetId = createAsset("AI 多视图参考 · " + labels.get(view), "image", "ai_generated",
-                    localUrl, localUrl, viewPrompt, null, null, inputAssetId, format,
-                    "AI生成,火山方舟,Seedream,多视图,3D参考," + labels.get(view), metadata);
-            creativeProjects.bindAsset(assetId, numberAsLong(job.get("projectId")), numberAsLong(job.get("versionId")), inputAssetId);
+            Long assetId = createAsset("生产模拟图 · " + labels.get(view), "image", "ai_generated",
+                    sliceUrl, sliceUrl, simulationPrompt, negative, null, simulationAssetId, "jpg",
+                    "AI生成,火山方舟,Seedream,生产模拟图,视角切片," + labels.get(view), metadata);
+            creativeProjects.bindAsset(assetId, projectId, versionId, inputAssetId);
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("view", view);
             item.put("label", labels.get(view));
             item.put("assetId", assetId);
+            addSignedAssetFields(item, assetId, "image");
             images.add(item);
-            completedViews.add(view);
-            persistImageJobResult(jobId, arkMultiViewResultPayload(images, true));
         }
-        Map<String, Object> result = arkMultiViewResultPayload(images, false);
-        addGenerationCommandFields(result, command);
-        return result;
+        Map<String, Object> simulationImage = new LinkedHashMap<>();
+        simulationImage.put("assetId", simulationAssetId);
+        simulationImage.put("label", "生产模拟图");
+        simulationImage.put("layout", "triptych");
+        simulationImage.put("viewCount", 3);
+        simulationImage.put("width", triptych.width());
+        simulationImage.put("height", triptych.height());
+        addSignedAssetFields(simulationImage, simulationAssetId, "image");
+        return new TriptychGenerationResult(simulationAssetId, simulationImage, images);
     }
+
+    private String generatedUrl(Path path) throws IOException {
+        if (path == null || path.getFileName() == null) throw new IOException("生产模拟图切片路径为空");
+        return "/generated/" + path.getFileName();
+    }
+
+    private record TriptychGenerationResult(Long simulationAssetId,
+                                             Map<String, Object> simulationImage,
+                                             List<Map<String, Object>> images) {}
 
     private Map<String, Object> queueArkImageToImage(GenerateImageRequest req, Long ownerUserId) throws Exception {
         requireArkImageConfiguration();
@@ -3058,6 +3121,7 @@ public class CreativeAiController {
         Long userId = requireCurrentConsumerUser();
         Long inputAssetId = numberAsLong(body == null ? null : body.get("inputAssetId"));
         if (inputAssetId == null) throw new IllegalArgumentException("缺少三视图参考作品");
+        Long simulationAssetId = numberAsLong(body == null ? null : body.get("simulationAssetId"));
         Map<String,Long> assetIds = parseMultiViewAssetIds(body == null ? null : body.get("images"));
         int viewCount = parsePositiveInt(body == null ? null : body.get("viewCount"), 3);
         List<String> requiredViews = requiredMultiViewKeys(viewCount);
@@ -3065,6 +3129,22 @@ public class CreativeAiController {
             throw new IllegalArgumentException(viewCount == 3 ? "三视图必须包含正面、侧面和背面" : "四视图缺少必要视角");
         }
         requireAssetAccess(inputAssetId);
+        if (simulationAssetId != null) {
+            requireAssetAccess(simulationAssetId);
+            Map<String,Object> simulationAsset = jdbc.queryForMap(
+                    "SELECT asset_type assetType,created_by createdBy,metadata_json metadataJson FROM digital_asset WHERE id=?",
+                    simulationAssetId);
+            if (!"image".equals(String.valueOf(simulationAsset.get("assetType")))) {
+                throw new IllegalArgumentException("生产模拟图必须是图片资产");
+            }
+            if (!(simulationAsset.get("createdBy") instanceof Number)
+                    || ((Number) simulationAsset.get("createdBy")).longValue() != userId) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权使用其他用户的生产模拟图");
+            }
+            if (!isProductionSimulationAsset(simulationAsset.get("metadataJson"))) {
+                throw new IllegalArgumentException("所选资产不是有效的生产模拟图");
+            }
+        }
         for (String view : requiredViews) {
             Long assetId = assetIds.get(view);
             requireAssetAccess(assetId);
@@ -3092,10 +3172,11 @@ public class CreativeAiController {
                 numberAsLong(body == null ? null : body.get("versionId")), inputAssetId, userId);
         synchronized (this) {
             List<Map<String,Object>> existingRows = jdbc.queryForList(
-                    "SELECT id,status FROM creative_multiview_bundle WHERE user_id=? AND input_asset_id=? ORDER BY id DESC LIMIT 1",
+                    "SELECT id,status,simulation_asset_id simulationAssetId FROM creative_multiview_bundle WHERE user_id=? AND input_asset_id=? ORDER BY id DESC LIMIT 1",
                     userId, inputAssetId);
             Long bundleId = existingRows.isEmpty() ? null : numberAsLong(existingRows.get(0).get("id"));
             if (bundleId != null) {
+                if (simulationAssetId == null) simulationAssetId = numberAsLong(existingRows.get(0).get("simulationAssetId"));
                 String existingStatus = str(existingRows.get(0).get("status"));
                 if (("review".equals(existingStatus) || "approved".equals(existingStatus))
                         && !multiViewBundleItemsMatch(bundleId, assetIds)) {
@@ -3110,23 +3191,26 @@ public class CreativeAiController {
                     insertMultiViewBundleItems(bundleId, assetIds);
                 }
                 if (Set.of("draft", "rejected").contains(existingStatus)) {
-                    jdbc.update("UPDATE creative_multiview_bundle SET product_key=?,product_name=?,material=?,product_size=?,view_count=?,status='draft',review_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE id=? AND user_id=?",
+                    jdbc.update("UPDATE creative_multiview_bundle SET simulation_asset_id=?,product_key=?,product_name=?,material=?,product_size=?,view_count=?,status='draft',review_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE id=? AND user_id=?",
+                            simulationAssetId,
                             blank(productKey) ? null : productKey, blank(productName) ? null : productName,
                             blank(material) ? null : material, blank(productSize) ? null : productSize,
                             viewCount, bundleId, userId);
                 }
             } else {
                 String bundleNo = no("MVB");
+                final Long persistedSimulationAssetId = simulationAssetId;
                 jdbc.update(con -> {
                     PreparedStatement ps = con.prepareStatement(
-                        "INSERT INTO creative_multiview_bundle (bundle_no,user_id,input_asset_id,product_key,product_name,material,product_size,view_count,status) VALUES (?,?,?,?,?,?,?,?,'draft')",
+                        "INSERT INTO creative_multiview_bundle (bundle_no,user_id,input_asset_id,simulation_asset_id,product_key,product_name,material,product_size,view_count,status) VALUES (?,?,?,?,?,?,?,?,?,'draft')",
                             Statement.NO_GENERATED_KEYS);
                     ps.setString(1, bundleNo); ps.setLong(2, userId); ps.setLong(3, inputAssetId);
-                    ps.setString(4, blank(productKey) ? null : productKey);
-                    ps.setString(5, blank(productName) ? null : productName);
-                    ps.setString(6, blank(material) ? null : material);
-                    ps.setString(7, blank(productSize) ? null : productSize);
-                    ps.setInt(8, viewCount);
+                    if (persistedSimulationAssetId == null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4, persistedSimulationAssetId);
+                    ps.setString(5, blank(productKey) ? null : productKey);
+                    ps.setString(6, blank(productName) ? null : productName);
+                    ps.setString(7, blank(material) ? null : material);
+                    ps.setString(8, blank(productSize) ? null : productSize);
+                    ps.setInt(9, viewCount);
                     return ps;
                 });
                 bundleId = jdbc.queryForObject(
@@ -3209,10 +3293,13 @@ public class CreativeAiController {
                 + (campaign == null ? "" : ";活动投稿=" + campaign.key())
                 + (blank(note) ? "" : "-" + note);
         Long primaryAssetId = assetIds.get("front");
+        Long simulationAssetId = numberAsLong(bundle.get("simulationAssetId"));
+        Set<Long> reviewAssetIds = new LinkedHashSet<>(assetIds.values());
+        if (simulationAssetId != null) reviewAssetIds.add(simulationAssetId);
         jdbc.update("UPDATE creative_multiview_bundle SET status='review',purpose=?,museum_id=?,museum_name=?,campaign_key=?,note=?,review_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE id=? AND user_id=?",
                 purpose, blank(museumId) ? null : museumId, blank(museumName) ? null : museumName,
                 campaign == null ? null : campaign.key(), blank(note) ? null : note, id, userId);
-        for (Long assetId : assetIds.values()) {
+        for (Long assetId : reviewAssetIds) {
             jdbc.update("UPDATE digital_asset SET status='review',tags=CONCAT(COALESCE(tags,''),?) WHERE id=? AND created_by=?",
                     auditTag, assetId, userId);
         }
@@ -3245,6 +3332,8 @@ public class CreativeAiController {
         for (Map<String,Object> row : rows) {
             Map<String,Object> full = multiViewBundleResponse(numberAsLong(row.get("id")));
             row.put("images", full.get("images"));
+            row.put("simulationAssetId", full.get("simulationAssetId"));
+            row.put("simulationImage", full.get("simulationImage"));
         }
         return rows;
     }
@@ -3262,7 +3351,7 @@ public class CreativeAiController {
         if ("rejected".equals(status) && blank(comment)) throw new IllegalArgumentException("三视图审核不通过时必须填写原因");
         Map<String,Object> bundle;
         try {
-            bundle = jdbc.queryForMap("SELECT id,user_id userId,input_asset_id inputAssetId,status FROM creative_multiview_bundle WHERE id=?", id);
+            bundle = jdbc.queryForMap("SELECT id,user_id userId,input_asset_id inputAssetId,simulation_asset_id simulationAssetId,status FROM creative_multiview_bundle WHERE id=?", id);
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new IllegalArgumentException("三视图作品包不存在");
         }
@@ -3276,11 +3365,14 @@ public class CreativeAiController {
         }
         Map<String,Long> assetIds = multiViewBundleItemIds(id);
         if (assetIds.size() < 3) throw new IllegalStateException("三视图作品包明细不完整，无法审核");
+        Long simulationAssetId = numberAsLong(bundle.get("simulationAssetId"));
+        Set<Long> reviewAssetIds = new LinkedHashSet<>(assetIds.values());
+        if (simulationAssetId != null) reviewAssetIds.add(simulationAssetId);
         String operator = authenticatedPrincipal().username();
         jdbc.update("UPDATE creative_multiview_bundle SET status=?,review_comment=?,reviewed_by=?,reviewed_at=?,updated_at=NOW() WHERE id=?",
                 status, blank(comment) ? null : comment, blank(operator) ? "admin" : operator,
                 "review".equals(status) ? null : LocalDateTime.now(), id);
-        for (Long assetId : assetIds.values()) {
+        for (Long assetId : reviewAssetIds) {
             jdbc.update("UPDATE digital_asset SET status=?,tags=CONCAT(COALESCE(tags,''),?) WHERE id=?",
                     status, ";三视图包审核=" + status + (blank(comment) ? "" : "-" + comment), assetId);
         }
@@ -3332,6 +3424,16 @@ public class CreativeAiController {
         return ids;
     }
 
+    private boolean isProductionSimulationAsset(Object rawMetadata) {
+        try {
+            JsonNode metadata = storedJsonNode(rawMetadata);
+            return metadata != null && metadata.path("productionSimulation").asBoolean(false)
+                    && "triptych".equalsIgnoreCase(metadata.path("layout").asText(""));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private void insertMultiViewBundleItems(Long bundleId, Map<String,Long> assetIds) {
         Map<String,String> labels = Map.of("front", "正面", "left", "左侧", "back", "背面", "right", "右侧");
         for (Map.Entry<String,Long> entry : assetIds.entrySet()) {
@@ -3357,13 +3459,13 @@ public class CreativeAiController {
     private Map<String,Object> queryOwnedMultiViewBundle(Long id, Long userId) {
         List<Map<String,Object>> rows = jdbc.queryForList("SELECT id,view_count viewCount,status,product_name productName FROM creative_multiview_bundle WHERE id=? AND user_id=?", id, userId);
         if (rows.isEmpty()) throw new IllegalArgumentException("三视图作品包不存在或无权访问");
-        Map<String,Object> result = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment FROM creative_multiview_bundle b WHERE b.id=?", id);
+        Map<String,Object> result = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.simulation_asset_id simulationAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment FROM creative_multiview_bundle b WHERE b.id=?", id);
         result.putAll(optionalProjectVersion("creative_multiview_bundle", "id", id));
         return result;
     }
 
     private Map<String,Object> multiViewBundleResponse(Long bundleId) {
-        Map<String,Object> row = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b WHERE b.id=?", bundleId);
+        Map<String,Object> row = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.simulation_asset_id simulationAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b WHERE b.id=?", bundleId);
         row.putAll(optionalProjectVersion("creative_multiview_bundle", "id", bundleId));
         List<Map<String,Object>> items = jdbc.queryForList("SELECT i.view_key view,i.label,i.asset_id assetId,a.title assetTitle,a.status assetStatus FROM creative_multiview_bundle_item i JOIN digital_asset a ON a.id=i.asset_id WHERE i.bundle_id=? ORDER BY CASE i.view_key WHEN 'front' THEN 1 WHEN 'left' THEN 2 WHEN 'back' THEN 3 WHEN 'right' THEN 4 ELSE 5 END,i.id", bundleId);
         for (Map<String,Object> item : items) {
@@ -3373,6 +3475,15 @@ public class CreativeAiController {
         row.put("bundleId", row.get("id"));
         row.put("images", items);
         row.put("viewCount", items.size());
+        Long simulationAssetId = numberAsLong(row.get("simulationAssetId"));
+        if (simulationAssetId != null) {
+            Map<String,Object> simulation = new LinkedHashMap<>();
+            simulation.put("assetId", simulationAssetId);
+            simulation.put("label", "生产模拟图");
+            simulation.put("layout", "triptych");
+            addSignedAssetFields(simulation, simulationAssetId, "image");
+            row.put("simulationImage", simulation);
+        }
         return row;
     }
 

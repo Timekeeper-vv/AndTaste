@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { ConversationEvent, ConversationQuickReply } from '../api/creative'
+import type { ConversationEvent, ConversationQuickReply, SeedreamProductionSimulationImage } from '../api/creative'
 
 type ReadonlyValue<T> = { readonly value: T }
 type AnyRef<T = any> = Ref<T>
@@ -28,6 +28,8 @@ export interface ConversationRestorationOptions {
   previewUrl: AnyRef<string>
   referenceAnalysis: AnyRef<string>
   multiviewImages: AnyRef<any[]>
+  simulationAssetId: AnyRef<number | null>
+  simulationImage: AnyRef<SeedreamProductionSimulationImage | null>
   multiviewBundleId: AnyRef<number | null>
   multiviewBundleNo: AnyRef<string>
   multiviewBundleStatus: AnyRef<string>
@@ -143,6 +145,10 @@ export function useConversationRestoration(options: ConversationRestorationOptio
         options.pendingMultiViewInputAssetId.value = Number(payload.inputAssetId) || null
         options.pendingMultiViewPrompt.value = ''
         options.multiviewImages.value = Array.isArray(payload.images) ? payload.images : []
+        options.simulationAssetId.value = Number(payload.simulationAssetId) > 0 ? Number(payload.simulationAssetId) : null
+        options.simulationImage.value = payload.simulationImage && typeof payload.simulationImage === 'object'
+          ? payload.simulationImage
+          : (options.simulationAssetId.value ? { assetId: options.simulationAssetId.value, label: '生产模拟图' } : null)
         // Older events did not restore the generated source asset. Keep the
         // input asset as a fallback so the restored package remains usable.
         if (!options.generatedAssetId.value && Number(payload.inputAssetId) > 0) options.generatedAssetId.value = Number(payload.inputAssetId)
@@ -226,20 +232,20 @@ export function useConversationRestoration(options: ConversationRestorationOptio
           options.addRestoredMessage('assistant', `产品图本次没有生成成功。${payload.errorMessage || '可以调整描述后重新提交。'}`)
           break
         case 'image_generated':
-          options.addRestoredMessage('assistant', '产品视觉已经生成并保存。下一步可以补全四视图、生成 3D，或直接提交商品化申请。')
+          options.addRestoredMessage('assistant', '产品视觉已经生成并保存。下一步可以生成生产模拟图、生成 3D，或直接提交商品化申请。')
           break
         case 'image_refined':
           options.addRestoredMessage('user', `补充修改：${payload.refinementNote || '基于当前图重新生成'}`)
-          options.addRestoredMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或进入四视图和 3D。')
+          options.addRestoredMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或生成生产模拟图和 3D。')
           break
         case 'multiview_queued':
-          options.addRestoredMessage('assistant', '三视图已进入生成队列。离开当前页面也会继续生成，完成后会自动保存到作品库。')
+          options.addRestoredMessage('assistant', '生产模拟图已进入生成队列。离开当前页面也会继续生成，完成后会自动保存到作品库。')
           break
         case 'multiview_failed':
-          options.addRestoredMessage('assistant', `三视图本次没有生成成功。${payload.errorMessage || '可以稍后重新提交。'}`)
+          options.addRestoredMessage('assistant', `生产模拟图本次没有生成成功。${payload.errorMessage || '可以稍后重新提交。'}`)
           break
         case 'multiview_generated':
-          options.addRestoredMessage('assistant', '三视图已经保存。现在可以把它们一起交给 3D 建模，结构会比单张图更完整。')
+          options.addRestoredMessage('assistant', '生产模拟图已经保存。一张图包含正面、侧面和背面，系统也保留三张视角切片用于 3D 建模。')
           break
         case 'model_submitted':
           options.addRestoredMessage('assistant', '3D 建模任务已提交，完成后会出现在作品库。你可以在那里预览、评审并申请打样。')

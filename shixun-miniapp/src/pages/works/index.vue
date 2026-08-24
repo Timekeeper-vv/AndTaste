@@ -18,7 +18,7 @@
     </view>
 
     <template v-else>
-      <AiGeneratedNotice class="ai-disclosure" compact description="带有“AI生成”标识的图片、四视图和 3D 原型由人工智能生成。展示、商业使用、打样和生产前请完成人工复核与权利核验。" />
+      <AiGeneratedNotice class="ai-disclosure" compact description="带有“AI生成”标识的图片、生产模拟图和 3D 原型由人工智能生成。展示、商业使用、打样和生产前请完成人工复核与权利核验。" />
 
       <view v-if="loadError && !assets.length && !multiviewBundles.length" class="load-error">
         <text class="load-error-title">作品暂时未能打开</text>
@@ -38,9 +38,12 @@
         <view class="section-head"><text>作品库</text><text>{{ totalWorkCount }} 件</text></view>
 
         <view v-for="bundle in multiviewBundles" :key="`bundle-${bundle.id}`" class="multiview-bundle-card">
-          <view class="bundle-card-head"><view><text>三视图作品包</text><text>{{ bundle.bundleNo || `#${bundle.id}` }}</text></view><text class="status" :class="String(bundle.status || 'draft')">{{ statusText(bundle.status || 'draft') }}</text></view>
-          <view class="bundle-image-grid"><view v-for="image in bundle.images" :key="image.assetId"><image v-if="bundlePreviewSrc(image)" :src="bundlePreviewSrc(image)" mode="aspectFit" /><view v-else class="bundle-image-placeholder">{{ image.label }}</view><text>{{ image.label }}</text></view></view>
-          <view class="bundle-card-body"><text class="bundle-title">{{ bundle.productName || '三视图文创作品' }}</text><text class="meta">{{ bundle.material || '材质待定' }} · {{ bundle.productSize || '尺寸待定' }} · {{ bundle.viewCount || 3 }} 张视图</text><text v-if="bundle.status === 'rejected' && bundle.reviewComment" class="bundle-reject-reason">未通过原因：{{ bundle.reviewComment }}</text><view class="actions"><button v-if="['draft','rejected'].includes(String(bundle.status || 'draft'))" size="mini" :loading="submittingBundleId === bundle.id" @tap="submitBundleReview(bundle)">{{ bundle.status === 'rejected' ? '重新提交整包审核' : '提交整包审核' }}</button><button v-if="bundle.status === 'approved'" size="mini" class="production" @tap="applyBundleProduction(bundle)">申请打样</button><button v-if="sampleLifecycleRoute(bundle, 'bundle')" size="mini" class="sample-progress" @tap="openSampleLifecycle(bundle, 'bundle')">样品进度</button><button size="mini" @tap="copyBundle(bundle)">复制作品包编号</button></view></view>
+          <view class="bundle-card-head"><view><text>生产模拟图作品包</text><text>{{ bundle.bundleNo || `#${bundle.id}` }}</text></view><text class="status" :class="String(bundle.status || 'draft')">{{ statusText(bundle.status || 'draft') }}</text></view>
+          <view v-if="bundleSimulationSrc(bundle)" class="bundle-simulation-preview" @tap="previewBundleSimulation(bundle)"><image :src="bundleSimulationSrc(bundle)" mode="aspectFit" /><text>完整生产模拟图</text></view>
+          <view v-else-if="bundle.simulationAssetId" class="bundle-simulation-placeholder"><text>完整生产模拟图已保存</text><text>预览加载中</text></view>
+          <view class="bundle-view-heading"><text>视角切片</text><text>用于建模与审核</text></view>
+          <view class="bundle-image-grid"><view v-for="image in bundle.images" :key="image.assetId"><image v-if="bundlePreviewSrc(image)" :src="bundlePreviewSrc(image)" mode="aspectFit" /><view v-else class="bundle-image-placeholder">{{ image.label }}</view><text>{{ image.label }}切片</text></view></view>
+          <view class="bundle-card-body"><text class="bundle-title">{{ bundle.productName || '生产模拟图文创作品' }}</text><text class="meta">{{ bundle.material || '材质待定' }} · {{ bundle.productSize || '尺寸待定' }} · {{ bundle.viewCount || 3 }} 张视角切片</text><text v-if="bundle.status === 'rejected' && bundle.reviewComment" class="bundle-reject-reason">未通过原因：{{ bundle.reviewComment }}</text><view class="actions"><button v-if="['draft','rejected'].includes(String(bundle.status || 'draft'))" size="mini" :loading="submittingBundleId === bundle.id" @tap="submitBundleReview(bundle)">{{ bundle.status === 'rejected' ? '重新提交生产模拟图审核' : '提交生产模拟图审核' }}</button><button v-if="bundle.status === 'approved'" size="mini" class="production" @tap="applyBundleProduction(bundle)">申请打样</button><button v-if="sampleLifecycleRoute(bundle, 'bundle')" size="mini" class="sample-progress" @tap="openSampleLifecycle(bundle, 'bundle')">样品进度</button><button size="mini" @tap="copyBundle(bundle)">复制作品包编号</button></view></view>
         </view>
 
         <view v-for="item in visibleAssets" :key="item.id" class="asset">
@@ -100,6 +103,7 @@ const assets = ref<any[]>([])
 const multiviewBundles = ref<any[]>([])
 const productionRequests = ref<any[]>([])
 const securedPreviews = ref<Record<string, string>>({})
+const securedBundlePreviews = ref<Record<string, string>>({})
 const localPreviews = ref<Record<string, { path: string; savedAt: number }>>({})
 const loading = ref(false)
 const loadError = ref('')
@@ -110,7 +114,10 @@ const signedIn = ref(Boolean(readMiniSession()?.token))
 const DESKTOP_MODEL_URL = 'https://www.zhijiansk.com/'
 const threeDimensionalPolicyConfirmed = ref(false)
 
-const bundleAssetIds = computed(() => new Set(multiviewBundles.value.flatMap(bundle => Array.isArray(bundle.images) ? bundle.images.map((item: any) => String(item.assetId)) : [])))
+const bundleAssetIds = computed(() => new Set(multiviewBundles.value.flatMap(bundle => [
+  ...(Array.isArray(bundle.images) ? bundle.images.map((item: any) => String(item.assetId)) : []),
+  bundle.simulationAssetId ? String(bundle.simulationAssetId) : '',
+].filter(Boolean))))
 // The image-inspiration flow creates a short-lived, model-generated
 // intermediate asset while it extracts the subject from the uploaded image.
 // Keep that asset available for the second Seedream pass, but do not present
@@ -137,6 +144,13 @@ const bundlePreviewSrc = (item: any) => {
   const raw = String(item?.previewUrl || item?.imageUrl || item?.fileUrl || '')
   if (!raw) return ''
   return /^https:\/\//.test(raw) ? raw : apiUrl(raw)
+}
+const bundleSimulationImage = (bundle: any) => bundle?.simulationImage || bundle?.productionSimulationImage || (bundle?.simulationAssetId ? { assetId: bundle.simulationAssetId } : null)
+const bundleSimulationSrc = (bundle: any) => {
+  const image = bundleSimulationImage(bundle)
+  const assetId = String(image?.assetId || bundle?.simulationAssetId || '')
+  const secured = assetId ? securedBundlePreviews.value[assetId] : ''
+  return secured || bundlePreviewSrc(image)
 }
 const isGenerating = (status?: string) => ['queued', 'pending', 'running', 'processing'].includes(String(status || ''))
 const assetDisplayStatus = (asset: any) => String(asset.status || 'draft')
@@ -204,6 +218,35 @@ async function hydratePreviews(rows: any[]) {
   // refresh in the background, while saved files keep recent works visible on
   // a slow or temporarily unavailable network.
   pairs.forEach((pair) => { if (pair) void cachePreview(pair[0], pair[1]) })
+}
+
+async function hydrateBundlePreviews(rows: any[]) {
+  const pairs = await Promise.all(rows.map(async bundle => {
+    const image = bundleSimulationImage(bundle)
+    const assetId = String(image?.assetId || bundle?.simulationAssetId || '')
+    if (!assetId || bundlePreviewSrc(image)) return null
+    try {
+      const access = await getAssetPreviewAccess(assetId)
+      const raw = access?.previewUrl || access?.url
+      const url = absoluteMediaUrl(raw, assetId, access?.accessToken)
+      return url ? [assetId, url] as const : null
+    } catch {
+      return null
+    }
+  }))
+  const next: Record<string, string> = {}
+  pairs.forEach(pair => { if (pair) next[pair[0]] = pair[1] })
+  securedBundlePreviews.value = next
+  // Keep the signed URL on the row too, so a copied bundle remains previewable
+  // during this page lifetime without another access request.
+  if (Object.keys(next).length) {
+    multiviewBundles.value = multiviewBundles.value.map(bundle => {
+      const image = bundleSimulationImage(bundle)
+      const assetId = String(image?.assetId || bundle?.simulationAssetId || '')
+      const url = assetId ? next[assetId] : ''
+      return url ? { ...bundle, simulationImage: { ...(image || {}), assetId: Number(assetId), previewUrl: url } } : bundle
+    })
+  }
 }
 
 function worksCacheKey() {
@@ -297,6 +340,7 @@ async function refresh(notify = false) {
     saveWorksCache(assets.value)
     // 图片签名地址在后台补齐，作品列表本身不等待这些预览请求。
     void hydratePreviews(assets.value)
+    void hydrateBundlePreviews(multiviewBundles.value)
     if (notify) uni.showToast({ title: '作品已更新', icon: 'success' })
   } catch (error: any) {
     loadError.value = readableLoadError(error)
@@ -444,6 +488,7 @@ function resetGuestState() {
   multiviewBundles.value = []
   productionRequests.value = []
   securedPreviews.value = {}
+  securedBundlePreviews.value = {}
   localPreviews.value = {}
   loadError.value = ''
   loading.value = false
@@ -451,6 +496,15 @@ function resetGuestState() {
 
 function copyBundle(bundle: any) {
   uni.setClipboardData({ data: String(bundle?.bundleNo || bundle?.id || '') })
+}
+
+function previewBundleSimulation(bundle: any) {
+  const current = bundleSimulationSrc(bundle)
+  if (!current) {
+    uni.showToast({ title: '生产模拟图还在加载，请稍候', icon: 'none' })
+    return
+  }
+  uni.previewImage({ current, urls: [current] })
 }
 
 function sampleLifecycleRequest(item: any, kind: 'asset' | 'bundle') {
@@ -490,8 +544,8 @@ function submitBundleReview(bundle: any) {
     return
   }
   uni.showModal({
-    title: bundle.status === 'rejected' ? '重新提交三视图审核' : '提交三视图审核',
-    content: purpose === 'museum_sale' ? `正面、侧面和背面将作为一个作品包提交至${context.museum?.name || '目标渠道'}。` : '正面、侧面和背面将作为一个完整作品包提交审核。',
+    title: bundle.status === 'rejected' ? '重新提交生产模拟图审核' : '提交生产模拟图审核',
+    content: purpose === 'museum_sale' ? `完整生产模拟图及正面、侧面和背面切片将作为一个作品包提交至${context.museum?.name || '目标渠道'}。` : '完整生产模拟图及三张视角切片将作为一个作品包提交审核。',
     confirmText: '提交审核',
     success: async result => {
       if (!result.confirm) return
@@ -502,10 +556,10 @@ function submitBundleReview(bundle: any) {
           museumId,
           ...(campaign?.key ? { campaignKey: campaign.key } : {}),
         })
-        uni.showToast({ title: response.message || '三视图已提交审核', icon: 'success' })
+          uni.showToast({ title: response.message || '生产模拟图已提交审核', icon: 'success' })
         await refresh(false)
       } catch (error: any) {
-        uni.showToast({ title: error?.message || '提交三视图审核失败', icon: 'none' })
+        uni.showToast({ title: error?.message || '提交生产模拟图审核失败', icon: 'none' })
       } finally {
         submittingBundleId.value = null
       }
@@ -521,7 +575,7 @@ async function applyBundleProduction(bundle: any) {
     if (existing) {
       uni.showModal({
         title: '已有打样申请',
-        content: '该三视图作品包已经提交过打样申请，请在商品化申请中继续处理。',
+        content: '该生产模拟图作品包已经提交过打样申请，请在商品化申请中继续处理。',
         cancelText: '取消', confirmText: '查看申请',
         success: result => { if (result.confirm) uni.navigateTo({ url: '/pages/production-requests/index' }) },
       })
@@ -529,7 +583,7 @@ async function applyBundleProduction(bundle: any) {
     }
     const projectQuery = bundle.projectId ? `&projectId=${encodeURIComponent(String(bundle.projectId))}` : ''
     const versionQuery = bundle.versionId ? `&versionId=${encodeURIComponent(String(bundle.versionId))}` : ''
-    uni.navigateTo({ url: `/pages/production/index?bundleId=${encodeURIComponent(String(bundle.id))}&title=${encodeURIComponent(bundle.productName || '三视图作品')}${projectQuery}${versionQuery}` })
+    uni.navigateTo({ url: `/pages/production/index?bundleId=${encodeURIComponent(String(bundle.id))}&title=${encodeURIComponent(bundle.productName || '生产模拟图作品')}${projectQuery}${versionQuery}` })
   } catch (error: any) {
     uni.showToast({ title: error?.message || '暂时无法检查申请', icon: 'none' })
   } finally {
@@ -627,6 +681,8 @@ onPullDownRefresh(() => {
 .ai-disclosure{margin:-18rpx 0 10rpx}.asset-media{position:relative;flex:0 0 180rpx;width:180rpx;height:180rpx}.asset-media .cover,.asset-media .model{display:block;width:180rpx;height:180rpx}.asset-media .model{display:flex}.ai-output-badge{position:absolute;left:10rpx;top:10rpx;padding:5rpx 8rpx;border-radius:6rpx;background:rgba(107,67,49,.88);color:#fff;font-size:16rpx;font-weight:900;line-height:1.2}
 .page{min-height:100vh;padding:34rpx}.intro{display:flex;align-items:flex-start;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 34rpx}.title{font-size:48rpx;font-weight:800;display:block}.sub{font-size:24rpx;color:#8e7469;display:block;margin-top:12rpx;line-height:1.55}.refresh{margin:4rpx 0 0;background:#f4e5db;color:#873e26;font-size:21rpx}.section{margin-top:10rpx}.section-head{display:flex;justify-content:space-between;align-items:center;margin:24rpx 4rpx 18rpx;font-size:30rpx;font-weight:750}.section-head text:last-child{font-size:21rpx;color:#9a7d70;font-weight:400}.empty{padding:120rpx 34rpx;text-align:center;color:#9c8479;line-height:1.8}.create-first{width:300rpx;height:82rpx;line-height:82rpx;margin:28rpx auto 0;border-radius:42rpx;background:#963c23;color:#fff;font-size:27rpx}.asset,.job-card{display:flex;background:#fff;border-radius:22rpx;margin-bottom:22rpx;overflow:hidden;box-shadow:0 8rpx 22rpx rgba(65,34,20,.07)}.cover,.model{width:180rpx;height:180rpx;flex-shrink:0}.cover{background:#f4e7df}.model,.job-icon{background:linear-gradient(145deg,#4b2518,#bc5a34);color:#fff;font-size:38rpx;font-weight:800;display:flex;align-items:center;justify-content:center}.body,.job-body{padding:20rpx;min-width:0;flex:1}.row{display:flex;align-items:center;gap:12rpx}.name{font-weight:700;font-size:29rpx;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.approved,.status.succeeded,.status.paid{background:#e4f5e9;color:#248653}.status.rejected,.status.failed{background:#ffe5e1;color:#ba3d2e}.status.running,.status.queued,.status.processing{background:#fff0d5;color:#aa681e}.meta,.source,.generation,.failure,.progress-text{display:block;font-size:21rpx;color:#967c70;margin-top:10rpx;line-height:1.5}.generation{color:#8b5a42}.source{color:#9d4e30}.failure{color:#ba3d2e;white-space:normal}.project-entry{display:flex;align-items:center;justify-content:space-between;gap:12rpx;margin-top:11rpx;padding:10rpx 12rpx;border-radius:10rpx;background:#edf3ed;color:#5d7969;font-size:19rpx;font-weight:750}.project-entry text:last-child{color:#789081;font-size:18rpx}.progress-line{height:10rpx;border-radius:8rpx;background:#f2e4da;margin-top:14rpx;overflow:hidden}.progress-value{height:100%;background:linear-gradient(90deg,#c86a40,#8b351f);border-radius:inherit}.progress-text{margin-top:7rpx;font-size:19rpx}.actions{display:flex;flex-wrap:wrap;gap:10rpx;margin-top:14rpx}.actions button{margin:0;background:#f8ede5;color:#843b23;font-size:20rpx}.actions .production{background:#f8d9c0;color:#74301d}.job-card{padding:0}.job-icon{width:130rpx;min-height:150rpx;flex-shrink:0;font-size:29rpx}.job-card.failed .job-icon{background:linear-gradient(145deg,#7f2920,#c64d3d)}
 .multiview-bundle-card{margin-bottom:22rpx;padding:19rpx;border:1rpx solid rgba(105,135,113,.24);border-radius:18rpx;background:#fff;box-shadow:0 9rpx 21rpx rgba(67,53,37,.055)}.bundle-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12rpx}.bundle-card-head view{display:flex;min-width:0;flex-direction:column;gap:5rpx}.bundle-card-head view text:first-child{color:#3f5548;font-size:27rpx;font-weight:800}.bundle-card-head view text:last-child{color:#9aa79d;font-size:18rpx}.bundle-card-head .status{background:#edf3ed;color:#5d7969}.bundle-card-head .status.review{background:#fff4dc;color:#9c743c}.bundle-card-head .status.approved{background:#e5f2e8;color:#4f8463}.bundle-card-head .status.rejected{background:#fff0ec;color:#ad5d4a}.bundle-image-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8rpx;margin-top:14rpx}.bundle-image-grid>view{overflow:hidden;border:1rpx solid #e1e9e2;border-radius:10rpx;background:#f8faf8}.bundle-image-grid image,.bundle-image-placeholder{display:block;width:100%;height:170rpx;background:#edf1ed}.bundle-image-placeholder{display:flex;align-items:center;justify-content:center;color:#809087;font-size:18rpx}.bundle-image-grid>view>text{display:block;padding:7rpx;color:#6d7f72;font-size:17rpx;font-weight:800;text-align:center}.bundle-card-body{display:flex;min-width:0;flex-direction:column}.bundle-title{display:block;margin-top:13rpx;color:#3d4c43;font-size:25rpx;font-weight:800}.bundle-reject-reason{display:block;margin-top:10rpx;padding:9rpx 10rpx;border-left:3rpx solid #bb6b55;border-radius:0 8rpx 8rpx 0;background:#fff3ef;color:#9c5946;font-size:19rpx;line-height:1.5}
+.bundle-simulation-preview{overflow:hidden;margin-top:14rpx;border:1rpx solid #dbe6dc;border-radius:10rpx;background:#f7faf7}.bundle-simulation-preview image{display:block;width:100%;height:250rpx;background:#edf1ed}.bundle-simulation-preview text,.bundle-simulation-placeholder text{display:block;padding:7rpx;color:#5f796a;font-size:18rpx;font-weight:800;text-align:center}.bundle-simulation-placeholder{display:flex;align-items:center;justify-content:center;flex-direction:column;min-height:120rpx;margin-top:14rpx;border:1rpx dashed #cddbd0;border-radius:10rpx;background:#f7faf7;color:#6b8173}.bundle-simulation-placeholder text+text{padding-top:0;font-size:16rpx;font-weight:400;color:#93a197}
+.bundle-view-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8rpx;margin-top:14rpx;color:#6d8173;font-size:17rpx;font-weight:800}.bundle-view-heading text:last-child{color:#9ba79f;font-size:15rpx;font-weight:400}
 .review-gate-tip{display:flex;align-items:center;min-height:48rpx;padding:0 12rpx;border-radius:9rpx;background:#f3f1ec;color:#8a8177;font-size:18rpx;line-height:1.35}.actions .sample-progress{background:#e7f2e9;color:#527363}
 </style>
 

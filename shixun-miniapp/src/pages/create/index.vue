@@ -7,7 +7,7 @@
       <text class="sub">{{ activeMode.description }}</text>
       <view class="mode-rail"><view v-for="item in modeOptions" :key="item.key" class="mode-tab" :class="{ active: mode === item.key }" @tap="selectMode(item.key)"><text>{{ item.mark }}</text><text>{{ item.short }}</text></view></view>
     </view>
-    <AiGeneratedNotice class="ai-disclosure" description="提交后生成的图片、四视图和 3D 原型均为人工智能生成内容。请在展示、销售、打样或生产前完成人工复核、版权核验和工艺确认。" />
+    <AiGeneratedNotice class="ai-disclosure" description="提交后生成的图片、生产模拟图和 3D 原型均为人工智能生成内容。请在展示、销售、打样或生产前完成人工复核、版权核验和工艺确认。" />
     <view v-if="campaignContext" class="campaign-context"><view><text>PRIORITY CREATOR TASK</text><text>{{ campaignContext.title }}</text><text>面向 {{ campaignContext.targetName }} · {{ campaignContext.collectionStyle }}</text></view><text>通过 +{{ campaignContext.rewardAmount }} 积分</text></view>
 
     <view class="intention-card">
@@ -53,16 +53,16 @@
 
       <view v-if="isMultiViewMode" class="multiview-workbench">
         <view class="multiview-head">
-          <view><text>{{ multiViewSource === 'seedream' ? 'SEEDREAM · TURNAROUND' : 'MULTI-VIEW · CAPTURE' }}</text><text>{{ multiViewSource === 'seedream' ? '四个一致视角' : '上传你的多角度图片' }}</text></view>
-          <text class="multiview-state" :class="{ ready: canSubmitMultiView }">{{ multiViewSource === 'seedream' ? (hasCompleteMultiView ? '4 / 4 已就绪' : '等待生成') : manualMultiViewProgress }}</text>
+          <view><text>{{ multiViewSource === 'seedream' ? 'SEEDREAM · PRODUCTION SIMULATION' : 'MULTI-VIEW · CAPTURE' }}</text><text>{{ multiViewSource === 'seedream' ? '一张生产模拟图' : '上传你的多角度图片' }}</text></view>
+          <text class="multiview-state" :class="{ ready: canSubmitMultiView }">{{ multiViewSource === 'seedream' ? (hasCompleteMultiView ? '3 / 3 已就绪' : '等待生成') : manualMultiViewProgress }}</text>
         </view>
         <view class="multiview-source-switch">
-          <button :class="{ active: multiViewSource === 'seedream' }" :disabled="loading" @tap="setMultiViewSource('seedream')"><text>AI 补全四视图</text><text>1 张图 → 4 个一致视角</text></button>
+          <button :class="{ active: multiViewSource === 'seedream' }" :disabled="loading" @tap="setMultiViewSource('seedream')"><text>生成生产模拟图</text><text>1 张图 → 正面、侧面、背面</text></button>
           <button :class="{ active: multiViewSource === 'manual' }" :disabled="loading" @tap="setMultiViewSource('manual')"><text>手动上传多视图</text><text>正面必传，至少再传 1 个角度</text></button>
         </view>
 
         <template v-if="multiViewSource === 'seedream'">
-          <text class="multiview-intro">由同一张参考图生成正、左、背、右四个一致视角；只有服务端真实返回并存入作品库的图片，才能进入下一步建模。</text>
+          <text class="multiview-intro">Seedream 只调用一次，输出一张横向生产模拟图，按正面、侧面、背面三个等宽面板排列；服务端再切出三张真实图片供审核和建模。</text>
           <view class="turnaround-flow">
             <view v-for="slot in multiViewSlots" :key="slot.key" class="turnaround-step" :class="{ ready: multiViewAssetIdByView[slot.key] }"><text>{{ slot.short }}</text><text>{{ slot.label }}</text></view>
           </view>
@@ -71,6 +71,11 @@
           <view v-if="multiViewError" class="multiview-error"><text>本次请求未完成</text><text>{{ multiViewError }}</text></view>
 
           <view v-if="orderedMultiViewImages.length" class="multiview-result">
+            <view v-if="multiViewSimulationImage" class="simulation-result" @tap="previewSimulationImage">
+              <image v-if="multiViewSimulationImageSrc" :src="multiViewSimulationImageSrc" mode="aspectFit" />
+              <view v-else class="simulation-image-fallback"><text>生产模拟图</text><text>完整图片已存入作品库</text></view>
+              <view class="simulation-result-meta"><text>生产模拟图</text><text>正面 · 侧面 · 背面</text></view>
+            </view>
             <view class="view-grid">
               <view v-for="item in orderedMultiViewImages" :key="`${item.view}-${item.assetId}`" class="view-card" @tap="previewMultiView(item)">
                 <image v-if="multiViewImageSrc(item)" :src="multiViewImageSrc(item)" mode="aspectFill" />
@@ -78,15 +83,15 @@
                 <view class="view-card-meta"><text>{{ item.label || viewLabel(item.view) }}</text><text>已保存</text></view>
               </view>
             </view>
-            <view class="multiview-delivery"><view><text>四视图已保存</text><text>{{ multiViewMessage || '可直接提交给 Tripo 创建 3D 原型。' }}</text></view><text>✓</text></view>
-            <view class="multiview-credit-note"><text>积分说明</text><text>生成四视图阶段不预扣平台积分；提交 3D 时后端会按当前规则预扣 {{ imageTo3dCreditLabel }}，若提交失败会自动退回。</text></view>
+            <view class="multiview-delivery"><view><text>生产模拟图已保存</text><text>{{ multiViewMessage || '三张视角切片可直接提交给 Tripo 创建 3D 原型。' }}</text></view><text>✓</text></view>
+            <view class="multiview-credit-note"><text>积分说明</text><text>生成生产模拟图阶段不预扣平台积分；提交 3D 时后端会按当前规则预扣 {{ imageTo3dCreditLabel }}，若提交失败会自动退回。</text></view>
             <button class="model-submit" :loading="loading && loadingAction === 'model'" :disabled="loading || !hasCompleteMultiView" @tap="submitMultiViewModel"><text>3D</text>{{ multiViewModelButtonLabel }}</button>
           </view>
-          <view v-else class="multiview-empty"><view class="turntable-orb"><text>3D</text></view><view><text>先生成可用的四视图</text><text>选择一张主体清晰的参考图，系统会基于原图补全一致视角。</text></view></view>
+          <view v-else class="multiview-empty"><view class="turntable-orb"><text>3D</text></view><view><text>先生成生产模拟图</text><text>选择一张主体清晰的参考图，系统会基于原图生成正面、侧面和背面。</text></view></view>
         </template>
 
         <template v-else>
-          <text class="multiview-intro">已有正面、侧面或背面产品图时，可直接上传给 Tripo。正面图必传，至少再上传一个角度；四个角度都会进一步提升厚度与背部结构的完整度。</text>
+          <text class="multiview-intro">已有正面、侧面或背面产品图时，可直接上传给 Tripo。正面图必传，至少再上传一个角度；三张角度图会共同约束厚度、比例与背部结构。</text>
           <view class="manual-view-grid">
             <view v-for="slot in multiViewSlots" :key="slot.key" class="manual-view-slot" :class="{ ready: manualMultiViewAssets[slot.key].assetId, uploading: manualMultiViewUploading === slot.key }" @tap="pickManualMultiView(slot.key)">
               <image v-if="manualMultiViewAssets[slot.key].localPath" :src="manualMultiViewAssets[slot.key].localPath" mode="aspectFill" />
@@ -94,7 +99,7 @@
               <view class="manual-view-meta"><text>{{ slot.label }}</text><text>{{ manualMultiViewUploading === slot.key ? '上传中…' : manualMultiViewAssets[slot.key].assetId ? '已存入作品库' : '点击上传' }}</text></view>
             </view>
           </view>
-          <view class="multiview-credit-note"><text>积分说明</text><text>上传图片不会扣积分；提交多视图 3D 时才会按当前规则预扣 {{ imageTo3dCreditLabel }}，若提交失败会自动退回。</text></view>
+          <view class="multiview-credit-note"><text>积分说明</text><text>上传图片不会扣积分；提交三视角 3D 时才会按当前规则预扣 {{ imageTo3dCreditLabel }}，若提交失败会自动退回。</text></view>
           <button class="model-submit" :loading="loading && loadingAction === 'model'" :disabled="loading || !canSubmitMultiView" @tap="submitMultiViewModel"><text>3D</text>{{ manualMultiViewModelButtonLabel }}</button>
         </template>
       </view>
@@ -119,6 +124,7 @@ import {
   type CreatorCampaign,
   type ProductionFeasibilityResult,
   type SeedreamMultiViewImage,
+  type SeedreamProductionSimulationImage,
   type Tripo3dPromptTemplate,
   uploadReference,
 } from '../../api/creative'
@@ -143,7 +149,7 @@ import { requireSession } from '../../utils/session'
 
 type CreateMode = 'text' | 'image' | 'reference' | 'text3d' | 'image3d' | 'multiview'
 type FinishKey = 'glaze' | 'texture' | 'relief'
-type MultiViewKey = 'front' | 'left' | 'back' | 'right'
+type MultiViewKey = 'front' | 'left' | 'back'
 type MultiViewSource = 'seedream' | 'manual'
 type LoadingAction = 'creation' | 'multiview' | 'model'
 
@@ -177,11 +183,11 @@ const finish = reactive({ glaze: 72, texture: 42, relief: 36 })
 const multiViewSource = ref<MultiViewSource>('seedream')
 const multiViewSize = ref<'1K' | '2K'>('2K')
 const multiViewImages = ref<SeedreamMultiViewImage[]>([])
+const multiViewSimulationImage = ref<SeedreamProductionSimulationImage | null>(null)
 const manualMultiViewAssets = reactive<Record<MultiViewKey, ManualMultiViewAsset>>({
   front: { assetId: null, localPath: '' },
   left: { assetId: null, localPath: '' },
   back: { assetId: null, localPath: '' },
-  right: { assetId: null, localPath: '' },
 })
 const manualMultiViewUploading = ref<MultiViewKey | ''>('')
 const multiViewMessage = ref('')
@@ -200,9 +206,8 @@ const campaignContext = ref<CampaignContext | null>(null)
 
 const multiViewSlots: MultiViewSlot[] = [
   { key: 'front', label: '正面', short: '正' },
-  { key: 'left', label: '左侧', short: '左' },
+  { key: 'left', label: '侧面', short: '侧' },
   { key: 'back', label: '背面', short: '背' },
-  { key: 'right', label: '右侧', short: '右' },
 ]
 const multiViewSizes: Array<'1K' | '2K'> = ['1K', '2K']
 
@@ -212,7 +217,7 @@ const modeOptions: Array<{ key: CreateMode; mark: string; short: string; title: 
   { key: 'reference', mark: '鉴', short: '参考图改造', title: '保留原有特征，重构文化语言。', description: '上传草图、普通产品图或灵感图，用文创设计重新组织它的材质与场景。', notice: '请使用你拥有版权或已获得授权的参考图片；生成结果会保留在你的作品库。', cost: 16 },
   { key: 'text3d', mark: '形', short: '文字 3D', title: '把一段描述，推向立体原型。', description: '清楚描述主体、材质和结构，生成后可在作品库发起 3D 安全预览。', notice: '3D 生成完成后，请先提交审核；审核通过的模型才能申请打样或生产。', cost: 60 },
   { key: 'image3d', mark: '立', short: '图片 3D', title: '从参考图，生成可预览的原型。', description: '上传主体清晰的图像，系统会生成可进入作品库继续推进的三维模型。', notice: '请尽量使用主体完整、背景干净的图片，以便获得更准确的 3D 结构；材质偏好会随本次作品工艺方向一并记录。', cost: 70 },
-  { key: 'multiview', mark: '观', short: '多视图 3D', title: '从一张图，补全一件作品的四面。', description: '先基于原图生成一致的正、左、背、右视图，再一键交给 Tripo 创建 3D 原型。', notice: '四视图会以原图为唯一依据生成并保存；平台积分只会在下一步提交 Tripo 3D 任务时按当前规则预扣。材质偏好会同步为本次工艺方向记录。', cost: 0 },
+  { key: 'multiview', mark: '观', short: '生产模拟图', title: '从一张图，生成一张生产模拟图。', description: '一次调用 Seedream，输出包含正面、侧面、背面的横向生产模拟图，再一键交给 Tripo 创建 3D 原型。', notice: '生产模拟图会以原图为唯一依据生成并保存；平台积分只会在下一步提交 Tripo 3D 任务时按当前规则预扣。材质偏好会同步为本次工艺方向记录。', cost: 0 },
 ]
 const patterns = [
   { id: 'taotie', name: '饕餮回纹', category: '青铜纹样', prompt: '简化饕餮回纹，适合文创产品边缘与局部浮雕装饰', tone: '#6d8476', mark: '饕' },
@@ -268,11 +273,11 @@ const assessmentLevelClass = computed(() => {
 })
 const referencePanel = computed(() => {
   if (mode.value === 'image' || mode.value === 'reference') return { eyebrow: 'REFERENCE REMIX', description: '上传产品、草图或灵感图，AI 会保留主体特征后进行文创改造。' }
-  if (mode.value === 'multiview') return { eyebrow: 'MULTIVIEW SOURCE', description: '上传一张主体完整的产品图。系统会以它为唯一依据，补全正、左、背、右四个一致视角。' }
+  if (mode.value === 'multiview') return { eyebrow: 'PRODUCTION SIMULATION SOURCE', description: '上传一张主体完整的产品图。系统会以它为唯一依据，生成正面、侧面、背面的生产模拟图。' }
   return { eyebrow: 'IMAGE TO 3D', description: '上传主体清晰的产品图，生成可继续预览与打样的 3D 原型。' }
 })
 const multiViewAssetIdByView = computed<Record<MultiViewKey, number | null>>(() => {
-  const ids: Record<MultiViewKey, number | null> = { front: null, left: null, back: null, right: null }
+  const ids: Record<MultiViewKey, number | null> = { front: null, left: null, back: null }
   multiViewSlots.forEach((slot) => {
     const item = multiViewImages.value.find(image => image.view === slot.key)
     const assetId = Number(item?.assetId)
@@ -290,24 +295,23 @@ const manualMultiViewAssetIdByView = computed<Record<MultiViewKey, number | null
   front: manualMultiViewAssets.front.assetId,
   left: manualMultiViewAssets.left.assetId,
   back: manualMultiViewAssets.back.assetId,
-  right: manualMultiViewAssets.right.assetId,
 }))
 const manualMultiViewCount = computed(() => multiViewSlots.filter(slot => Boolean(manualMultiViewAssetIdByView.value[slot.key])).length)
 const hasMinimumManualMultiView = computed(() => Boolean(manualMultiViewAssetIdByView.value.front) && manualMultiViewCount.value >= 2)
 const canSubmitMultiView = computed(() => multiViewSource.value === 'seedream' ? hasCompleteMultiView.value : hasMinimumManualMultiView.value)
-const manualMultiViewProgress = computed(() => `${manualMultiViewCount.value} / 4 已上传`)
+const manualMultiViewProgress = computed(() => `${manualMultiViewCount.value} / 3 已上传`)
 const imageTo3dCreditLabel = computed(() => `${formatCredit(imageTo3dCredit.value)} 积分`)
-const multiViewModelButtonLabel = computed(() => `用 4 视图创建 3D（预扣 ${imageTo3dCreditLabel.value}）`)
+const multiViewModelButtonLabel = computed(() => `用三张视角创建 3D（预扣 ${imageTo3dCreditLabel.value}）`)
 const manualMultiViewModelButtonLabel = computed(() => `用已上传视图创建 3D（预扣 ${imageTo3dCreditLabel.value}）`)
 const generateButtonLabel = computed(() => {
   if (loading.value) {
-    if (loadingAction.value === 'multiview') return generationProgressMessage.value === '正在生成，请稍候…' ? '正在基于原图生成四个视图…' : generationProgressMessage.value
-    if (loadingAction.value === 'model') return '正在提交多视图 3D 任务…'
+    if (loadingAction.value === 'multiview') return generationProgressMessage.value === '正在生成，请稍候…' ? '正在生成生产模拟图…' : generationProgressMessage.value
+    if (loadingAction.value === 'model') return '正在提交生产模拟图 3D 任务…'
     return generationProgressMessage.value
   }
   if (isMultiViewMode.value) {
     if (multiViewSource.value === 'manual') return canSubmitMultiView.value ? manualMultiViewModelButtonLabel.value : '先上传正面图与另一个角度'
-    return hasCompleteMultiView.value ? '重新生成四个一致视图' : '生成四个一致视图'
+    return hasCompleteMultiView.value ? '重新生成生产模拟图' : '生成生产模拟图'
   }
   return `开始生成（${activeMode.value.cost} 积分）`
 })
@@ -318,7 +322,7 @@ function updateImageTaskProgress(job: { status?: string; jobType?: string; queue
     generationProgressMessage.value = ahead > 0 ? `已进入队列，前面还有 ${ahead} 项任务…` : '已进入队列，马上开始…'
   } else if (job.status === 'running') {
     generationProgressMessage.value = job.jobType === 'multi_view'
-      ? '正在生成一致的产品多视图，请稍候…'
+      ? '正在生成标准化生产模拟图，请稍候…'
       : job.jobType === 'image_to_image'
         ? '正在依据参考图生成产品视觉，请稍候…'
         : 'Seedream 5.0 正在生成产品图，请稍候…'
@@ -386,6 +390,7 @@ function isRecommendedForSelectedProduct(material: MaterialDefinition) {
 function changeFinish(key: FinishKey, event: any) { finish[key] = Number(event.detail.value) || 0 }
 function clearMultiViewResult() {
   multiViewImages.value = []
+  multiViewSimulationImage.value = null
   multiViewMessage.value = ''
   multiViewError.value = ''
 }
@@ -420,7 +425,7 @@ async function pickImage() {
       referenceAssetId.value = null
       clearPreparedImagePrompt()
       clearMultiViewResult()
-      if (replacesCompleteViews) uni.showToast({ title: '参考图已更新，请重新生成四视图', icon: 'none' })
+      if (replacesCompleteViews) uni.showToast({ title: '参考图已更新，请重新生成生产模拟图', icon: 'none' })
     },
   })
 }
@@ -459,7 +464,7 @@ function setMultiViewSize(size: '1K' | '2K') {
   const replacesCompleteViews = hasCompleteMultiView.value
   multiViewSize.value = size
   clearMultiViewResult()
-  if (replacesCompleteViews) uni.showToast({ title: '已更新精度，请重新生成四视图', icon: 'none' })
+  if (replacesCompleteViews) uni.showToast({ title: '已更新精度，请重新生成生产模拟图', icon: 'none' })
 }
 function buildPrompt() {
   const direction = `产品类别：${selectedProductCategory.value.label}，制造材质：${form.material}，视觉表面：${selectedMaterial.value.modelLabel}，釉面光泽 ${finish.glaze}%，肌理颗粒 ${finish.texture}%，浮雕层次 ${finish.relief}%`
@@ -479,9 +484,19 @@ function multiViewImageSrc(item: SeedreamMultiViewImage) {
   if (/^https?:\/\//i.test(raw)) return raw
   return raw.startsWith('/') ? apiUrl(raw) : ''
 }
+const multiViewSimulationImageSrc = computed(() => {
+  const raw = String(multiViewSimulationImage.value?.previewUrl || multiViewSimulationImage.value?.imageUrl || multiViewSimulationImage.value?.fileUrl || '')
+  if (/^https?:\/\//i.test(raw)) return raw
+  return raw.startsWith('/') ? apiUrl(raw) : ''
+})
+function previewSimulationImage() {
+  const current = multiViewSimulationImageSrc.value
+  const urls = [current, ...orderedMultiViewImages.value.map(multiViewImageSrc)].filter(Boolean)
+  if (current && urls.length) uni.previewImage({ current, urls })
+}
 function previewMultiView(item: SeedreamMultiViewImage) {
   const current = multiViewImageSrc(item)
-  const urls = orderedMultiViewImages.value.map(multiViewImageSrc).filter(Boolean)
+  const urls = [multiViewSimulationImageSrc.value, ...orderedMultiViewImages.value.map(multiViewImageSrc)].filter(Boolean)
   if (current && urls.length) uni.previewImage({ current, urls })
 }
 async function ensureReferenceAsset() {
@@ -493,7 +508,7 @@ async function ensureReferenceAsset() {
   referenceAssetId.value = assetId
   return assetId
 }
-function normalizeMultiViewImages(result: { images?: SeedreamMultiViewImage[] }) {
+function normalizeMultiViewImages(result: { images?: SeedreamMultiViewImage[]; simulationAssetId?: number; simulationImage?: SeedreamProductionSimulationImage }) {
   const source = Array.isArray(result?.images) ? result.images : []
   const normalized: SeedreamMultiViewImage[] = []
   const missing: string[] = []
@@ -505,7 +520,15 @@ function normalizeMultiViewImages(result: { images?: SeedreamMultiViewImage[] })
     }
     normalized.push({ ...candidate, view: slot.key, label: candidate.label || slot.label, assetId: Number(candidate.assetId) })
   })
-  if (missing.length) throw new Error(`多视图服务没有完整返回${missing.join('、')}图，请不要提交 3D，并稍后重试`)
+  if (missing.length) throw new Error(`生产模拟图服务没有完整返回${missing.join('、')}切片，请不要提交 3D，并稍后重试`)
+  const simulationAssetId = Number(result?.simulationAssetId || result?.simulationImage?.assetId)
+  if (Number.isFinite(simulationAssetId) && simulationAssetId > 0) {
+    multiViewSimulationImage.value = {
+      ...(result.simulationImage || {}),
+      assetId: simulationAssetId,
+      label: result.simulationImage?.label || '生产模拟图',
+    }
+  }
   return normalized
 }
 async function loadCreditRules() {
@@ -788,14 +811,15 @@ async function generateMultiView(prompt: string) {
     const result = await createSeedreamMultiView({
       ...multiviewRequest,
       inputAssetId,
+      viewCount: 3,
       size: multiViewSize.value,
       watermark: true,
     }, updateImageTaskProgress)
     multiViewImages.value = normalizeMultiViewImages(result)
-    multiViewMessage.value = result.message || 'AI 已完成四个一致视角，可提交给 Tripo 创建 3D。'
-    uni.showToast({ title: '四视图已生成', icon: 'success' })
+    multiViewMessage.value = result.message || 'AI 已完成生产模拟图，可提交三张视角切片给 Tripo 创建 3D。'
+    uni.showToast({ title: '生产模拟图已生成', icon: 'success' })
   } catch (error: any) {
-    const message = error?.message || '多视图生成失败，请稍后重试'
+    const message = error?.message || '生产模拟图生成失败，请稍后重试'
     multiViewError.value = message
     uni.showToast({ title: message, icon: 'none' })
   } finally {
@@ -812,10 +836,9 @@ async function submitMultiViewModel() {
   const front = assetIds.front
   const left = assetIds.left
   const back = assetIds.back
-  const right = assetIds.right
-  const viewCount = [front, left, back, right].filter(Boolean).length
-  if (multiViewSource.value === 'seedream' && (!front || !left || !back || !right)) {
-    return uni.showToast({ title: '请先生成完整的正、左、背、右四视图', icon: 'none' })
+  const viewCount = [front, left, back].filter(Boolean).length
+  if (multiViewSource.value === 'seedream' && (!front || !left || !back)) {
+    return uni.showToast({ title: '请先生成完整的正面、侧面、背面生产模拟图', icon: 'none' })
   }
   if (multiViewSource.value === 'manual' && (!front || viewCount < 2)) {
     return uni.showToast({ title: '请先上传正面图与至少一个其他角度', icon: 'none' })
@@ -828,18 +851,18 @@ async function submitMultiViewModel() {
     const prompt = buildPrompt()
     await refreshProductionAssessment({ prompt, quiet: true })
     const result = await createModel({
-      title: form.title || `${multiViewSource.value === 'seedream' ? 'AI 补全' : '手动'} 多视图 · ${selectedProductCategory.value.label} 3D 原型`,
+      title: form.title || `${multiViewSource.value === 'seedream' ? '生产模拟图' : '手动'} · ${selectedProductCategory.value.label} 3D 原型`,
       prompt,
       rawPrompt: prompt,
       mode: 'multiview_to_model',
-      multiviewAssetIds: { front, left, back, right },
+      multiviewAssetIds: { front, left, back },
       negativePrompt: defaultNegativePrompt,
       ...modelQualityOptions(),
     })
     uni.removeStorageSync('miniapp_atelier_draft')
     const remaining = Number(result?.creditAccount?.balance)
     const balanceHint = Number.isFinite(remaining) ? `当前可用积分 ${formatCredit(remaining)}。` : ''
-    const serverMessage = result?.message || '多视图 3D 生成任务已创建'
+    const serverMessage = result?.message || '生产模拟图 3D 生成任务已创建'
     uni.showModal({
       title: '3D 任务已提交',
       content: `${serverMessage}，可在“我的作品”中查看进度。${balanceHint}`,
@@ -894,7 +917,7 @@ onLoad((query: any) => {
 
 .multiview-workbench{margin-top:22rpx;padding:17rpx;border:1rpx solid #cfddd2;border-radius:20rpx;background:linear-gradient(145deg,rgba(242,247,241,.98),rgba(255,251,245,.96));box-shadow:inset 0 1rpx 0 rgba(255,255,255,.88)}
 .multiview-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12rpx}.multiview-head>view{display:flex;flex-direction:column;gap:4rpx}.multiview-head>view text:first-child{color:#668272;font-size:14rpx;font-weight:900;letter-spacing:1.7rpx}.multiview-head>view text:last-child{color:#403a33;font-family:"Songti SC","STSong",serif;font-size:26rpx;font-weight:700}.multiview-state{flex:0 0 auto;padding:6rpx 9rpx;border-radius:99rpx;background:#ece7df;color:#8b8075;font-size:14rpx;font-weight:800}.multiview-state.ready{background:#dcecdf;color:#4e7463}
-.multiview-intro{display:block;margin-top:10rpx;color:#80766b;font-size:17rpx;line-height:1.65}.turnaround-flow{display:grid;grid-template-columns:repeat(4,1fr);gap:7rpx;margin-top:15rpx}.turnaround-step{position:relative;display:flex;min-height:77rpx;flex-direction:column;align-items:center;justify-content:center;gap:5rpx;border:1rpx solid #ddd7ce;border-radius:13rpx;background:rgba(255,253,249,.78);color:#8a8177}.turnaround-step text:first-child{display:grid;place-items:center;width:31rpx;height:31rpx;border-radius:50%;background:#ebe6de;color:#82776c;font-family:"Songti SC","STSong",serif;font-size:19rpx}.turnaround-step text:last-child{font-size:14rpx;font-weight:800}.turnaround-step.ready{border-color:#a5bdac;background:#f5faf4;color:#527362}.turnaround-step.ready text:first-child{background:#668574;color:#fff;box-shadow:0 5rpx 10rpx rgba(69,100,82,.18)}
+.multiview-intro{display:block;margin-top:10rpx;color:#80766b;font-size:17rpx;line-height:1.65}.turnaround-flow{display:grid;grid-template-columns:repeat(3,1fr);gap:7rpx;margin-top:15rpx}.turnaround-step{position:relative;display:flex;min-height:77rpx;flex-direction:column;align-items:center;justify-content:center;gap:5rpx;border:1rpx solid #ddd7ce;border-radius:13rpx;background:rgba(255,253,249,.78);color:#8a8177}.turnaround-step text:first-child{display:grid;place-items:center;width:31rpx;height:31rpx;border-radius:50%;background:#ebe6de;color:#82776c;font-family:"Songti SC","STSong",serif;font-size:19rpx}.turnaround-step text:last-child{font-size:14rpx;font-weight:800}.turnaround-step.ready{border-color:#a5bdac;background:#f5faf4;color:#527362}.turnaround-step.ready text:first-child{background:#668574;color:#fff;box-shadow:0 5rpx 10rpx rgba(69,100,82,.18)}
 .quality-row{display:flex;align-items:center;justify-content:space-between;gap:12rpx;margin-top:13rpx;padding:10rpx 11rpx;border-radius:13rpx;background:rgba(255,255,255,.58);color:#756c62;font-size:16rpx;font-weight:800}.quality-row>view{display:flex;gap:6rpx}.quality-choice{min-width:68rpx;height:48rpx;margin:0;padding:0 12rpx;border:1rpx solid #ded7cd;border-radius:10rpx;background:#fffdf9;color:#82786d;font-size:15rpx;font-weight:900}.quality-choice.active{border-color:#638172;background:#638172;color:#fff;box-shadow:0 5rpx 11rpx rgba(77,111,94,.18)}.quality-choice[disabled]{opacity:.56}
 .multiview-error{display:flex;flex-direction:column;gap:4rpx;margin-top:12rpx;padding:11rpx 12rpx;border:1rpx solid #e7c4b7;border-radius:13rpx;background:#fff5f0;color:#96604c}.multiview-error text:first-child{font-size:16rpx;font-weight:900}.multiview-error text:last-child{font-size:15rpx;line-height:1.55}
 .multiview-result{margin-top:14rpx}.view-grid{display:grid;grid-template-columns:1fr 1fr;gap:9rpx}.view-card{overflow:hidden;border:1rpx solid #d9ded6;border-radius:15rpx;background:#fffdf9;box-shadow:0 6rpx 14rpx rgba(62,54,45,.055)}.view-card image,.view-image-fallback{display:block;width:100%;height:186rpx;background:linear-gradient(145deg,#e1e8df,#f0e4d8)}.view-image-fallback{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4rpx;color:#5c7566}.view-image-fallback text:first-child{font-family:"Songti SC","STSong",serif;font-size:22rpx;font-weight:700}.view-image-fallback text:last-child{color:#8d8378;font-size:14rpx}.view-card-meta{display:flex;align-items:center;justify-content:space-between;padding:9rpx 10rpx}.view-card-meta text:first-child{color:#4b443c;font-size:17rpx;font-weight:800}.view-card-meta text:last-child{color:#668272;font-size:13rpx}
@@ -905,4 +928,5 @@ onLoad((query: any) => {
 .multiview-source-switch{display:grid;grid-template-columns:1fr 1fr;gap:8rpx;margin-top:13rpx}.multiview-source-switch button{display:flex;min-height:84rpx;flex-direction:column;align-items:flex-start;justify-content:center;gap:4rpx;margin:0;padding:12rpx;border:1rpx solid #ddd7ce;border-radius:13rpx;background:#fffdf9;color:#746b61;text-align:left}.multiview-source-switch button::after{border:0}.multiview-source-switch button text:first-child{font-size:17rpx;font-weight:900}.multiview-source-switch button text:last-child{color:#978c81;font-size:13rpx;line-height:1.4}.multiview-source-switch button.active{border-color:#86a894;background:#eef5ed;color:#4b6c5a;box-shadow:0 6rpx 14rpx rgba(78,109,89,.09)}.multiview-source-switch button.active text:last-child{color:#6d8677}.manual-view-grid{display:grid;grid-template-columns:1fr 1fr;gap:9rpx;margin-top:14rpx}.manual-view-slot{position:relative;min-height:180rpx;overflow:hidden;border:1rpx dashed #cfc8bd;border-radius:15rpx;background:rgba(255,253,249,.74)}.manual-view-slot.ready{border-style:solid;border-color:#9db8a5;background:#f4faf3}.manual-view-slot.uploading{opacity:.68}.manual-view-slot image{display:block;width:100%;height:180rpx;background:#e9ece5}.manual-view-empty{display:flex;height:180rpx;flex-direction:column;align-items:center;justify-content:center;gap:5rpx;color:#7a756c}.manual-view-empty text:first-child{display:grid;place-items:center;width:45rpx;height:45rpx;border-radius:50%;background:#ece7df;color:#627a6d;font-family:"Songti SC","STSong",serif;font-size:25rpx;font-weight:800}.manual-view-empty text:nth-child(2){color:#544c43;font-size:18rpx;font-weight:900}.manual-view-empty text:last-child{color:#978c81;font-size:13rpx}.manual-view-meta{position:absolute;right:0;bottom:0;left:0;display:flex;align-items:center;justify-content:space-between;gap:6rpx;padding:8rpx 9rpx;background:rgba(38,46,40,.68);color:#fff}.manual-view-meta text:first-child{font-size:15rpx;font-weight:900}.manual-view-meta text:last-child{color:rgba(255,255,255,.76);font-size:12rpx}
 .product-rule-tip{display:block;margin-top:11rpx;padding:10rpx 11rpx;border-left:3rpx solid #799887;border-radius:0 10rpx 10rpx 0;background:#f1f6ef;color:#5f7668;font-size:14rpx;line-height:1.55}
 .campaign-context{position:relative;z-index:1;display:flex;align-items:flex-start;justify-content:space-between;gap:12rpx;margin:-8rpx 0 17rpx;padding:14rpx;border:1rpx solid #c6d9c8;border-radius:16rpx;background:#f2f8f2}.campaign-context>view{display:flex;min-width:0;flex:1;flex-direction:column;gap:3rpx}.campaign-context>view text:first-child{color:#658070;font-size:13rpx;font-weight:900;letter-spacing:1.4rpx}.campaign-context>view text:nth-child(2){overflow:hidden;color:#3f594a;font-family:"Songti SC","STSong",serif;font-size:23rpx;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.campaign-context>view text:last-child{overflow:hidden;color:#7a8e81;font-size:15rpx;text-overflow:ellipsis;white-space:nowrap}.campaign-context>text{flex:0 0 auto;padding:6rpx 7rpx;border-radius:8rpx;background:#dcecdf;color:#4f755d;font-size:14rpx;font-weight:850;white-space:nowrap}
+.simulation-result{overflow:hidden;margin-bottom:9rpx;border:1rpx solid #cbdccf;border-radius:15rpx;background:#f7faf7;box-shadow:0 6rpx 14rpx rgba(62,54,45,.055)}.simulation-result image,.simulation-image-fallback{display:block;width:100%;height:220rpx;background:linear-gradient(145deg,#e1e8df,#f0e4d8)}.simulation-image-fallback{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5rpx;color:#557160}.simulation-image-fallback text:first-child{font-family:"Songti SC","STSong",serif;font-size:25rpx;font-weight:800}.simulation-image-fallback text:last-child{color:#8d978f;font-size:14rpx}.simulation-result-meta{display:flex;align-items:center;justify-content:space-between;padding:9rpx 11rpx}.simulation-result-meta text:first-child{color:#456a55;font-size:18rpx;font-weight:900}.simulation-result-meta text:last-child{color:#718378;font-size:14rpx}.view-grid{grid-template-columns:repeat(3,1fr);gap:7rpx}.view-card image,.view-image-fallback{height:160rpx}
 </style>
