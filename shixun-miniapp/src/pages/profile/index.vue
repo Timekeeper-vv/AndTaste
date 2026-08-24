@@ -108,7 +108,6 @@
     <button v-if="loggedIn" class="logout" @tap="logout">退出当前账号</button>
     <view class="bottom-nav">
       <view @tap="goHome"><text>⌂</text><text>首页</text></view>
-      <view @tap="go('/pages/create/index?mode=text')"><text>✦</text><text>创作</text></view>
       <view @tap="go('/pages/works/index')"><text>▣</text><text>作品</text></view>
       <view class="active"><text>◉</text><text>我的</text></view>
     </view>
@@ -185,7 +184,7 @@ function logout() {
 .arrow { margin-left: 14rpx; color: #8ba094; font-size: 42rpx; font-weight: 300; line-height: 1; }
 .service-badge { margin-left: 10rpx; padding: 4rpx 10rpx; border-radius: 99rpx; color: #4a8370; background: #e5f5ed; font-size: 18rpx; font-weight: 800; }
 .logout { width: 100%; height: 91rpx; margin-top: 49rpx; border: 1rpx solid #ecdcd1; border-radius: 22rpx; color: #a3654d; background: rgba(250, 242, 236, .9); font-size: 27rpx; }
-.bottom-nav { position: fixed; z-index: 5; right: 24rpx; bottom: calc(20rpx + env(safe-area-inset-bottom)); left: 24rpx; display: grid; grid-template-columns: repeat(4, 1fr); overflow: hidden; min-height: 96rpx; border: 1rpx solid rgba(116, 103, 83, .15); border-radius: 22rpx; background: rgba(255, 253, 249, .96); box-shadow: 0 13rpx 34rpx rgba(63, 50, 34, .16); }
+.bottom-nav { position: fixed; z-index: 5; right: 24rpx; bottom: calc(20rpx + env(safe-area-inset-bottom)); left: 24rpx; display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; min-height: 96rpx; border: 1rpx solid rgba(116, 103, 83, .15); border-radius: 22rpx; background: rgba(255, 253, 249, .96); box-shadow: 0 13rpx 34rpx rgba(63, 50, 34, .16); }
 .bottom-nav view { display: flex; align-items: center; justify-content: center; gap: 5rpx; min-width: 0; flex-direction: column; color: #8c877e; font-size: 18rpx; }
 .bottom-nav view text:first-child { color: #849489; font-size: 27rpx; line-height: 1; }
 .bottom-nav .active { color: #4f7563; background: #edf4ed; font-weight: 800; }
