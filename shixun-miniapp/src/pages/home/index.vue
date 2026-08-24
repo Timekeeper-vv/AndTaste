@@ -46,11 +46,13 @@
           </view>
         </view>
 
-        <view class="section-head management-heading"><view><text>管理工作台</text><text>集中处理</text></view></view>
-        <view class="workspace-entry" @tap="openProfessional">
-          <view class="workspace-icon"><text>▦</text></view>
-          <view class="workspace-copy"><text>专业工作台</text><text>作品管理 · 生产流程 · 历史记录</text><view class="workspace-stats"><text>{{ assetCount }} 件作品</text><text>{{ commercialRequestCount }} 条申请</text></view></view>
-          <text class="workspace-arrow">›</text>
+        <view v-if="isProfessional" class="management-workspace">
+          <view class="section-head management-heading"><view><text>管理工作台</text><text>集中处理</text></view></view>
+          <view class="workspace-entry" @tap="openProfessional">
+            <view class="workspace-icon"><text>▦</text></view>
+            <view class="workspace-copy"><text>专业工作台</text><text>作品管理 · 生产流程 · 历史记录</text><view class="workspace-stats"><text>{{ assetCount }} 件作品</text><text>{{ commercialRequestCount }} 条申请</text></view></view>
+            <text class="workspace-arrow">›</text>
+          </view>
         </view>
       </view>
     </scroll-view>
@@ -79,8 +81,10 @@ const productionRequests = ref<any[]>([])
 const commercialRequests = ref({ quoteRequests: [] as any[], consignmentApplications: [] as any[], selectionDemands: [] as any[] })
 const refreshing = ref(false)
 const heroVisualUrl = ref('')
+const creatorMode = ref<'amateur' | 'professional'>(readCreatorMode())
 
 const loggedIn = computed(() => Boolean(user.value))
+const isProfessional = computed(() => creatorMode.value === 'professional')
 const assetCount = computed(() => assets.value.length)
 const commercialRequestCount = computed(() => productionRequests.value.length
   + commercialRequests.value.quoteRequests.length
@@ -94,6 +98,10 @@ function requestTime(item: any) {
   const value = item?.updatedAt || item?.createdAt || item?.submittedAt || item?.reviewedAt || ''
   const timestamp = Date.parse(String(value))
   return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function readCreatorMode(): 'amateur' | 'professional' {
+  return (uni.getStorageSync('creation_context') || {}).creatorMode === 'professional' ? 'professional' : 'amateur'
 }
 
 function go(url: string) {
@@ -115,7 +123,7 @@ function openCommercial() {
 }
 
 function openProfessional() {
-  if (!requireSession()) return
+  if (!requireSession() || !isProfessional.value) return
   go('/pages/professional/index')
 }
 
@@ -179,6 +187,7 @@ async function refreshHome() {
 
 onShow(() => {
   user.value = getSession()?.user
+  creatorMode.value = readCreatorMode()
   if (user.value) void refreshHome()
   else {
     heroVisualUrl.value = ''
