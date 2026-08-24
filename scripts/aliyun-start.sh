@@ -369,12 +369,23 @@ WantedBy=multi-user.target"
 
 nginx(){
   local domain="${DOMAIN:-_}" conf="/etc/nginx/conf.d/$APP_NAME.conf"
+  local cert_dir="/etc/letsencrypt/live/$domain"
+  local ssl_enabled="false"
+  if [ "$domain" != "_" ] && [ -r "$cert_dir/fullchain.pem" ] && [ -r "$cert_dir/privkey.pem" ]; then
+    ssl_enabled="true"
+  fi
   # The material-variant upload limit is 100MB and local 3D conversion may
   # run for up to five minutes.  Keep the reverse proxy above those backend
   # limits, otherwise a valid C-end upload/conversion fails at Nginx first.
-  local content="server { listen 80; server_name $domain; client_max_body_size 120m; location / { proxy_pass http://127.0.0.1:$APP_PORT; proxy_http_version 1.1; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto \$scheme; proxy_read_timeout 360s; } }"
+  local content
+  if [ "$ssl_enabled" = "true" ]; then
+    content="server { listen 80; listen [::]:80; server_name $domain www.$domain; client_max_body_size 120m; location /.well-known/acme-challenge/ { root /var/www/certbot; } location / { return 301 https://\$host\$request_uri; } } server { listen 443 ssl; listen [::]:443 ssl; server_name $domain www.$domain; ssl_certificate $cert_dir/fullchain.pem; ssl_certificate_key $cert_dir/privkey.pem; client_max_body_size 120m; location / { proxy_pass http://127.0.0.1:$APP_PORT; proxy_http_version 1.1; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto https; proxy_read_timeout 360s; } }"
+  else
+    content="server { listen 80; listen [::]:80; server_name $domain www.$domain; client_max_body_size 120m; location / { proxy_pass http://127.0.0.1:$APP_PORT; proxy_http_version 1.1; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto \$scheme; proxy_read_timeout 360s; } }"
+  fi
   if [ "$(id -u)" = 0 ]; then printf '%s\n' "$content" > "$conf"; else printf '%s\n' "$content" | sudo tee "$conf" >/dev/null; fi
-  run_root nginx -t; run_root systemctl enable --now nginx; run_root systemctl reload nginx; ok "Nginx已配置：http://$domain"
+  run_root nginx -t; run_root systemctl enable --now nginx; run_root systemctl reload nginx
+  if [ "$ssl_enabled" = "true" ]; then ok "Nginx已配置：https://$domain"; else ok "Nginx已配置：http://$domain"; fi
 }
 
 validate_runtime_config(){
