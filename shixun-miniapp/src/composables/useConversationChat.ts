@@ -9,6 +9,19 @@ import { readableErrorMessage } from '../api/client'
 type ReadonlyValue<T> = { readonly value: T }
 export interface ChatAction { type: string; value?: string; label?: string }
 
+const CATEGORY_BACK_REPLY: ConversationQuickReply = {
+  label: '返回选择大品类',
+  type: 'edit',
+  value: 'product',
+}
+
+/** Keeps older saved category turns navigable after this control was added. */
+export function withProductCategoryBackReply(replies: ConversationQuickReply[]) {
+  const hasProductChoices = replies.some(item => item.type === 'product')
+  const hasBackReply = replies.some(item => item.type === 'edit' && item.value === 'product')
+  return hasProductChoices && !hasBackReply ? [CATEGORY_BACK_REPLY, ...replies] : replies
+}
+
 interface ProductLike { key?: string; name?: string }
 
 export interface ConversationChatOptions {
@@ -170,7 +183,7 @@ export function useConversationChat(options: ConversationChatOptions) {
       }
 
       options.chatStage.value = String(result.stage || 'understanding')
-      options.chatQuickReplies.value = Array.isArray(result.quickReplies) ? result.quickReplies : []
+      options.chatQuickReplies.value = withProductCategoryBackReply(Array.isArray(result.quickReplies) ? result.quickReplies : [])
       const recommendedSizeResolved = (recommendedSizeTurn || preserveRecommendedSize || materialRecommendationResolved)
         && result.stage !== 'need_additional_detail'
         && options.hasCompleteLocalGenerationBrief()

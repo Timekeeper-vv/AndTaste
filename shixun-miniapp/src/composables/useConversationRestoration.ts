@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { ConversationEvent, ConversationQuickReply, SeedreamProductionSimulationImage } from '../api/creative'
+import { withProductCategoryBackReply } from './useConversationChat'
 
 type ReadonlyValue<T> = { readonly value: T }
 type AnyRef<T = any> = Ref<T>
@@ -263,7 +264,7 @@ export function useConversationRestoration(options: ConversationRestorationOptio
           break
         case 'chat_assistant_message':
           if (payload.text) options.addRestoredMessage('assistant', String(payload.text))
-          if (Array.isArray(payload.quickReplies)) options.chatQuickReplies.value = payload.quickReplies
+          if (Array.isArray(payload.quickReplies)) options.chatQuickReplies.value = withProductCategoryBackReply(payload.quickReplies)
           if (payload.stage) options.chatStage.value = String(payload.stage)
           if (!options.generatedAssetId.value && (payload.generationConfirmationRequired || (payload.readyToGenerate && payload.generationConfirmed !== true))) {
             options.awaitingGenerationConfirmation.value = true

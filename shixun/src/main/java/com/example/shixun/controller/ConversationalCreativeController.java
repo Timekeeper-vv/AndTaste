@@ -847,6 +847,7 @@ public class ConversationalCreativeController {
         }
         if (blank(text(brief.get("productKey")))) {
             if (!blank(text(brief.get("categoryKey")))) {
+                result.add(reply("返回选择大品类", "edit", "product"));
                 for (Map<String, Object> row : catalog) {
                     result.add(reply(value(row, "name"), "product", value(row, "optionKey")));
                     if (result.size() >= 8) break;

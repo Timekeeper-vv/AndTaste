@@ -340,6 +340,7 @@ function quickReplyMark(type: string) {
   return ({
     category: '类',
     product: '选',
+    edit: '返',
     material: '材',
     size: '尺',
     upload: '图',
