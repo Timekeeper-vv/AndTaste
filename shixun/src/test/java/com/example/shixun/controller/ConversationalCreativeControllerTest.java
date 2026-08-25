@@ -255,6 +255,21 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void ordinaryQuestionDisplaysPlainSiliconFlowAnswerWithoutCreativePrompting() throws Exception {
+        when(siliconFlow.chat(anyString(), anyString(), anyDouble(), anyInt(), anyInt()))
+                .thenReturn("广西景区更适合销售冰箱贴、钥匙扣和明信片，原因是轻便、易携带，也方便做地标主题。");
+
+        Map<String, Object> result = controller.chat(1L, Map.of("message", "广西什么东西卖得好"), claims);
+
+        assertThat(result.get("assistantText"))
+                .isEqualTo("广西景区更适合销售冰箱贴、钥匙扣和明信片，原因是轻便、易携带，也方便做地标主题。");
+        assertThat(result.get("stage")).isEqualTo("need_product");
+        assertMissingKeys((Map<?, ?>) result.get("brief"), "productKey", "inspiration", "material", "productSize");
+        verify(siliconFlow).chat(org.mockito.ArgumentMatchers.contains("不是创作流程引导器"),
+                org.mockito.ArgumentMatchers.eq("广西什么东西卖得好"), anyDouble(), anyInt(), anyInt());
+    }
+
+    @Test
     void ordinaryQuestionPreservesAConfirmedBriefWithoutTriggeringGeneration() throws Exception {
         controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
         chooseRecommendedSize();

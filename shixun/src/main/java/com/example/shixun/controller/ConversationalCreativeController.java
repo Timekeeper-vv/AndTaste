@@ -159,9 +159,10 @@ public class ConversationalCreativeController {
         String editTarget = "edit".equals(text(action.get("type"))) ? text(action.get("value")) : null;
         String actionType = text(action.get("type"));
         boolean structuredAction = !action.isEmpty() && !"text".equals(actionType);
+        boolean directQuestion = !structuredAction && !confirmationText && isLikelyQuestion(message, brief);
         PlannerDecision decision = (isGenerationConfirmationAction(action) || confirmationText || editTarget != null || structuredAction)
                 ? new PlannerDecision("", Map.of(), "", "")
-                : planTurn(message, action, brief, catalog);
+                : directQuestion ? answerQuestionTurn(message, brief, catalog) : planTurn(message, action, brief, catalog);
         boolean creativeInput = structuredAction || shouldApplyCreativeInput(decision.intent, message, brief);
         if (creativeInput || confirmationText || isGenerationConfirmationAction(action)) {
             applyGenerationConfirmationState(brief, action, message);
@@ -773,6 +774,59 @@ public class ConversationalCreativeController {
         } catch (Exception ignored) {
             return new PlannerDecision("", Map.of(), "", "");
         }
+    }
+
+    /**
+     * Ordinary questions use a separate SiliconFlow prompt from the creative
+     * planner. This prevents market advice from being mistaken for a product
+     * brief and makes the model answer the user's question directly.
+     */
+    private PlannerDecision answerQuestionTurn(String message, Map<String, Object> brief,
+                                               List<Map<String, Object>> catalog) {
+        String catalogText = catalog.stream().limit(80)
+                .map(row -> value(row, "name"))
+                .filter(name -> !blank(name))
+                .distinct()
+                .reduce((left, right) -> left + "、" + right).orElse("");
+        String system = "你是‘之间智造’的市场咨询助手，不是创作流程引导器。直接回答用户的问题，不要反问用户想做什么产品，不要要求用户选择品类，不要输出JSON，不要把用户原话改写成创作提示词，也不要修改任何创作档案。\n"
+                + "用户咨询文创、景区销售或产品方向时，请给出具体、可执行的中文回答，说明推荐品类和原因；信息不足时可以明确说明是趋势判断，但仍要先给出答案。回答控制在2到4句话。可参考当前系统支持的产品目录："
+                + (blank(catalogText) ? "（目录暂不可用）" : catalogText);
+        try {
+            String raw = siliconFlow.chat(system, message, 0.35, 700, 30);
+            String reply = raw == null ? "" : raw.trim();
+            String suggestedDirection = "";
+            try {
+                JsonNode node = parseJsonNode(raw);
+                if (node.isObject()) {
+                    reply = firstNonBlank(node.path("answer").asText(""), node.path("reply").asText(""), reply);
+                    suggestedDirection = node.path("suggestedDirection").asText("");
+                }
+            } catch (Exception ignored) {
+                // SiliconFlow is allowed to return normal text for Q&A.
+            }
+            return new PlannerDecision(reply, Map.of(), "answer_question", suggestedDirection);
+        } catch (Exception ignored) {
+            return new PlannerDecision("我暂时无法连接市场咨询模型，请稍后再试。", Map.of(), "answer_question", "");
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) if (!blank(value)) return value.trim();
+        return "";
+    }
+
+    private boolean isLikelyQuestion(String message, Map<String, Object> brief) {
+        if (blank(message)) return false;
+        String value = message.trim();
+        if (!blank(text(brief.get("productKey")))
+                && value.matches(".*(你帮我推荐|帮我选|你来选|按推荐规格|推荐材质|推荐尺寸).*") ) {
+            return false;
+        }
+        if (value.matches(".*(我想做|我要做|想做一个|想做一款|帮我做|请帮我设计|帮我设计|请生成|帮我生成|设计一个|设计一款|生成一个|生成一款|做成|主题是|灵感是|结合|希望做|请做|做一个|做一款).*") ) {
+            return false;
+        }
+        return value.matches(".*(什么|哪种|哪个|哪些|怎么|如何|为什么|卖得|卖的|好卖|推荐|适合|有没有|能不能|可以吗|值得|价格|多少钱|成本|利润).*")
+                || value.matches(".*[？?]$");
     }
 
     private boolean shouldApplyCreativeInput(String intent, String message, Map<String, Object> brief) {
