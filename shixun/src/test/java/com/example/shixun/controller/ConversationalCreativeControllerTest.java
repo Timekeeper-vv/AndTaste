@@ -225,6 +225,58 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void ordinaryQuestionOnlyAnswersAndCanBeExplicitlyAdopted() throws Exception {
+        when(siliconFlow.chat(anyString(), anyString(), anyDouble(), anyInt(), anyInt()))
+                .thenReturn("{\"intent\":\"answer_question\",\"reply\":\"西湖景区更适合轻量便携的地标文创。\",\"suggestedDirection\":\"西湖断桥主题的合金冰箱贴\",\"ready\":false}");
+
+        Map<String, Object> question = controller.chat(1L, Map.of("message", "西湖景区什么卖得最好"), claims);
+        Map<?, ?> questionBrief = (Map<?, ?>) question.get("brief");
+        assertMissingKeys(questionBrief, "productKey", "inspiration", "material", "productSize");
+        assertThat(question.get("stage")).isEqualTo("need_product");
+        assertThat(String.valueOf(question.get("quickReplies"))).contains("把这个方向带入创作");
+
+        Map<String, Object> adopt = new LinkedHashMap<>();
+        adopt.put("type", "adopt_direction");
+        adopt.put("value", "西湖断桥主题的合金冰箱贴");
+        Map<String, Object> adopted = controller.chat(1L, Map.of("action", adopt), claims);
+        Map<?, ?> adoptedBrief = (Map<?, ?>) adopted.get("brief");
+        assertThat(adoptedBrief.get("inspiration")).isEqualTo("西湖断桥主题的合金冰箱贴");
+        assertThat(adoptedBrief.get("inspirationSource")).isEqualTo("adopted_direction");
+        assertThat(adoptedBrief.get("productKey")).isEqualTo("souvenir-alloy-magnet");
+    }
+
+    @Test
+    void questionFallbackDoesNotBecomeInspirationWhenPlannerOmitsIntent() {
+        Map<String, Object> result = controller.chat(1L, Map.of("message", "冰箱贴应该怎么设计？"), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertMissingKeys(brief, "productKey", "inspiration", "material", "productSize");
+        assertThat(result.get("readyToGenerate")).isEqualTo(false);
+    }
+
+    @Test
+    void ordinaryQuestionPreservesAConfirmedBriefWithoutTriggeringGeneration() throws Exception {
+        controller.chat(1L, Map.of("message", "我想做一个合金冰箱贴，主题是祥云和古城墙"), claims);
+        chooseRecommendedSize();
+        Map<String, Object> confirmation = new LinkedHashMap<>();
+        confirmation.put("type", "confirm_generate");
+        confirmation.put("value", "confirm");
+        controller.chat(1L, Map.of("action", confirmation), claims);
+        when(siliconFlow.chat(anyString(), anyString(), anyDouble(), anyInt(), anyInt()))
+                .thenReturn("{\"intent\":\"answer_question\",\"reply\":\"合金适合压铸和烤漆，结构稳定且便于量产。\",\"ready\":false}");
+
+        Map<String, Object> result = controller.chat(1L, Map.of("message", "为什么冰箱贴适合用合金？"), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("generationConfirmed")).isEqualTo(true);
+        assertThat(String.valueOf(brief.get("inspiration"))).contains("祥云");
+        assertThat(result.get("assistantText")).isEqualTo("合金适合压铸和烤漆，结构稳定且便于量产。");
+        assertThat(result.get("readyToGenerate")).isEqualTo(false);
+        assertThat(result.get("generationConfirmationRequired")).isEqualTo(false);
+        assertThat((List<?>) result.get("quickReplies")).isEmpty();
+    }
+
+    @Test
     void categoryChoicesCanReturnToTheTopLevelCatalog() {
         Map<String, Object> categoryAction = new LinkedHashMap<>();
         categoryAction.put("type", "category");

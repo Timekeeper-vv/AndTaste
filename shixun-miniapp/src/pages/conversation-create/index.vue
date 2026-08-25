@@ -347,6 +347,7 @@ function quickReplyMark(type: string) {
     text: '写',
     template: '例',
     confirm_generate: '出',
+    adopt_direction: '入',
     add_detail: '改',
     multiview: '观',
     bundle_review: '审',

@@ -32,7 +32,7 @@ export const saveConversationEvent = (id: number | string, body: { step: string;
 
 export interface ConversationQuickReply {
   label: string
-  type: 'product' | 'category' | 'material' | 'template' | 'upload' | 'text' | 'confirm_generate' | 'add_detail' | 'edit' | string
+  type: 'product' | 'category' | 'material' | 'template' | 'upload' | 'text' | 'confirm_generate' | 'add_detail' | 'edit' | 'adopt_direction' | string
   value?: string
 }
 

@@ -43,7 +43,7 @@ import java.util.regex.Pattern;
 @RequestMapping("/api/creative/ai/conversations")
 public class ConversationalCreativeController {
     private static final Set<String> MODES = Set.of("template", "text", "image");
-    private static final Set<String> CHAT_ACTIONS = Set.of("product", "category", "material", "size", "template", "image", "text", "confirm_generate", "add_detail", "edit");
+    private static final Set<String> CHAT_ACTIONS = Set.of("product", "category", "material", "size", "template", "image", "text", "confirm_generate", "add_detail", "edit", "adopt_direction");
     private static final Set<String> EDIT_TARGETS = Set.of("product", "inspiration", "material", "size");
     private static final Set<String> STEPS = Set.of("welcome", "chat", "mode", "product", "inspiration", "material", "size", "style", "summary", "image", "multiview", "model", "commercial", "compliance", "navigation");
     private static final int MAX_PAYLOAD_LENGTH = 12000;
@@ -156,33 +156,45 @@ public class ConversationalCreativeController {
         applyAction(brief, action, message, userId);
 
         List<Map<String, Object>> catalog = catalogOptions(text(brief.get("categoryKey")), message, 120);
-        if (!confirmationText) applyLocalHints(brief, message, action, catalog, userId);
-        applyGenerationConfirmationState(brief, action, message);
         String editTarget = "edit".equals(text(action.get("type"))) ? text(action.get("value")) : null;
         String actionType = text(action.get("type"));
         boolean structuredAction = !action.isEmpty() && !"text".equals(actionType);
         PlannerDecision decision = (isGenerationConfirmationAction(action) || confirmationText || editTarget != null || structuredAction)
-                ? new PlannerDecision("", Map.of())
+                ? new PlannerDecision("", Map.of(), "", "")
                 : planTurn(message, action, brief, catalog);
-        applyDecision(brief, decision, userId);
+        boolean creativeInput = structuredAction || shouldApplyCreativeInput(decision.intent, message, brief);
+        if (creativeInput || confirmationText || isGenerationConfirmationAction(action)) {
+            applyGenerationConfirmationState(brief, action, message);
+        }
+        if (creativeInput) applyDecision(brief, decision, userId);
         // The model may improve the wording, but it must never erase a
         // material, size, or inspiration already captured by local rules.
-        if (!confirmationText) applyLocalHints(brief, message, action, catalog, userId);
+        if (!confirmationText && creativeInput) applyLocalHints(brief, message, action, catalog, userId);
         // A structured button is authoritative. The language model may phrase
         // the next question as text mode, but it must not undo an explicit
         // product, material, template, or uploaded-image choice.
         applyAction(brief, action, null, userId);
         normalizeBrief(brief, userId);
 
-        applyGenerationConfirmationState(brief, action, message);
+        if (creativeInput || confirmationText || isGenerationConfirmationAction(action)) {
+            applyGenerationConfirmationState(brief, action, message);
+        }
         boolean templateUnavailable = "template".equals(text(brief.get("mode")));
         boolean complete = !templateUnavailable && hasRequiredBrief(brief);
-        boolean ready = complete && isTrue(brief.get("generationConfirmed"));
+        boolean ordinaryQuestion = !creativeInput && !structuredAction && !blank(message) && !confirmationText;
+        boolean ready = complete && isTrue(brief.get("generationConfirmed")) && !ordinaryQuestion;
         boolean addingDetail = complete && "add_detail".equals(text(action.get("type")));
-        boolean confirmationRequired = complete && !ready && !addingDetail;
+        boolean confirmationRequired = complete && !ready && !addingDetail && !ordinaryQuestion;
         List<Map<String, Object>> quickReplies = templateUnavailable
                 ? templateQuickReplies()
                 : addingDetail ? List.of() : quickReplies(brief, catalog, complete, ready);
+        if (ordinaryQuestion && blank(decision.suggestedDirection)) {
+            quickReplies = List.of();
+        }
+        if (("answer_question".equals(decision.intent) || "recommend_direction".equals(decision.intent))
+                && !blank(decision.suggestedDirection)) {
+            quickReplies = List.of(reply("把这个方向带入创作", "adopt_direction", decision.suggestedDirection));
+        }
         String stage = templateUnavailable ? "template_unavailable"
                 : ready ? "ready_for_image"
                 : addingDetail ? "need_additional_detail"
@@ -201,20 +213,20 @@ public class ConversationalCreativeController {
             reply = "好的，请重新选择材质；不确定时可以继续让我推荐。";
         } else if ("size".equals(editTarget)) {
             reply = "好的，请重新告诉我成品尺寸；例如 60×60×3mm，也可以让我按常用规格推荐。";
-        } else if (confirmationRequired) {
+        } else if (confirmationRequired && creativeInput) {
             reply = "我已经整理好产品、灵感、材质和尺寸。生成图片前，还有需要补充的吗？没有的话点击“没有补充，开始生成”。";
         } else if (ready && (isGenerationConfirmationAction(action) || confirmationText)) {
             reply = "好的，我按当前方案开始生成产品图。";
-        } else if ("need_size".equals(stage)) {
+        } else if (creativeInput && "need_size".equals(stage)) {
             // The planner may phrase the reply differently, but it must not
             // move the workflow backwards by repeating a stale question.
             reply = fallbackReply(brief, catalog, false);
         }
-        if (!addingDetail && editTarget == null && !templateUnavailable && !ready
+        if (creativeInput && !addingDetail && editTarget == null && !templateUnavailable && !ready
                 && isStaleProgressReply(reply, brief)) {
             reply = fallbackReply(brief, catalog, false);
         }
-        boolean recommendationTurn = isRecommendationMessage(message);
+        boolean recommendationTurn = creativeInput && isRecommendationMessage(message);
         boolean materialRecommendationTurn = "material".equals(actionType)
                 && "recommend".equalsIgnoreCase(text(action.get("value")));
         boolean sizeRecommendationTurn = "size".equals(actionType)
@@ -389,6 +401,16 @@ public class ConversationalCreativeController {
                 brief.put("referenceAssetId", assetId);
                 brief.put("inspiration", "以用户上传的参考图片主体、构图和可识别细节为创作依据。");
                 brief.put("inspirationSource", "image");
+            }
+        } else if ("adopt_direction".equals(type)) {
+            String direction = limit(value, 240);
+            if (!blank(direction)) {
+                brief.put("inspiration", direction);
+                brief.put("inspirationSource", "adopted_direction");
+                if (blank(text(brief.get("mode")))) brief.put("mode", "text");
+                applyNaturalLanguageHints(brief, direction, catalogOptions(text(brief.get("categoryKey")), direction, 120), userId);
+                brief.put("inspiration", direction);
+                brief.put("inspirationSource", "adopted_direction");
             }
         } else if ("edit".equals(type)) {
             if ("product".equals(value)) {
@@ -724,12 +746,12 @@ public class ConversationalCreativeController {
 
     private PlannerDecision planTurn(String message, Map<String, Object> action, Map<String, Object> brief,
                                      List<Map<String, Object>> catalog) {
-        if (blank(message) && action.isEmpty()) return new PlannerDecision("", Map.of());
+        if (blank(message) && action.isEmpty()) return new PlannerDecision("", Map.of(), "", "");
         String catalogText = catalog.stream().limit(120)
                 .map(row -> String.join("|", value(row, "optionKey"), value(row, "name"), value(row, "categoryKey"), value(row, "material"), value(row, "process")))
                 .reduce((left, right) -> left + "\n" + right).orElse("");
-        String system = "你是‘之间智造’的对话式文创产品设计师。你要像豆包一样自然聊天，但每次只推进一个最必要的问题。\n"
-                + "必须只输出JSON，不要Markdown，格式：{\"reply\":\"给用户看的简短中文回复\",\"productKey\":\"选品表中的optionKey或空\",\"productName\":\"或空\",\"categoryKey\":\"或空\",\"material\":\"或空\",\"productSize\":\"用户明确的成品尺寸/规格或空\",\"inspiration\":\"用户灵感或空\",\"mode\":\"text/image/template或空\",\"ready\":false}\n"
+        String system = "你是‘之间智造’的对话式文创产品设计师。你要像豆包一样自然聊天，但每次只推进一个最必要的问题。先判断用户意图：answer_question=普通咨询/知识问答/市场建议，只回答不修改创作档案；recommend_direction=给出产品方向建议；choose_product/provide_inspiration/provide_material/provide_size=用户明确在填写创作信息；confirm_generate=确认生成；edit_brief=修改已有档案。普通问句如‘什么卖得最好、哪个好、有什么推荐、怎么选’默认是answer_question。只有用户明确说‘我要做/设计/生成/做成/主题/灵感/希望’等创作表达时，才写入创作档案。\n"
+                + "必须只输出JSON，不要Markdown，格式：{\"intent\":\"answer_question|recommend_direction|choose_product|provide_inspiration|provide_material|provide_size|confirm_generate|edit_brief\",\"reply\":\"给用户看的简短中文回复\",\"productKey\":\"选品表中的optionKey或空\",\"productName\":\"或空\",\"categoryKey\":\"或空\",\"material\":\"或空\",\"productSize\":\"用户明确的成品尺寸/规格或空\",\"inspiration\":\"用户明确提供的创作灵感或空\",\"mode\":\"text/image/template或空\",\"suggestedDirection\":\"咨询后可选的创作方向，无法建议则空\",\"ready\":false}\n"
                 + "产品只能从提供的选品目录中选择，不能创造不存在的产品；不要强制询问颜色和视觉风格，按产品自动处理；材质不确定时允许推荐。生成前必须已明确产品、灵感、材质和成品尺寸；尺寸优先记录用户明确的长宽高/厚度、直径或 A 系列规格，用户说“你帮我推荐”时不要伪造尺寸，由系统按选品规格推荐。信息足够时ready=true；回复不要重复询问已经有的字段，最多两句话。\n"
                 + "选品目录：\n" + catalogText;
         String user = "当前创作档案：" + brief + "\n用户本轮输入：" + (blank(message) ? "（点击了快捷选项）" : message)
@@ -746,10 +768,28 @@ public class ConversationalCreativeController {
             fields.put("inspiration", node.path("inspiration").asText(""));
             fields.put("mode", node.path("mode").asText(""));
             fields.put("ready", node.path("ready").asBoolean(false));
-            return new PlannerDecision(node.path("reply").asText(""), fields);
+            return new PlannerDecision(node.path("reply").asText(""), fields,
+                    node.path("intent").asText(""), node.path("suggestedDirection").asText(""));
         } catch (Exception ignored) {
-            return new PlannerDecision("", Map.of());
+            return new PlannerDecision("", Map.of(), "", "");
         }
+    }
+
+    private boolean shouldApplyCreativeInput(String intent, String message, Map<String, Object> brief) {
+        if ("answer_question".equals(intent)) return false;
+        if (Set.of("choose_product", "provide_inspiration", "provide_material", "provide_size", "edit_brief").contains(intent)) return true;
+        if (blank(message)) return false;
+        String value = message.trim();
+        if (isRecommendationMessage(value)) return !blank(text(brief.get("productKey")));
+        if (!blank(text(brief.get("productKey")))
+                && (extractExplicitMaterial(value) != null || extractProductSize(value) != null
+                || extractBareNumericSize(value) != null)) return true;
+        if (!blank(text(brief.get("inspiration")))
+                && value.matches(".*(再?补充|增加|添加|改成|调整|修改|去掉|删掉|保留|加强|弱化|避免).*") ) return true;
+        boolean explicitCreation = value.matches(".*(我想做|我要做|想做一个|想做一款|帮我做|请帮我设计|帮我设计|请生成|帮我生成|设计一个|设计一款|生成一个|生成一款|做成|主题是|灵感是|结合|希望做|请做|做一个|做一款).*");
+        if (explicitCreation) return true;
+        return !value.matches(".*(什么|怎么|如何|为什么|哪个好|哪些|是否|能不能|可以吗|推荐吗|吗[？?]?$|[？?]$).*")
+                && value.matches(".*(设计|生成|创作|制作).*");
     }
 
     private void applyDecision(Map<String, Object> brief, PlannerDecision decision, long userId) {
@@ -901,7 +941,7 @@ public class ConversationalCreativeController {
             return;
         }
         if ("add_detail".equals(type) || !blank(message)
-                || (type != null && Set.of("product", "category", "material", "size", "template", "image", "text", "edit").contains(type))) {
+                || (type != null && Set.of("product", "category", "material", "size", "template", "image", "text", "edit", "adopt_direction").contains(type))) {
             brief.put("generationConfirmed", false);
         }
     }
@@ -1037,7 +1077,11 @@ public class ConversationalCreativeController {
     private static final class PlannerDecision {
         private final String reply;
         private final Map<String, Object> fields;
-        private PlannerDecision(String reply, Map<String, Object> fields) { this.reply = reply; this.fields = fields; }
+        private final String intent;
+        private final String suggestedDirection;
+        private PlannerDecision(String reply, Map<String, Object> fields, String intent, String suggestedDirection) {
+            this.reply = reply; this.fields = fields; this.intent = intent; this.suggestedDirection = suggestedDirection;
+        }
     }
 
     private void updateSummary(long id, long userId, String step, Object payload) {

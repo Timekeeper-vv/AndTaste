@@ -80,6 +80,7 @@ export function useConversationChat(options: ConversationChatOptions) {
     if (type === 'category' || type === 'product') return '正在整理产品方向'
     if (type === 'material' || type === 'recommend_material') return '正在匹配材质与生产工艺'
     if (type === 'size') return '正在核对成品尺寸与比例'
+    if (type === 'adopt_direction') return '正在把建议整理为创作方案'
     if (type === 'upload' || /图片|照片|草图|参考图/.test(message)) return '正在读取参考图片和主体特征'
     return '正在理解你的想法'
   }
