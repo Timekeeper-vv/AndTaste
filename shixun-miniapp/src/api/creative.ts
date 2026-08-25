@@ -8,8 +8,11 @@ export interface ConversationSession {
   mode?: 'template' | 'text' | 'image' | string
   productType?: string
   material?: string
+  productSize?: string
   status?: string
   events?: ConversationEvent[]
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface ConversationEvent {

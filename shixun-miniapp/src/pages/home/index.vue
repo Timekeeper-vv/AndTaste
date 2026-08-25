@@ -36,6 +36,24 @@
           <view class="entry-arrow primary-arrow"><text>›</text></view>
         </view>
 
+        <view v-if="loggedIn" class="history-section">
+          <view class="section-head history-heading">
+            <view><text>历史对话</text><text>{{ conversations.length ? `${conversations.length} 个会话` : '按会话保存创作进度' }}</text></view>
+            <view class="new-conversation" @tap="startNewConversation"><text>＋</text><text>新建</text></view>
+          </view>
+          <view v-if="conversations.length" class="conversation-history-list">
+            <view v-for="conversation in conversations" :key="conversation.id" class="conversation-history-item" @tap="openConversation(conversation)">
+              <view class="history-mark">对</view>
+              <view class="history-copy">
+                <view class="history-title-row"><text>{{ conversationTitle(conversation) }}</text><text>{{ formatConversationTime(conversation.updatedAt || conversation.createdAt) }}</text></view>
+                <text class="history-detail">{{ conversationStage(conversation) }}<text v-if="conversation.productSize"> · {{ conversation.productSize }}</text></text>
+              </view>
+              <text class="history-arrow">›</text>
+            </view>
+          </view>
+          <view v-else class="history-empty" @tap="startNewConversation"><text class="history-empty-mark">＋</text><view><text>还没有历史对话</text><text>开始一次创作后，进度会自动保存在这里</text></view><text class="history-arrow">›</text></view>
+        </view>
+
         <view class="secondary-entry-grid">
           <view class="creation-entry secondary-entry" @tap="openCommercial">
             <view class="entry-icon commercial-icon"><text>□</text></view>
@@ -72,7 +90,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { getAssetPreviewAccess, getAssets, getCredits, getProductionRequests } from '../../api/creative'
+import { getAssetPreviewAccess, getAssets, getConversations, getCredits, getProductionRequests, type ConversationSession } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { getCommercialRequests } from '../../api/commercial'
 import { getSession, requireSession } from '../../utils/session'
@@ -80,6 +98,7 @@ import { getSession, requireSession } from '../../utils/session'
 const user = ref(getSession()?.user)
 const credits = ref(0)
 const assets = ref<any[]>([])
+const conversations = ref<ConversationSession[]>([])
 const productionRequests = ref<any[]>([])
 const commercialRequests = ref({ quoteRequests: [] as any[], consignmentApplications: [] as any[], selectionDemands: [] as any[] })
 const refreshing = ref(false)
@@ -114,6 +133,38 @@ function go(url: string) {
 function startConversation() {
   if (!requireSession()) return
   go('/pages/conversation-create/index')
+}
+
+function startNewConversation() {
+  if (!requireSession()) return
+  go('/pages/conversation-create/index?new=1')
+}
+
+function openConversation(session: ConversationSession) {
+  if (!requireSession() || !session?.id) return
+  go(`/pages/conversation-create/index?sessionId=${encodeURIComponent(String(session.id))}`)
+}
+
+function conversationTitle(session: ConversationSession) {
+  return String(session.productType || '').trim() || '未命名创作'
+}
+
+function conversationStage(session: ConversationSession) {
+  if (String(session.status || '') === 'completed') return '已完成'
+  if (session.material) return `材质：${session.material}`
+  if (session.mode === 'image') return '图片灵感'
+  if (session.mode === 'text') return '文字灵感'
+  return '创作进行中'
+}
+
+function formatConversationTime(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const diff = Math.max(0, Date.now() - date.getTime())
+  if (diff < 60 * 1000) return '刚刚更新'
+  if (diff < 24 * 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / (60 * 60 * 1000)))} 小时前`
+  return `${date.getMonth() + 1}月${date.getDate()}日`
 }
 
 function openWorks() {
@@ -174,16 +225,18 @@ async function refreshHome() {
   if (!getSession() || refreshing.value) return
   refreshing.value = true
   user.value = getSession()?.user
-  const [creditResult, assetResult, requestResult, commercialResult] = await Promise.allSettled([
+  const [creditResult, assetResult, requestResult, commercialResult, conversationResult] = await Promise.allSettled([
     getCredits(),
     getAssets(),
     getProductionRequests(),
     getCommercialRequests(),
+    getConversations(),
   ])
   if (creditResult.status === 'fulfilled') credits.value = Number(creditResult.value?.balance) || 0
   if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
   if (requestResult.status === 'fulfilled') productionRequests.value = Array.isArray(requestResult.value) ? requestResult.value : []
   if (commercialResult.status === 'fulfilled') commercialRequests.value = normalizeCommercialRequests(commercialResult.value)
+  if (conversationResult.status === 'fulfilled') conversations.value = Array.isArray(conversationResult.value) ? conversationResult.value : []
   await hydrateHeroVisual()
   refreshing.value = false
 }
@@ -198,6 +251,7 @@ onShow(() => {
     assets.value = []
     productionRequests.value = []
     commercialRequests.value = normalizeCommercialRequests(null)
+    conversations.value = []
   }
 })
 </script>
@@ -210,4 +264,5 @@ onShow(() => {
 .path-heading{margin-top:34rpx}.creation-entry{box-sizing:border-box;border:1rpx solid #dfe4df;border-radius:16rpx;background:#fff;box-shadow:0 5rpx 14rpx rgba(33,56,46,.03)}.primary-entry{display:flex;min-height:176rpx;align-items:center;gap:20rpx;padding:24rpx;background:#f2f7f2;border-color:#d0dfd3}.entry-icon{display:grid;place-items:center;flex:none;border-radius:16rpx;font-family:"Songti SC","STSong",serif}.entry-icon text{line-height:1}.conversation-icon{width:80rpx;height:80rpx;background:#315f4b;color:#f4f7f2;font-size:48rpx}.entry-copy{display:flex;min-width:0;flex:1;flex-direction:column}.entry-copy text:first-child{overflow:hidden;color:#293f35;font-size:30rpx;font-weight:750;text-overflow:ellipsis;white-space:nowrap}.entry-copy text:last-child{overflow:hidden;margin-top:8rpx;color:#7d8a82;font-size:20rpx;text-overflow:ellipsis;white-space:nowrap}.entry-arrow{display:grid;place-items:center;flex:none;border-radius:50%}.primary-arrow{width:60rpx;height:60rpx;background:#dfece1;color:#315f4b;font-size:38rpx;line-height:1}.secondary-entry-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16rpx;margin-top:16rpx}.secondary-entry{position:relative;display:flex;min-width:0;height:188rpx;flex-direction:column;justify-content:space-between;padding:20rpx}.secondary-entry .entry-icon{width:56rpx;height:56rpx;border-radius:14rpx;background:#edf3ee;color:#47745d;font-size:30rpx}.secondary-entry .entry-copy{margin-top:12rpx}.secondary-entry .entry-copy text:first-child{font-size:24rpx}.secondary-entry .entry-copy text:last-child{margin-top:6rpx;font-size:18rpx}.works-entry{background:#fffdf9}.works-entry .works-icon{background:#f3eee2;color:#806b46}.secondary-arrow{position:absolute;right:18rpx;bottom:15rpx;color:#75867c;font-size:32rpx;line-height:1}
 .management-heading{margin-top:34rpx}.workspace-entry{display:flex;align-items:center;gap:16rpx;min-height:164rpx;padding:20rpx;border:1rpx solid #dfe4df;border-radius:16rpx;background:#fff;box-shadow:0 5rpx 14rpx rgba(33,56,46,.03)}.workspace-icon{display:grid;place-items:center;width:68rpx;height:68rpx;align-self:flex-start;flex:none;border-radius:16rpx;background:#edf1ec;color:#587263;font-size:32rpx}.workspace-copy{display:flex;min-width:0;flex:1;align-self:stretch;flex-direction:column}.workspace-copy>text:first-child{color:#31493d;font-size:25rpx;font-weight:750}.workspace-copy>text:nth-child(2){overflow:hidden;margin-top:7rpx;color:#89948d;font-size:18rpx;text-overflow:ellipsis;white-space:nowrap}.workspace-stats{display:flex;align-items:center;gap:8rpx;margin-top:auto}.workspace-stats text{padding:5rpx 8rpx;border-radius:8rpx;background:#f0f4f0;color:#61756a;font-size:16rpx}.workspace-arrow{align-self:center;color:#73827a;font-size:36rpx}
 .bottom-nav{position:fixed;z-index:10;right:0;bottom:0;left:0;display:grid;grid-template-columns:repeat(4,1fr);height:116rpx;padding:12rpx 20rpx calc(12rpx + env(safe-area-inset-bottom));box-sizing:content-box;border-top:1rpx solid #dfe4df;background:rgba(250,251,248,.97)}.nav-item{display:flex;align-items:center;justify-content:center;min-width:0;flex-direction:column;gap:6rpx;color:#8b958f;font-size:17rpx}.nav-icon{font-size:30rpx;line-height:1}.nav-item.active{color:#315f4b;font-weight:750}.create-icon{display:grid;place-items:center;width:76rpx;height:76rpx;margin-top:-36rpx;border:4rpx solid #f7f7f3;border-radius:50%;background:#264d3e;color:#fffdf8;font-size:42rpx;font-weight:400;line-height:1;box-shadow:0 10rpx 20rpx rgba(33,68,52,.2)}.create-nav{color:#365849;font-weight:700}
+.history-section{margin-top:28rpx}.history-heading{margin:0 0 14rpx}.new-conversation{display:flex;align-items:center;gap:4rpx;padding:8rpx 12rpx;border:1rpx solid #cbdccf;border-radius:10rpx;background:#f0f7f1;color:#47715a;font-size:17rpx;font-weight:700}.new-conversation text:first-child{font-size:24rpx;line-height:1}.conversation-history-list{display:flex;flex-direction:column;gap:9rpx}.conversation-history-item,.history-empty{display:flex;align-items:center;gap:13rpx;min-height:86rpx;padding:13rpx 14rpx;box-sizing:border-box;border:1rpx solid #e0e7e1;border-radius:14rpx;background:#fff;box-shadow:0 4rpx 12rpx rgba(33,56,46,.025)}.conversation-history-item:active,.history-empty:active{background:#f1f7f1}.history-mark,.history-empty-mark{display:grid;place-items:center;flex:none;width:48rpx;height:48rpx;border-radius:13rpx;background:#edf4ee;color:#527963;font-family:"Songti SC","STSong",serif;font-size:23rpx;font-weight:800}.history-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:7rpx}.history-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:10rpx;min-width:0}.history-title-row text:first-child{overflow:hidden;color:#344b3f;font-size:20rpx;font-weight:750;text-overflow:ellipsis;white-space:nowrap}.history-title-row text:last-child{flex:none;color:#9aa59e;font-size:14rpx}.history-detail{overflow:hidden;color:#819088;font-size:15rpx;text-overflow:ellipsis;white-space:nowrap}.history-arrow{flex:none;color:#84948b;font-size:30rpx;line-height:1}.history-empty{border-style:dashed;background:#fbfcfa}.history-empty-mark{background:#f5f7f3;color:#769081;font-family:inherit;font-size:27rpx}.history-empty view{display:flex;min-width:0;flex:1;flex-direction:column;gap:5rpx}.history-empty view text:first-child{color:#52695b;font-size:18rpx;font-weight:750}.history-empty view text:last-child{overflow:hidden;color:#9aa59e;font-size:14rpx;text-overflow:ellipsis;white-space:nowrap}
 </style>

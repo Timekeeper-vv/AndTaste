@@ -199,6 +199,7 @@ const inspirationText = ref('')
 const referencePath = ref('')
 const referenceAssetId = ref<number | null>(null)
 const sessionId = ref<number | null>(null)
+const requestedSessionId = ref<number | null>(null)
 const projectId = ref<number | null>(null)
 const versionId = ref<number | null>(null)
 const generatedAssetId = ref<number | null>(null)
@@ -801,6 +802,7 @@ const conversationSession = useConversationSession({
   sessionReady,
   saving,
   forceNewSession,
+  preferredSessionId: () => Number(requestedSessionId.value) || 0,
   onSessionLoaded: session => {
     projectId.value = Number(session.projectId) > 0 ? Number(session.projectId) : null
     versionId.value = Number(session.versionId) > 0 ? Number(session.versionId) : null
@@ -1496,6 +1498,8 @@ function restart() {
 watch(chatInput, scheduleChatDraftSave)
 onLoad(options => {
   campaignContext.value = campaignFromStorage()
+  const parsedSessionId = Number(options?.sessionId || 0)
+  requestedSessionId.value = Number.isFinite(parsedSessionId) && parsedSessionId > 0 ? parsedSessionId : null
   const campaignNeedsSession = Boolean(campaignContext.value && !Number(campaignContext.value.sessionId))
   forceNewSession.value = String(options?.new || '') === '1' || campaignNeedsSession
 })

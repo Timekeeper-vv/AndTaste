@@ -15,6 +15,8 @@ export interface ConversationSessionOptions {
   sessionReady: Ref<boolean>
   saving: Ref<boolean>
   forceNewSession: ReadonlyValue<boolean>
+  /** Optional deep-link target selected from the conversation history list. */
+  preferredSessionId?: () => number
   campaignSessionId?: () => number
   requireSession: () => boolean
   isNotFound: (error: unknown) => boolean
@@ -67,6 +69,17 @@ export function useConversationSession(options: ConversationSessionOptions) {
       if (!options.requireSession()) return false
       if (options.sessionId.value) return true
       try {
+        const preferredSessionId = Number(options.preferredSessionId?.() || 0)
+        if (preferredSessionId > 0) {
+          if (await restoreSession(preferredSessionId)) return true
+          // A stale history link should open a clean draft instead of silently
+          // loading a different user's latest-looking draft.
+          const session = await createConversation()
+          options.sessionId.value = Number(session.id)
+          options.onSessionLoaded?.(session)
+          options.resetViewState()
+          return Boolean(options.sessionId.value)
+        }
         if (!options.forceNewSession.value) {
           try {
             const campaignSessionId = Number(options.campaignSessionId?.() || 0)
