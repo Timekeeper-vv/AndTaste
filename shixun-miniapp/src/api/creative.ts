@@ -28,6 +28,10 @@ export const createConversation = (mode?: 'template' | 'text' | 'image') => requ
 })
 export const getConversations = () => request<ConversationSession[]>('/api/creative/ai/conversations')
 export const getConversation = (id: number | string) => request<ConversationSession>(`/api/creative/ai/conversations/${encodeURIComponent(String(id))}`)
+export const deleteConversation = (id: number | string) => request<{ deleted?: boolean; id?: number }>(
+  `/api/creative/ai/conversations/${encodeURIComponent(String(id))}`,
+  { method: 'DELETE' },
+)
 export const saveConversationEvent = (id: number | string, body: { step: string; eventType: string; payload?: Record<string, any>; idempotencyKey?: string }) => request<ConversationSession>(
   `/api/creative/ai/conversations/${encodeURIComponent(String(id))}/events`,
   { method: 'POST', data: body, header: { 'content-type': 'application/json' } },

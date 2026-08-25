@@ -48,7 +48,7 @@
                 <view class="history-title-row"><text>{{ conversationTitle(conversation) }}</text><text>{{ formatConversationTime(conversation.updatedAt || conversation.createdAt) }}</text></view>
                 <text class="history-detail">{{ conversationStage(conversation) }}<text v-if="conversation.productSize"> · {{ conversation.productSize }}</text></text>
               </view>
-              <text class="history-arrow">›</text>
+              <view class="history-item-actions"><view class="history-delete" :class="{ loading: deletingConversationId === conversation.id }" :aria-label="`删除${conversationTitle(conversation)}`" @tap.stop="removeConversation(conversation)"><text>{{ deletingConversationId === conversation.id ? '…' : '删除' }}</text></view><text class="history-arrow">›</text></view>
             </view>
           </view>
           <view v-else class="history-empty" @tap="startNewConversation"><text class="history-empty-mark">＋</text><view><text>还没有历史对话</text><text>开始一次创作后，进度会自动保存在这里</text></view><text class="history-arrow">›</text></view>
@@ -90,7 +90,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { getAssetPreviewAccess, getAssets, getConversations, getCredits, getProductionRequests, type ConversationSession } from '../../api/creative'
+import { deleteConversation, getAssetPreviewAccess, getAssets, getConversations, getCredits, getProductionRequests, type ConversationSession } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { getCommercialRequests } from '../../api/commercial'
 import { getSession, requireSession } from '../../utils/session'
@@ -99,6 +99,7 @@ const user = ref(getSession()?.user)
 const credits = ref(0)
 const assets = ref<any[]>([])
 const conversations = ref<ConversationSession[]>([])
+const deletingConversationId = ref<number | null>(null)
 const productionRequests = ref<any[]>([])
 const commercialRequests = ref({ quoteRequests: [] as any[], consignmentApplications: [] as any[], selectionDemands: [] as any[] })
 const refreshing = ref(false)
@@ -143,6 +144,29 @@ function startNewConversation() {
 function openConversation(session: ConversationSession) {
   if (!requireSession() || !session?.id) return
   go(`/pages/conversation-create/index?sessionId=${encodeURIComponent(String(session.id))}`)
+}
+
+function removeConversation(session: ConversationSession) {
+  if (!session?.id || deletingConversationId.value) return
+  uni.showModal({
+    title: '删除历史对话',
+    content: '只删除这段对话记录，不会删除作品、生产模拟图或 3D 模型。',
+    confirmText: '删除',
+    confirmColor: '#b45f4a',
+    success: async result => {
+      if (!result.confirm) return
+      deletingConversationId.value = Number(session.id)
+      try {
+        await deleteConversation(session.id)
+        conversations.value = conversations.value.filter(item => Number(item.id) !== Number(session.id))
+        uni.showToast({ title: '历史对话已删除', icon: 'none' })
+      } catch (error: any) {
+        uni.showToast({ title: error?.message || '删除失败，请稍后重试', icon: 'none' })
+      } finally {
+        deletingConversationId.value = null
+      }
+    },
+  })
 }
 
 function conversationTitle(session: ConversationSession) {
@@ -265,4 +289,5 @@ onShow(() => {
 .management-heading{margin-top:34rpx}.workspace-entry{display:flex;align-items:center;gap:16rpx;min-height:164rpx;padding:20rpx;border:1rpx solid #dfe4df;border-radius:16rpx;background:#fff;box-shadow:0 5rpx 14rpx rgba(33,56,46,.03)}.workspace-icon{display:grid;place-items:center;width:68rpx;height:68rpx;align-self:flex-start;flex:none;border-radius:16rpx;background:#edf1ec;color:#587263;font-size:32rpx}.workspace-copy{display:flex;min-width:0;flex:1;align-self:stretch;flex-direction:column}.workspace-copy>text:first-child{color:#31493d;font-size:25rpx;font-weight:750}.workspace-copy>text:nth-child(2){overflow:hidden;margin-top:7rpx;color:#89948d;font-size:18rpx;text-overflow:ellipsis;white-space:nowrap}.workspace-stats{display:flex;align-items:center;gap:8rpx;margin-top:auto}.workspace-stats text{padding:5rpx 8rpx;border-radius:8rpx;background:#f0f4f0;color:#61756a;font-size:16rpx}.workspace-arrow{align-self:center;color:#73827a;font-size:36rpx}
 .bottom-nav{position:fixed;z-index:10;right:0;bottom:0;left:0;display:grid;grid-template-columns:repeat(4,1fr);height:116rpx;padding:12rpx 20rpx calc(12rpx + env(safe-area-inset-bottom));box-sizing:content-box;border-top:1rpx solid #dfe4df;background:rgba(250,251,248,.97)}.nav-item{display:flex;align-items:center;justify-content:center;min-width:0;flex-direction:column;gap:6rpx;color:#8b958f;font-size:17rpx}.nav-icon{font-size:30rpx;line-height:1}.nav-item.active{color:#315f4b;font-weight:750}.create-icon{display:grid;place-items:center;width:76rpx;height:76rpx;margin-top:-36rpx;border:4rpx solid #f7f7f3;border-radius:50%;background:#264d3e;color:#fffdf8;font-size:42rpx;font-weight:400;line-height:1;box-shadow:0 10rpx 20rpx rgba(33,68,52,.2)}.create-nav{color:#365849;font-weight:700}
 .history-section{margin-top:28rpx}.history-heading{margin:0 0 14rpx}.new-conversation{display:flex;align-items:center;gap:4rpx;padding:8rpx 12rpx;border:1rpx solid #cbdccf;border-radius:10rpx;background:#f0f7f1;color:#47715a;font-size:17rpx;font-weight:700}.new-conversation text:first-child{font-size:24rpx;line-height:1}.conversation-history-list{display:flex;flex-direction:column;gap:9rpx}.conversation-history-item,.history-empty{display:flex;align-items:center;gap:13rpx;min-height:86rpx;padding:13rpx 14rpx;box-sizing:border-box;border:1rpx solid #e0e7e1;border-radius:14rpx;background:#fff;box-shadow:0 4rpx 12rpx rgba(33,56,46,.025)}.conversation-history-item:active,.history-empty:active{background:#f1f7f1}.history-mark,.history-empty-mark{display:grid;place-items:center;flex:none;width:48rpx;height:48rpx;border-radius:13rpx;background:#edf4ee;color:#527963;font-family:"Songti SC","STSong",serif;font-size:23rpx;font-weight:800}.history-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:7rpx}.history-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:10rpx;min-width:0}.history-title-row text:first-child{overflow:hidden;color:#344b3f;font-size:20rpx;font-weight:750;text-overflow:ellipsis;white-space:nowrap}.history-title-row text:last-child{flex:none;color:#9aa59e;font-size:14rpx}.history-detail{overflow:hidden;color:#819088;font-size:15rpx;text-overflow:ellipsis;white-space:nowrap}.history-arrow{flex:none;color:#84948b;font-size:30rpx;line-height:1}.history-empty{border-style:dashed;background:#fbfcfa}.history-empty-mark{background:#f5f7f3;color:#769081;font-family:inherit;font-size:27rpx}.history-empty view{display:flex;min-width:0;flex:1;flex-direction:column;gap:5rpx}.history-empty view text:first-child{color:#52695b;font-size:18rpx;font-weight:750}.history-empty view text:last-child{overflow:hidden;color:#9aa59e;font-size:14rpx;text-overflow:ellipsis;white-space:nowrap}
-</style>
+.history-item-actions{display:flex;align-items:center;gap:9rpx;flex:none}.history-delete{display:flex;align-items:center;justify-content:center;min-width:64rpx;height:46rpx;padding:0 7rpx;border:1rpx solid #efd8d0;border-radius:9rpx;background:#fff8f5;color:#b45f4a;font-size:14rpx}.history-delete:active{background:#fbe9e3}.history-delete.loading{opacity:.6}
+ </style>

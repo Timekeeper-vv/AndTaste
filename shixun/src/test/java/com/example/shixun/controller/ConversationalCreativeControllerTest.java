@@ -48,6 +48,19 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void deletingConversationKeepsGeneratedAssets() {
+        jdbc.update("INSERT INTO creative_conversation_event(session_id,user_id,step,event_type,payload_json) VALUES (1,1,'image','image_generated',?)", "{\"assetId\":7}");
+        jdbc.update("INSERT INTO digital_asset(id,created_by) VALUES (7,1)");
+
+        Map<String, Object> result = controller.delete(1L, claims);
+
+        assertThat(result.get("deleted")).isEqualTo(true);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creative_conversation_session WHERE id=1", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creative_conversation_event WHERE session_id=1", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM digital_asset WHERE id=7", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
     void naturalLanguageRequiresFinishedProductSizeBeforeGenerationConfirmation() {
         Map<String, Object> result = controller.chat(1L, Map.of(
                 "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"

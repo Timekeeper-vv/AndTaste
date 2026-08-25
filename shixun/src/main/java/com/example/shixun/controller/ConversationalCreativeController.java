@@ -12,7 +12,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
@@ -111,6 +113,26 @@ public class ConversationalCreativeController {
     public Map<String, Object> detail(@PathVariable long id,
                                       @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         return getOwnedSession(id, requireConsumer(principal));
+    }
+
+    /**
+     * Removes only the conversation transcript. The creative project and all
+     * generated assets remain available in the works and production flows.
+     */
+    @DeleteMapping("/{id}")
+    @Transactional
+    public Map<String, Object> delete(@PathVariable long id,
+                                      @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        long userId = requireConsumer(principal);
+        Integer owned = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM creative_conversation_session WHERE id=? AND user_id=?",
+                Integer.class, id, userId);
+        if (owned == null || owned == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作会话不存在");
+        // Do not delete the linked creative_project: generated assets, models,
+        // reviews and production records may still reference that project.
+        jdbc.update("DELETE FROM creative_conversation_event WHERE session_id=? AND user_id=?", id, userId);
+        jdbc.update("DELETE FROM creative_conversation_session WHERE id=? AND user_id=?", id, userId);
+        return Map.of("deleted", true, "id", id);
     }
 
     @PostMapping("/{id}/events")
