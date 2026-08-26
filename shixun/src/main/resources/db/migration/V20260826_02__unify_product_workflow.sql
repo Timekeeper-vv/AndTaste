@@ -5,8 +5,6 @@ SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_sche
 SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='creative_multiview_bundle' AND column_name='product_no'),'SELECT 1','ALTER TABLE creative_multiview_bundle ADD COLUMN product_no VARCHAR(40) NULL AFTER bundle_no'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='consumer_production_request' AND column_name='product_no'),'SELECT 1','ALTER TABLE consumer_production_request ADD COLUMN product_no VARCHAR(40) NULL AFTER request_no'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='consumer_professional_submission' AND column_name='product_no'),'SELECT 1','ALTER TABLE consumer_professional_submission ADD COLUMN product_no VARCHAR(40) NULL AFTER submission_no'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='creative_quote_request' AND column_name='product_no'),'SELECT 1','ALTER TABLE creative_quote_request ADD COLUMN product_no VARCHAR(40) NULL AFTER request_no'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='creative_consignment_application' AND column_name='product_no'),'SELECT 1','ALTER TABLE creative_consignment_application ADD COLUMN product_no VARCHAR(40) NULL AFTER application_no'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='consumer_production_request' AND column_name='sample_lead_time'),'SELECT 1','ALTER TABLE consumer_production_request ADD COLUMN sample_lead_time VARCHAR(120) NULL AFTER sample_fee_yuan'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='consumer_production_request' AND column_name='sample_material'),'SELECT 1','ALTER TABLE consumer_production_request ADD COLUMN sample_material VARCHAR(180) NULL AFTER sample_lead_time'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @sql := IF(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='consumer_production_request' AND column_name='sample_quote_note'),'SELECT 1','ALTER TABLE consumer_production_request ADD COLUMN sample_quote_note VARCHAR(1200) NULL AFTER sample_material'); PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -18,19 +16,3 @@ UPDATE digital_asset SET product_no=CONCAT('PRD-',LPAD(COALESCE(parent_asset_id,
 UPDATE creative_multiview_bundle b JOIN digital_asset a ON a.id=b.input_asset_id SET b.product_no=COALESCE(b.product_no,a.product_no,CONCAT('PRD-',LPAD(a.id,10,'0'))) WHERE b.product_no IS NULL OR b.product_no='';
 UPDATE consumer_production_request r LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id LEFT JOIN digital_asset a ON a.id=r.asset_id SET r.product_no=COALESCE(r.product_no,b.product_no,a.product_no,CONCAT('PRD-',LPAD(COALESCE(r.asset_id,r.id),10,'0'))) WHERE r.product_no IS NULL OR r.product_no='';
 UPDATE consumer_professional_submission SET product_no=CONCAT('PRD-',submission_no) WHERE product_no IS NULL OR product_no='';
-UPDATE creative_quote_request q JOIN digital_asset a ON a.id=q.asset_id SET q.product_no=a.product_no WHERE (q.product_no IS NULL OR q.product_no='') AND q.asset_id IS NOT NULL;
-UPDATE creative_consignment_application c JOIN digital_asset a ON a.id=c.asset_id SET c.product_no=a.product_no WHERE (c.product_no IS NULL OR c.product_no='') AND c.asset_id IS NOT NULL;
-
--- Preserve the newest historical request and mark older repeated taps as
--- duplicates instead of deleting audit history.  New submissions are blocked
--- in the service while the account row is locked.
-UPDATE consumer_production_request old_req
-JOIN consumer_production_request new_req
-  ON new_req.user_id=old_req.user_id
- AND new_req.product_no=old_req.product_no
- AND new_req.request_type=old_req.request_type
- AND new_req.id>old_req.id
- AND new_req.status IN ('review','approved','processing')
-SET old_req.status='duplicate', old_req.review_comment='系统清理：同一产品重复提交'
-WHERE old_req.product_no IS NOT NULL
-  AND old_req.status IN ('review','approved','processing');
