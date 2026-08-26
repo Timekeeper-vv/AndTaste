@@ -165,6 +165,10 @@ public class CommercialProductizationController {
         if (assetId != null) requireAssetProductMatch(assetId, product);
         int quantity = positiveInt(body.get("quantity"), 1, 100000, "数量必须在1到100000之间");
         String requestType = enumValue(body.get("requestType"), Set.of("sample", "bulk", "personal"), "sample");
+        if (assetId != null) {
+            List<Map<String,Object>> existing = jdbc.queryForList("SELECT id FROM creative_quote_request WHERE user_id=? AND asset_id=? AND request_type=? AND status NOT IN ('rejected','closed') LIMIT 1", userId, assetId, requestType);
+            if (!existing.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "该作品已提交过一次有效申请，不能重复提交");
+        }
         String purpose = enumValue(body.get("purpose"), Set.of("personal", "channel_sale", "museum_sale"), "personal");
         String basis = copyrightBasis(body.get("copyrightBasis"));
         requireCopyrightConfirmed(body.get("copyrightConfirmed"));
@@ -172,6 +176,7 @@ public class CommercialProductizationController {
         jdbc.update("INSERT INTO creative_quote_request (request_no,user_id,asset_id,product_template_id,request_type,quantity,purpose,note,copyright_basis,copyright_confirmed,copyright_statement_version,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'new')",
                 requestNo, userId, assetId, product.get("id"), requestType, quantity, purpose, limit(text(body.get("note")), 1200), basis, true, COPYRIGHT_VERSION);
         Long applicationId = jdbc.queryForObject("SELECT id FROM creative_quote_request WHERE request_no=?", Long.class, requestNo);
+        if (assetId != null) jdbc.update("UPDATE creative_quote_request q JOIN digital_asset a ON a.id=? SET q.product_no=a.product_no WHERE q.id=?", assetId, applicationId);
         audit("quote", String.valueOf(applicationId), "created", principal.username(), "用户提交报价/打样申请");
         Map<String, Object> out = result(requestNo, "报价申请已提交，运营会根据作品、数量和工艺条件人工确认");
         out.put("id", applicationId);
@@ -191,6 +196,8 @@ public class CommercialProductizationController {
         Long assetId = longValue(body.get("assetId"));
         if (assetId == null) throw new IllegalArgumentException("代销申请必须关联一件自己的作品");
         requireOwnedAsset(assetId, userId);
+        List<Map<String,Object>> existing = jdbc.queryForList("SELECT id FROM creative_consignment_application WHERE user_id=? AND asset_id=? AND status NOT IN ('rejected','withdrawn') LIMIT 1", userId, assetId);
+        if (!existing.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "该作品已提交过有效代销申请，不能重复提交");
         Map<String, Object> product = product(body.get("templateCode"));
         requireAssetProductMatch(assetId, product);
         Long channelId = longValue(body.get("channelId"));
@@ -209,6 +216,7 @@ public class CommercialProductizationController {
         jdbc.update("INSERT INTO creative_consignment_application (application_no,user_id,asset_id,product_template_id,channel_id,channel_name_snapshot,sales_mode,creator_share_percent,platform_service_percent,note,copyright_basis,copyright_confirmed,copyright_statement_version,authorization_note,status) VALUES (?,?,?,?,?,?, 'preorder',70.00,30.00,?,?,?,?,?,'pending_review')",
                 applicationNo, userId, assetId, product.get("id"), channelId, channelName, limit(text(body.get("note")), 1200), basis, true, COPYRIGHT_VERSION, limit(text(body.get("authorizationNote")), 1000));
         Long applicationId = jdbc.queryForObject("SELECT id FROM creative_consignment_application WHERE application_no=?", Long.class, applicationNo);
+        jdbc.update("UPDATE creative_consignment_application c JOIN digital_asset a ON a.id=? SET c.product_no=a.product_no WHERE c.id=?", assetId, applicationId);
         audit("consignment", String.valueOf(applicationId), "created", principal.username(), "用户提交代销申请");
         Map<String, Object> out = result(applicationNo, "代销申请已提交，平台会先进行版权、作品质量和渠道匹配审核");
         out.put("id", applicationId);
@@ -477,7 +485,7 @@ public class CommercialProductizationController {
             @RequestParam(required = false, defaultValue = "new") String status,
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         requireStaff(principal);
-        String sql = "SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.note,r.copyright_basis copyrightBasis,r.copyright_confirmed copyrightConfirmed,r.status,r.quoted_unit_price quotedUnitPrice,r.quoted_total_price quotedTotalPrice,r.quoted_lead_time quotedLeadTime,r.operator_comment operatorComment,p.template_code templateCode,p.product_name productName,r.created_at createdAt,r.updated_at updatedAt FROM creative_quote_request r JOIN user u ON u.id=r.user_id JOIN creative_product_template p ON p.id=r.product_template_id";
+        String sql = "SELECT r.id,r.request_no requestNo,r.product_no productNo,r.user_id userId,u.username,r.asset_id assetId,r.request_type requestType,r.quantity,r.purpose,r.note,r.copyright_basis copyrightBasis,r.copyright_confirmed copyrightConfirmed,r.status,r.quoted_unit_price quotedUnitPrice,r.quoted_total_price quotedTotalPrice,r.quoted_lead_time quotedLeadTime,r.operator_comment operatorComment,p.template_code templateCode,p.product_name productName,r.created_at createdAt,r.updated_at updatedAt FROM creative_quote_request r JOIN user u ON u.id=r.user_id JOIN creative_product_template p ON p.id=r.product_template_id";
         if ("all".equals(status)) return jdbc.queryForList(sql + " ORDER BY r.id DESC LIMIT 300");
         return jdbc.queryForList(sql + " WHERE r.status=? ORDER BY r.id DESC LIMIT 300", status);
     }
@@ -540,7 +548,7 @@ public class CommercialProductizationController {
             @RequestParam(required = false, defaultValue = "pending_review") String status,
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         requireStaff(principal);
-        String sql = "SELECT a.id,a.application_no applicationNo,a.user_id userId,u.username,a.asset_id assetId,a.channel_id channelId,a.channel_name_snapshot channelName,a.sales_mode salesMode,a.creator_share_percent creatorSharePercent,a.platform_service_percent platformServicePercent,a.note,a.copyright_basis copyrightBasis,a.copyright_confirmed copyrightConfirmed,a.authorization_note authorizationNote,a.status,a.operator_comment operatorComment,p.template_code templateCode,p.product_name productName,a.created_at createdAt,a.updated_at updatedAt FROM creative_consignment_application a JOIN user u ON u.id=a.user_id JOIN creative_product_template p ON p.id=a.product_template_id";
+        String sql = "SELECT a.id,a.application_no applicationNo,a.product_no productNo,a.user_id userId,u.username,a.asset_id assetId,a.channel_id channelId,a.channel_name_snapshot channelName,a.sales_mode salesMode,a.creator_share_percent creatorSharePercent,a.platform_service_percent platformServicePercent,a.note,a.copyright_basis copyrightBasis,a.copyright_confirmed copyrightConfirmed,a.authorization_note authorizationNote,a.status,a.operator_comment operatorComment,p.template_code templateCode,p.product_name productName,a.created_at createdAt,a.updated_at updatedAt FROM creative_consignment_application a JOIN user u ON u.id=a.user_id JOIN creative_product_template p ON p.id=a.product_template_id";
         if ("all".equals(status)) return jdbc.queryForList(sql + " ORDER BY a.id DESC LIMIT 300");
         return jdbc.queryForList(sql + " WHERE a.status=? ORDER BY a.id DESC LIMIT 300", status);
     }
