@@ -40,6 +40,8 @@ interface MultiViewBundle {
   campaignKey?: string
   reviewComment?: string
   createdAt?: string
+  productNo?: string
+  sampleRequest?: { requestId?: number; requestStatus?: string; sampleFeeYuan?: number; sampleLeadTime?: string; sampleMaterial?: string; sampleQuoteNote?: string; samplePaymentStatus?: string; samplePaidAt?: string }
   images?: Array<{ view?: string; label?: string; assetId?: number; previewUrl?: string; imageUrl?: string }>
 }
 
@@ -49,7 +51,7 @@ const loading = ref(false)
 const reviewingId = ref<number | null>(null)
 const reviewingBundleId = ref<number | null>(null)
 const keywordUserId = ref('')
-const status = ref<'all' | ReviewStatus>('review')
+const status = ref<'all' | ReviewStatus>('all')
 const activeWork = ref<ConsumerAsset | null>(null)
 const activeMediaUrl = ref('')
 const professionalSubmissions = ref<any[]>([])
@@ -227,6 +229,18 @@ async function reviewBundle(bundle: MultiViewBundle, nextStatus: ReviewStatus, r
   }
 }
 
+async function quoteBundle(bundle: MultiViewBundle) {
+  const request = bundle.sampleRequest
+  if (!request?.requestId) { emit('alert', '用户尚未提交打样申请', 'error'); return }
+  const fee = window.prompt('请输入打样价格（元）', request.sampleFeeYuan == null ? '' : String(request.sampleFeeYuan)); if (fee == null) return
+  const lead = window.prompt('请输入打样时间', request.sampleLeadTime || ''); if (lead == null) return
+  const material = window.prompt('请输入材质', request.sampleMaterial || bundle.material || ''); if (material == null) return
+  const note = window.prompt('请输入报价说明', request.sampleQuoteNote || '') || ''
+  const r = await fetch(`/api/creative/ai/consumer-production/admin/${request.requestId}/quote`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sampleFeeYuan: fee, sampleLeadTime: lead, sampleMaterial: material, sampleQuoteNote: note }) })
+  if (!r.ok) { const e = await r.json().catch(() => null); emit('alert', e?.message || '报价保存失败', 'error'); return }
+  emit('alert', '报价单已保存，用户可支付打样费', 'success'); await load()
+}
+
 async function loadProfessionalSubmissions() {
   try {
     const r = await fetch('/api/creative/ai/consumer-professional-submissions/review', { cache: 'no-store' })
@@ -285,7 +299,10 @@ async function downloadProfessionalSubmission(item: any) {
     document.body.appendChild(link)
     link.click()
     link.remove()
-    URL.revokeObjectURL(url)
+    // Defer revoke so the browser can start fetching the blob before the URL
+    // is released. Revoking synchronously after click() cancels the download
+    // in Chromium/Safari/Firefox, which is why the ZIP never saved.
+    setTimeout(() => URL.revokeObjectURL(url), 1500)
   } catch (e: any) {
     emit('alert', '下载专业作品包失败：' + (e?.message || e), 'error')
   }
@@ -324,6 +341,13 @@ async function openPreview(w: ConsumerAsset) {
   } catch (e: any) {
     emit('alert', `作品预览失败：${e?.message || e}`, 'error')
   }
+}
+
+async function downloadModel(w: ConsumerAsset) {
+  try {
+    const url = await requestAssetPreviewUrl(w.id)
+    const link = document.createElement('a'); link.href = url; link.download = `${w.title || 'model'}.glb`; link.click()
+  } catch (e: any) { emit('alert', `GLB下载失败：${e?.message || e}`, 'error') }
 }
 
 function closePreview() {
@@ -400,11 +424,11 @@ onMounted(load)
       <header class="multiview-review-header"><div><span>COMPLETE PRODUCT REVIEW</span><h2>三视图作品包审核</h2><p>正面、侧面和背面作为一个完整产品统一审核。通过后用户才能申请打样。</p></div><b>{{ visibleMultiViewBundles.length }} <small>个作品包</small></b></header>
       <div class="multiview-review-grid">
         <article v-for="bundle in visibleMultiViewBundles" :key="bundle.id" class="multiview-review-card">
-          <div class="bundle-review-top"><div><strong>{{ bundle.productName || '三视图文创作品' }}</strong><small>{{ bundle.bundleNo || `#${bundle.id}` }} · 用户 {{ bundle.userId || '-' }} · {{ bundle.username || '-' }}</small></div><span class="status-pill" :class="statusClass(bundle.status)">{{ statusText[bundle.status || 'review'] || bundle.status }}</span></div>
+          <div class="bundle-review-top"><div><strong>{{ bundle.productName || '三视图文创作品' }}</strong><small>{{ bundle.productNo || bundle.bundleNo || `#${bundle.id}` }} · 用户 {{ bundle.userId || '-' }} · {{ bundle.username || '-' }}</small></div><span class="status-pill" :class="statusClass(bundle.status)">{{ bundle.status === 'approved' && bundle.sampleRequest?.samplePaymentStatus === 'paid' ? '已支付，生产中' : bundle.status === 'approved' && bundle.sampleRequest ? '待用户支付打样费' : statusText[bundle.status || 'review'] || bundle.status }}</span></div>
           <div class="bundle-review-images"><div v-for="image in bundle.images || []" :key="image.assetId" role="button" tabindex="0" @click="openBundleImage(image)"><img v-if="bundleImageUrl(image)" :src="bundleImageUrl(image)" :alt="image.label || '视图'" /><span v-else>{{ image.label || '视图' }}</span><small>{{ image.label }} · 点击查看大图</small></div></div>
-          <div class="bundle-review-meta"><span>{{ bundle.material || '材质待定' }}</span><span>{{ bundle.productSize || '尺寸待定' }}</span><span>{{ bundlePurpose(bundle) }}</span></div>
+          <div class="bundle-review-meta"><span>{{ bundle.material || '材质待定' }}</span><span>{{ bundle.productSize || '尺寸待定' }}</span><span>{{ bundlePurpose(bundle) }}</span><span v-if="bundle.sampleRequest">打样：{{ bundle.sampleRequest.sampleMaterial || '待填材质' }} · ¥{{ bundle.sampleRequest.sampleFeeYuan || '-' }} · {{ bundle.sampleRequest.sampleLeadTime || '待填时间' }}</span></div>
           <p v-if="bundle.reviewComment" class="bundle-review-note">审核意见：{{ bundle.reviewComment }}</p>
-          <div class="actions"><template v-if="bundle.status === 'review'"><button class="approve" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'approved')">通过整包</button><button class="reject" :disabled="reviewingBundleId === bundle.id" @click="openRejectForm('bundle', bundle)">不通过</button></template><button v-if="['approved', 'rejected'].includes(String(bundle.status))" class="outline" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'review')">退回待审</button></div>
+          <div class="actions"><template v-if="bundle.status === 'review'"><button class="approve" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'approved')">通过整包</button><button class="reject" :disabled="reviewingBundleId === bundle.id" @click="openRejectForm('bundle', bundle)">不通过</button></template><button v-if="bundle.sampleRequest && bundle.sampleRequest.samplePaymentStatus !== 'paid'" class="outline" @click="quoteBundle(bundle)">填写报价单</button><button v-if="['approved', 'rejected'].includes(String(bundle.status))" class="outline" :disabled="reviewingBundleId === bundle.id" @click="reviewBundle(bundle, 'review')">退回待审</button></div>
         </article>
       </div>
     </section>
@@ -441,6 +465,7 @@ onMounted(load)
           <p class="prompt" :title="w.prompt">{{ w.prompt || '暂无提示词' }}</p>
           <div class="actions">
             <button type="button" class="outline" @click="openPreview(w)">查看</button>
+            <button v-if="w.assetType === 'model'" type="button" class="outline" @click="downloadModel(w)">下载GLB</button>
             <button type="button" class="approve" :disabled="reviewingId === w.id" @click="reviewWork(w, 'approved')">通过</button>
             <button type="button" class="reject" :disabled="reviewingId === w.id" @click="openRejectForm('work', w)">不通过</button>
             <button v-if="w.status !== 'review'" type="button" class="outline" :disabled="reviewingId === w.id" @click="reviewWork(w, 'review')">退回待审</button>

@@ -114,6 +114,42 @@ class CreativeProjectServiceTest {
     }
 
     @Test
+    void allowsBriefVersionToBeSubmittedForReviewDirectly() {
+        // A 3D model can be submitted for review while its version is still
+        // recorded as "brief" (the generation-phase write may have advanced a
+        // different version). Submitting for review must succeed instead of
+        // failing with "创作阶段不能从 brief 流转到 human_review".
+        Map<String, Object> project = service.createProject(7L, "直接送审", "文创模型", Map.of());
+        long projectId = ((Number) project.get("id")).longValue();
+        long versionId = ((Number) project.get("currentVersionId")).longValue();
+        assertThat(jdbc.queryForObject("SELECT phase FROM creative_project_version WHERE id=?", String.class, versionId))
+                .isEqualTo("brief");
+
+        service.transitionProject(projectId, versionId, 7L, "human_review", "asset_review_submitted",
+                "user", 7L, Map.of());
+
+        assertThat(jdbc.queryForObject("SELECT phase FROM creative_project_version WHERE id=?", String.class, versionId))
+                .isEqualTo("human_review");
+        assertThat(jdbc.queryForObject("SELECT status FROM creative_project_version WHERE id=?", String.class, versionId))
+                .isEqualTo("frozen");
+    }
+
+    @Test
+    void allowsApprovedProductionRequestToEnterSamplingFromBrief() {
+        Map<String, Object> project = service.createProject(7L, "直接打样", "文创模型", Map.of());
+        long projectId = ((Number) project.get("id")).longValue();
+        long versionId = ((Number) project.get("currentVersionId")).longValue();
+
+        service.transitionProject(projectId, versionId, 7L, "sampling", "sampling_requested",
+                "user", 7L, Map.of());
+
+        assertThat(jdbc.queryForObject("SELECT phase FROM creative_project_version WHERE id=?", String.class, versionId))
+                .isEqualTo("sampling");
+        assertThat(jdbc.queryForObject("SELECT status FROM creative_project_version WHERE id=?", String.class, versionId))
+                .isEqualTo("frozen");
+    }
+
+    @Test
     void allowsApprovedProductionRequestAfterPreflightWasRunEarly() {
         Map<String, Object> project = service.createProject(7L, "预检后打样", "文创摆件", Map.of());
         long projectId = ((Number) project.get("id")).longValue();

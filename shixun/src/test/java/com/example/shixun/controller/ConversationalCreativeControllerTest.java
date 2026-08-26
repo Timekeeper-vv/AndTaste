@@ -77,6 +77,50 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void explicitBadgeMaterialAndProcessCannotFallThroughToKeychain() throws Exception {
+        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "souvenir-zinc-badge", "souvenir", "锌合金徽章", "徽章", "金属徽章", "锌合金", "压铸/烤漆", "4-8cm", "徽章,锌合金,烤漆", 1, "approved", 200);
+        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "manual-souvenir-keychain-silicone", "souvenir", "硅胶钥匙扣", "钥匙扣", "柔性挂件", "硅胶", "模制/喷色", "4-8cm", "钥匙扣,硅胶", 1, "approved", 3);
+        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "manual-souvenir-badge-tinplate", "souvenir", "马口铁徽章", "徽章", "低客单徽章", "马口铁", "压铸/烤漆", "4-8cm", "徽章,马口铁", 1, "approved", 201);
+
+        when(siliconFlow.chat(anyString(), anyString(), anyDouble(), anyInt(), anyInt()))
+                .thenReturn("{\"intent\":\"choose_product\",\"reply\":\"已识别\",\"productKey\":\"manual-souvenir-keychain-silicone\",\"productName\":\"硅胶钥匙扣\",\"material\":\"硅胶\",\"mode\":\"text\"}");
+
+        Map<String, Object> result = controller.chat(1L, Map.of(
+                "message", "我想做50×50mm的锌合金烤漆金属徽章"
+        ), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("productKey")).isEqualTo("souvenir-zinc-badge");
+        assertThat(brief.get("productName")).isEqualTo("锌合金徽章");
+        assertThat(brief.get("material")).isEqualTo("锌合金");
+        assertThat(brief.get("productSize")).isEqualTo("50×50mm");
+        assertThat(String.valueOf(result.get("assistantText"))).doesNotContain("硅胶钥匙扣");
+        assertThat(String.valueOf(result.get("brief"))).doesNotContain("manual-souvenir-keychain-silicone");
+    }
+
+    @Test
+    void laterCreativeDetailsCannotLetPlannerReplaceAnAlreadyBoundProduct() throws Exception {
+        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "souvenir-zinc-badge", "souvenir", "锌合金徽章", "徽章", "金属徽章", "锌合金", "压铸/烤漆", "4-8cm", "徽章,锌合金,烤漆", 1, "approved", 2);
+        jdbc.update("INSERT INTO selection_option(option_key,category_key,name,subtitle,description,material,process,specification,tags,enabled,review_status,sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "manual-souvenir-keychain-silicone", "souvenir", "硅胶钥匙扣", "钥匙扣", "柔性挂件", "硅胶", "模制/喷色", "4-8cm", "钥匙扣,硅胶", 1, "approved", 3);
+        when(siliconFlow.chat(anyString(), anyString(), anyDouble(), anyInt(), anyInt()))
+                .thenReturn("{\"intent\":\"choose_product\",\"reply\":\"已识别\",\"productKey\":\"souvenir-zinc-badge\",\"productName\":\"锌合金徽章\",\"mode\":\"text\"}")
+                .thenReturn("{\"intent\":\"provide_inspiration\",\"reply\":\"已更新\",\"productKey\":\"manual-souvenir-keychain-silicone\",\"productName\":\"硅胶钥匙扣\",\"inspiration\":\"人物和工具\",\"mode\":\"text\"}");
+
+        controller.chat(1L, Map.of("message", "我想做50×50mm的锌合金烤漆金属徽章"), claims);
+        Map<String, Object> result = controller.chat(1L, Map.of("message", "图案内容是一个人物拿着工具"), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("productKey")).isEqualTo("souvenir-zinc-badge");
+        assertThat(brief.get("productName")).isEqualTo("锌合金徽章");
+        assertThat(String.valueOf(brief.get("inspiration"))).contains("人物");
+    }
+
+    @Test
     void naturalLanguageRequiresFinishedProductSizeBeforeGenerationConfirmation() {
         Map<String, Object> result = controller.chat(1L, Map.of(
                 "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"

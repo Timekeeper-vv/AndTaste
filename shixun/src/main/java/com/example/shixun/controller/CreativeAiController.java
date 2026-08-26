@@ -2751,6 +2751,7 @@ public class CreativeAiController {
         String safeTitle = blank(title) ? original.replaceFirst("(?i)\\.zip$", "") : title.trim();
         jdbc.update("INSERT INTO consumer_professional_submission (submission_no,user_id,title,original_name,storage_name,file_size,purpose,museum_id,museum_name,note) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 submissionNo, userId, safeTitle, original, stored, file.getSize(), normalizedPurpose, nullToEmpty(museumId), nullToEmpty(museumName), nullToEmpty(note));
+        try { jdbc.update("UPDATE consumer_professional_submission SET product_no=? WHERE submission_no=?", "PRD-" + submissionNo, submissionNo); } catch (DataAccessException ignored) { }
         return Map.of("success", true, "submissionNo", submissionNo, "status", "review", "message", "专业作品包已提交，审核员可在后台下载审核");
     }
 
@@ -3233,15 +3234,16 @@ public class CreativeAiController {
                 final Long persistedSimulationAssetId = simulationAssetId;
                 jdbc.update(con -> {
                     PreparedStatement ps = con.prepareStatement(
-                        "INSERT INTO creative_multiview_bundle (bundle_no,user_id,input_asset_id,simulation_asset_id,product_key,product_name,material,product_size,view_count,status) VALUES (?,?,?,?,?,?,?,?,?,'draft')",
+                        "INSERT INTO creative_multiview_bundle (bundle_no,user_id,input_asset_id,simulation_asset_id,product_no,product_key,product_name,material,product_size,view_count,status) VALUES (?,?,?,?,?,?,?,?,?,?, 'draft')",
                             Statement.NO_GENERATED_KEYS);
                     ps.setString(1, bundleNo); ps.setLong(2, userId); ps.setLong(3, inputAssetId);
                     if (persistedSimulationAssetId == null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4, persistedSimulationAssetId);
-                    ps.setString(5, blank(productKey) ? null : productKey);
-                    ps.setString(6, blank(productName) ? null : productName);
-                    ps.setString(7, blank(material) ? null : material);
-                    ps.setString(8, blank(productSize) ? null : productSize);
-                    ps.setInt(9, viewCount);
+                    ps.setString(5, productNoForAsset(inputAssetId));
+                    ps.setString(6, blank(productKey) ? null : productKey);
+                    ps.setString(7, blank(productName) ? null : productName);
+                    ps.setString(8, blank(material) ? null : material);
+                    ps.setString(9, blank(productSize) ? null : productSize);
+                    ps.setInt(10, viewCount);
                     return ps;
                 });
                 bundleId = jdbc.queryForObject(
@@ -3496,7 +3498,12 @@ public class CreativeAiController {
     }
 
     private Map<String,Object> multiViewBundleResponse(Long bundleId) {
-        Map<String,Object> row = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.simulation_asset_id simulationAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b WHERE b.id=?", bundleId);
+        Map<String,Object> row;
+        try {
+            row = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.product_no productNo,b.user_id userId,b.input_asset_id inputAssetId,b.simulation_asset_id simulationAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b WHERE b.id=?", bundleId);
+        } catch (DataAccessException legacySchema) {
+            row = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.simulation_asset_id simulationAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b WHERE b.id=?", bundleId);
+        }
         row.putAll(optionalProjectVersion("creative_multiview_bundle", "id", bundleId));
         List<Map<String,Object>> items = jdbc.queryForList("SELECT i.view_key view,i.label,i.asset_id assetId,a.title assetTitle,a.status assetStatus FROM creative_multiview_bundle_item i JOIN digital_asset a ON a.id=i.asset_id WHERE i.bundle_id=? ORDER BY CASE i.view_key WHEN 'front' THEN 1 WHEN 'left' THEN 2 WHEN 'back' THEN 3 WHEN 'right' THEN 4 ELSE 5 END,i.id", bundleId);
         for (Map<String,Object> item : items) {
@@ -3515,7 +3522,28 @@ public class CreativeAiController {
             addSignedAssetFields(simulation, simulationAssetId, "image");
             row.put("simulationImage", simulation);
         }
+        List<Map<String,Object>> sampleRequests;
+        try {
+            sampleRequests = jdbc.queryForList("SELECT id requestId,status requestStatus,sample_product_name sampleProductName,sample_fee_yuan sampleFeeYuan,sample_lead_time sampleLeadTime,sample_material sampleMaterial,sample_quote_note sampleQuoteNote,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt FROM consumer_production_request WHERE multiview_bundle_id=? AND request_type='sample' ORDER BY id DESC LIMIT 1", bundleId);
+        } catch (DataAccessException legacySchema) {
+            sampleRequests = jdbc.queryForList("SELECT id requestId,status requestStatus,sample_product_name sampleProductName,sample_fee_yuan sampleFeeYuan,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt FROM consumer_production_request WHERE multiview_bundle_id=? AND request_type='sample' ORDER BY id DESC LIMIT 1", bundleId);
+        }
+        if (!sampleRequests.isEmpty()) row.put("sampleRequest", sampleRequests.get(0));
+        if (blank(str(row.get("productNo")))) row.put("productNo", productNoForAsset(numberAsLong(row.get("inputAssetId"))));
         return row;
+    }
+
+    private String productNoForAsset(Long assetId) {
+        if (assetId == null) return null;
+        try {
+            Map<String,Object> row = jdbc.queryForMap("SELECT product_no productNo,parent_asset_id parentAssetId FROM digital_asset WHERE id=?", assetId);
+            String existing = str(row.get("productNo"));
+            if (!blank(existing)) return existing;
+            Long parent = numberAsLong(row.get("parentAssetId"));
+            return "PRD-" + String.format("%010d", parent == null ? assetId : parent);
+        } catch (DataAccessException ignored) {
+            return "PRD-" + String.format("%010d", assetId);
+        }
     }
 
     private void createOrResetCampaignParticipationForBundle(Long userId, CampaignDefinition campaign, Long assetId) {
@@ -3813,6 +3841,13 @@ public class CreativeAiController {
         asset.putAll(optionalProjectVersion("digital_asset", "id", assetId));
         if(bundleId == null && !"model".equals(String.valueOf(asset.get("assetType")))) throw new IllegalStateException("单图流程仅支持审核通过的3D模型提交打样/生产申请");
         if(bundleId == null && !"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
+        String productNo = bundleId == null ? productNoForAsset(assetId) : firstNonBlank(str(bundle.get("productNo")), productNoForAsset(assetId));
+        if (!blank(productNo)) {
+            List<Map<String,Object>> duplicate = jdbc.queryForList(
+                    "SELECT id FROM consumer_production_request WHERE user_id=? AND product_no=? AND request_type=? AND status IN ('review','approved','processing') LIMIT 1",
+                    userId, productNo, requestType);
+            if (!duplicate.isEmpty()) throw new IllegalStateException("该产品已提交过一次有效的" + ("sample".equals(requestType) ? "打样" : "批量生产") + "申请");
+        }
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
         if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
         String requestedSampleProductName = body==null || body.get("sampleProductName")==null ? "" : String.valueOf(body.get("sampleProductName")).trim();
@@ -3909,6 +3944,7 @@ public class CreativeAiController {
             });
         }
         Long id=jdbc.queryForObject("SELECT id FROM consumer_production_request WHERE request_no=?", Long.class, requestNo);
+        try { jdbc.update("UPDATE consumer_production_request SET product_no=? WHERE id=?", productNo, id); } catch (DataAccessException ignored) { }
         // Reuse the validated asset/bundle reference. A client commonly opens
         // the production page with only an asset or bundle id; resolving the
         // project a second time from optional body fields used to drop the
@@ -4035,6 +4071,34 @@ public class CreativeAiController {
                 productionRequestSelect(true, true) + where + " ORDER BY r.id DESC LIMIT ?",
                 productionRequestSelect(false, true) + where + " ORDER BY r.id DESC LIMIT ?",
                 args);
+    }
+
+    @GetMapping("/admin/orders")
+    public List<Map<String,Object>> adminOrders(@RequestParam(defaultValue="300") int size) {
+        requireCreativeAdmin();
+        return queryProductionRequestRows(
+                productionRequestSelect(true, true) + " ORDER BY r.id DESC LIMIT ?",
+                productionRequestSelect(false, true) + " ORDER BY r.id DESC LIMIT ?",
+                List.of(Math.max(1, Math.min(size, 1000))));
+    }
+
+    /** Staff quote entry point shared by multi-view and 3D model requests. */
+    @PutMapping("/consumer-production/admin/{id}/quote")
+    @Transactional
+    public Map<String,Object> quoteConsumerProduction(@PathVariable Long id, @RequestBody Map<String,String> body) {
+        requireCreativeAdmin();
+        String feeText = body == null ? "" : nullToEmpty(body.get("sampleFeeYuan")).trim();
+        BigDecimal fee;
+        try { fee = new BigDecimal(feeText); } catch (Exception e) { throw new IllegalArgumentException("请填写有效的打样价格"); }
+        if (fee.signum() <= 0) throw new IllegalArgumentException("打样价格必须大于0");
+        String lead = body == null ? "" : nullToEmpty(body.get("sampleLeadTime")).trim();
+        String material = body == null ? "" : nullToEmpty(body.get("sampleMaterial")).trim();
+        String note = body == null ? "" : nullToEmpty(body.get("sampleQuoteNote")).trim();
+        int updated = jdbc.update("UPDATE consumer_production_request SET sample_fee_yuan=?,sample_lead_time=?,sample_material=?,sample_quote_note=?,status='approved',sample_payment_status='unpaid',review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND request_type='sample' AND status IN ('review','approved')",
+                fee, blank(lead) ? null : lead, blank(material) ? null : material, blank(note) ? null : note,
+                "后台报价：" + note, authenticatedPrincipal().username(), id);
+        if (updated != 1) throw new IllegalStateException("打样申请不存在或当前状态不能报价");
+        return Map.of("success", true, "id", id, "status", "approved", "samplePaymentStatus", "unpaid", "message", "报价单已保存，等待用户支付打样费");
     }
 
     @PutMapping("/consumer-production/admin/{id}/review")
@@ -5308,6 +5372,15 @@ public class CreativeAiController {
             return ps;
         }, kh);
         Long assetId=Objects.requireNonNull(kh.getKey()).longValue();
+        // Keep derived assets (notably 3D models) attached to the same
+        // product number as their source image.
+        try {
+            Long rootId = parentAssetId == null ? assetId : parentAssetId;
+            String productNo = "PRD-" + String.format("%010d", rootId);
+            jdbc.update("UPDATE digital_asset SET product_no=? WHERE id=?", productNo, assetId);
+        } catch (DataAccessException ignored) {
+            // The additive migration may still be running during a rolling deploy.
+        }
         Object owner=meta==null?null:meta.get("createdByUserId");
         if(owner instanceof Number) assignAssetOwner(assetId,((Number)owner).longValue());
         Long projectId = meta == null ? null : numberAsLong(meta.get("projectId"));
@@ -5448,19 +5521,19 @@ public class CreativeAiController {
                 ? "r.project_id projectId,r.version_id versionId,"
                 : "NULL projectId,NULL versionId,";
         String bundleColumns = includeBundle
-                ? "r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo,b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,"
+                ? "r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo,b.product_no multiviewProductNo,b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,"
                 : "NULL multiviewBundleId,NULL multiviewBundleNo,NULL multiviewViewCount,NULL multiviewBundleStatus,NULL multiviewProductName,NULL multiviewProductSize,NULL multiviewBundleComment,";
         String lifecycleColumns = currentSchema
                 ? "r.sample_workflow_status sampleWorkflowStatus,r.sample_received_at sampleReceivedAt,r.sample_accepted_at sampleAcceptedAt,r.sample_revision_count sampleRevisionCount,r.bulk_unlocked_at bulkUnlockedAt,r.bulk_unlocked_by bulkUnlockedBy,"
                 : "NULL sampleWorkflowStatus,NULL sampleReceivedAt,NULL sampleAcceptedAt,NULL sampleRevisionCount,NULL bulkUnlockedAt,NULL bulkUnlockedBy,";
         String bundleJoin = includeBundle ? " LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id" : "";
-        return "SELECT r.id,r.request_no requestNo,r.user_id userId,u.username,r.asset_id assetId,"
+        return "SELECT r.id,r.request_no requestNo,r.product_no productNo,r.user_id userId,u.username,r.asset_id assetId,"
                 + projectColumns + bundleColumns
                 + "a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,"
                 + "r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,"
                 + "r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,"
                 + "r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,"
-                + "r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_payment_status samplePaymentStatus,"
+                + "r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_lead_time sampleLeadTime,r.sample_material sampleMaterial,r.sample_quote_note sampleQuoteNote,r.sample_payment_status samplePaymentStatus,"
                 + "r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,"
                 + lifecycleColumns + "r.created_at createdAt,r.updated_at updatedAt "
                 + "FROM consumer_production_request r JOIN user u ON u.id=r.user_id "
@@ -5479,6 +5552,7 @@ public class CreativeAiController {
             row.putIfAbsent("versionId", null);
             row.putIfAbsent("multiviewBundleId", null);
             row.putIfAbsent("multiviewBundleNo", null);
+            row.putIfAbsent("multiviewProductNo", row.get("productNo"));
             row.putIfAbsent("multiviewViewCount", null);
             row.putIfAbsent("multiviewBundleStatus", null);
             row.putIfAbsent("multiviewProductName", null);
@@ -5497,12 +5571,17 @@ public class CreativeAiController {
             row.putIfAbsent("sampleRevisionCount", 0);
             row.putIfAbsent("bulkUnlockedAt", null);
             row.putIfAbsent("bulkUnlockedBy", null);
+            row.putIfAbsent("sampleLeadTime", null);
+            row.putIfAbsent("sampleMaterial", null);
+            row.putIfAbsent("sampleQuoteNote", null);
         }
         return rows;
     }
 
     private List<Map<String,Object>> enrichProductionRows(List<Map<String,Object>> rows) {
         for(Map<String,Object> r:rows) {
+            r.put("orderType", "sample".equals(str(r.get("requestType")))
+                    ? (r.get("multiviewBundleId") == null ? "model" : "multiview") : "production");
             Object json=r.get("museumDistributionJson");
             try {
                 if(json==null||blank(String.valueOf(json))) r.put("museumDistribution",List.of());

@@ -562,33 +562,66 @@ public class ConversationalCreativeController {
 
     private String extractExplicitMaterial(String input) {
         if (blank(input)) return null;
-        String normalized = input.trim().replaceAll("\\s+", "");
+        String normalized = input.trim().replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
         String[] materialTokens = {
-                "水晶超柔", "超柔", "毛线", "毛绒", "毛毡", "布艺", "棉布", "帆布",
-                "亚克力", "合金", "锌合金", "陶瓷", "硅胶", "木质", "木材", "纸质",
-                "不锈钢", "玻璃", "树脂", "PVC", "皮革", "牛皮纸", "磁性材料"
+                // Match specific materials before their broader aliases. For
+                // example, “锌合金” must not be reduced to “合金”.
+                "水晶超柔", "锌合金", "不锈钢", "亚克力", "牛皮纸", "磁性材料",
+                "超柔", "毛线", "毛绒", "毛毡", "布艺", "棉布", "帆布",
+                "合金", "陶瓷", "硅胶", "木质", "木材", "纸质",
+                "玻璃", "树脂", "PVC", "皮革"
         };
         for (String token : materialTokens) {
-            if (normalized.contains(token)) return token;
+            if (normalized.contains(token.toLowerCase(Locale.ROOT))) return token;
         }
         return null;
     }
 
     private Map<String, Object> matchProduct(String input, List<Map<String, Object>> catalog, long userId) {
-        String normalized = input.toLowerCase(Locale.ROOT);
+        String normalized = input == null ? "" : input.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        String requestedFamily = productFamilyToken(normalized);
+        String requestedMaterial = extractExplicitMaterial(normalized);
+        List<Map<String, Object>> candidates = catalog;
+        if (!blank(requestedFamily)) {
+            // The first catalog query is intentionally small for chat latency.
+            // A named product family is a hard constraint, so reload the
+            // published catalog when that family is absent from the window.
+            boolean familyPresent = catalog != null && catalog.stream()
+                    .anyMatch(row -> requestedFamily.equals(productFamilyToken(value(row, "name"))));
+            if (!familyPresent) candidates = catalogOptions(null, null, 500);
+        }
         Map<String, Object> best = null;
         int bestScore = 0;
-        for (Map<String, Object> row : catalog) {
+        for (Map<String, Object> row : candidates) {
             int score = 0;
             String name = value(row, "name");
             String key = value(row, "optionKey");
             String tags = value(row, "tags");
-            if (!blank(name) && normalized.contains(name.toLowerCase(Locale.ROOT))) score += 100;
-            if (!blank(key) && normalized.contains(key.toLowerCase(Locale.ROOT))) score += 90;
             String family = productFamilyToken(name);
+            // An explicit family in the user's sentence is authoritative. A
+            // badge request must never fall through to a keychain just because
+            // the model or catalog order happened to rank it first.
+            if (!blank(requestedFamily)) {
+                if (!requestedFamily.equals(family)) continue;
+                score += 220;
+            }
+            if (!blank(name) && normalized.contains(name.toLowerCase(Locale.ROOT).replaceAll("\\s+", ""))) score += 100;
+            if (!blank(key) && normalized.contains(key.toLowerCase(Locale.ROOT).replaceAll("\\s+", ""))) score += 90;
             if (!blank(family) && normalized.contains(family.toLowerCase(Locale.ROOT))) score += 70;
+
+            String material = value(row, "material").toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+            String process = value(row, "process").toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+            if (!blank(requestedMaterial)) {
+                String requested = requestedMaterial.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+                if (material.equals(requested)) score += 150;
+                else if (material.contains(requested) || requested.contains(material)) score += 90;
+            }
+            if (normalized.contains("金属") && (material.contains("金属") || material.contains("合金"))) score += 35;
+            if (normalized.contains("烤漆") && process.contains("烤漆")) score += 45;
+            if (normalized.contains("压铸") && process.contains("压铸")) score += 25;
             for (String token : tags.split("[,，/、]")) {
-                if (token.trim().length() >= 2 && normalized.contains(token.trim().toLowerCase(Locale.ROOT))) score += 8;
+                String tag = token.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+                if (tag.length() >= 2 && normalized.contains(tag)) score += 8;
             }
             if (score > bestScore) { best = row; bestScore = score; }
         }
@@ -604,13 +637,14 @@ public class ConversationalCreativeController {
      */
     private String productFamilyToken(String name) {
         if (blank(name)) return "";
+        String normalized = name.toLowerCase(Locale.ROOT);
         String[] families = {
                 "冰箱贴", "钥匙扣", "徽章", "胸针", "书签", "明信片", "贴纸",
                 "笔记本", "本册", "抱枕", "毛巾", "公仔", "潮玩", "毛绒",
                 "杯垫", "马克杯", "保温杯", "随行杯", "帆布包", "手提袋",
                 "T恤", "吊坠", "耳钉", "耳坠", "项链", "手链", "手镯", "摆件"
         };
-        for (String family : families) if (name.contains(family)) return family;
+        for (String family : families) if (normalized.contains(family.toLowerCase(Locale.ROOT))) return family;
         return "";
     }
 
@@ -901,7 +935,11 @@ public class ConversationalCreativeController {
         String productName = text(fields.get("productName"));
         Map<String, Object> product = findCatalogOption(productKey, userId);
         if (product == null && productName != null) product = findCatalogOptionByName(productName, userId);
-        if (product != null) applyProduct(brief, product);
+        // Once a product has been explicitly captured, a follow-up creative
+        // description must not let the planner silently replace it. Product
+        // changes are handled by an explicit product action or by the local
+        // natural-language matcher, which has family/material safeguards.
+        if (product != null && blank(text(brief.get("productKey")))) applyProduct(brief, product);
         String categoryKey = text(fields.get("categoryKey"));
         if (blank(text(brief.get("productKey"))) && isKnownCategory(categoryKey)) brief.put("categoryKey", categoryKey);
         String canonical = canonicalMaterial(text(brief.get("materialOptions")), text(fields.get("material")));
@@ -1127,7 +1165,9 @@ public class ConversationalCreativeController {
         List<Object> args = new ArrayList<>();
         if (!blank(categoryKey)) { sql.append(" AND o.category_key=?"); args.add(categoryKey); }
         if (!blank(keyword) && keyword.length() > 2) { sql.append(" AND (o.name LIKE ? OR o.subtitle LIKE ? OR o.tags LIKE ? OR o.description LIKE ?)"); String k = "%" + keyword + "%"; args.add(k); args.add(k); args.add(k); args.add(k); }
-        sql.append(" ORDER BY o.sort_order,o.id LIMIT ?"); args.add(Math.max(1, Math.min(size, 180)));
+        // Keep the normal chat payload small, but allow an explicit family
+        // lookup to inspect the full published catalog when needed.
+        sql.append(" ORDER BY o.sort_order,o.id LIMIT ?"); args.add(Math.max(1, Math.min(size, 500)));
         List<Map<String, Object>> rows = jdbc.queryForList(sql.toString(), args.toArray());
         // A natural-language sentence rarely matches a complete SQL LIKE
         // phrase. Fall back to the category catalog so the chat model can

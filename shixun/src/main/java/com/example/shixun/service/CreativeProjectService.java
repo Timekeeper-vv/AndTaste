@@ -51,7 +51,15 @@ public class CreativeProjectService {
             Map.entry("production", "in_production"),
             Map.entry("sample_approved", "sample_accepted"));
     private static final Map<String, Set<String>> PHASE_TRANSITIONS = Map.ofEntries(
-            Map.entry("brief", Set.of("brief", "generation")),
+            // A generated image bundle or 3D model can be submitted for review
+            // while its version is still recorded as "brief" (the generation
+            // phase write may have advanced a different version, or the model
+            // asset was bound after the fact). Every other generative phase
+            // already allows human_review, so let a brief enter it directly
+            // instead of failing the user's submit-for-review action. An
+            // already-approved 3D asset may also enter sampling directly from
+            // brief when the production request is submitted.
+            Map.entry("brief", Set.of("brief", "generation", "human_review", "sampling")),
             Map.entry("generation", Set.of("generation", "multiview", "preflight", "ai_review", "human_review", "sampling", "brief", "failed", "cancelled")),
             Map.entry("multiview", Set.of("multiview", "preflight", "ai_review", "human_review", "generation", "failed", "cancelled")),
             // A production preflight can be run before the admin review is

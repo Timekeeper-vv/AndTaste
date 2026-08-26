@@ -36,6 +36,7 @@ import ConsumerCreditManagement from './components/ConsumerCreditManagement.vue'
 import PaymentOperations from './components/PaymentOperations.vue'
 import HistoricalSalesManagement from './components/HistoricalSalesManagement.vue'
 import ConsumerProductionReview from './components/ConsumerProductionReview.vue'
+import OrderManagement from './components/OrderManagement.vue'
 import CommercialProductization from './components/CommercialProductization.vue'
 import { isEmbeddedMiniapp, notifyMiniapp } from './utils/miniappBridge'
 
@@ -64,6 +65,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   paymentOperations:SUPER_ADMIN_ROLES,
   historicalSales:SUPER_ADMIN_ROLES,
   consumerProductionReview:SUPER_ADMIN_ROLES,
+  orderManagement:SUPER_ADMIN_ROLES,
   commercialProductization:MANAGER_ROLES,
   professionalGuidance:MANAGER_ROLES,
   aiAssistant:  ALL_ROLES,
@@ -296,7 +298,8 @@ const pageLabels: Record<string, string> = {
   consumerCreditManagement:'C端额度管理',
   paymentOperations:'支付运营',
   historicalSales:'历史销售数据',
-  consumerProductionReview:'C端用户作品生产审核',
+  consumerProductionReview:'3D建模审核',
+  orderManagement:'订单管理',
   commercialProductization:'商品化与代销审核',
   professionalGuidance:'专业指导',
   aiAssistant:  '之间味道AI助手',
@@ -452,7 +455,8 @@ const pageLabels: Record<string, string> = {
         <ConsumerCreditManagement v-if="currentPage === 'consumerCreditManagement'" :current-user="currentUser" @alert="showAlert" />
         <PaymentOperations v-if="currentPage === 'paymentOperations'" :current-user="currentUser" @alert="showAlert" />
         <HistoricalSalesManagement v-if="currentPage === 'historicalSales'" :current-user="currentUser" @alert="showAlert" />
-        <ConsumerProductionReview v-if="currentPage === 'consumerProductionReview'" :current-user="currentUser" @alert="showAlert" />
+        <ConsumerWorksReview v-if="currentPage === 'consumerProductionReview'" :current-user="currentUser" mode="standard" @alert="showAlert" />
+        <OrderManagement v-if="currentPage === 'orderManagement'" />
         <CommercialProductization v-if="currentPage === 'commercialProductization'" :current-user="currentUser" @alert="showAlert" />
         <CommercialProductization v-if="currentPage === 'professionalGuidance'" :current-user="currentUser" initial-tab="guidance" guidance-only @alert="showAlert" />
         <AiAssistantPage v-if="currentPage === 'aiAssistant'" :current-user="currentUser" />

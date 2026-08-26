@@ -16,6 +16,7 @@ export type PageName =
   | 'paymentOperations'
   | 'historicalSales'
   | 'consumerProductionReview'
+  | 'orderManagement'
   | 'commercialProductization'
   | 'professionalGuidance'
   | 'aiAssistant'

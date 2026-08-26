@@ -255,7 +255,15 @@ async function submit() {
     // then safely retry with the same key instead of creating a duplicate.
     uni.removeStorageSync(idempotency.storageKey)
   } catch (error: any) {
-    uni.showToast({ title: error.message || '提交申请失败', icon: 'none' })
+    // Keep the validation/server reason visible long enough for the user to
+    // act on it. A short toast made failed submissions look like a dead
+    // button, especially when production preflight rejected the request.
+    uni.showModal({
+      title: '申请未提交',
+      content: error?.message || '提交申请失败，请稍后重试',
+      showCancel: false,
+      confirmText: '知道了',
+    })
   } finally {
     submitting.value = false
   }
