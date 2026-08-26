@@ -176,8 +176,11 @@ class ArkImageQueueIntegrationTest {
         long multiViewAsset = createReferenceAsset(multiViewUser, "multiview-reference.png");
 
         JsonNode edit = postQueuedImageEdit(editor.token(), editorAsset);
+        JsonNode duplicateEdit = postQueuedImageEdit(editor.token(), editorAsset);
         JsonNode multiView = postQueuedMultiView(multiViewUser.token(), multiViewAsset);
         assertThat(edit.path("jobType").asText()).isEqualTo("image_to_image");
+        assertThat(duplicateEdit.path("jobId").asLong()).isEqualTo(edit.path("jobId").asLong());
+        assertThat(duplicateEdit.path("reused").asBoolean()).isTrue();
         assertThat(multiView.path("jobType").asText()).isEqualTo("multi_view");
         assertThat(edit.path("provider").asText()).isEqualTo("volcengine_ark");
         assertThat(multiView.path("provider").asText()).isEqualTo("volcengine_ark");
@@ -201,6 +204,12 @@ class ArkImageQueueIntegrationTest {
         assertThat(completedEdit.path("creativeBrief").path("productKey").asText()).isEqualTo("magnet");
         assertThat(jdbc.queryForObject("SELECT title FROM digital_asset WHERE id=?", String.class,
                 completedEdit.path("assetId").asLong())).isEqualTo("之间智造效果图");
+        var editorAccount = jdbc.queryForMap("SELECT balance,frozen_balance frozenBalance,total_consumed totalConsumed " +
+                "FROM consumer_credit_account WHERE user_id=?", editor.id());
+        assertThat(editorAccount.get("balance").toString()).isEqualTo("80.00");
+        assertThat(editorAccount.get("frozenBalance").toString()).isEqualTo("0.00");
+        assertThat(editorAccount.get("totalConsumed").toString()).isEqualTo("20.00");
+        assertThat(count("SELECT COUNT(*) FROM consumer_credit_transaction WHERE biz_type='image2d' AND user_id=" + editor.id())).isEqualTo(1);
         assertThat(completedViews.path("status").asText()).isEqualTo("succeeded");
         assertThat(completedViews.path("images")).hasSize(3);
         assertThat(completedViews.path("simulationAssetId").asLong()).isPositive();
@@ -309,9 +318,9 @@ class ArkImageQueueIntegrationTest {
     private void assertCreditSettled(long userId) {
         var account = jdbc.queryForMap("SELECT balance,frozen_balance frozenBalance,total_consumed totalConsumed " +
                 "FROM consumer_credit_account WHERE user_id=?", userId);
-        assertThat(account.get("balance").toString()).isEqualTo("84.00");
+        assertThat(account.get("balance").toString()).isEqualTo("80.00");
         assertThat(account.get("frozenBalance").toString()).isEqualTo("0.00");
-        assertThat(account.get("totalConsumed").toString()).isEqualTo("16.00");
+        assertThat(account.get("totalConsumed").toString()).isEqualTo("20.00");
         assertThat(jdbc.queryForObject("SELECT status FROM consumer_credit_transaction WHERE user_id=? AND biz_type='image2d'", String.class, userId))
                 .isEqualTo("completed");
     }

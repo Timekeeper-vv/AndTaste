@@ -13,11 +13,12 @@ import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.Callable;
-import java.util.function.Consumer;
 
 /**
  * Durable queue boundary for Ark/Seedream image jobs.
@@ -191,6 +192,20 @@ public class ArkImageQueueService {
                                    Long inputAssetId, String prompt, String negative, String size,
                                    String productKey, String productName, String material,
                                    Long ownerUserId, Object requestPayload) throws Exception {
+        return enqueue(jobNo, model, jobType, styleId, inputAssetId, prompt, negative, size,
+                productKey, productName, material, ownerUserId, requestPayload, null, null);
+    }
+
+    /**
+     * Queue a job with an optional credit reservation that runs only after the
+     * duplicate check. This keeps repeated taps idempotent and prevents a
+     * failed database insert from leaving a frozen credit balance.
+     */
+    public QueueSubmission enqueue(String jobNo, String model, String jobType, Long styleId,
+                                   Long inputAssetId, String prompt, String negative, String size,
+                                   String productKey, String productName, String material,
+                                   Long ownerUserId, Object requestPayload,
+                                   Supplier<Long> reserveCredit, Consumer<Long> refundCredit) throws Exception {
         synchronized (submissionLock) {
             java.util.List<Map<String, Object>> active = jdbc.queryForList(
                     "SELECT id,job_type jobType,input_asset_id inputAssetId,prompt FROM ai_generation_job " +
@@ -208,10 +223,18 @@ public class ArkImageQueueService {
                 }
                 return new QueueSubmission(numberAsLong(existing.get("id")), true);
             }
-            long jobId = createQueuedJob(jobNo, model, jobType, styleId, inputAssetId,
-                    prompt, negative, size, productKey, productName, material,
-                    ownerUserId, null, requestPayload);
-            return new QueueSubmission(jobId, false);
+            Long creditTxId = reserveCredit == null ? null : reserveCredit.get();
+            try {
+                long jobId = createQueuedJob(jobNo, model, jobType, styleId, inputAssetId,
+                        prompt, negative, size, productKey, productName, material,
+                        ownerUserId, creditTxId, requestPayload);
+                return new QueueSubmission(jobId, false);
+            } catch (Exception error) {
+                if (creditTxId != null && refundCredit != null) {
+                    try { refundCredit.accept(creditTxId); } catch (Exception ignored) { }
+                }
+                throw error;
+            }
         }
     }
 

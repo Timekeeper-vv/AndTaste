@@ -1799,7 +1799,13 @@ public class CreativeAiController {
                 no("I2A"), volcengineArkSeedreamImageModel, "image_to_image", req.styleId,
                 req.inputAssetId, command.compiledPrompt(),
                 mergeNegative(req.negativePrompt, command.negativePrompt()), size,
-                command.productKey(), command.category(), command.material(), ownerUserId, req);
+                command.productKey(), command.category(), command.material(), ownerUserId, req,
+                () -> {
+                    Long consumerUserId = currentConsumerUserIdOrNull();
+                    return consumerUserId == null ? null : reserveConsumerCredit(
+                            consumerUserId, "image2d", consumerCreditCost("image2d"), "C端火山方舟图生图预扣");
+                },
+                txId -> refundConsumerCredit(txId, "图片任务创建失败"));
         creativeProjects.bindJob(submission.jobId(), req.projectId, req.versionId, req.inputAssetId);
         Map<String, Object> response = imageGenerationJobResponse(submission.jobId());
         if (submission.reused()) response.put("reused", true);
@@ -5549,7 +5555,10 @@ public class CreativeAiController {
 
     private BigDecimal consumerCreditCost(String bizType) {
         return switch (nullToEmpty(bizType)) {
-            case "image2d" -> BigDecimal.valueOf(16);
+            // Every successful 2D product image generation has the same
+            // consumer price, regardless of whether it is text-to-image or
+            // image-to-image (including conversational creation).
+            case "image2d" -> BigDecimal.valueOf(20);
             case "image_to_3d" -> BigDecimal.valueOf(70);
             case "text_to_3d" -> BigDecimal.valueOf(60);
             case "model_convert" -> BigDecimal.valueOf(1);

@@ -212,9 +212,9 @@ const multiViewSlots: MultiViewSlot[] = [
 const multiViewSizes: Array<'1K' | '2K'> = ['1K', '2K']
 
 const modeOptions: Array<{ key: CreateMode; mark: string; short: string; title: string; description: string; notice: string; cost: number }> = [
-  { key: 'text', mark: '字', short: '文字生图', title: '让灵感，先成为一张产品图。', description: '把文化、材质、纹样和使用场景交给 AI，生成后会自动进入作品库。', notice: '文字生成图片会把你的纹样、材质和表面效果方向一并交给 AI。', cost: 16 },
-  { key: 'image', mark: '图', short: '上传图生图', title: '让参考图，成为一件真实产品。', description: '上传草图、照片或灵感图，保留主体识别点并重构为目标文创产品。', notice: '上传图片会作为 Seedream 的参考图，材质、尺寸和补充描述会一并写入改造提示词。', cost: 16 },
-  { key: 'reference', mark: '鉴', short: '参考图改造', title: '保留原有特征，重构文化语言。', description: '上传草图、普通产品图或灵感图，用文创设计重新组织它的材质与场景。', notice: '请使用你拥有版权或已获得授权的参考图片；生成结果会保留在你的作品库。', cost: 16 },
+  { key: 'text', mark: '字', short: '文字生图', title: '让灵感，先成为一张产品图。', description: '把文化、材质、纹样和使用场景交给 AI，生成后会自动进入作品库。', notice: '文字生成图片会把你的纹样、材质和表面效果方向一并交给 AI。', cost: 20 },
+  { key: 'image', mark: '图', short: '上传图生图', title: '让参考图，成为一件真实产品。', description: '上传草图、照片或灵感图，保留主体识别点并重构为目标文创产品。', notice: '上传图片会作为 Seedream 的参考图，材质、尺寸和补充描述会一并写入改造提示词。', cost: 20 },
+  { key: 'reference', mark: '鉴', short: '参考图改造', title: '保留原有特征，重构文化语言。', description: '上传草图、普通产品图或灵感图，用文创设计重新组织它的材质与场景。', notice: '请使用你拥有版权或已获得授权的参考图片；生成结果会保留在你的作品库。', cost: 20 },
   { key: 'text3d', mark: '形', short: '文字 3D', title: '把一段描述，推向立体原型。', description: '清楚描述主体、材质和结构，生成后可在作品库发起 3D 安全预览。', notice: '3D 生成完成后，请先提交审核；审核通过的模型才能申请打样或生产。', cost: 60 },
   { key: 'image3d', mark: '立', short: '图片 3D', title: '从参考图，生成可预览的原型。', description: '上传主体清晰的图像，系统会生成可进入作品库继续推进的三维模型。', notice: '请尽量使用主体完整、背景干净的图片，以便获得更准确的 3D 结构；材质偏好会随本次作品工艺方向一并记录。', cost: 70 },
   { key: 'multiview', mark: '观', short: '生产模拟图', title: '从一张图，生成一张生产模拟图。', description: '一次调用 Seedream，输出包含正面、侧面、背面的横向生产模拟图，再一键交给 Tripo 创建 3D 原型。', notice: '生产模拟图会以原图为唯一依据生成并保存；平台积分只会在下一步提交 Tripo 3D 任务时按当前规则预扣。材质偏好会同步为本次工艺方向记录。', cost: 0 },

@@ -8,7 +8,7 @@
       <button class="refresh" size="mini" :loading="loading" @tap="loadData(true)">刷新</button>
     </view>
 
-    <view class="card"><text class="balance">当前积分 <text>{{ balance }}</text></text><text class="rules">文生图 16 积分 · 文生3D 60 积分 · 图生3D 70 积分</text></view>
+    <view class="card"><text class="balance">当前积分 <text>{{ balance }}</text></text><text class="rules">图片生成 20 积分 · 文生3D 60 积分 · 图生3D 70 积分</text></view>
 
     <view class="section">
       <text class="label">选择充值套餐</text>
