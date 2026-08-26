@@ -129,6 +129,15 @@ async function update(row: any, nextStatus: string) {
       body = { status: nextStatus, quotedUnitPrice: quoteUnit.value || null, quotedTotalPrice: quoteTotal.value || null, quotedLeadTime: quoteLead.value, operatorComment: comment.value }
     } else if (tab.value === 'sampleRequests') {
       const draft = sampleDraft(row)
+      const fee = Number(draft.fee)
+      if (!draft.material.trim() || !draft.lead.trim() || !draft.fee.trim()) {
+        emit('alert', '请填写打样价格、材质和打样时间', 'error')
+        return
+      }
+      if (!Number.isFinite(fee) || fee <= 0) {
+        emit('alert', '打样价格必须是大于0的数字', 'error')
+        return
+      }
       body = { sampleFeeYuan: draft.fee, sampleLeadTime: draft.lead, sampleMaterial: draft.material, sampleQuoteNote: draft.note }
     } else if (tab.value === 'consignments') {
       body = { status: nextStatus, operatorComment: comment.value }
