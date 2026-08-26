@@ -33,6 +33,11 @@ public class ApiExceptionHandler {
         return response(HttpStatus.CONFLICT, "请求与现有数据冲突，请刷新后重试");
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> badRequest(IllegalArgumentException error) {
+        return response(HttpStatus.BAD_REQUEST, message(error.getMessage(), "请求参数不正确"));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> unexpected(Exception error) {
         String requestId = requestId();

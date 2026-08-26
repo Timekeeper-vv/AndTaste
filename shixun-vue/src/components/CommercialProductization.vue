@@ -15,6 +15,7 @@ const comment = ref('')
 const quoteUnit = ref('')
 const quoteTotal = ref('')
 const quoteLead = ref('')
+const sampleDrafts = ref<Record<number, { fee: string; lead: string; material: string; note: string }>>({})
 const guidanceDrafts = ref<Record<number, { fee: string; lead: string; result: string; comment: string }>>({})
 const busyId = ref<number | null>(null)
 
@@ -75,15 +76,29 @@ function resetForm() {
   quoteUnit.value = ''
   quoteTotal.value = ''
   quoteLead.value = ''
+  sampleDrafts.value = {}
   guidanceDrafts.value = {}
 }
 function formatTime(value?: string) { return value ? String(value).replace('T', ' ').slice(0, 19) : '-' }
+function sampleDraft(row: any) {
+  const id = Number(row.id)
+  if (!sampleDrafts.value[id]) {
+    sampleDrafts.value[id] = {
+      fee: row.sampleFeeYuan == null ? '' : String(row.sampleFeeYuan),
+      lead: row.sampleLeadTime || '',
+      material: row.sampleMaterial || '',
+      note: row.sampleQuoteNote || row.reviewComment || '',
+    }
+  }
+  return sampleDrafts.value[id]
+}
 function openQuote(row: any) {
   if (tab.value === 'sampleRequests') {
-    quoteUnit.value = row.sampleMaterial || ''
-    quoteTotal.value = row.sampleFeeYuan == null ? '' : String(row.sampleFeeYuan)
-    quoteLead.value = row.sampleLeadTime || ''
-    comment.value = row.sampleQuoteNote || row.reviewComment || ''
+    const draft = sampleDraft(row)
+    quoteUnit.value = draft.material
+    quoteTotal.value = draft.fee
+    quoteLead.value = draft.lead
+    comment.value = draft.note
   } else {
     quoteUnit.value = row.quotedUnitPrice || ''
     quoteTotal.value = row.quotedTotalPrice || ''
@@ -113,7 +128,8 @@ async function update(row: any, nextStatus: string) {
     if (tab.value === 'quotes') {
       body = { status: nextStatus, quotedUnitPrice: quoteUnit.value || null, quotedTotalPrice: quoteTotal.value || null, quotedLeadTime: quoteLead.value, operatorComment: comment.value }
     } else if (tab.value === 'sampleRequests') {
-      body = { sampleFeeYuan: quoteTotal.value, sampleLeadTime: quoteLead.value, sampleMaterial: quoteUnit.value, sampleQuoteNote: comment.value }
+      const draft = sampleDraft(row)
+      body = { sampleFeeYuan: draft.fee, sampleLeadTime: draft.lead, sampleMaterial: draft.material, sampleQuoteNote: draft.note }
     } else if (tab.value === 'consignments') {
       body = { status: nextStatus, operatorComment: comment.value }
     } else {
@@ -171,7 +187,8 @@ onMounted(load)
         <p v-else-if="tab === 'guidance' && row.requestNote">用户诉求：{{ row.requestNote }}</p>
         <p v-else-if="row.note">用户说明：{{ row.note }}</p>
         <p v-if="row.copyrightBasis" class="rights">权利依据：{{ row.copyrightBasis }} · 已确认声明：{{ row.copyrightConfirmed ? '是' : '否' }}<span v-if="row.authorizationNote"> · {{ row.authorizationNote }}</span></p>
-        <div v-if="tab === 'quotes' || tab === 'sampleRequests'" class="quote-form"><label>{{ tab === 'sampleRequests' ? '材质' : '单价' }} <input v-model="quoteUnit" inputmode="decimal" placeholder="待确认" @focus="openQuote(row)" /></label><label>{{ tab === 'sampleRequests' ? '打样价格' : '总价' }} <input v-model="quoteTotal" inputmode="decimal" placeholder="待确认" /></label><label>打样时间 <input v-model="quoteLead" placeholder="例如：10-15 个工作日" /></label></div>
+        <div v-if="tab === 'quotes'" class="quote-form"><label>单价 <input v-model="quoteUnit" inputmode="decimal" placeholder="待确认" @focus="openQuote(row)" /></label><label>总价 <input v-model="quoteTotal" inputmode="decimal" placeholder="待确认" /></label><label>打样时间 <input v-model="quoteLead" placeholder="例如：10-15 个工作日" /></label></div>
+        <div v-else-if="tab === 'sampleRequests'" class="quote-form"><label>材质 <input v-model="sampleDraft(row).material" placeholder="例如：锌合金、亚克力、树脂" /></label><label>打样价格 <input v-model="sampleDraft(row).fee" inputmode="decimal" placeholder="例如：199" /></label><label>打样时间 <input v-model="sampleDraft(row).lead" placeholder="例如：10-15 个工作日" /></label></div>
         <div v-if="tab === 'guidance'" class="guidance-form">
           <label>指导费 <input v-model="guidanceDraft(row).fee" inputmode="decimal" placeholder="例如：199" /></label>
           <label>预计完成 <input v-model="guidanceDraft(row).lead" placeholder="例如：1-2 个工作日" /></label>
@@ -179,7 +196,7 @@ onMounted(load)
           <p class="payment-state">支付状态：{{ statusLabel[row.paymentStatus] || row.paymentStatus || '未报价' }}</p>
         </div>
         <label v-if="tab === 'guidance'" class="comment"><span>运营说明</span><input v-model="guidanceDraft(row).comment" placeholder="报价范围、服务边界或交付说明" /></label>
-        <label v-else-if="tab === 'sampleRequests'" class="comment"><span>报价备注</span><input v-model="comment" placeholder="材质工艺、费用包含范围、生产说明" @focus="openQuote(row)" /></label>
+        <label v-else-if="tab === 'sampleRequests'" class="comment"><span>报价备注</span><input v-model="sampleDraft(row).note" placeholder="材质工艺、费用包含范围、生产说明" /></label>
         <label v-else class="comment"><span>运营备注</span><input v-model="comment" placeholder="通过说明、补材料要求或驳回原因" @focus="tab === 'quotes' ? openQuote(row) : null" /></label>
         <footer v-if="tab === 'quotes'"><button class="processing" :disabled="busyId === row.id" @click="update(row, 'processing')">接单处理中</button><button class="quoted" :disabled="busyId === row.id" @click="update(row, 'quoted')">保存报价</button><button class="approve" :disabled="busyId === row.id" @click="update(row, 'accepted')">确认可执行</button><button class="reject" :disabled="busyId === row.id" @click="update(row, 'rejected')">驳回</button></footer>
         <footer v-else-if="tab === 'sampleRequests'"><button class="quoted" :disabled="busyId === row.id || row.samplePaymentStatus === 'paid'" @click="update(row, 'approved')">保存报价并通知支付</button></footer>
