@@ -315,6 +315,12 @@ export interface ProfessionalSubmission {
   note?: string
   status?: 'review' | 'approved' | 'rejected' | string
   reviewComment?: string
+  quotedSampleFeeYuan?: number | string | null
+  quotedSampleLeadTime?: string
+  quotedSampleNote?: string
+  samplePaymentStatus?: 'not_required' | 'unpaid' | 'pending' | 'manual_review' | 'paid' | string
+  samplePaymentOrderNo?: string
+  samplePaidAt?: string
   createdAt?: string
 }
 
@@ -322,6 +328,9 @@ export const uploadProfessionalSubmission = (filePath: string, formData: Record<
   '/api/creative/ai/consumer-professional-submissions', filePath, 'file', formData,
 )
 export const getMyProfessionalSubmissions = () => request<ProfessionalSubmission[]>('/api/creative/ai/consumer-professional-submissions/my')
+export const createProfessionalSubmissionSamplePaymentOrder = (submissionId: number | string, channel: PaymentChannel = 'wechat_jsapi') => request<PaymentOrder>('/api/payments/professional-submission-sample-orders', {
+  method: 'POST', data: { submissionId: String(submissionId), channel }, header: { 'content-type': 'application/json' },
+})
 
 export type Tripo3dPromptTemplate = 'universal' | 'collectible' | 'oriental' | 'plush_toy' | 'ppc_precision'
 

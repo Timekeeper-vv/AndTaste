@@ -54,6 +54,7 @@ const activeWork = ref<ConsumerAsset | null>(null)
 const activeMediaUrl = ref('')
 const professionalSubmissions = ref<any[]>([])
 const reviewingSubmissionId = ref<number | null>(null)
+const professionalQuoteDrafts = ref<Record<number, { fee: string; leadTime: string; note: string }>>({})
 const rejectionTarget = ref<{ kind: 'work' | 'bundle' | 'professional'; item: any } | null>(null)
 const rejectionReason = ref('')
 const activeBundleImage = ref<{ url: string; label: string } | null>(null)
@@ -91,6 +92,17 @@ const statusText: Record<string, string> = {
 }
 
 const statusClass = (s?: string) => s === 'approved' ? 'ok' : s === 'rejected' ? 'bad' : 'wait'
+function professionalQuoteDraft(item: any) {
+  const id = Number(item.id)
+  if (!professionalQuoteDrafts.value[id]) {
+    professionalQuoteDrafts.value[id] = {
+      fee: item.quotedSampleFeeYuan == null ? '' : String(item.quotedSampleFeeYuan),
+      leadTime: item.quotedSampleLeadTime || '',
+      note: item.quotedSampleNote || '',
+    }
+  }
+  return professionalQuoteDrafts.value[id]
+}
 const assetTypeText = (t?: string) => t === 'model' ? '3D模型' : '产品图片'
 const previewUrl = (w: ConsumerAsset) => w.previewUrl || w.fileUrl || ''
 function purposeOf(w: ConsumerAsset): 'museum_sale' | 'personal' | 'unknown' {
@@ -235,7 +247,15 @@ async function reviewProfessionalSubmission(item: any, nextStatus: ReviewStatus,
     const r = await fetch(`/api/creative/ai/consumer-professional-submissions/${item.id}/review`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus, comment: reviewComment.trim() }),
+      body: JSON.stringify({
+        status: nextStatus,
+        comment: reviewComment.trim(),
+        ...(nextStatus === 'approved' ? {
+          quotedSampleFeeYuan: professionalQuoteDraft(item).fee,
+          quotedSampleLeadTime: professionalQuoteDraft(item).leadTime,
+          quotedSampleNote: professionalQuoteDraft(item).note,
+        } : {}),
+      }),
     })
     if (!r.ok) {
       const err = await r.json().catch(() => null)
@@ -441,13 +461,14 @@ onMounted(load)
       </header>
       <div v-if="visibleProfessionalSubmissions.length" class="submission-table-wrap">
         <table>
-          <thead><tr><th>作品包</th><th>提交人 / 用途</th><th>文件与时间</th><th>审核状态</th><th>操作</th></tr></thead>
+          <thead><tr><th>作品包</th><th>提交人 / 用途</th><th>文件与时间</th><th>审核状态</th><th>打样报价单</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="item in visibleProfessionalSubmissions" :key="item.id">
               <td><strong>{{ item.title }}</strong><small>{{ item.submissionNo }}</small><p v-if="item.note">{{ item.note }}</p></td>
               <td><strong>{{ item.createdByName || `用户 #${item.userId}` }}</strong><small>{{ item.purpose === 'museum_sale' ? `博物馆售卖${item.museumName ? ` · ${item.museumName}` : ''}` : '个人创作' }}</small></td>
               <td><strong>{{ item.originalName }}</strong><small>{{ item.fileSize ? `${(item.fileSize / 1024 / 1024).toFixed(1)} MB` : '-' }} · {{ formatTime(item.createdAt) }}</small></td>
               <td><span class="submission-status" :class="statusClass(item.status)">{{ statusText[item.status || 'review'] || item.status }}</span><small v-if="item.reviewComment" class="review-note">{{ item.reviewComment }}</small></td>
+              <td><div class="professional-quote-form"><label><span>打样费</span><input v-model="professionalQuoteDraft(item).fee" inputmode="decimal" placeholder="例如 2000" /></label><label><span>预计交期</span><input v-model="professionalQuoteDraft(item).leadTime" placeholder="例如 10-15 个工作日" /></label><label><span>报价说明</span><textarea v-model="professionalQuoteDraft(item).note" rows="2" placeholder="包含范围、运费、修改次数等" /></label><small v-if="item.status === 'approved'">支付：{{ item.samplePaymentStatus === 'paid' ? '已支付' : item.samplePaymentStatus === 'pending' ? '支付处理中' : '待用户支付' }}</small></div></td>
               <td><div class="submission-actions"><button type="button" class="outline" @click="downloadProfessionalSubmission(item)">下载 ZIP</button><button type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="openRejectForm('professional', item)">不通过</button><button v-if="item.status !== 'review'" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
             </tr>
           </tbody>
@@ -506,6 +527,10 @@ onMounted(load)
 
 <style scoped>
 .review-page{padding:24px;display:flex;flex-direction:column;gap:18px}.hero-card{position:relative;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(360px,.8fr);gap:20px;padding:28px;border-radius:28px;color:#1f2937;background:linear-gradient(135deg,#fff 0%,#f8efe7 48%,#eefaf7 100%);border:1px solid rgba(148,163,184,.18);box-shadow:0 22px 60px rgba(15,23,42,.08)}.hero-card:after{content:"";position:absolute;right:-80px;top:-90px;width:260px;height:260px;border-radius:50%;background:rgba(180,83,42,.12)}.eyebrow{display:inline-flex;margin-bottom:10px;padding:7px 10px;border-radius:999px;background:#fff6ed;color:#b4532a;font-size:11px;font-weight:900;letter-spacing:1.7px}.hero-card h1{margin:0 0 10px;font-size:30px;letter-spacing:-.04em}.hero-card p{max-width:720px;margin:0;color:#64748b;line-height:1.7}.hero-stats{position:relative;z-index:1;display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.hero-stats article{padding:18px;border-radius:20px;background:rgba(255,255,255,.75);border:1px solid rgba(148,163,184,.16);box-shadow:0 12px 30px rgba(15,23,42,.05)}.hero-stats b{display:block;font-size:28px;color:#111827}.hero-stats span{font-size:12px;color:#64748b;font-weight:800}.filter-card{display:grid;grid-template-columns:180px 160px minmax(240px,1fr) 120px;gap:12px;align-items:end;padding:16px;border-radius:22px;background:#fff;border:1px solid rgba(148,163,184,.18);box-shadow:0 12px 34px rgba(15,23,42,.05)}label span{display:block;margin-bottom:7px;color:#475569;font-size:12px;font-weight:900}input,select{width:100%;height:42px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:13px;background:#f8fafc;padding:0 12px;color:#0f172a;outline:none}input:focus,select:focus{border-color:#b4532a;box-shadow:0 0 0 3px rgba(180,83,42,.12)}.filter-card button,.actions button,footer button{height:42px;border:0;border-radius:13px;font-weight:900;cursor:pointer}.filter-card button{background:#111827;color:#fff}.filter-card button:disabled,.actions button:disabled{opacity:.55;cursor:not-allowed}.work-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}.work-card{overflow:hidden;border-radius:24px;background:#fff;border:1px solid rgba(148,163,184,.16);box-shadow:0 16px 42px rgba(15,23,42,.07)}.preview{position:relative;height:230px;background:#111827;cursor:pointer;overflow:hidden}.preview img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s}.preview:hover img{transform:scale(1.03)}.model-placeholder{height:100%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:46px;font-weight:950;background:radial-gradient(circle at 70% 20%,rgba(20,184,166,.35),transparent 35%),linear-gradient(135deg,#111827,#334155)}.type-pill,.status-pill{position:absolute;top:12px;padding:7px 9px;border-radius:999px;background:rgba(255,255,255,.92);font-size:11px;font-weight:900}.type-pill{left:12px;color:#334155}.status-pill{right:12px}.status-pill.wait{color:#b45309;background:#fff7ed}.status-pill.ok{color:#047857;background:#ecfdf5}.status-pill.bad{color:#dc2626;background:#fef2f2}.work-body{padding:16px}.title-line{display:flex;align-items:center;justify-content:space-between;gap:12px}.title-line b{font-size:16px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.title-line small{color:#94a3b8;font-weight:900}.meta-row{display:flex;justify-content:space-between;gap:10px;margin-top:9px;color:#64748b;font-size:12px}.prompt{min-height:44px;margin:12px 0 14px;color:#475569;font-size:13px;line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.actions{display:flex;flex-wrap:wrap;gap:8px}.actions button{padding:0 13px}.outline{border:1px solid #e2e8f0!important;background:#fff!important;color:#334155!important}.approve{background:#0f766e!important;color:#fff!important}.reject{background:#b91c1c!important;color:#fff!important}.empty-card{padding:60px 20px;text-align:center;border-radius:24px;background:#fff;border:1px dashed #cbd5e1;color:#64748b}.empty-card b,.empty-card span{display:block}.empty-card b{margin-bottom:8px;color:#0f172a;font-size:18px}.preview-modal{position:fixed;inset:0;z-index:200;background:rgba(15,23,42,.62);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:24px}.modal-card{width:min(980px,96vw);max-height:92vh;display:flex;flex-direction:column;border-radius:26px;background:#fff;overflow:hidden;box-shadow:0 28px 90px rgba(0,0,0,.28)}.modal-card header,.modal-card footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid #e2e8f0}.modal-card footer{border-top:1px solid #e2e8f0;border-bottom:0;justify-content:flex-end}.modal-card header b,.modal-card header span{display:block}.modal-card header span{margin-top:4px;color:#64748b;font-size:12px}.modal-card header button{width:38px;height:38px;border:0;border-radius:12px;background:#f1f5f9;font-size:24px;color:#475569}.modal-body{min-height:320px;overflow:auto;background:#f8fafc;display:flex;align-items:center;justify-content:center}.modal-body img{max-width:100%;max-height:72vh;object-fit:contain}.model-large{display:flex;flex-direction:column;align-items:center;gap:10px;color:#64748b}.model-large b{font-size:28px;color:#0f172a}.model-large a,.modal-card footer a{height:40px;display:inline-flex;align-items:center;padding:0 14px;border-radius:12px;background:#111827;color:#fff;text-decoration:none;font-weight:900}@media(max-width:980px){.review-page{padding:16px}.hero-card{grid-template-columns:1fr}.filter-card{grid-template-columns:1fr 1fr}.comment-field{grid-column:1/-1}.filter-card button{grid-column:1/-1}}@media(max-width:640px){.filter-card,.work-grid{grid-template-columns:1fr}.hero-stats{grid-template-columns:repeat(2,1fr)}.preview{height:210px}}
+</style>
+
+<style scoped>
+.professional-quote-form{display:grid;min-width:245px;gap:7px}.professional-quote-form label{display:grid;gap:4px;color:#6b796e;font-size:10px;font-weight:850}.professional-quote-form input,.professional-quote-form textarea{box-sizing:border-box;width:100%;border:1px solid #d7e1d7;border-radius:8px;background:#fffefa;color:#3f4d43;font:inherit;outline:0}.professional-quote-form input{height:33px;padding:0 8px}.professional-quote-form textarea{padding:7px 8px;resize:vertical}.professional-quote-form small{color:#5f7b69!important;font-weight:850}.submission-table-wrap table{min-width:1240px}
 </style>
 
 <style scoped>

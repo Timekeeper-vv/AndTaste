@@ -2759,13 +2759,13 @@ public class CreativeAiController {
     @GetMapping("/consumer-professional-submissions/my")
     public List<Map<String,Object>> myProfessionalSubmissions() {
         Long userId = requireCurrentConsumerUser();
-        return jdbc.queryForList("SELECT id,submission_no submissionNo,title,original_name originalName,file_size fileSize,purpose,museum_name museumName,note,status,review_comment reviewComment,reviewed_by reviewedBy,reviewed_at reviewedAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
+        return jdbc.queryForList("SELECT id,submission_no submissionNo,title,original_name originalName,file_size fileSize,purpose,museum_name museumName,note,status,review_comment reviewComment,quoted_sample_fee_yuan quotedSampleFeeYuan,quoted_sample_lead_time quotedSampleLeadTime,quoted_sample_note quotedSampleNote,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt,reviewed_by reviewedBy,reviewed_at reviewedAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
     }
 
     @GetMapping("/consumer-professional-submissions/review")
     public List<Map<String,Object>> professionalSubmissionsForReview() {
         requireCreativeAdmin();
-        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_name museumName,s.note,s.status,s.review_comment reviewComment,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
+        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_name museumName,s.note,s.status,s.review_comment reviewComment,s.quoted_sample_fee_yuan quotedSampleFeeYuan,s.quoted_sample_lead_time quotedSampleLeadTime,s.quoted_sample_note quotedSampleNote,s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo,s.sample_paid_at samplePaidAt,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
     }
 
     @GetMapping("/consumer-professional-submissions/{id}/download")
@@ -2783,15 +2783,40 @@ public class CreativeAiController {
     }
 
     @PutMapping("/consumer-professional-submissions/{id}/review")
-    public Map<String,Object> reviewProfessionalSubmission(@PathVariable Long id, @RequestBody Map<String,String> body) {
+    @Transactional
+    public Map<String,Object> reviewProfessionalSubmission(@PathVariable Long id, @RequestBody Map<String,Object> body) {
         requireCreativeAdmin();
+        List<Map<String,Object>> existingRows = jdbc.queryForList(
+                "SELECT status,sample_payment_status FROM consumer_professional_submission WHERE id=? FOR UPDATE", id);
+        if (existingRows.isEmpty()) throw new IllegalArgumentException("专业作品包不存在");
+        String existingPaymentStatus = nullToEmpty(existingRows.get(0).get("sample_payment_status"));
+        if (Set.of("pending", "manual_review", "paid").contains(existingPaymentStatus)) {
+            throw new IllegalArgumentException("该专业作品报价已进入支付流程，不能重复修改审核结果或报价");
+        }
         String status = body == null ? "" : nullToEmpty(body.get("status")).trim();
         if (!Set.of("review", "approved", "rejected").contains(status)) throw new IllegalArgumentException("审核状态只能是 review / approved / rejected");
         String comment = body == null ? "" : nullToEmpty(body.get("comment"));
         if ("rejected".equals(status) && blank(comment)) throw new IllegalArgumentException("专业作品审核不通过时必须填写原因");
-        int updated = jdbc.update("UPDATE consumer_professional_submission SET status=?,review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=?", status, comment, authenticatedPrincipal().username(), id);
-        if (updated == 0) throw new IllegalArgumentException("专业作品包不存在");
-        return Map.of("success", true, "status", status, "message", "专业作品包审核状态已更新");
+        BigDecimal fee = body == null ? null : decimalValue(body.get("quotedSampleFeeYuan"));
+        String lead = body == null ? "" : truncate(nullToEmpty(body.get("quotedSampleLeadTime")), 120);
+        String quoteNote = body == null ? "" : truncate(nullToEmpty(body.get("quotedSampleNote")), 1200);
+        if ("approved".equals(status) && (fee == null || fee.signum() <= 0 || blank(lead))) {
+            throw new IllegalArgumentException("审核通过前请填写打样费和预计交期，系统会生成报价单");
+        }
+        String paymentStatus = "approved".equals(status) ? "unpaid" : "not_required";
+        if (!"approved".equals(status)) {
+            fee = null;
+            lead = "";
+            quoteNote = "";
+        }
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET status=?,review_comment=?,quoted_sample_fee_yuan=?,quoted_sample_lead_time=?,quoted_sample_note=?,sample_payment_status=?,sample_payment_order_no=NULL,sample_paid_at=NULL,reviewed_by=?,reviewed_at=NOW() WHERE id=?", status, comment, fee, lead, quoteNote, paymentStatus, authenticatedPrincipal().username(), id);
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("success", true); result.put("status", status); result.put("paymentRequired", "approved".equals(status));
+        result.put("message", "approved".equals(status) ? "专业作品包已通过，报价单已生成，用户可支付打样费" : "专业作品包审核状态已更新");
+        if ("approved".equals(status)) {
+            result.put("quote", Map.of("feeYuan", fee, "leadTime", lead, "note", quoteNote));
+        }
+        return result;
     }
 
     @PostMapping(value = "/assets/{id}/material-variants", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -5855,6 +5880,25 @@ public class CreativeAiController {
         if(v instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
         if(v==null||blank(String.valueOf(v))) return BigDecimal.ZERO;
         return new BigDecimal(String.valueOf(v));
+    }
+
+    private BigDecimal decimalValue(Object value) {
+        if (value == null || (value instanceof String s && s.trim().isEmpty())) return null;
+        try {
+            BigDecimal result = new BigDecimal(String.valueOf(value).trim());
+            return result.scale() > 2 ? result.setScale(2, java.math.RoundingMode.HALF_UP) : result;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("打样费必须是有效金额");
+        }
+    }
+
+    private String nullToEmpty(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private String truncate(String value, int max) {
+        String text = value == null ? "" : value.trim();
+        return text.length() <= max ? text : text.substring(0, max);
     }
 
     private String plain(BigDecimal v) { return v.stripTrailingZeros().toPlainString(); }

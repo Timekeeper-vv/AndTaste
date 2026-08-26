@@ -4,7 +4,8 @@
     <view v-if="loading" class="empty">正在加载申请…</view>
     <view v-else-if="!requests.length" class="empty">暂无待支付的打样申请</view>
     <view v-for="item in requests" :key="item.id" class="request-card">
-      <view class="request-head"><view><text class="product">{{ item.sampleProductName || item.title || '未命名作品' }}</text><text class="meta">申请 #{{ item.id }} · {{ item.status === 'approved' ? '审核通过' : item.status }}</text></view><text class="fee">¥{{ fee(item.sampleFeeYuan) }}</text></view>
+      <view class="request-head"><view><text class="product">{{ item.sampleProductName || item.title || '未命名作品' }}</text><text class="meta">申请 #{{ item.id }} · {{ item.status === 'approved' ? '审核通过' : item.status }}</text><text v-if="item.professionalPayment && item.quotedSampleLeadTime" class="meta">预计交期：{{ item.quotedSampleLeadTime }}</text></view><text class="fee">¥{{ fee(item.sampleFeeYuan) }}</text></view>
+      <text v-if="item.professionalPayment && item.quotedSampleNote" class="note">报价说明：{{ item.quotedSampleNote }}</text>
       <text class="note">{{ item.samplePaymentStatus === 'paid' ? '已支付，申请已进入生产' : item.samplePaymentStatus === 'manual_review' ? '待管理员核验收款' : '请完成打样费用支付' }}</text>
       <button v-if="item.status === 'approved' && item.samplePaymentStatus !== 'paid' && item.samplePaymentStatus !== 'manual_review'" class="pay" :loading="payingId === item.id" @tap="pay(item)">微信支付打样费</button>
       <button v-else-if="item.samplePaymentStatus === 'manual_review'" class="disabled" disabled>等待人工核验</button>
@@ -17,7 +18,7 @@
 import { onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import { ref } from 'vue'
 import { getCommercialRequests } from '../../api/commercial'
-import { bindWechatMiniapp, createCommercialQuoteSamplePaymentOrder, createSamplePaymentOrder, getPaymentOrder, getProductionRequests, type PaymentOrder } from '../../api/creative'
+import { bindWechatMiniapp, createCommercialQuoteSamplePaymentOrder, createProfessionalSubmissionSamplePaymentOrder, createSamplePaymentOrder, getMyProfessionalSubmissions, getPaymentOrder, getProductionRequests, type PaymentOrder } from '../../api/creative'
 import { requireSession } from '../../utils/session'
 
 const requests = ref<any[]>([])
@@ -28,6 +29,7 @@ const intent = ref<'awaiting' | 'paid' | 'exception'>('awaiting')
 const hint = ref('微信支付已受理，正在等待官方回调确认，请勿重复支付。')
 const quoteId = ref('')
 const requestId = ref('')
+const professionalSubmissionId = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 const fee = (value: any) => Number(value || 0).toFixed(2).replace(/\.00$/, '')
 
@@ -37,6 +39,15 @@ function loginCode(): Promise<string> { return new Promise((resolve, reject) => 
 async function load() {
   loading.value = true
   try {
+    if (professionalSubmissionId.value) {
+      const rows = await getMyProfessionalSubmissions()
+      const item = (Array.isArray(rows) ? rows : []).find((row: any) => String(row.id) === professionalSubmissionId.value)
+      const paymentStatus = String(item?.samplePaymentStatus || 'unpaid')
+      requests.value = item && item.status === 'approved' && ['unpaid', 'pending', 'manual_review'].includes(paymentStatus)
+        ? [{ ...item, professionalPayment: true, sampleProductName: item.title, sampleFeeYuan: item.quotedSampleFeeYuan }]
+        : []
+      return
+    }
     if (quoteId.value) {
       const data = await getCommercialRequests()
       const item = (data?.quoteRequests || []).find((row: any) => String(row.id) === quoteId.value)
@@ -47,7 +58,7 @@ async function load() {
       return
     }
 
-    const [rows, data] = await Promise.all([getProductionRequests(), getCommercialRequests()])
+    const [rows, data, professionalRows] = await Promise.all([getProductionRequests(), getCommercialRequests(), getMyProfessionalSubmissions()])
     const production = (Array.isArray(rows) ? rows : []).filter((item: any) => {
       const paymentStatus = String(item?.samplePaymentStatus || 'unpaid')
       return item.requestType === 'sample'
@@ -58,7 +69,10 @@ async function load() {
     const quotes = requestId.value ? [] : (data?.quoteRequests || [])
       .filter((item: any) => item.requestType === 'sample' && item.status === 'accepted' && ['unpaid', 'pending', 'manual_review'].includes(String(item.samplePaymentStatus || 'unpaid')))
       .map((item: any) => ({ ...item, sampleProductName: item.productName, sampleFeeYuan: item.quotedTotalPrice, quotePayment: true }))
-    requests.value = [...production, ...quotes]
+    const professional = (Array.isArray(professionalRows) ? professionalRows : [])
+      .filter((item: any) => item.status === 'approved' && ['unpaid', 'pending', 'manual_review'].includes(String(item.samplePaymentStatus || 'unpaid')))
+      .map((item: any) => ({ ...item, professionalPayment: true, sampleProductName: item.title, sampleFeeYuan: item.quotedSampleFeeYuan }))
+    requests.value = [...production, ...quotes, ...professional]
   } catch (error: any) {
     uni.showToast({ title: error.message || '加载失败', icon: 'none' })
   } finally {
@@ -70,7 +84,9 @@ async function pay(item: any) {
   payingId.value = item.id
   try {
     await bindWechatMiniapp(await loginCode())
-    const order = item.quotePayment ? await createCommercialQuoteSamplePaymentOrder(item.id, 'wechat_jsapi') : await createSamplePaymentOrder(item.id, 'wechat_jsapi')
+    const order = item.professionalPayment
+      ? await createProfessionalSubmissionSamplePaymentOrder(item.id, 'wechat_jsapi')
+      : item.quotePayment ? await createCommercialQuoteSamplePaymentOrder(item.id, 'wechat_jsapi') : await createSamplePaymentOrder(item.id, 'wechat_jsapi')
     paymentOrder.value = order
     // #ifdef MP-WEIXIN
     const p: any = order.paymentParams
@@ -86,6 +102,7 @@ onShow(() => { if (requireSession()) void load() })
 onLoad((query: any) => {
   quoteId.value = String(query?.quoteId || '')
   requestId.value = String(query?.requestId || '')
+  professionalSubmissionId.value = String(query?.professionalSubmissionId || '')
 })
 onUnload(stop)
 </script>

@@ -140,7 +140,7 @@ public class PaymentController {
         // route. Physical sample fees use the separate sample-order endpoints.
         return Map.of("items", items, "channels", List.of(
                 Map.of("code", "wechat_virtual_payment", "name", "微信虚拟支付", "enabled", virtualPaymentReady(), "mode", "virtual_payment")
-        ));
+        ), "samplePaymentEnabled", wechatPaymentReady());
     }
 
     /**
@@ -427,6 +427,87 @@ public class PaymentController {
         }
     }
 
+    /** Create a payment order for an approved professional ZIP submission quote. */
+    @PostMapping("/professional-submission-sample-orders")
+    public Map<String, Object> createProfessionalSubmissionSampleOrder(
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal,
+            @RequestBody(required = false) Map<String, String> body) throws Exception {
+        Long userId = requireConsumer(principal);
+        String idText = body == null ? "" : nullToEmpty(body.get("submissionId"));
+        String channel = body == null ? "" : nullToEmpty(body.get("channel"));
+        long submissionId;
+        try { submissionId = Long.parseLong(idText); } catch (Exception e) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "专业作品报价编号无效"); }
+        if (submissionId <= 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "专业作品报价编号无效");
+        validateRequestedChannel(channel);
+
+        SampleOrderCreation creation;
+        try {
+            creation = Objects.requireNonNull(transactions.execute(status -> {
+                List<Map<String, Object>> rows = jdbc.queryForList(
+                        "SELECT id,title,status,quoted_sample_fee_yuan,quoted_sample_lead_time,sample_payment_status,sample_payment_order_no "
+                                + "FROM consumer_professional_submission WHERE id=? AND user_id=? FOR UPDATE", submissionId, userId);
+                if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品报价不存在");
+                Map<String, Object> submission = rows.get(0);
+                if (!"approved".equals(String.valueOf(submission.get("status")))) throw new IllegalStateException("专业作品尚未审核通过");
+                BigDecimal feeYuan = decimal(submission.get("quoted_sample_fee_yuan"));
+                if (feeYuan.signum() <= 0 || blank(nullableText(submission.get("quoted_sample_lead_time")))) throw new IllegalStateException("报价单尚未完整配置，请联系管理员");
+                String existingOrderNo = nullableText(submission.get("sample_payment_order_no"));
+                if (!blank(existingOrderNo)) {
+                    List<Map<String, Object>> existing = jdbc.queryForList("SELECT status,channel FROM payment_order WHERE order_no=? AND user_id=? FOR UPDATE", existingOrderNo, userId);
+                    if (!existing.isEmpty() && Set.of("pending", "manual_review", "paid").contains(String.valueOf(existing.get(0).get("status")))) {
+                        return new SampleOrderCreation(existingOrderNo, true, feeYuan, nullableText(submission.get("title")), String.valueOf(existing.get(0).get("channel")));
+                    }
+                }
+                CreditPackage pkg = new CreditPackage("professional_submission_sample_" + submissionId,
+                        "打样费 · " + nullableText(submission.get("title")), "专业作品包审核通过后的打样费用",
+                        feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
+                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
+                jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=? AND user_id=?",
+                        order.orderNo, submissionId, userId);
+                return new SampleOrderCreation(order.orderNo, order.reused, feeYuan, nullableText(submission.get("title")), channel);
+            }));
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
+
+        String actualChannel = creation.channel;
+        if (creation.reused) return createdOrderView(creation.orderNo, userId, actualChannel, true);
+        if ("manual_wechat_qr".equals(actualChannel)) {
+            transactions.execute(status -> {
+                jdbc.update("UPDATE payment_order SET code_url=?,provider_response=? WHERE order_no=? AND user_id=?",
+                        manualWechatQrUrl.trim(), "manual receipt QR for professional submission sample fee", creation.orderNo, userId);
+                return null;
+            });
+            return createdOrderView(creation.orderNo, userId, actualChannel, false);
+        }
+        CreditPackage pkg = new CreditPackage("professional_submission_sample_" + submissionId,
+                "打样费 · " + creation.productName, "专业作品包审核通过后的打样费用",
+                creation.feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
+        boolean providerSubmissionAttempted = false;
+        try {
+            if ("wechat_jsapi".equals(actualChannel)) {
+                String openId = boundOpenId(userId);
+                transactions.execute(status -> { prepareWechatOrderMetadata(creation.orderNo, openId); return null; });
+                providerSubmissionAttempted = true;
+                persistWechatPrepay(creation.orderNo, createWechatJsapiOrder(creation.orderNo, pkg, openId));
+            } else {
+                transactions.execute(status -> { prepareWechatOrderMetadata(creation.orderNo, null); return null; });
+                providerSubmissionAttempted = true;
+                persistWechatPrepay(creation.orderNo, createWechatNativeOrder(creation.orderNo, pkg));
+            }
+            return createdOrderView(creation.orderNo, userId, actualChannel, false);
+        } catch (Exception e) {
+            String nextStatus = providerSubmissionAttempted && providerResultUnknown(e) ? "payment_exception" : "failed";
+            transactions.execute(status -> {
+                jdbc.update("UPDATE payment_order SET status=?,provider_response=? WHERE order_no=? AND status='pending'", nextStatus, safeError(e), creation.orderNo);
+                if ("failed".equals(nextStatus)) jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='unpaid',sample_payment_order_no=NULL WHERE sample_payment_order_no=? AND sample_payment_status='pending'", creation.orderNo);
+                return null;
+            });
+            throw userSafeWechatError(e, providerSubmissionAttempted && providerResultUnknown(e)
+                    ? "微信下单结果待核对，请勿重复付款或创建新订单" : "微信支付下单未成功，请稍后重试");
+        }
+    }
+
     /** Create a payment order for a professional guidance quote. */
     @PostMapping("/commercial-guidance-orders")
     public Map<String, Object> createCommercialGuidanceOrder(
@@ -702,6 +783,12 @@ public class PaymentController {
             String productCode = String.valueOf(orderRows.get(0).get("product_code"));
             if (productCode.startsWith("sample_fee_")) {
                 jdbc.update("UPDATE consumer_production_request SET sample_payment_status='manual_review' WHERE sample_payment_order_no=? AND sample_payment_status='pending'", orderNo);
+            }
+        if (productCode.startsWith("commercial_quote_sample_")) {
+                jdbc.update("UPDATE creative_quote_request SET sample_payment_status='manual_review' WHERE sample_payment_order_no=? AND sample_payment_status='pending'", orderNo);
+            }
+            if (productCode.startsWith("professional_submission_sample_")) {
+                jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='manual_review' WHERE sample_payment_order_no=? AND sample_payment_status='pending'", orderNo);
             }
             return orderView(orderNo, userId);
         }));
@@ -2460,6 +2547,16 @@ public class PaymentController {
                 if (linked != 1) throw new IllegalStateException("商品化报价支付订单未关联到可支付申请");
             } catch (NumberFormatException ignored) {
                 throw new IllegalStateException("商品化报价支付订单关联申请无效");
+            }
+            return;
+        }
+        if (productCode.startsWith("professional_submission_sample_")) {
+            try {
+                long submissionId = Long.parseLong(productCode.substring("professional_submission_sample_".length()));
+                int linked = jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='paid',sample_paid_at=NOW() WHERE id=? AND sample_payment_order_no=? AND sample_payment_status IN ('pending','manual_review') AND status='approved'", submissionId, orderNo);
+                if (linked != 1) throw new IllegalStateException("专业作品打样支付订单未关联到可支付报价");
+            } catch (NumberFormatException ignored) {
+                throw new IllegalStateException("专业作品打样支付订单关联申请无效");
             }
             return;
         }
