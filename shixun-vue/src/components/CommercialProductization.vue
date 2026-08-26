@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import type { User } from '../types'
 
-type Tab = 'quotes' | 'consignments' | 'guidance'
+type Tab = 'quotes' | 'sampleRequests' | 'consignments' | 'guidance'
 
 const props = defineProps<{ currentUser: User; initialTab?: Tab; guidanceOnly?: boolean }>()
 const emit = defineEmits<{ alert: [msg: string, type?: 'success' | 'error'] }>()
@@ -23,6 +23,9 @@ const statuses = computed(() => {
     { value: 'new', label: '待处理' }, { value: 'processing', label: '处理中' },
     { value: 'quoted', label: '已报价' }, { value: 'rejected', label: '已驳回' }, { value: 'all', label: '全部' },
   ]
+  if (tab.value === 'sampleRequests') return [
+    { value: 'review', label: '待报价' }, { value: 'approved', label: '待用户支付' }, { value: 'processing', label: '待生产' }, { value: 'all', label: '全部' },
+  ]
   if (tab.value === 'consignments') return [
     { value: 'pending_review', label: '待审核' }, { value: 'need_materials', label: '待补材料' },
     { value: 'approved', label: '已通过' }, { value: 'rejected', label: '已驳回' }, { value: 'all', label: '全部' },
@@ -42,10 +45,10 @@ const statusLabel: Record<string, string> = {
 }
 
 function endpointFor(value: Tab) {
-  return value === 'quotes' ? 'quote-requests' : value === 'consignments' ? 'consignment-applications' : 'professional-guidance'
+  return value === 'quotes' ? 'quote-requests' : value === 'sampleRequests' ? 'sample-requests' : value === 'consignments' ? 'consignment-applications' : 'professional-guidance'
 }
-function tabLabel(value: Tab) { return value === 'quotes' ? '报价' : value === 'consignments' ? '代销' : '专业指导' }
-function defaultStatus(value: Tab) { return value === 'quotes' ? 'new' : value === 'consignments' ? 'pending_review' : 'requested' }
+function tabLabel(value: Tab) { return value === 'quotes' ? '报价' : value === 'sampleRequests' ? 'C端打样' : value === 'consignments' ? '代销' : '专业指导' }
+function defaultStatus(value: Tab) { return value === 'quotes' ? 'new' : value === 'sampleRequests' ? 'review' : value === 'consignments' ? 'pending_review' : 'requested' }
 
 async function load() {
   loading.value = true
@@ -76,10 +79,17 @@ function resetForm() {
 }
 function formatTime(value?: string) { return value ? String(value).replace('T', ' ').slice(0, 19) : '-' }
 function openQuote(row: any) {
-  quoteUnit.value = row.quotedUnitPrice || ''
-  quoteTotal.value = row.quotedTotalPrice || ''
-  quoteLead.value = row.quotedLeadTime || ''
-  comment.value = row.operatorComment || ''
+  if (tab.value === 'sampleRequests') {
+    quoteUnit.value = row.sampleMaterial || ''
+    quoteTotal.value = row.sampleFeeYuan == null ? '' : String(row.sampleFeeYuan)
+    quoteLead.value = row.sampleLeadTime || ''
+    comment.value = row.sampleQuoteNote || row.reviewComment || ''
+  } else {
+    quoteUnit.value = row.quotedUnitPrice || ''
+    quoteTotal.value = row.quotedTotalPrice || ''
+    quoteLead.value = row.quotedLeadTime || ''
+    comment.value = row.operatorComment || ''
+  }
 }
 function guidanceDraft(row: any) {
   const id = Number(row.id)
@@ -102,6 +112,8 @@ async function update(row: any, nextStatus: string) {
     let body: Record<string, unknown>
     if (tab.value === 'quotes') {
       body = { status: nextStatus, quotedUnitPrice: quoteUnit.value || null, quotedTotalPrice: quoteTotal.value || null, quotedLeadTime: quoteLead.value, operatorComment: comment.value }
+    } else if (tab.value === 'sampleRequests') {
+      body = { sampleFeeYuan: quoteTotal.value, sampleLeadTime: quoteLead.value, sampleMaterial: quoteUnit.value, sampleQuoteNote: comment.value }
     } else if (tab.value === 'consignments') {
       body = { status: nextStatus, operatorComment: comment.value }
     } else {
@@ -115,7 +127,7 @@ async function update(row: any, nextStatus: string) {
     })
     const data = await response.json().catch(() => null)
     if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`)
-    emit('alert', tab.value === 'guidance' ? '专业指导单已更新' : '申请状态已更新', 'success')
+    emit('alert', tab.value === 'guidance' ? '专业指导单已更新' : tab.value === 'sampleRequests' ? '打样报价单已保存' : '申请状态已更新', 'success')
     await load()
   } catch (error: any) {
     emit('alert', `更新失败：${error?.message || error}`, 'error')
@@ -136,6 +148,7 @@ onMounted(load)
     <section class="toolbar">
       <template v-if="!props.guidanceOnly">
         <button :class="{ active: tab === 'quotes' }" @click="switchTab('quotes')">报价 / 打样申请</button>
+        <button :class="{ active: tab === 'sampleRequests' }" @click="switchTab('sampleRequests')">C端打样申请</button>
         <button :class="{ active: tab === 'consignments' }" @click="switchTab('consignments')">渠道代销申请</button>
         <button :class="{ active: tab === 'guidance' }" @click="switchTab('guidance')">专业指导</button>
       </template>
@@ -145,18 +158,20 @@ onMounted(load)
     </section>
     <section v-if="rows.length" class="list">
       <article v-for="row in rows" :key="row.id" class="row">
-        <div class="row-head"><div><b>{{ row.productName || '商品化申请' }}</b><small>{{ tab === 'guidance' ? row.guidanceNo : (row.requestNo || row.applicationNo) }} · 用户 {{ row.username }} / ID {{ row.userId }}</small></div><em :class="row.status">{{ statusLabel[row.status] || row.status }}</em></div>
+        <div class="row-head"><div><b>{{ row.displayProductName || row.productName || '商品化申请' }}</b><small>{{ tab === 'guidance' ? row.guidanceNo : (row.requestNo || row.applicationNo) }} · {{ row.productNo || '' }} · 用户 {{ row.username }} / ID {{ row.userId }}</small></div><em :class="row.status">{{ tab === 'sampleRequests' && row.samplePaymentStatus === 'paid' ? '已支付打样费 · 待生产' : tab === 'sampleRequests' && row.status === 'approved' ? '待用户支付打样费' : statusLabel[row.status] || row.status }}</em></div>
         <div class="meta">
           <span>作品 ID：{{ row.assetId || '未关联' }}</span>
           <span v-if="tab === 'quotes'">数量：{{ row.quantity }} · {{ row.requestType }}</span>
+          <span v-else-if="tab === 'sampleRequests'">数量：{{ row.quantity }} · 多视图/3D打样</span>
           <span v-else-if="tab === 'consignments'">渠道：{{ row.channelName || '未指定' }}</span>
           <span v-else>原申请：{{ row.applicationNo || `${row.applicationType} #${row.applicationId}` }} · {{ statusLabel[row.applicationStatus] || row.applicationStatus }}</span>
           <span>提交：{{ formatTime(row.createdAt) }}</span>
         </div>
-        <p v-if="tab === 'guidance' && row.requestNote">用户诉求：{{ row.requestNote }}</p>
+        <p v-if="tab === 'sampleRequests'">用户打样申请：{{ row.note || '未填写说明' }}</p>
+        <p v-else-if="tab === 'guidance' && row.requestNote">用户诉求：{{ row.requestNote }}</p>
         <p v-else-if="row.note">用户说明：{{ row.note }}</p>
         <p v-if="row.copyrightBasis" class="rights">权利依据：{{ row.copyrightBasis }} · 已确认声明：{{ row.copyrightConfirmed ? '是' : '否' }}<span v-if="row.authorizationNote"> · {{ row.authorizationNote }}</span></p>
-        <div v-if="tab === 'quotes'" class="quote-form"><label>单价 <input v-model="quoteUnit" inputmode="decimal" placeholder="待确认" @focus="openQuote(row)" /></label><label>总价 <input v-model="quoteTotal" inputmode="decimal" placeholder="待确认" /></label><label>交期 <input v-model="quoteLead" placeholder="例如：打样 10-15 天" /></label></div>
+        <div v-if="tab === 'quotes' || tab === 'sampleRequests'" class="quote-form"><label>{{ tab === 'sampleRequests' ? '材质' : '单价' }} <input v-model="quoteUnit" inputmode="decimal" placeholder="待确认" @focus="openQuote(row)" /></label><label>{{ tab === 'sampleRequests' ? '打样价格' : '总价' }} <input v-model="quoteTotal" inputmode="decimal" placeholder="待确认" /></label><label>打样时间 <input v-model="quoteLead" placeholder="例如：10-15 个工作日" /></label></div>
         <div v-if="tab === 'guidance'" class="guidance-form">
           <label>指导费 <input v-model="guidanceDraft(row).fee" inputmode="decimal" placeholder="例如：199" /></label>
           <label>预计完成 <input v-model="guidanceDraft(row).lead" placeholder="例如：1-2 个工作日" /></label>
@@ -164,8 +179,10 @@ onMounted(load)
           <p class="payment-state">支付状态：{{ statusLabel[row.paymentStatus] || row.paymentStatus || '未报价' }}</p>
         </div>
         <label v-if="tab === 'guidance'" class="comment"><span>运营说明</span><input v-model="guidanceDraft(row).comment" placeholder="报价范围、服务边界或交付说明" /></label>
+        <label v-else-if="tab === 'sampleRequests'" class="comment"><span>报价备注</span><input v-model="comment" placeholder="材质工艺、费用包含范围、生产说明" @focus="openQuote(row)" /></label>
         <label v-else class="comment"><span>运营备注</span><input v-model="comment" placeholder="通过说明、补材料要求或驳回原因" @focus="tab === 'quotes' ? openQuote(row) : null" /></label>
         <footer v-if="tab === 'quotes'"><button class="processing" :disabled="busyId === row.id" @click="update(row, 'processing')">接单处理中</button><button class="quoted" :disabled="busyId === row.id" @click="update(row, 'quoted')">保存报价</button><button class="approve" :disabled="busyId === row.id" @click="update(row, 'accepted')">确认可执行</button><button class="reject" :disabled="busyId === row.id" @click="update(row, 'rejected')">驳回</button></footer>
+        <footer v-else-if="tab === 'sampleRequests'"><button class="quoted" :disabled="busyId === row.id || row.samplePaymentStatus === 'paid'" @click="update(row, 'approved')">保存报价并通知支付</button></footer>
         <footer v-else-if="tab === 'consignments'"><button class="materials" :disabled="busyId === row.id" @click="update(row, 'need_materials')">要求补材料</button><button class="approve" :disabled="busyId === row.id" @click="update(row, 'approved')">通过代销审核</button><button class="reject" :disabled="busyId === row.id" @click="update(row, 'rejected')">驳回</button></footer>
         <footer v-else><button class="quoted" :disabled="busyId === row.id || !canQuoteGuidance(row)" @click="update(row, 'quoted')">保存指导报价</button><button class="approve" :disabled="busyId === row.id || !canCompleteGuidance(row)" @click="update(row, 'completed')">完成指导</button><button class="reject" :disabled="busyId === row.id || row.paymentStatus === 'paid' || row.status === 'in_progress'" @click="update(row, 'closed')">关闭指导单</button></footer>
       </article>

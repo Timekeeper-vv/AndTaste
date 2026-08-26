@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 const rows = ref<any[]>([]), loading = ref(false)
-function textStatus(r: any) { if (r.samplePaymentStatus === 'paid') return '已支付打样费 · 生产中'; if (r.samplePaymentStatus === 'unpaid') return '待用户支付打样费'; return r.status === 'review' ? '待审核' : r.status || '-' }
+function textStatus(r: any) { if (r.samplePaymentStatus === 'paid') return '已支付打样费 · 待生产'; if (r.samplePaymentStatus === 'unpaid') return '待用户支付打样费'; return r.status === 'review' ? '待审核' : r.status || '-' }
 async function load() { loading.value = true; try { const r = await fetch('/api/creative/ai/admin/orders?size=500', { cache: 'no-store' }); rows.value = r.ok ? await r.json() : [] } finally { loading.value = false } }
 onMounted(load)
 </script>

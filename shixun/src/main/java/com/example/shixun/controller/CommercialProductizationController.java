@@ -482,6 +482,37 @@ public class CommercialProductizationController {
         return jdbc.queryForList(sql + " WHERE r.status=? ORDER BY r.id DESC LIMIT 300", status);
     }
 
+    @GetMapping("/admin/sample-requests")
+    public List<Map<String, Object>> adminSampleRequests(
+            @RequestParam(required = false, defaultValue = "review") String status,
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireStaff(principal);
+        String sql = "SELECT r.id,r.request_no requestNo,r.product_no productNo,r.user_id userId,u.username,r.asset_id assetId,r.multiview_bundle_id multiviewBundleId,r.request_type requestType,r.title,r.quantity,r.note,r.status,r.sample_product_name productName,r.sample_fee_yuan sampleFeeYuan,r.sample_lead_time sampleLeadTime,r.sample_material sampleMaterial,r.sample_quote_note sampleQuoteNote,r.sample_payment_status samplePaymentStatus,r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,r.review_comment reviewComment,r.created_at createdAt,r.updated_at updatedAt,COALESCE(b.product_name,a.title,r.sample_product_name) displayProductName FROM consumer_production_request r JOIN user u ON u.id=r.user_id LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id LEFT JOIN digital_asset a ON a.id=r.asset_id WHERE r.request_type='sample'";
+        if ("all".equals(status)) return jdbc.queryForList(sql + " ORDER BY r.id DESC LIMIT 500");
+        return jdbc.queryForList(sql + " AND r.status=? ORDER BY r.id DESC LIMIT 500", status);
+    }
+
+    @PutMapping("/admin/sample-requests/{id}")
+    @Transactional
+    public Map<String, Object> updateSampleRequestQuote(
+            @PathVariable Long id,
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
+        requireStaff(principal);
+        if (body == null) throw new IllegalArgumentException("报价内容不能为空");
+        BigDecimal fee = decimal(body.get("sampleFeeYuan"));
+        String lead = limit(text(body.get("sampleLeadTime")), 120);
+        String material = limit(text(body.get("sampleMaterial")), 180);
+        String note = limit(text(body.get("sampleQuoteNote")), 1200);
+        if (fee == null || fee.signum() <= 0 || blank(lead) || blank(material)) {
+            throw new IllegalArgumentException("请填写打样价格、时间和材质");
+        }
+        int changed = jdbc.update("UPDATE consumer_production_request SET sample_fee_yuan=?,sample_lead_time=?,sample_material=?,sample_quote_note=?,status='approved',sample_payment_status='unpaid',review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND request_type='sample' AND status IN ('review','approved')",
+                fee, lead, material, blank(note) ? null : note, blank(note) ? "后台已完成打样报价" : note, principal.username(), id);
+        if (changed != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "申请不存在或已进入支付/生产阶段");
+        return Map.of("success", true, "id", id, "status", "approved", "samplePaymentStatus", "unpaid", "message", "报价单已保存，等待用户支付");
+    }
+
     @PutMapping("/admin/quote-requests/{id}")
     @Transactional
     public Map<String, Object> reviewQuoteRequest(@PathVariable Long id,

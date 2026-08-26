@@ -3768,7 +3768,7 @@ public class CreativeAiController {
                                                                  @RequestParam(required=false,defaultValue="100") int size) {
         Long userId = requireCurrentConsumerUser();
         List<Object> args=new ArrayList<>();args.add(userId);
-        StringBuilder where = new StringBuilder(" WHERE r.user_id=?");
+        StringBuilder where = new StringBuilder(" WHERE r.user_id=? AND r.status<>'duplicate'");
         if(!blank(type)&&Set.of("sample","bulk").contains(type)){where.append(" AND r.request_type=?");args.add(type);}
         args.add(Math.max(1,Math.min(size,300)));
         return queryProductionRequestRows(
@@ -3842,12 +3842,14 @@ public class CreativeAiController {
         if(bundleId == null && !"model".equals(String.valueOf(asset.get("assetType")))) throw new IllegalStateException("单图流程仅支持审核通过的3D模型提交打样/生产申请");
         if(bundleId == null && !"approved".equals(String.valueOf(asset.get("status")))) throw new IllegalStateException("作品需先通过审核，才能提交打样或生产申请");
         String productNo = bundleId == null ? productNoForAsset(assetId) : firstNonBlank(str(bundle.get("productNo")), productNoForAsset(assetId));
-        if (!blank(productNo)) {
-            List<Map<String,Object>> duplicate = jdbc.queryForList(
-                    "SELECT id FROM consumer_production_request WHERE user_id=? AND product_no=? AND request_type=? AND status IN ('review','approved','processing') LIMIT 1",
-                    userId, productNo, requestType);
-            if (!duplicate.isEmpty()) throw new IllegalStateException("该产品已提交过一次有效的" + ("sample".equals(requestType) ? "打样" : "批量生产") + "申请");
-        }
+        // Serialize submissions per account.  Checking only a nullable
+        // client idempotency key allowed repeated taps to create several
+        // requests for the same product before the first insert committed.
+        jdbc.queryForList("SELECT id FROM user WHERE id=? FOR UPDATE", userId);
+        List<Map<String,Object>> duplicate = jdbc.queryForList(
+                "SELECT id FROM consumer_production_request WHERE user_id=? AND (product_no=? OR asset_id=? OR (? IS NOT NULL AND multiview_bundle_id=?)) AND request_type=? LIMIT 1",
+                userId, blank(productNo) ? null : productNo, assetId, bundleId, bundleId, requestType);
+        if (!duplicate.isEmpty()) throw new IllegalStateException("该产品已提交过一次" + ("sample".equals(requestType) ? "打样" : "批量生产") + "申请，不能重复提交");
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
         if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
         String requestedSampleProductName = body==null || body.get("sampleProductName")==null ? "" : String.valueOf(body.get("sampleProductName")).trim();
@@ -4077,8 +4079,8 @@ public class CreativeAiController {
     public List<Map<String,Object>> adminOrders(@RequestParam(defaultValue="300") int size) {
         requireCreativeAdmin();
         return queryProductionRequestRows(
-                productionRequestSelect(true, true) + " ORDER BY r.id DESC LIMIT ?",
-                productionRequestSelect(false, true) + " ORDER BY r.id DESC LIMIT ?",
+                productionRequestSelect(true, true) + " WHERE r.status<>'duplicate' ORDER BY r.id DESC LIMIT ?",
+                productionRequestSelect(false, true) + " WHERE r.status<>'duplicate' ORDER BY r.id DESC LIMIT ?",
                 List.of(Math.max(1, Math.min(size, 1000))));
     }
 

@@ -16,3 +16,17 @@ UPDATE digital_asset SET product_no=CONCAT('PRD-',LPAD(COALESCE(parent_asset_id,
 UPDATE creative_multiview_bundle b JOIN digital_asset a ON a.id=b.input_asset_id SET b.product_no=COALESCE(b.product_no,a.product_no,CONCAT('PRD-',LPAD(a.id,10,'0'))) WHERE b.product_no IS NULL OR b.product_no='';
 UPDATE consumer_production_request r LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id LEFT JOIN digital_asset a ON a.id=r.asset_id SET r.product_no=COALESCE(r.product_no,b.product_no,a.product_no,CONCAT('PRD-',LPAD(COALESCE(r.asset_id,r.id),10,'0'))) WHERE r.product_no IS NULL OR r.product_no='';
 UPDATE consumer_professional_submission SET product_no=CONCAT('PRD-',submission_no) WHERE product_no IS NULL OR product_no='';
+
+-- Preserve the newest historical request and mark older repeated taps as
+-- duplicates instead of deleting audit history.  New submissions are blocked
+-- in the service while the account row is locked.
+UPDATE consumer_production_request old_req
+JOIN consumer_production_request new_req
+  ON new_req.user_id=old_req.user_id
+ AND new_req.product_no=old_req.product_no
+ AND new_req.request_type=old_req.request_type
+ AND new_req.id>old_req.id
+ AND new_req.status IN ('review','approved','processing')
+SET old_req.status='duplicate', old_req.review_comment='系统清理：同一产品重复提交'
+WHERE old_req.product_no IS NOT NULL
+  AND old_req.status IN ('review','approved','processing');
