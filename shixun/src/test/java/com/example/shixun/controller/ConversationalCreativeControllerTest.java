@@ -61,6 +61,22 @@ class ConversationalCreativeControllerTest {
     }
 
     @Test
+    void concreteNaturalLanguageProductBindsCatalogFamilyAndSkipsProductChoices() {
+        Map<String, Object> result = controller.chat(1L, Map.of(
+                "message", "我想做一个兵马俑冰箱贴，主题是秦军和城墙"
+        ), claims);
+
+        Map<?, ?> brief = (Map<?, ?>) result.get("brief");
+        assertThat(brief.get("productKey")).isEqualTo("souvenir-alloy-magnet");
+        assertThat(brief.get("productName")).isEqualTo("合金冰箱贴");
+        assertThat(brief.get("categoryKey")).isEqualTo("souvenir");
+        assertThat(brief.get("inspiration")).asString().contains("兵马俑");
+        assertThat(result.get("stage")).isEqualTo("need_material");
+        assertThat(result.get("quickReplies").toString()).contains("你帮我推荐").doesNotContain("纪念品");
+        assertThat(result.get("assistantText").toString()).contains("已识别并绑定");
+    }
+
+    @Test
     void naturalLanguageRequiresFinishedProductSizeBeforeGenerationConfirmation() {
         Map<String, Object> result = controller.chat(1L, Map.of(
                 "message", "我想做一个合金冰箱贴，主题是祥云和古城墙"

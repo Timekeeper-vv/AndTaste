@@ -178,6 +178,8 @@ public class ConversationalCreativeController {
         applyAction(brief, action, message, userId);
 
         List<Map<String, Object>> catalog = catalogOptions(text(brief.get("categoryKey")), message, 120);
+        Map<String, Object> naturalLanguageProductMatch = isFreeTextTurn(message, action)
+                ? matchProduct(message, catalog, userId) : null;
         String editTarget = "edit".equals(text(action.get("type"))) ? text(action.get("value")) : null;
         String actionType = text(action.get("type"));
         boolean structuredAction = !action.isEmpty() && !"text".equals(actionType);
@@ -240,6 +242,12 @@ public class ConversationalCreativeController {
             reply = "我已经整理好产品、灵感、材质和尺寸。生成图片前，还有需要补充的吗？没有的话点击“没有补充，开始生成”。";
         } else if (ready && (isGenerationConfirmationAction(action) || confirmationText)) {
             reply = "好的，我按当前方案开始生成产品图。";
+        } else if (creativeInput && naturalLanguageProductMatch != null && !templateUnavailable) {
+            // A concrete product phrase such as “兵马俑冰箱贴” is already
+            // enough to bind the catalog product family. Keep the cultural
+            // phrase as inspiration and move straight to the next missing
+            // field instead of asking the user to choose the product again.
+            reply = "已识别并绑定为「" + value(naturalLanguageProductMatch, "name") + "」。" + fallbackReply(brief, catalog, false);
         } else if (creativeInput && "need_size".equals(stage)) {
             // The planner may phrase the reply differently, but it must not
             // move the workflow backwards by repeating a stale question.
@@ -577,6 +585,8 @@ public class ConversationalCreativeController {
             String tags = value(row, "tags");
             if (!blank(name) && normalized.contains(name.toLowerCase(Locale.ROOT))) score += 100;
             if (!blank(key) && normalized.contains(key.toLowerCase(Locale.ROOT))) score += 90;
+            String family = productFamilyToken(name);
+            if (!blank(family) && normalized.contains(family.toLowerCase(Locale.ROOT))) score += 70;
             for (String token : tags.split("[,，/、]")) {
                 if (token.trim().length() >= 2 && normalized.contains(token.trim().toLowerCase(Locale.ROOT))) score += 8;
             }
@@ -585,6 +595,23 @@ public class ConversationalCreativeController {
         if (best != null) return best;
         if (input.length() <= 30) return findCatalogOptionByName(input, userId);
         return null;
+    }
+
+    /**
+     * Maps a user-facing product family to the canonical catalog option. The
+     * catalog stores manufacturable variants such as “合金冰箱贴”, while users
+     * naturally say “兵马俑冰箱贴” or “城市地标冰箱贴”.
+     */
+    private String productFamilyToken(String name) {
+        if (blank(name)) return "";
+        String[] families = {
+                "冰箱贴", "钥匙扣", "徽章", "胸针", "书签", "明信片", "贴纸",
+                "笔记本", "本册", "抱枕", "毛巾", "公仔", "潮玩", "毛绒",
+                "杯垫", "马克杯", "保温杯", "随行杯", "帆布包", "手提袋",
+                "T恤", "吊坠", "耳钉", "耳坠", "项链", "手链", "手镯", "摆件"
+        };
+        for (String family : families) if (name.contains(family)) return family;
+        return "";
     }
 
     private String matchMaterial(String options, String input) {
