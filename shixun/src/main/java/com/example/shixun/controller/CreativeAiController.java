@@ -2766,27 +2766,76 @@ public class CreativeAiController {
     @GetMapping("/consumer-professional-submissions/my")
     public List<Map<String,Object>> myProfessionalSubmissions() {
         Long userId = requireCurrentConsumerUser();
-        return jdbc.queryForList("SELECT id,submission_no submissionNo,title,original_name originalName,file_size fileSize,purpose,museum_name museumName,note,status,review_comment reviewComment,quoted_sample_fee_yuan quotedSampleFeeYuan,quoted_sample_lead_time quotedSampleLeadTime,quoted_sample_note quotedSampleNote,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt,reviewed_by reviewedBy,reviewed_at reviewedAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
+        return jdbc.queryForList("SELECT id,submission_no submissionNo,product_no productNo,title,original_name originalName,file_size fileSize,purpose,museum_name museumName,note,status,review_comment reviewComment,quoted_sample_fee_yuan quotedSampleFeeYuan,quoted_sample_lead_time quotedSampleLeadTime,quoted_sample_note quotedSampleNote,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt,reviewed_by reviewedBy,reviewed_at reviewedAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
     }
 
     @GetMapping("/consumer-professional-submissions/review")
     public List<Map<String,Object>> professionalSubmissionsForReview() {
         requireCreativeAdmin();
-        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_name museumName,s.note,s.status,s.review_comment reviewComment,s.quoted_sample_fee_yuan quotedSampleFeeYuan,s.quoted_sample_lead_time quotedSampleLeadTime,s.quoted_sample_note quotedSampleNote,s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo,s.sample_paid_at samplePaidAt,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
+        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.product_no productNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_name museumName,s.note,s.status,s.review_comment reviewComment,s.quoted_sample_fee_yuan quotedSampleFeeYuan,s.quoted_sample_lead_time quotedSampleLeadTime,s.quoted_sample_note quotedSampleNote,s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo,s.sample_paid_at samplePaidAt,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
     }
 
     @GetMapping("/consumer-professional-submissions/{id}/download")
     public ResponseEntity<Resource> downloadProfessionalSubmission(@PathVariable Long id) throws Exception {
-        Map<String,Object> row = jdbc.queryForMap("SELECT user_id userId,original_name originalName,storage_name storageName FROM consumer_professional_submission WHERE id=?", id);
+        List<Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT user_id userId,original_name originalName,storage_name storageName FROM consumer_professional_submission WHERE id=?",
+                id);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品包不存在");
+        Map<String,Object> row = rows.get(0);
         JwtService.Claims principal = authenticatedPrincipal();
-        Long owner = ((Number) row.get("userId")).longValue();
+        Object ownerValue = row.get("userId");
+        Long owner = ownerValue instanceof Number ? ((Number) ownerValue).longValue() : null;
+        if (owner == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品包不存在");
         if (!isCreativeAdmin(principal) && !owner.equals(principal.userId())) throw new IllegalArgumentException("无权下载该作品包");
-        Path file = creativeAssetRoot().resolve("professional-submissions").resolve(String.valueOf(row.get("storageName"))).normalize();
-        if (!file.startsWith(creativeAssetRoot().resolve("professional-submissions").normalize()) || !Files.isRegularFile(file)) throw new IOException("作品包文件不存在");
-        String filename = URLEncoder.encode(String.valueOf(row.get("originalName")), StandardCharsets.UTF_8).replace("+", "%20");
+        Path file = resolveProfessionalSubmissionFile(row.get("storageName"));
+        String originalName = nullToEmpty(row.get("originalName"))
+                .replaceAll("[\\r\\n\\\\/]", "_")
+                .trim();
+        if (blank(originalName) || !originalName.toLowerCase(Locale.ROOT).endsWith(".zip")) {
+            originalName = "professional-submission.zip";
+        }
+        String filename = URLEncoder.encode(originalName, StandardCharsets.UTF_8).replace("+", "%20");
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/zip"))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + filename)
                 .contentLength(Files.size(file)).body(new FileSystemResource(file));
+    }
+
+    /**
+     * Resolve a submission in the current private store first, then in the
+     * directories used by older deployments.  The stored name is generated by
+     * the server and must remain a single ZIP filename; accepting a path here
+     * would turn this authenticated endpoint into a filesystem traversal bug.
+     */
+    private Path resolveProfessionalSubmissionFile(Object storageNameValue) throws IOException {
+        String storageName = nullToEmpty(storageNameValue).trim();
+        if (blank(storageName) || !storageName.toLowerCase(Locale.ROOT).endsWith(".zip")) {
+            throw new IOException("专业作品包文件地址无效");
+        }
+        Path relative;
+        try {
+            relative = Path.of(storageName).normalize();
+        } catch (RuntimeException invalidPath) {
+            throw new IOException("专业作品包文件地址无效", invalidPath);
+        }
+        if (relative.isAbsolute() || relative.getNameCount() != 1 || !storageName.equals(relative.toString())) {
+            throw new IOException("专业作品包文件地址无效");
+        }
+
+        Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        List<Path> roots = new ArrayList<>();
+        roots.add(creativeAssetRoot().resolve("professional-submissions").normalize());
+        // Compatibility for files uploaded before private storage was enabled.
+        roots.add(vuePublicDir().resolve("professional-submissions").normalize());
+        roots.add(cwd.resolve("src/main/resources/static/professional-submissions").normalize());
+        roots.add(cwd.resolve("data/creative-assets/professional-submissions").normalize());
+        Set<Path> uniqueRoots = new LinkedHashSet<>();
+        for (Path root : roots) {
+            Path normalizedRoot = root.toAbsolutePath().normalize();
+            if (!uniqueRoots.add(normalizedRoot)) continue;
+            Path candidate = normalizedRoot.resolve(relative).normalize();
+            if (candidate.startsWith(normalizedRoot) && Files.isRegularFile(candidate)) return candidate;
+        }
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品包文件不存在，请重新上传作品包");
     }
 
     @PutMapping("/consumer-professional-submissions/{id}/review")
@@ -3232,20 +3281,38 @@ public class CreativeAiController {
             } else {
                 String bundleNo = no("MVB");
                 final Long persistedSimulationAssetId = simulationAssetId;
-                jdbc.update(con -> {
-                    PreparedStatement ps = con.prepareStatement(
-                        "INSERT INTO creative_multiview_bundle (bundle_no,user_id,input_asset_id,simulation_asset_id,product_no,product_key,product_name,material,product_size,view_count,status) VALUES (?,?,?,?,?,?,?,?,?,?, 'draft')",
-                            Statement.NO_GENERATED_KEYS);
-                    ps.setString(1, bundleNo); ps.setLong(2, userId); ps.setLong(3, inputAssetId);
-                    if (persistedSimulationAssetId == null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4, persistedSimulationAssetId);
-                    ps.setString(5, productNoForAsset(inputAssetId));
-                    ps.setString(6, blank(productKey) ? null : productKey);
-                    ps.setString(7, blank(productName) ? null : productName);
-                    ps.setString(8, blank(material) ? null : material);
-                    ps.setString(9, blank(productSize) ? null : productSize);
-                    ps.setInt(10, viewCount);
-                    return ps;
-                });
+                try {
+                    jdbc.update(con -> {
+                        PreparedStatement ps = con.prepareStatement(
+                            "INSERT INTO creative_multiview_bundle (bundle_no,user_id,input_asset_id,simulation_asset_id,product_no,product_key,product_name,material,product_size,view_count,status) VALUES (?,?,?,?,?,?,?,?,?,?, 'draft')",
+                                Statement.NO_GENERATED_KEYS);
+                        ps.setString(1, bundleNo); ps.setLong(2, userId); ps.setLong(3, inputAssetId);
+                        if (persistedSimulationAssetId == null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4, persistedSimulationAssetId);
+                        ps.setString(5, productNoForAsset(inputAssetId));
+                        ps.setString(6, blank(productKey) ? null : productKey);
+                        ps.setString(7, blank(productName) ? null : productName);
+                        ps.setString(8, blank(material) ? null : material);
+                        ps.setString(9, blank(productSize) ? null : productSize);
+                        ps.setInt(10, viewCount);
+                        return ps;
+                    });
+                } catch (DataAccessException legacySchema) {
+                    // product_no is additive; allow a rolling deployment to
+                    // finish a bundle before the database migration lands.
+                    jdbc.update(con -> {
+                        PreparedStatement ps = con.prepareStatement(
+                            "INSERT INTO creative_multiview_bundle (bundle_no,user_id,input_asset_id,simulation_asset_id,product_key,product_name,material,product_size,view_count,status) VALUES (?,?,?,?,?,?,?,?,?,'draft')",
+                                Statement.NO_GENERATED_KEYS);
+                        ps.setString(1, bundleNo); ps.setLong(2, userId); ps.setLong(3, inputAssetId);
+                        if (persistedSimulationAssetId == null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4, persistedSimulationAssetId);
+                        ps.setString(5, blank(productKey) ? null : productKey);
+                        ps.setString(6, blank(productName) ? null : productName);
+                        ps.setString(7, blank(material) ? null : material);
+                        ps.setString(8, blank(productSize) ? null : productSize);
+                        ps.setInt(9, viewCount);
+                        return ps;
+                    });
+                }
                 bundleId = jdbc.queryForObject(
                         "SELECT id FROM creative_multiview_bundle WHERE bundle_no=?",
                         Long.class, bundleNo);
@@ -3846,9 +3913,18 @@ public class CreativeAiController {
         // client idempotency key allowed repeated taps to create several
         // requests for the same product before the first insert committed.
         jdbc.queryForList("SELECT id FROM user WHERE id=? FOR UPDATE", userId);
-        List<Map<String,Object>> duplicate = jdbc.queryForList(
-                "SELECT id FROM consumer_production_request WHERE user_id=? AND (product_no=? OR asset_id=? OR (? IS NOT NULL AND multiview_bundle_id=?)) AND request_type=? LIMIT 1",
-                userId, blank(productNo) ? null : productNo, assetId, bundleId, bundleId, requestType);
+        List<Map<String,Object>> duplicate;
+        try {
+            duplicate = jdbc.queryForList(
+                    "SELECT id FROM consumer_production_request WHERE user_id=? AND (product_no=? OR asset_id=? OR (? IS NOT NULL AND multiview_bundle_id=?)) AND request_type=? LIMIT 1",
+                    userId, blank(productNo) ? null : productNo, assetId, bundleId, bundleId, requestType);
+        } catch (DataAccessException legacySchema) {
+            // product_no is additive. On an older node, still prevent a
+            // duplicate request through the original asset/bundle identity.
+            duplicate = bundleId == null
+                    ? jdbc.queryForList("SELECT id FROM consumer_production_request WHERE user_id=? AND asset_id=? AND request_type=? LIMIT 1", userId, assetId, requestType)
+                    : jdbc.queryForList("SELECT id FROM consumer_production_request WHERE user_id=? AND multiview_bundle_id=? AND request_type=? LIMIT 1", userId, bundleId, requestType);
+        }
         if (!duplicate.isEmpty()) throw new IllegalStateException("该产品已提交过一次" + ("sample".equals(requestType) ? "打样" : "批量生产") + "申请，不能重复提交");
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
         if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
@@ -4078,10 +4154,41 @@ public class CreativeAiController {
     @GetMapping("/admin/orders")
     public List<Map<String,Object>> adminOrders(@RequestParam(defaultValue="300") int size) {
         requireCreativeAdmin();
-        return queryProductionRequestRows(
+        int limit = Math.max(1, Math.min(size, 1000));
+        List<Map<String, Object>> rows = queryProductionRequestRows(
                 productionRequestSelect(true, true) + " WHERE r.status<>'duplicate' ORDER BY r.id DESC LIMIT ?",
                 productionRequestSelect(false, true) + " WHERE r.status<>'duplicate' ORDER BY r.id DESC LIMIT ?",
-                List.of(Math.max(1, Math.min(size, 1000))));
+                List.of(limit));
+        // Professional ZIP submissions have their own review/payment table,
+        // but they are still sample orders from the operator's perspective.
+        // Merge them here so the order center shows one complete lifecycle.
+        rows.addAll(professionalSubmissionOrderRows(limit));
+        rows.sort((left, right) -> String.valueOf(right.get("createdAt"))
+                .compareTo(String.valueOf(left.get("createdAt"))));
+        return rows.size() <= limit ? rows : new ArrayList<>(rows.subList(0, limit));
+    }
+
+    private List<Map<String, Object>> professionalSubmissionOrderRows(int limit) {
+        String columns = "s.id,s.submission_no requestNo,s.submission_no orderNo,s.user_id userId,u.username,s.title,s.title productName,s.title assetTitle," +
+                "s.product_no productNo,'professional_submission' requestType,'professional' orderType,1 quantity," +
+                "s.status,s.review_comment reviewComment,s.quoted_sample_fee_yuan sampleFeeYuan," +
+                "NULL sampleMaterial,s.quoted_sample_lead_time sampleLeadTime,s.quoted_sample_note sampleQuoteNote," +
+                "s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo," +
+                "s.sample_paid_at samplePaidAt,s.created_at createdAt,s.updated_at updatedAt";
+        try {
+            return jdbc.queryForList("SELECT " + columns + " FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC LIMIT ?", limit);
+        } catch (DataAccessException currentSchemaFailure) {
+            // product_no was added by the unified workflow migration. Keep
+            // order management usable during an older rolling deployment.
+            try {
+                return jdbc.queryForList("SELECT " + columns.replace("s.product_no productNo,", "CONCAT('PRD-',s.submission_no) productNo,")
+                        + " FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC LIMIT ?", limit);
+            } catch (DataAccessException legacySchemaFailure) {
+                // The professional submission feature may not exist on a
+                // pre-feature database; production orders remain available.
+                return new ArrayList<>();
+            }
+        }
     }
 
     /** Staff quote entry point shared by multi-view and 3D model requests. */
@@ -5519,23 +5626,27 @@ public class CreativeAiController {
     }
 
     private String productionRequestSelect(boolean currentSchema, boolean includeBundle) {
+        String productIdentityColumn = currentSchema ? "r.product_no productNo," : "NULL productNo,";
         String projectColumns = currentSchema
                 ? "r.project_id projectId,r.version_id versionId,"
                 : "NULL projectId,NULL versionId,";
         String bundleColumns = includeBundle
-                ? "r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo,b.product_no multiviewProductNo,b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,"
+                ? "r.multiview_bundle_id multiviewBundleId,b.bundle_no multiviewBundleNo," + (currentSchema ? "b.product_no multiviewProductNo," : "NULL multiviewProductNo,") + "b.view_count multiviewViewCount,b.status multiviewBundleStatus,b.product_name multiviewProductName,b.product_size multiviewProductSize,b.review_comment multiviewBundleComment,"
                 : "NULL multiviewBundleId,NULL multiviewBundleNo,NULL multiviewViewCount,NULL multiviewBundleStatus,NULL multiviewProductName,NULL multiviewProductSize,NULL multiviewBundleComment,";
+        String quoteColumns = currentSchema
+                ? "r.sample_lead_time sampleLeadTime,r.sample_material sampleMaterial,r.sample_quote_note sampleQuoteNote,"
+                : "NULL sampleLeadTime,NULL sampleMaterial,NULL sampleQuoteNote,";
         String lifecycleColumns = currentSchema
                 ? "r.sample_workflow_status sampleWorkflowStatus,r.sample_received_at sampleReceivedAt,r.sample_accepted_at sampleAcceptedAt,r.sample_revision_count sampleRevisionCount,r.bulk_unlocked_at bulkUnlockedAt,r.bulk_unlocked_by bulkUnlockedBy,"
                 : "NULL sampleWorkflowStatus,NULL sampleReceivedAt,NULL sampleAcceptedAt,NULL sampleRevisionCount,NULL bulkUnlockedAt,NULL bulkUnlockedBy,";
         String bundleJoin = includeBundle ? " LEFT JOIN creative_multiview_bundle b ON b.id=r.multiview_bundle_id" : "";
-        return "SELECT r.id,r.request_no requestNo,r.product_no productNo,r.user_id userId,u.username,r.asset_id assetId,"
+        return "SELECT r.id,r.request_no requestNo," + productIdentityColumn + "r.user_id userId,u.username,r.asset_id assetId,"
                 + projectColumns + bundleColumns
                 + "a.title assetTitle,a.asset_type assetType,a.preview_url previewUrl,a.file_url fileUrl,a.format,"
                 + "r.request_type requestType,r.title,r.quantity,r.self_ship_quantity selfShipQuantity,"
                 + "r.museum_distribution_json museumDistributionJson,r.recipient_name recipientName,r.recipient_phone recipientPhone,r.recipient_address recipientAddress,r.note,"
                 + "r.status,r.review_comment reviewComment,r.reviewed_by reviewedBy,r.reviewed_at reviewedAt,"
-                + "r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan,r.sample_lead_time sampleLeadTime,r.sample_material sampleMaterial,r.sample_quote_note sampleQuoteNote,r.sample_payment_status samplePaymentStatus,"
+                + "r.sample_product_name sampleProductName,r.sample_fee_yuan sampleFeeYuan," + quoteColumns + "r.sample_payment_status samplePaymentStatus,"
                 + "r.sample_payment_order_no samplePaymentOrderNo,r.sample_paid_at samplePaidAt,"
                 + lifecycleColumns + "r.created_at createdAt,r.updated_at updatedAt "
                 + "FROM consumer_production_request r JOIN user u ON u.id=r.user_id "

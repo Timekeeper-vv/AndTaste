@@ -3,6 +3,7 @@ package com.example.shixun.controller;
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
 import org.springframework.http.HttpStatus;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -176,7 +177,14 @@ public class CommercialProductizationController {
         jdbc.update("INSERT INTO creative_quote_request (request_no,user_id,asset_id,product_template_id,request_type,quantity,purpose,note,copyright_basis,copyright_confirmed,copyright_statement_version,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'new')",
                 requestNo, userId, assetId, product.get("id"), requestType, quantity, purpose, limit(text(body.get("note")), 1200), basis, true, COPYRIGHT_VERSION);
         Long applicationId = jdbc.queryForObject("SELECT id FROM creative_quote_request WHERE request_no=?", Long.class, requestNo);
-        if (assetId != null) jdbc.update("UPDATE creative_quote_request q JOIN digital_asset a ON a.id=? SET q.product_no=a.product_no WHERE q.id=?", assetId, applicationId);
+        if (assetId != null) {
+            try {
+                jdbc.update("UPDATE creative_quote_request q JOIN digital_asset a ON a.id=? SET q.product_no=a.product_no WHERE q.id=?", assetId, applicationId);
+            } catch (DataAccessException legacySchema) {
+                // product_no is added by the unified workflow migration; the
+                // request itself remains valid during a rolling upgrade.
+            }
+        }
         audit("quote", String.valueOf(applicationId), "created", principal.username(), "用户提交报价/打样申请");
         Map<String, Object> out = result(requestNo, "报价申请已提交，运营会根据作品、数量和工艺条件人工确认");
         out.put("id", applicationId);
@@ -216,7 +224,12 @@ public class CommercialProductizationController {
         jdbc.update("INSERT INTO creative_consignment_application (application_no,user_id,asset_id,product_template_id,channel_id,channel_name_snapshot,sales_mode,creator_share_percent,platform_service_percent,note,copyright_basis,copyright_confirmed,copyright_statement_version,authorization_note,status) VALUES (?,?,?,?,?,?, 'preorder',70.00,30.00,?,?,?,?,?,'pending_review')",
                 applicationNo, userId, assetId, product.get("id"), channelId, channelName, limit(text(body.get("note")), 1200), basis, true, COPYRIGHT_VERSION, limit(text(body.get("authorizationNote")), 1000));
         Long applicationId = jdbc.queryForObject("SELECT id FROM creative_consignment_application WHERE application_no=?", Long.class, applicationNo);
-        jdbc.update("UPDATE creative_consignment_application c JOIN digital_asset a ON a.id=? SET c.product_no=a.product_no WHERE c.id=?", assetId, applicationId);
+        try {
+            jdbc.update("UPDATE creative_consignment_application c JOIN digital_asset a ON a.id=? SET c.product_no=a.product_no WHERE c.id=?", assetId, applicationId);
+        } catch (DataAccessException legacySchema) {
+            // See the quote request above: identity backfill is best effort
+            // until the additive migration has completed.
+        }
         audit("consignment", String.valueOf(applicationId), "created", principal.username(), "用户提交代销申请");
         Map<String, Object> out = result(applicationNo, "代销申请已提交，平台会先进行版权、作品质量和渠道匹配审核");
         out.put("id", applicationId);

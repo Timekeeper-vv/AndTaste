@@ -51,7 +51,7 @@ const loading = ref(false)
 const reviewingId = ref<number | null>(null)
 const reviewingBundleId = ref<number | null>(null)
 const keywordUserId = ref('')
-const status = ref<'all' | ReviewStatus>('all')
+const status = ref<'all' | ReviewStatus | 'processing'>('all')
 const activeWork = ref<ConsumerAsset | null>(null)
 const activeMediaUrl = ref('')
 const professionalSubmissions = ref<any[]>([])
@@ -82,18 +82,23 @@ const stats = computed(() => {
   const total = source.length
   const review = source.filter(x => x.status === 'review').length
   const approved = source.filter(x => x.status === 'approved').length
+  const processing = source.filter(x => x.status === 'processing').length
   const rejected = source.filter(x => x.status === 'rejected').length
-  return { total, review, approved, rejected }
+  return { total, review, approved, processing, rejected }
 })
 
 const statusText: Record<string, string> = {
   review: '待审核',
   approved: '已通过',
+  processing: '生产中',
   rejected: '未通过',
   draft: '草稿',
 }
 
-const statusClass = (s?: string) => s === 'approved' ? 'ok' : s === 'rejected' ? 'bad' : 'wait'
+const statusClass = (s?: string) => s === 'approved' || s === 'processing' ? 'ok' : s === 'rejected' ? 'bad' : 'wait'
+function professionalPaymentLocked(item: any) {
+  return item?.status === 'processing' || ['pending', 'manual_review', 'paid'].includes(String(item?.samplePaymentStatus || ''))
+}
 function professionalQuoteDraft(item: any) {
   const id = Number(item.id)
   if (!professionalQuoteDrafts.value[id]) {
@@ -399,6 +404,7 @@ onMounted(load)
         <article><b>{{ stats.total }}</b><span>当前列表</span></article>
         <article><b>{{ stats.review }}</b><span>待审核</span></article>
         <article><b>{{ stats.approved }}</b><span>已通过</span></article>
+        <article><b>{{ stats.processing }}</b><span>生产中</span></article>
         <article><b>{{ stats.rejected }}</b><span>未通过</span></article>
       </div>
     </section>
@@ -414,6 +420,7 @@ onMounted(load)
           <option value="all">全部</option>
           <option value="review">待审核</option>
           <option value="approved">已通过</option>
+          <option value="processing">生产中</option>
           <option value="rejected">未通过</option>
         </select>
       </label>
@@ -493,8 +500,8 @@ onMounted(load)
               <td><strong>{{ item.createdByName || `用户 #${item.userId}` }}</strong><small>{{ item.purpose === 'museum_sale' ? `博物馆售卖${item.museumName ? ` · ${item.museumName}` : ''}` : '个人创作' }}</small></td>
               <td><strong>{{ item.originalName }}</strong><small>{{ item.fileSize ? `${(item.fileSize / 1024 / 1024).toFixed(1)} MB` : '-' }} · {{ formatTime(item.createdAt) }}</small></td>
               <td><span class="submission-status" :class="statusClass(item.status)">{{ statusText[item.status || 'review'] || item.status }}</span><small v-if="item.reviewComment" class="review-note">{{ item.reviewComment }}</small></td>
-              <td><div class="professional-quote-form"><label><span>打样费</span><input v-model="professionalQuoteDraft(item).fee" inputmode="decimal" placeholder="例如 2000" /></label><label><span>预计交期</span><input v-model="professionalQuoteDraft(item).leadTime" placeholder="例如 10-15 个工作日" /></label><label><span>报价说明</span><textarea v-model="professionalQuoteDraft(item).note" rows="2" placeholder="包含范围、运费、修改次数等" /></label><small v-if="item.status === 'approved'">支付：{{ item.samplePaymentStatus === 'paid' ? '已支付' : item.samplePaymentStatus === 'pending' ? '支付处理中' : '待用户支付' }}</small></div></td>
-              <td><div class="submission-actions"><button type="button" class="outline" @click="downloadProfessionalSubmission(item)">下载 ZIP</button><button type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="openRejectForm('professional', item)">不通过</button><button v-if="item.status !== 'review'" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
+              <td><div class="professional-quote-form"><label><span>打样费</span><input v-model="professionalQuoteDraft(item).fee" :disabled="professionalPaymentLocked(item)" inputmode="decimal" placeholder="例如 2000" /></label><label><span>预计交期</span><input v-model="professionalQuoteDraft(item).leadTime" :disabled="professionalPaymentLocked(item)" placeholder="例如 10-15 个工作日" /></label><label><span>报价说明</span><textarea v-model="professionalQuoteDraft(item).note" :disabled="professionalPaymentLocked(item)" rows="2" placeholder="包含范围、运费、修改次数等" /></label><small v-if="['approved', 'processing'].includes(String(item.status))">支付：{{ item.samplePaymentStatus === 'paid' ? '已支付，生产中' : item.samplePaymentStatus === 'pending' ? '支付处理中' : item.samplePaymentStatus === 'manual_review' ? '人工核验中' : '待用户支付' }}</small></div></td>
+              <td><div class="submission-actions"><button type="button" class="outline" @click="downloadProfessionalSubmission(item)">下载 ZIP</button><button v-if="!professionalPaymentLocked(item)" type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button v-if="!professionalPaymentLocked(item)" type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="openRejectForm('professional', item)">不通过</button><button v-if="item.status !== 'review' && !professionalPaymentLocked(item)" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
             </tr>
           </tbody>
         </table>

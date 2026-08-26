@@ -2553,7 +2553,12 @@ public class PaymentController {
         if (productCode.startsWith("professional_submission_sample_")) {
             try {
                 long submissionId = Long.parseLong(productCode.substring("professional_submission_sample_".length()));
-                int linked = jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='paid',sample_paid_at=NOW() WHERE id=? AND sample_payment_order_no=? AND sample_payment_status IN ('pending','manual_review') AND status='approved'", submissionId, orderNo);
+                // A professional ZIP follows the same lifecycle as a normal
+                // sample request: once the payment is confirmed, the quote
+                // is no longer waiting for payment and must enter production.
+                // Keep the status transition in the payment transaction so
+                // manual confirmation and WeChat callbacks behave identically.
+                int linked = jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='paid',sample_paid_at=NOW(),status='processing' WHERE id=? AND sample_payment_order_no=? AND sample_payment_status IN ('pending','manual_review') AND status='approved'", submissionId, orderNo);
                 if (linked != 1) throw new IllegalStateException("专业作品打样支付订单未关联到可支付报价");
             } catch (NumberFormatException ignored) {
                 throw new IllegalStateException("专业作品打样支付订单关联申请无效");

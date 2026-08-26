@@ -307,13 +307,14 @@ export const uploadReference = (filePath: string, projectId?: number | string | 
 export interface ProfessionalSubmission {
   id?: number
   submissionNo?: string
+  productNo?: string
   title?: string
   originalName?: string
   fileSize?: number
   purpose?: 'personal' | 'museum_sale' | string
   museumName?: string
   note?: string
-  status?: 'review' | 'approved' | 'rejected' | string
+  status?: 'review' | 'approved' | 'processing' | 'rejected' | string
   reviewComment?: string
   quotedSampleFeeYuan?: number | string | null
   quotedSampleLeadTime?: string
