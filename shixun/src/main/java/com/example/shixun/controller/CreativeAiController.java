@@ -2796,8 +2796,38 @@ public class CreativeAiController {
         }
         String filename = URLEncoder.encode(originalName, StandardCharsets.UTF_8).replace("+", "%20");
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/zip"))
+                .cacheControl(CacheControl.noStore())
+                // Nginx honors this header and forwards the file as it is read
+                // instead of buffering the complete ZIP before the client sees
+                // the first bytes.
+                .header("X-Accel-Buffering", "no")
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + filename)
                 .contentLength(Files.size(file)).body(new FileSystemResource(file));
+    }
+
+    /**
+     * Exchanges the normal login session for a short-lived, submission-bound
+     * URL. Native browser downloads can then stream the ZIP immediately rather
+     * than waiting for the frontend to buffer the entire response as a Blob.
+     */
+    @PostMapping("/consumer-professional-submissions/{id}/download-access")
+    public Map<String,Object> createProfessionalSubmissionDownloadAccess(@PathVariable Long id) {
+        List<Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT user_id userId FROM consumer_professional_submission WHERE id=?",
+                id);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品包不存在");
+        Long owner = numberAsLong(rows.get(0).get("userId"));
+        JwtService.Claims principal = authenticatedPrincipal();
+        if (owner == null || (!isCreativeAdmin(principal) && !owner.equals(principal.userId()))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权下载该作品包");
+        }
+        String token = jwtService.issueProfessionalSubmissionAccessToken(
+                principal.userId(), principal.username(), principal.role(), id);
+        String encodedToken = URLEncoder.encode(token, StandardCharsets.UTF_8);
+        String url = "/api/creative/ai/consumer-professional-submissions/" + id
+                + "/download?access_token=" + encodedToken;
+        return Map.of("submissionId", id, "url", url, "expiresIn", 300,
+                "message", "下载链接将在5分钟后失效");
     }
 
     /**
@@ -4163,9 +4193,81 @@ public class CreativeAiController {
         // but they are still sample orders from the operator's perspective.
         // Merge them here so the order center shows one complete lifecycle.
         rows.addAll(professionalSubmissionOrderRows(limit));
-        rows.sort((left, right) -> String.valueOf(right.get("createdAt"))
-                .compareTo(String.valueOf(left.get("createdAt"))));
-        return rows.size() <= limit ? rows : new ArrayList<>(rows.subList(0, limit));
+        return deduplicateAdminOrderRows(rows, limit);
+    }
+
+    /**
+     * Older workflow versions created a new request row when an operator
+     * rejected and the user resubmitted the same product. Those rows are
+     * useful audit history, but the order center should show one current order
+     * instead of every historical attempt. Keep the newest row for a stable
+     * product identity and leave rows without an identity untouched.
+     */
+    private List<Map<String, Object>> deduplicateAdminOrderRows(List<Map<String, Object>> rows, int limit) {
+        Map<String, Map<String, Object>> latestByIdentity = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            String identity = adminOrderIdentity(row);
+            if (identity == null) {
+                // A malformed/legacy row must remain visible; never merge
+                // unrelated orders merely because both have missing data.
+                identity = "row:" + firstNonBlank(str(row.get("orderNo")), str(row.get("requestNo")), str(row.get("id")));
+            }
+            Map<String, Object> existing = latestByIdentity.get(identity);
+            if (existing == null || compareAdminOrderRecency(row, existing) > 0) {
+                latestByIdentity.put(identity, row);
+            }
+        }
+        List<Map<String, Object>> result = new ArrayList<>(latestByIdentity.values());
+        result.sort((left, right) -> compareAdminOrderRecency(right, left));
+        return result.size() <= limit ? result : new ArrayList<>(result.subList(0, limit));
+    }
+
+    private String adminOrderIdentity(Map<String, Object> row) {
+        String userId = normalizedOrderPart(row.get("userId"));
+        String requestType = firstNonBlank(str(row.get("requestType")), str(row.get("orderType"))).trim();
+        String productIdentity = firstNonBlank(
+                str(row.get("productNo")),
+                str(row.get("multiviewProductNo")),
+                normalizedOrderPart(row.get("multiviewBundleId")),
+                normalizedOrderPart(row.get("assetId")),
+                str(row.get("requestNo")),
+                str(row.get("orderNo")));
+        if (blank(userId) || blank(requestType) || blank(productIdentity)) return null;
+        return userId + "|" + requestType.trim().toLowerCase(Locale.ROOT) + "|" + productIdentity.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizedOrderPart(Object value) {
+        String text = str(value).trim();
+        return blank(text) || "null".equalsIgnoreCase(text) ? "" : text;
+    }
+
+    private int compareAdminOrderRecency(Map<String, Object> left, Map<String, Object> right) {
+        int updated = compareOrderDateValues(left.get("updatedAt"), right.get("updatedAt"));
+        if (updated != 0) return updated;
+        int created = compareOrderDateValues(left.get("createdAt"), right.get("createdAt"));
+        if (created != 0) return created;
+        return Long.compare(orderRowId(left), orderRowId(right));
+    }
+
+    private int compareOrderDateValues(Object left, Object right) {
+        String leftValue = normalizedOrderPart(left);
+        String rightValue = normalizedOrderPart(right);
+        if (leftValue.isEmpty() && rightValue.isEmpty()) return 0;
+        if (leftValue.isEmpty()) return -1;
+        if (rightValue.isEmpty()) return 1;
+        // JDBC timestamps and LocalDateTime values both sort correctly after
+        // normalizing their separator; retain lexical fallback for legacy
+        // date strings that do not parse as an ISO timestamp.
+        String leftIso = leftValue.replace(' ', 'T');
+        String rightIso = rightValue.replace(' ', 'T');
+        return leftIso.compareTo(rightIso);
+    }
+
+    private long orderRowId(Map<String, Object> row) {
+        Object value = row.get("id");
+        if (value instanceof Number number) return number.longValue();
+        try { return Long.parseLong(normalizedOrderPart(value)); }
+        catch (NumberFormatException ignored) { return 0L; }
     }
 
     private List<Map<String, Object>> professionalSubmissionOrderRows(int limit) {

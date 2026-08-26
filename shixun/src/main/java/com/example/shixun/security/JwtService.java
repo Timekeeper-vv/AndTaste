@@ -25,6 +25,7 @@ public class JwtService {
     private static final long ASSET_ACCESS_TOKEN_TTL_SECONDS = 300;
     private static final String ASSET_READ_SCOPE = "asset:read";
     private static final String ASSET_MATERIAL_LAB_SCOPE = "asset:material-lab";
+    private static final String PROFESSIONAL_SUBMISSION_READ_SCOPE = "professional-submission:read";
     private static final Set<String> SUPPORTED_ROLES = Set.of("admin", "technician", "feeder", "designer", "user");
 
     private final ObjectMapper mapper;
@@ -73,6 +74,16 @@ public class JwtService {
     }
 
     /**
+     * Issues a short-lived token for streaming one professional ZIP submission
+     * through a browser download URL. It has a separate scope so it cannot be
+     * replayed against an asset media endpoint with a colliding id.
+     */
+    public String issueProfessionalSubmissionAccessToken(Long userId, String username, String role,
+                                                         Long submissionId) {
+        return issueAssetAccessToken(userId, username, role, submissionId, PROFESSIONAL_SUBMISSION_READ_SCOPE);
+    }
+
+    /**
      * Issues a five-minute token for the material laboratory of one model.
      * It is deliberately more narrow than a normal login token: the filter
      * only accepts it for that asset's read endpoints and material-variant
@@ -85,7 +96,7 @@ public class JwtService {
     private String issueAssetAccessToken(Long userId, String username, String role, Long assetId, String scope) {
         if (userId == null || userId <= 0 || assetId == null || assetId <= 0
                 || username == null || username.isBlank() || !SUPPORTED_ROLES.contains(role)
-                || !Set.of(ASSET_READ_SCOPE, ASSET_MATERIAL_LAB_SCOPE).contains(scope)) {
+                || !Set.of(ASSET_READ_SCOPE, ASSET_MATERIAL_LAB_SCOPE, PROFESSIONAL_SUBMISSION_READ_SCOPE).contains(scope)) {
             throw new IllegalArgumentException("媒体访问令牌参数无效");
         }
         if (ASSET_MATERIAL_LAB_SCOPE.equals(scope) && !"user".equals(role)) {
@@ -118,6 +129,12 @@ public class JwtService {
 
     public Claims verifyMediaAccessToken(String token, long expectedAssetId) {
         return verifyScopedAssetAccessToken(token, expectedAssetId, Set.of(ASSET_READ_SCOPE));
+    }
+
+    /** Verifies a token that may only stream the referenced professional ZIP. */
+    public Claims verifyProfessionalSubmissionAccessToken(String token, long expectedSubmissionId) {
+        return verifyScopedAssetAccessToken(token, expectedSubmissionId,
+                Set.of(PROFESSIONAL_SUBMISSION_READ_SCOPE));
     }
 
     /** Verifies the upload-capable, single-asset material-lab token only. */

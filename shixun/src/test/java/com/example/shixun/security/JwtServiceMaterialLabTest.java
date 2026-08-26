@@ -41,4 +41,18 @@ class JwtServiceMaterialLabTest {
         assertThatThrownBy(() -> service.verifyMaterialLabAccessToken(token, 42L))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void professionalSubmissionTokenIsBoundToItsSubmissionAndScope() {
+        String token = service.issueProfessionalSubmissionAccessToken(7L, "creative-user", "admin", 48L);
+
+        assertThat(service.verifyProfessionalSubmissionAccessToken(token, 48L).userId()).isEqualTo(7L);
+        assertThatThrownBy(() -> service.verifyProfessionalSubmissionAccessToken(token, 49L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.verifyAssetReadOrMaterialLabAccessToken(token, 48L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.verify(token))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("受限媒体令牌不能用于通用接口");
+    }
 }

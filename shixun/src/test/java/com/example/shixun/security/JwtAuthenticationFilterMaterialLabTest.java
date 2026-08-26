@@ -42,6 +42,19 @@ class JwtAuthenticationFilterMaterialLabTest {
                 .isEqualTo(401);
     }
 
+    @Test
+    void professionalSubmissionTokenIsAcceptedOnlyForItsDownloadRoute() throws Exception {
+        String downloadToken = jwtService.issueProfessionalSubmissionAccessToken(7L, "creative-user", "user", 48L);
+        JwtAuthenticationFilter filter = filterForCreativeUser();
+
+        assertThat(run(filter, request("GET", "/api/creative/ai/consumer-professional-submissions/48/download", downloadToken)))
+                .isEqualTo(200);
+        assertThat(run(filter, request("GET", "/api/creative/ai/consumer-professional-submissions/49/download", downloadToken)))
+                .isEqualTo(401);
+        assertThat(run(filter, request("GET", "/api/creative/ai/assets/48/model-content", downloadToken)))
+                .isEqualTo(401);
+    }
+
     private JwtAuthenticationFilter filterForCreativeUser() {
         JdbcTemplate jdbc = new JdbcTemplate() {
             @Override

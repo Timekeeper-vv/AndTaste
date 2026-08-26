@@ -68,19 +68,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String requestPath = path(request);
         Long readableAssetId = assetReadIdForRequest(requestPath, request.getMethod());
         Long materialLabUploadAssetId = materialLabUploadAssetIdForRequest(requestPath, request.getMethod());
-        // Browser model/image viewers cannot set Authorization headers.  A
-        // scoped token may therefore appear only on a private asset read URL,
-        // or on the single material-variant upload URL.  Do not generalize
-        // this branch to arbitrary API paths.
+        Long professionalSubmissionId = professionalSubmissionReadIdForRequest(requestPath, request.getMethod());
+        // Browser viewers and native downloads cannot set Authorization
+        // headers. A scoped token may therefore appear only on a private
+        // asset read URL, professional ZIP download URL, or the single
+        // material-variant upload URL. Do not generalize this branch.
         boolean scopedAssetToken = (token == null || token.isBlank())
-                && (readableAssetId != null || materialLabUploadAssetId != null);
+                && (readableAssetId != null || materialLabUploadAssetId != null || professionalSubmissionId != null);
         if (scopedAssetToken) {
             token = request.getParameter("access_token");
         }
         if (token == null || token.isBlank()) { unauthorized(response, "请先登录"); return; }
         JwtService.Claims claims;
         try {
-            if (materialLabUploadAssetId != null && scopedAssetToken) {
+            if (professionalSubmissionId != null && scopedAssetToken) {
+                // A professional ZIP token cannot be replayed against an
+                // asset URL, even if the numeric ids happen to collide.
+                claims = jwtService.verifyProfessionalSubmissionAccessToken(token.trim(), professionalSubmissionId);
+            } else if (materialLabUploadAssetId != null && scopedAssetToken) {
                 // State-changing access must use the narrower material-lab
                 // scope; an ordinary asset:read token is never enough.
                 claims = jwtService.verifyMaterialLabAccessToken(token.trim(), materialLabUploadAssetId);
@@ -171,6 +176,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (!"POST".equalsIgnoreCase(method)) return null;
         java.util.regex.Matcher matcher = java.util.regex.Pattern
                 .compile("/api/creative/ai/assets/(\\d+)/material-variants")
+                .matcher(path);
+        if (!matcher.matches()) return null;
+        try {
+            return Long.valueOf(matcher.group(1));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private Long professionalSubmissionReadIdForRequest(String path, String method) {
+        if (!"GET".equalsIgnoreCase(method)) return null;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("/api/creative/ai/consumer-professional-submissions/(\\d+)/download")
                 .matcher(path);
         if (!matcher.matches()) return null;
         try {

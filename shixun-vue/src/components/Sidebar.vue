@@ -22,7 +22,6 @@ const allMenus: MenuGroup[] = [
   { group: '总览', items: [
     { key: 'dashboard', label: '经营看板', roles: ALL_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>` },
     { key: 'approvalCenter', label: '审批中心', roles: MANAGER_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>` },
-    { key: 'consumerWorksReview', label: 'C端作品审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'professionalWorksReview', label: '专业作品审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'multiviewReview', label: '多视图审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'consumerAssetInventory', label: 'C端用户端库存', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
@@ -122,7 +121,21 @@ const allMenus: MenuGroup[] = [
 
 const menus = computed<MenuGroup[]>(() => {
   const role: Role = props.currentUser?.role || 'admin'
-  return allMenus.map(g => ({ ...g, items: g.items.filter(item => item.roles.includes(role)) })).filter(g => g.items.length > 0)
+  const seen = new Set<PageName>()
+  return allMenus
+    .map(g => ({
+      ...g,
+      // Menu entries are keyed by page; keep the first visible definition so
+      // a repeated config item cannot render duplicate navigation buttons.
+      items: g.items
+        .filter(item => item.roles.includes(role))
+        .filter(item => {
+          if (seen.has(item.key)) return false
+          seen.add(item.key)
+          return true
+        }),
+    }))
+    .filter(g => g.items.length > 0)
 })
 const currentRoleLabel = computed<string>(() => roleLabels[props.currentUser?.role] || '超级管理员')
 const currentRoleColor = computed<string>(() => roleColors[props.currentUser?.role] || '#ef4444')

@@ -56,6 +56,7 @@ const activeWork = ref<ConsumerAsset | null>(null)
 const activeMediaUrl = ref('')
 const professionalSubmissions = ref<any[]>([])
 const reviewingSubmissionId = ref<number | null>(null)
+const downloadingProfessionalId = ref<number | null>(null)
 const professionalQuoteDrafts = ref<Record<number, { fee: string; leadTime: string; note: string }>>({})
 const rejectionTarget = ref<{ kind: 'work' | 'bundle' | 'professional'; item: any } | null>(null)
 const rejectionReason = ref('')
@@ -290,26 +291,32 @@ async function reviewProfessionalSubmission(item: any, nextStatus: ReviewStatus,
 }
 
 async function downloadProfessionalSubmission(item: any) {
+  const id = Number(item?.id)
+  if (!Number.isInteger(id) || id <= 0 || downloadingProfessionalId.value === id) return
+  downloadingProfessionalId.value = id
   try {
-    const r = await fetch(`/api/creative/ai/consumer-professional-submissions/${item.id}/download`)
+    // Exchange the normal Authorization header for a short-lived URL. The
+    // browser can then stream the response natively instead of buffering the
+    // entire ZIP in `await response.blob()` before starting the download.
+    const r = await fetch(`/api/creative/ai/consumer-professional-submissions/${id}/download-access`, { method: 'POST' })
     if (!r.ok) {
       const err = await r.json().catch(() => null)
       throw new Error(err?.message || `HTTP ${r.status}`)
     }
-    const blob = await r.blob()
-    const url = URL.createObjectURL(blob)
+    const data = await r.json().catch(() => null)
+    const url = typeof data?.url === 'string' ? data.url : ''
+    if (!url) throw new Error('服务器未返回有效下载地址')
     const link = document.createElement('a')
     link.href = url
-    link.download = item.originalName || 'professional-submission.zip'
+    link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
     link.remove()
-    // Defer revoke so the browser can start fetching the blob before the URL
-    // is released. Revoking synchronously after click() cancels the download
-    // in Chromium/Safari/Firefox, which is why the ZIP never saved.
-    setTimeout(() => URL.revokeObjectURL(url), 1500)
+    emit('alert', '已开始下载专业作品包', 'success')
   } catch (e: any) {
     emit('alert', '下载专业作品包失败：' + (e?.message || e), 'error')
+  } finally {
+    downloadingProfessionalId.value = null
   }
 }
 
@@ -501,7 +508,7 @@ onMounted(load)
               <td><strong>{{ item.originalName }}</strong><small>{{ item.fileSize ? `${(item.fileSize / 1024 / 1024).toFixed(1)} MB` : '-' }} · {{ formatTime(item.createdAt) }}</small></td>
               <td><span class="submission-status" :class="statusClass(item.status)">{{ statusText[item.status || 'review'] || item.status }}</span><small v-if="item.reviewComment" class="review-note">{{ item.reviewComment }}</small></td>
               <td><div class="professional-quote-form"><label><span>打样费</span><input v-model="professionalQuoteDraft(item).fee" :disabled="professionalPaymentLocked(item)" inputmode="decimal" placeholder="例如 2000" /></label><label><span>预计交期</span><input v-model="professionalQuoteDraft(item).leadTime" :disabled="professionalPaymentLocked(item)" placeholder="例如 10-15 个工作日" /></label><label><span>报价说明</span><textarea v-model="professionalQuoteDraft(item).note" :disabled="professionalPaymentLocked(item)" rows="2" placeholder="包含范围、运费、修改次数等" /></label><small v-if="['approved', 'processing'].includes(String(item.status))">支付：{{ item.samplePaymentStatus === 'paid' ? '已支付，生产中' : item.samplePaymentStatus === 'pending' ? '支付处理中' : item.samplePaymentStatus === 'manual_review' ? '人工核验中' : '待用户支付' }}</small></div></td>
-              <td><div class="submission-actions"><button type="button" class="outline" @click="downloadProfessionalSubmission(item)">下载 ZIP</button><button v-if="!professionalPaymentLocked(item)" type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button v-if="!professionalPaymentLocked(item)" type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="openRejectForm('professional', item)">不通过</button><button v-if="item.status !== 'review' && !professionalPaymentLocked(item)" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
+              <td><div class="submission-actions"><button type="button" class="outline" :disabled="downloadingProfessionalId === item.id" @click="downloadProfessionalSubmission(item)">{{ downloadingProfessionalId === item.id ? '准备下载…' : '下载 ZIP' }}</button><button v-if="!professionalPaymentLocked(item)" type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button v-if="!professionalPaymentLocked(item)" type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="openRejectForm('professional', item)">不通过</button><button v-if="item.status !== 'review' && !professionalPaymentLocked(item)" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
             </tr>
           </tbody>
         </table>
