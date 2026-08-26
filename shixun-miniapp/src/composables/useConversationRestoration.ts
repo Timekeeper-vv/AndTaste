@@ -38,6 +38,8 @@ export interface ConversationRestorationOptions {
   campaignAttached: AnyRef<boolean>
   modelInputMode: AnyRef<string>
   refinementNote: AnyRef<string>
+  replacementImagePending: AnyRef<boolean>
+  replacementPrompt: AnyRef<string>
   chatQuickReplies: AnyRef<ConversationQuickReply[]>
   chatStage: AnyRef<string>
   awaitingGenerationConfirmation: AnyRef<boolean>
@@ -83,6 +85,7 @@ export function useConversationRestoration(options: ConversationRestorationOptio
         break
       case 'image_inspiration_uploaded':
       case 'image_inspiration_confirmed':
+      case 'image_reference_replaced':
         options.mode.value = 'image'
         // An uploaded image is the primary source, but any text brief entered
         // before the upload is still a valid supplement. Clearing it here made
@@ -92,6 +95,16 @@ export function useConversationRestoration(options: ConversationRestorationOptio
           options.inspirationText.value = restoredInspiration
         }
         options.referenceAssetId.value = Number(payload.inputAssetId || payload.referenceAssetId) || options.referenceAssetId.value || null
+        if (eventType(event) === 'image_reference_replaced') {
+          options.replacementImagePending.value = true
+          options.replacementPrompt.value = ''
+          options.chatStage.value = 'need_additional_detail'
+        }
+        break
+      case 'image_reference_replacement_prompt':
+        options.replacementImagePending.value = true
+        options.replacementPrompt.value = String(payload.prompt || '')
+        options.chatStage.value = 'need_additional_detail'
         break
       case 'material_selected':
         options.material.value = String(payload.material || payload.materialName || options.material.value)
@@ -111,21 +124,29 @@ export function useConversationRestoration(options: ConversationRestorationOptio
         if (payload.inspirationText) options.inspirationText.value = String(payload.inspirationText)
         break
       case 'image_generation_queued':
+        options.replacementImagePending.value = false
+        options.replacementPrompt.value = ''
         options.pendingImageJobId.value = Number(payload.jobId) || options.pendingImageJobId.value
         options.pendingGenerationPrompt.value = String(payload.prompt || options.pendingGenerationPrompt.value)
         break
       case 'image_generation_failed':
+        options.replacementImagePending.value = false
+        options.replacementPrompt.value = ''
         options.pendingImageJobId.value = null
         options.pendingGenerationPrompt.value = ''
         break
       case 'image_generated':
         options.pendingImageJobId.value = null
         options.pendingGenerationPrompt.value = ''
+        options.replacementImagePending.value = false
+        options.replacementPrompt.value = ''
         options.generatedAssetId.value = Number(payload.generatedAssetId) || options.generatedAssetId.value
         options.previewUrl.value = options.imageUrl({ previewUrl: payload.previewUrl })
         options.referenceAnalysis.value = String(payload.referenceAnalysis || options.referenceAnalysis.value || '')
         break
       case 'image_refined':
+        options.replacementImagePending.value = false
+        options.replacementPrompt.value = ''
         options.generatedAssetId.value = Number(payload.generatedAssetId) || options.generatedAssetId.value
         options.previewUrl.value = options.imageUrl({ previewUrl: payload.previewUrl })
         options.referenceAnalysis.value = String(payload.referenceAnalysis || options.referenceAnalysis.value || '')
@@ -215,6 +236,14 @@ export function useConversationRestoration(options: ConversationRestorationOptio
           options.addRestoredImageMessage(Number(payload.inputAssetId), '已上传灵感图片')
           options.addRestoredMessage('assistant', '图片已收到。你希望它用什么材质？')
           break
+        case 'image_reference_replaced':
+          options.addRestoredImageMessage(Number(payload.inputAssetId), '已上传新的参考图片')
+          options.addRestoredMessage('assistant', '新参考图已收到，产品方向保持不变。请补充这次生成要求，我再调用图生图。')
+          break
+        case 'image_reference_replacement_prompt':
+          if (payload.prompt) options.addRestoredMessage('user', `新参考图生成要求：${String(payload.prompt)}`)
+          options.addRestoredMessage('assistant', '好的，我会保持当前产品方向，根据新参考图重新生成。')
+          break
         case 'material_selected':
           options.addRestoredMessage('user', String(payload.material || payload.materialName || options.material.value))
           options.addRestoredMessage('assistant', '材质已确认。接下来确认成品尺寸后，我会生成产品图。')
@@ -286,7 +315,10 @@ export function useConversationRestoration(options: ConversationRestorationOptio
         case 'mode_selected': options.phase.value = 'product'; break
         case 'product_selected': options.phase.value = options.mode.value === 'template' ? 'material' : options.mode.value === 'text' ? 'inspiration' : 'image'; break
         case 'text_inspiration_submitted': options.phase.value = 'material'; break
-        case 'image_inspiration_uploaded': options.phase.value = 'image'; break
+        case 'image_inspiration_uploaded':
+          options.phase.value = 'image'; break
+        case 'image_reference_replaced':
+        case 'image_reference_replacement_prompt': options.phase.value = 'result'; break
         case 'image_inspiration_confirmed': options.phase.value = 'material'; break
         case 'material_selected': options.phase.value = 'material'; break
         case 'size_selected': options.phase.value = 'size'; break

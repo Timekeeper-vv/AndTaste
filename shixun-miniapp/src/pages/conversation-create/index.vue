@@ -1,6 +1,6 @@
 <template>
   <view class="page chat-experience">
-    <scroll-view class="chat" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
+    <scroll-view class="chat" :class="{ 'chat-with-quick-replies': chatQuickReplies.length > 0 }" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
       <view class="workspace-intro">
         <view class="workspace-intro-top"><view class="online-mark"><view class="online-dot" /><text>AI 工作台</text></view><text class="workspace-ref">{{ projectId ? `项目 ${projectId}` : '新项目' }}</text></view>
         <text class="workspace-title">把灵感说出来，剩下的交给我</text>
@@ -64,8 +64,9 @@
         <view class="output-header"><view><text class="surface-kicker">IMAGE OUTPUT</text><text class="surface-title">产品视觉已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>已保存</text></view></view>
         <view class="visual-frame"><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFit" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view class="visual-badge">AI 生成</view></view>
         <view class="output-info"><view><text>{{ selectedProduct?.name || '文创产品' }}</text><text>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }} · {{ mode === 'image' ? '参考图改造' : '文字生图' }}</text></view><text class="output-open" @tap="previewImage">查看大图 ›</text></view>
-        <view v-if="refiningImage" class="refinement-panel"><view class="refinement-heading"><view><text class="surface-kicker">REFINE THIS IMAGE</text><text>告诉我哪里不满意</text></view><text class="refinement-close" @tap="cancelRefinement">×</text></view><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：保留主体和构图，把边缘改得更简洁，去掉文字。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view></view>
-        <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成生产模拟图</text><text>一张图包含三个标准视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action disabled"><view class="action-icon gold">样</view><view><text>完成生产模拟图或 3D 原型后打样</text><text>当前产品图仅用于继续创作</text></view></view></view>
+        <view v-if="replacementImagePending" class="refinement-panel replacement-panel"><view class="refinement-heading"><view><text class="surface-kicker">NEW REFERENCE IMAGE</text><text>补充这次生成要求</text></view><text class="refinement-close" @tap="cancelReplacementImage">×</text></view><text class="replacement-help">新参考图已上传，产品方向保持不变。请补充你希望这次生成重点保留、调整或避免的内容。</text><textarea v-model="replacementPrompt" maxlength="800" auto-height class="text-input refinement-input" placeholder="例如：保留新图主体和配色，转成当前产品的量产外观，背景简洁，不要文字。" /><view class="input-foot"><text>{{ replacementPrompt.length }}/800</text><button class="dark-button" :disabled="!replacementPrompt.trim() || busy" :loading="busy" @tap="generateReplacementImage">根据新参考图生成</button></view></view>
+        <view v-else-if="refiningImage" class="refinement-panel"><view class="refinement-heading"><view><text class="surface-kicker">REFINE THIS IMAGE</text><text>告诉我哪里不满意</text></view><text class="refinement-close" @tap="cancelRefinement">×</text></view><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：保留主体和构图，把边缘改得更简洁，去掉文字。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view></view>
+        <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成生产模拟图</text><text>一张图包含三个标准视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="pickReplacementImage"><view class="action-icon warm">换</view><view><text>重新上传图片生成</text><text>上传后补充提示词再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action disabled"><view class="action-icon gold">样</view><view><text>完成生产模拟图或 3D 原型后打样</text><text>当前产品图仅用于继续创作</text></view></view></view>
       </view>
 
       <view v-if="phase === 'multiview'" id="multiview-output" class="output-surface">
@@ -99,6 +100,14 @@
         <button v-if="isModelTaskSucceeded" class="outline-button full-button" @tap="openCommercial">申请打样 / 商品化</button>
       </view>
 
+      <view
+        class="chat-bottom-spacer"
+        :class="{
+          'has-quick-replies': chatQuickReplies.length > 0,
+          'has-replacement-panel': replacementImagePending,
+        }"
+        aria-hidden="true"
+      />
       <view id="bottom-anchor" class="bottom-anchor" />
     </scroll-view>
 
@@ -106,8 +115,8 @@
 
     <view class="composer-dock">
       <view class="composer-context"><view class="context-live" /><text>{{ chatStageLabel }}</text><text v-if="selectedProduct" class="context-product">· {{ selectedProduct.name }}</text><text v-if="chatSending" class="context-working">处理中</text></view>
-      <scroll-view v-if="chatQuickReplies.length" scroll-x class="quick-reply-list" :show-scrollbar="false"><view class="quick-reply-track"><view v-for="item in chatQuickReplies" :key="`${item.type}-${item.value}-${item.label}`" class="quick-reply" :class="{ confirm: item.type === 'confirm_generate', secondary: item.type === 'add_detail', disabled: busy || chatSending || quickReplySubmitting }" :aria-label="item.label" @tap="handleQuickReply(item)"><text class="quick-reply-mark">{{ quickReplyMark(item.type) }}</text><text>{{ item.label }}</text></view></view></scroll-view>
-      <view class="chat-input-row"><button class="chat-upload-button" :disabled="busy || chatSending || quickReplySubmitting" aria-label="上传灵感图片" @tap="pickInspirationImage">＋</button><input v-model="chatInput" class="chat-input" maxlength="1200" confirm-type="send" placeholder="描述你的灵感，或直接回答上面的问题" @confirm="submitChatInput" /><button class="chat-send-button" :class="{ ready: chatInput.trim() }" :disabled="!chatInput.trim() || busy || chatSending || quickReplySubmitting" aria-label="发送" @tap="submitChatInput">↑</button></view>
+      <scroll-view v-if="chatQuickReplies.length" scroll-x class="quick-reply-list" :show-scrollbar="false"><view class="quick-reply-track"><view v-for="item in chatQuickReplies" :key="`${item.type}-${item.value}-${item.label}`" class="quick-reply" :class="{ confirm: item.type === 'confirm_generate', secondary: item.type === 'add_detail' || item.type === 'replace_image', disabled: busy || chatSending || quickReplySubmitting }" :aria-label="item.label" @tap="handleQuickReply(item)"><text class="quick-reply-mark">{{ quickReplyMark(item.type) }}</text><text>{{ item.label }}</text></view></view></scroll-view>
+      <view class="chat-input-row"><button class="chat-upload-button" :disabled="chatInputLocked || busy || chatSending || quickReplySubmitting" aria-label="上传灵感图片" @tap="pickInspirationImage">＋</button><textarea v-model="chatInput" class="chat-input" :class="{ 'input-locked': chatInputLocked }" :disabled="chatInputLocked" maxlength="1200" confirm-type="send" :auto-height="false" :show-confirm-bar="false" :placeholder="chatInputPlaceholder" @confirm="submitChatInput" /><button class="chat-send-button" :class="{ ready: chatInput.trim() && !chatInputLocked }" :disabled="chatInputLocked || !chatInput.trim() || busy || chatSending || quickReplySubmitting" aria-label="发送" @tap="submitChatInput">↑</button></view>
       <view class="composer-footer"><text>AI 生成内容 · 请在商业使用前人工复核</text><text>{{ chatInput.length }}/1200</text></view>
     </view>
 
@@ -221,6 +230,8 @@ const multiviewBundleSubmitting = ref(false)
 const modelInputMode = ref<'single' | 'multiview'>('single')
 const refiningImage = ref(false)
 const refinementNote = ref('')
+const replacementImagePending = ref(false)
+const replacementPrompt = ref('')
 const modelTask = ref<ModelTask | null>(null)
 const messages = ref<Message[]>([])
 const busy = ref(false)
@@ -233,6 +244,10 @@ const forceNewSession = ref(false)
 const chatExperience = true
 const chatInput = ref('')
 const chatQuickReplies = ref<ConversationQuickReply[]>([])
+const chatInputLocked = computed(() => replacementImagePending.value || (phase.value === 'result' && chatQuickReplies.value.length > 0))
+const chatInputPlaceholder = computed(() => chatInputLocked.value
+  ? '请先选择上方选项，切勿直接对话'
+  : '描述你的灵感，或直接回答上面的问题')
 const chatSending = ref(false)
 const quickReplySubmitting = ref(false)
 const chatThinking = ref(false)
@@ -350,6 +365,7 @@ function quickReplyMark(type: string) {
     confirm_generate: '出',
     adopt_direction: '入',
     add_detail: '改',
+    replace_image: '换',
     multiview: '观',
     bundle_review: '审',
     bundle_production: '样',
@@ -667,6 +683,8 @@ function clearGeneratedOutputForNewDirection() {
   multiviewBundleComment.value = ''
   refiningImage.value = false
   refinementNote.value = ''
+  replacementImagePending.value = false
+  replacementPrompt.value = ''
 }
 
 // Assigned after the session composable exposes saveEvent. Keeping a no-op
@@ -735,6 +753,8 @@ function resetViewState() {
   multiviewBundleComment.value = ''
   refiningImage.value = false
   refinementNote.value = ''
+  replacementImagePending.value = false
+  replacementPrompt.value = ''
   resetCreativePolicy()
   messages.value = []
   messageId = 0
@@ -775,6 +795,8 @@ const conversationRestoration = useConversationRestoration({
   campaignAttached,
   modelInputMode,
   refinementNote,
+  replacementImagePending,
+  replacementPrompt,
   chatQuickReplies,
   chatStage,
   awaitingGenerationConfirmation,
@@ -889,6 +911,12 @@ async function submitTextInspiration() {
   phase.value = 'material'
 }
 async function pickInspirationImage() {
+  return chooseInspirationImage(false)
+}
+async function pickReplacementImage() {
+  return chooseInspirationImage(true)
+}
+async function chooseInspirationImage(replaceGenerated: boolean) {
   if (busy.value) {
     uni.showToast({ title: '图片正在上传或生成中，请稍候', icon: 'none' })
     return
@@ -912,8 +940,11 @@ async function pickInspirationImage() {
     }
     activateReferenceImageMode()
     referencePath.value = path
-    referenceAssetId.value = null
-    void uploadInspirationImage(path)
+    // During replacement, keep the previous source asset until the new file
+    // is confirmed by the server. A failed upload must not break the current
+    // result or leave the session without a usable reference image.
+    if (!replaceGenerated) referenceAssetId.value = null
+    void uploadInspirationImage(path, replaceGenerated)
   }, fail: (error: any) => {
     const message = String(error?.errMsg || '')
     if (/cancel/i.test(message)) return
@@ -925,13 +956,16 @@ async function pickInspirationImage() {
     uni.showModal({ title: '选择图片失败', content: `${hint}\n\n微信返回：${message || '未提供错误信息'}`, showCancel: false })
   } })
 }
-async function uploadInspirationImage(path: string) {
+async function uploadInspirationImage(path: string, replaceGenerated = false) {
   const imageMessageId = addImageMessage(path, '正在上传灵感图片…', 'uploading')
   busy.value = true
+  let uploadedAssetId: number | null = null
+  const previousGeneratedAssetId = replaceGenerated ? generatedAssetId.value : null
   try {
     const result = await uploadReference(path, projectId.value, versionId.value)
     const id = Number(result?.assetId)
     if (!Number.isFinite(id) || id <= 0) throw new Error('图片上传成功但没有返回作品编号')
+    uploadedAssetId = id
     activateReferenceImageMode()
     referenceAssetId.value = id
     // Show the local image immediately. Replace it with the server-controlled
@@ -941,6 +975,31 @@ async function uploadInspirationImage(path: string) {
     void freshAssetPreview(id).then(storedPreview => {
       if (storedPreview) updateImageMessage(imageMessageId, { imageUrl: storedPreview, imageState: 'ready' })
     })
+    if (replaceGenerated) {
+      // Keep the current result visible until the user supplies the new
+      // instruction. The old generated asset remains in the works library,
+      // and the selected product/material/size stay attached to this session.
+      replacementImagePending.value = true
+      replacementPrompt.value = ''
+      phase.value = 'result'
+      chatStage.value = 'need_additional_detail'
+      chatQuickReplies.value = []
+      await saveCreativeEventBestEffort('inspiration', 'image_reference_replaced', {
+        productType: selectedProduct.value?.name,
+        productKey: selectedProduct.value?.key,
+        material: material.value,
+        productSize: productSize.value,
+        inputAssetId: id,
+        previousGeneratedAssetId,
+        fileType: 'image',
+      })
+      addMessage('assistant', '新参考图已上传，产品方向保持不变。请补充这次生成要求，我再调用图生图。')
+      uni.showToast({ title: '图片已上传，请补充提示词', icon: 'success' })
+      // Release the upload lock; the replacement panel now owns the next
+      // explicit action and the shared chat composer stays locked.
+      busy.value = false
+      return
+    }
     await saveCreativeEventBestEffort('inspiration', 'image_inspiration_uploaded', {
       productType: selectedProduct.value?.name,
       inputAssetId: id,
@@ -956,10 +1015,21 @@ async function uploadInspirationImage(path: string) {
     // same uploaded image can receive different product context.
     await sendChatTurn('我已上传灵感图片', { type: 'image', value: String(id), label: '已上传灵感图片' }, { skipUserMessage: true })
   } catch (error: any) {
-    updateImageMessage(imageMessageId, { imageState: 'failed', text: '这张灵感图片上传失败' })
+    // Once the asset id exists, the file is already safely stored. A later
+    // chat continuation may fail independently and must not make a valid
+    // uploaded image look broken or force the user to upload it again.
+    if (!uploadedAssetId) updateImageMessage(imageMessageId, { imageState: 'failed', text: '这张灵感图片上传失败' })
     const message = error?.message || '图片上传失败'
     // Toast 文案长度有限，网络上传错误改用弹窗，避免关键的微信错误被截断。
-    uni.showModal({ title: '图片上传失败', content: message, showCancel: false })
+    uni.showModal({
+      title: uploadedAssetId
+        ? (replaceGenerated ? '图片已上传，重新生成失败' : '图片已上传，对话暂时中断')
+        : '图片上传失败',
+      content: uploadedAssetId
+        ? `${message}\n\n图片已保存，当前产品方向未改变，请稍后重试。`
+        : message,
+      showCancel: false,
+    })
   }
   finally { busy.value = false }
 }
@@ -1032,14 +1102,61 @@ async function completeGeneratedProductImage(result: any, generationPrompt: stri
   }
   await saveCreativeEventBestEffort('image', 'image_generated', { jobId: result?.jobId, productType: selectedProduct.value.name, material: material.value, productSize: productSize.value, prompt: generationPrompt, sourcePrompt: prompt.value, generatedAssetId: generatedAssetId.value, previewUrl: previewUrl.value, mode: mode.value, referenceAssetId: referenceAssetId.value, inspirationText: inspirationText.value, referenceStrategy: isReferenceImageMode() ? 'direct_single_pass' : 'text_to_image', productForm, referenceAnalysis: result?.referenceAnalysis || '', referenceAnalysisSource: result?.referenceAnalysisSource || '' })
   addMessage('assistant', '产品视觉已经生成并保存。下一步请生成生产模拟图或 3D 原型，完成后才能提交审核和申请打样。')
+  setImageResultQuickReplies()
+  phase.value = 'result'
+  await scrollToSection('result-output')
+}
+
+function setImageResultQuickReplies() {
+  replacementImagePending.value = false
+  replacementPrompt.value = ''
   chatStage.value = 'image_ready'
   chatQuickReplies.value = [
     { label: '满意，生成生产模拟图', type: 'multiview', value: '' },
     { label: '不满意，告诉我怎么改', type: 'refine', value: '' },
+    { label: '重新上传图片生成', type: 'replace_image', value: '' },
     { label: '生成 3D 原型', type: 'model', value: '' },
   ]
-  phase.value = 'result'
-  await scrollToSection('result-output')
+}
+
+async function generateReplacementImage() {
+  const note = replacementPrompt.value.trim()
+  if (!note || busy.value) return
+  if (!referenceAssetId.value) {
+    uni.showToast({ title: '请先上传新的参考图片', icon: 'none' })
+    return
+  }
+  const previousAssetId = generatedAssetId.value
+  inspirationText.value = note
+  replacementImagePending.value = false
+  replacementPrompt.value = ''
+
+  // This clears only the active page output. Existing generated works remain
+  // persisted and visible in the works library.
+  clearGeneratedOutputForNewDirection()
+  phase.value = 'image'
+  chatStage.value = 'ready_for_image'
+  chatQuickReplies.value = []
+
+  await saveCreativeEventBestEffort('inspiration', 'image_reference_replacement_prompt', {
+    prompt: note,
+    inputAssetId: referenceAssetId.value,
+    previousGeneratedAssetId: previousAssetId,
+    productType: selectedProduct.value?.name,
+    productKey: selectedProduct.value?.key,
+    material: material.value,
+    productSize: productSize.value,
+  })
+
+  addMessage('user', `新参考图生成要求：${note}`)
+  addMessage('assistant', '好的，我会保持当前产品方向，根据新参考图重新生成。')
+  await generateProductImage()
+}
+
+function cancelReplacementImage() {
+  replacementImagePending.value = false
+  replacementPrompt.value = ''
+  setImageResultQuickReplies()
 }
 
 async function completeRefinedProductImage(result: any, generationPrompt: string, note: string) {
@@ -1073,6 +1190,7 @@ async function completeRefinedProductImage(result: any, generationPrompt: string
   addMessage('user', `补充修改：${note}`)
   addMessage('assistant', '新的产品视觉已经生成，旧版本仍保留在作品库。你可以继续修改，或生成生产模拟图和 3D。')
   cancelRefinement()
+  setImageResultQuickReplies()
   await scrollToSection('result-output')
 }
 
@@ -1313,6 +1431,7 @@ const conversationChat = useConversationChat({
   saveCreativeEventBestEffort,
   generateProductImage,
   pickInspirationImage,
+  pickReplacementImage,
   generateMultiView,
   submitMultiViewReview,
   applyMultiViewProduction,
@@ -1517,7 +1636,12 @@ onMounted(async () => {
   else if (pendingMultiViewJobId.value && !hasCompleteThreeViews.value) void resumePendingMultiViewGeneration()
   if (phase.value === 'multiview' && hasCompleteThreeViews.value) await restoreCurrentMultiViewBundle()
   if (phase.value === 'model' && modelTask.value && !isModelTaskTerminal.value) void scheduleModelPolling(true)
-  if (phase.value === 'result') await scrollToSection('result-output')
+  if (phase.value === 'result') {
+    // A restored replacement flow intentionally has no quick replies while
+    // the user is entering the new prompt.
+    if (!replacementImagePending.value) setImageResultQuickReplies()
+    await scrollToSection('result-output')
+  }
   else if (phase.value === 'multiview') await scrollToSection('multiview-output')
   else if (phase.value === 'model') await scrollToSection('model-output')
 })
@@ -1554,7 +1678,7 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
   --orange-soft: #fff0e9;
   min-height: 100vh;
   box-sizing: border-box;
-  padding-bottom: calc(118rpx + env(safe-area-inset-bottom));
+  padding-bottom: calc(108rpx + env(safe-area-inset-bottom));
   background: var(--paper);
   color: var(--ink);
 }
@@ -1581,7 +1705,19 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .chat {
   height: 100vh;
   box-sizing: border-box;
-  padding: 24rpx 28rpx calc(332rpx + env(safe-area-inset-bottom));
+  padding: 24rpx 28rpx 24rpx;
+}
+.chat-bottom-spacer {
+  display: block;
+  width: 100%;
+  height: calc(300rpx + env(safe-area-inset-bottom));
+  flex: 0 0 auto;
+}
+.chat-bottom-spacer.has-quick-replies {
+  height: calc(430rpx + env(safe-area-inset-bottom));
+}
+.chat-bottom-spacer.has-replacement-panel {
+  height: calc(360rpx + env(safe-area-inset-bottom));
 }
 .workspace-intro { margin: 6rpx 0 18rpx; }
 .workspace-intro-top { justify-content: space-between; gap: 10rpx; }
@@ -1721,11 +1857,12 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .refinement-heading view { display: flex; flex-direction: column; gap: 5rpx; }
 .refinement-heading view text:last-child { color: #684e45; font-size: 17rpx; font-weight: 850; }
 .refinement-close { color: #aa806e; font-size: 28rpx; }
+.replacement-help { display: block; margin-top: 9rpx; color: #8b796f; font-size: 14rpx; line-height: 1.5; }
 .text-input { width: 100%; min-height: 132rpx; box-sizing: border-box; margin-top: 12rpx; padding: 12rpx; border: 1rpx solid #e5d4cc; border-radius: 10rpx; background: #fff; color: #493f3b; font-size: 17rpx; line-height: 1.55; }
 .input-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 9rpx; color: #a08f86; font-size: 12rpx; }
 .refinement-panel .dark-button { height: 58rpx; margin: 0; padding: 0 13rpx; font-size: 15rpx; line-height: 58rpx; }
 
-.composer-dock { position: fixed; z-index: 25; right: 0; bottom: calc(88rpx + env(safe-area-inset-bottom)); left: 0; box-sizing: border-box; padding: 13rpx 22rpx 9rpx; border-top: 1rpx solid #dfe7e1; background: rgba(255, 255, 255, .97); box-shadow: 0 -10rpx 24rpx rgba(44, 62, 51, .07); backdrop-filter: blur(18rpx); }
+.composer-dock { position: fixed; z-index: 25; right: 0; bottom: calc(88rpx + env(safe-area-inset-bottom)); left: 0; box-sizing: border-box; padding: 13rpx 22rpx 9rpx; border-top: 1rpx solid #dfe7e1; background: rgba(255, 255, 255, .94); box-shadow: 0 -5rpx 14rpx rgba(44, 62, 51, .045); backdrop-filter: blur(12rpx); }
 .composer-context { min-width: 0; gap: 7rpx; color: #64776c; font-size: 20rpx; }
 .context-live { width: 9rpx; height: 9rpx; border-radius: 50%; background: #70a481; }
 .context-product { overflow: hidden; max-width: 260rpx; color: #96a29b; text-overflow: ellipsis; white-space: nowrap; }
@@ -1745,7 +1882,9 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .chat-upload-button { width: 76rpx; padding: 0; border: 1rpx solid #d9e2db; background: #f8faf8; color: #658073; font-size: 34rpx; }
 .chat-send-button { width: 76rpx; padding: 0; background: #dfe7e1; color: #91a099; font-size: 32rpx; font-weight: 900; }
 .chat-send-button.ready { background: var(--green); color: #fff; }
-.chat-input { flex: 1; min-width: 0; height: 76rpx; box-sizing: border-box; padding: 0 17rpx; border: 1rpx solid #d9e2db; border-radius: 12rpx; background: #f8faf8; color: #33463b; font-size: 26rpx; }
+.chat-input { display: block; flex: 1; min-width: 0; height: 76rpx; min-height: 76rpx; max-height: 76rpx; box-sizing: border-box; overflow-y: auto; padding: 8rpx 17rpx; border: 1rpx solid #d9e2db; border-radius: 12rpx; background: #f8faf8; color: #33463b; font-size: 26rpx; line-height: 30rpx; }
+.chat-input.input-locked { border-color: #e2e8e3; background: #f0f3f1; color: #8b9890; }
+.chat-input.input-locked::placeholder { color: #9aa59e; }
 .chat-input:focus { border-color: #9cbea7; background: #fff; }
 .chat-send-button::after, .chat-upload-button::after { border: 0; }
 .chat-send-button[disabled], .chat-upload-button[disabled] { opacity: .65; }

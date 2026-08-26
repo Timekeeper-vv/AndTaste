@@ -4,7 +4,7 @@ import {
   type ConversationChatResult,
   type ConversationQuickReply,
 } from '../api/creative'
-import { readableErrorMessage } from '../api/client'
+import * as apiClient from '../api/client'
 
 type ReadonlyValue<T> = { readonly value: T }
 export interface ChatAction { type: string; value?: string; label?: string }
@@ -57,6 +57,7 @@ export interface ConversationChatOptions {
   saveCreativeEventBestEffort: (step: string, eventType: string, payload?: Record<string, any>) => Promise<void>
   generateProductImage: () => Promise<void>
   pickInspirationImage: () => Promise<void>
+  pickReplacementImage: () => Promise<void>
   generateMultiView: () => Promise<void>
   submitMultiViewReview: () => Promise<void>
   applyMultiViewProduction: () => void
@@ -221,7 +222,20 @@ export function useConversationChat(options: ConversationChatOptions) {
         // optimistic item without exposing its storage shape here.
         options.removeOptimisticMessage?.(optimisticMessageId)
       }
-      const errorMessage = readableErrorMessage(error, '创作服务暂时不可用，当前已输入内容会保留，请稍后重试。')
+      // Keep the error path defensive. Some older WeChat DevTools builds can
+      // expose a partially initialized imported module while rebuilding the
+      // watched output tree; error rendering must never hide the original
+      // upload/chat failure with a second "readableErrorMessage" exception.
+      const fallback = '创作服务暂时不可用，当前已输入内容会保留，请稍后重试。'
+      let errorMessage = fallback
+      try {
+        const formatter = apiClient?.readableErrorMessage
+        errorMessage = typeof formatter === 'function'
+          ? formatter(error, fallback)
+          : String(error?.message || error?.errMsg || '').trim() || fallback
+      } catch {
+        errorMessage = String(error?.message || error?.errMsg || '').trim() || fallback
+      }
       console.warn('[conversation-create] chat failed', { message: errorMessage, statusCode: error?.statusCode || 0 })
       options.onChatError?.(errorMessage, error)
     } finally {
@@ -237,6 +251,7 @@ export function useConversationChat(options: ConversationChatOptions) {
     const type = String(item.type || '')
     try {
       if (type === 'upload') return await options.pickInspirationImage()
+      if (type === 'replace_image') return await options.pickReplacementImage()
       if (type === 'multiview') return await options.generateMultiView()
       if (type === 'bundle_review') return await options.submitMultiViewReview()
       if (type === 'bundle_production') return options.applyMultiViewProduction()

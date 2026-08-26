@@ -214,6 +214,7 @@ export async function uploadFile<T>(path: string, filePath: string, name = 'file
   } catch (error: any) {
     throw new Error(uploadFailureMessage(error))
   }
+  if (!response) throw new Error('微信未返回上传结果，请重新选择图片后重试')
   const data: any = parsePayload(response.data || '{}')
   if (response.statusCode === 401) {
     if (session?.token) {
