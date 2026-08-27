@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { User } from '../types'
 import andTasteLogo from '../assets/and_taste.png'
 import QRCode from 'qrcode'
@@ -65,6 +65,14 @@ const versionId = ref<number | null>(null)
 const activeConversation = computed(() => conversations.value.find(item => item.id === activeConversationId.value) || null)
 const historyLoading = ref(false)
 const historyPanelOpen = ref(true)
+const HISTORY_PAGE_SIZE = 5
+const historyPage = ref(1)
+const historyTotalPages = computed(() => Math.max(1, Math.ceil(conversations.value.length / HISTORY_PAGE_SIZE)))
+const visibleConversations = computed(() => {
+  const page = Math.min(Math.max(1, historyPage.value), historyTotalPages.value)
+  const start = (page - 1) * HISTORY_PAGE_SIZE
+  return conversations.value.slice(start, start + HISTORY_PAGE_SIZE)
+})
 const messages = ref<ChatMessage[]>([])
 const messageCounter = ref(0)
 const products = ref<Product[]>([])
@@ -92,6 +100,7 @@ const bundleId = ref<number | null>(null)
 const bundleStatus = ref('')
 const bundleComment = ref('')
 const bundleRefreshing = ref(false)
+const bundleRefreshSequence = ref(0)
 const modelTask = ref<any | null>(null)
 const modelReviewStatus = ref('')
 const modelReviewComment = ref('')
@@ -107,6 +116,13 @@ const paymentOrder = ref<any | null>(null)
 const paymentQrUrl = ref('')
 const paymentLoading = ref(false)
 const paymentTimer = ref<number | null>(null)
+const paymentDialogOpen = ref(false)
+const paymentRequest = ref<any | null>(null)
+const paymentIntent = ref<'awaiting' | 'paid' | 'exception' | 'failed'>('awaiting')
+const paymentHint = ref('请使用微信扫码支付。支付回调确认后，申请会自动进入生产中。')
+const paymentError = ref('')
+const paymentClosing = ref(false)
+const paymentReturnView = ref<'chat' | 'result' | 'orders'>('orders')
 const professionalSubmissions = ref<any[]>([])
 const professionalSubmissionFile = ref<File | null>(null)
 const professionalSubmissionTitle = ref('')
@@ -137,6 +153,13 @@ const generationActionReplies = computed(() => quickReplies.value.filter(item =>
   return true
 }))
 const museumOptions = computed(() => museums.value.filter(item => item.id && item.name))
+
+function changeHistoryPage(page: number) {
+  historyPage.value = Math.min(Math.max(1, page), historyTotalPages.value)
+}
+watch(historyTotalPages, total => {
+  if (historyPage.value > total) historyPage.value = total
+})
 
 function notify(message: string, type: 'success' | 'error' = 'success') { emit('alert', message, type) }
 function messageId() { messageCounter.value += 1; return `message-${messageCounter.value}` }
@@ -195,7 +218,10 @@ async function loadProducts() {
 }
 async function loadHistory() {
   historyLoading.value = true
-  try { conversations.value = await api<Conversation[]>('/api/creative/ai/conversations') || [] } catch (error: any) { notify(error.message || '读取历史对话失败', 'error') } finally { historyLoading.value = false }
+  try {
+    conversations.value = await api<Conversation[]>('/api/creative/ai/conversations') || []
+    historyPage.value = 1
+  } catch (error: any) { notify(error.message || '读取历史对话失败', 'error') } finally { historyLoading.value = false }
 }
 function resetConversationView() {
   clearReferencePreview()
@@ -214,6 +240,8 @@ function resetConversationView() {
   bundleId.value = null
   bundleStatus.value = ''
   bundleComment.value = ''
+  bundleRefreshSequence.value += 1
+  bundleRefreshing.value = false
   modelTask.value = null
   modelReviewStatus.value = ''
   modelReviewComment.value = ''
@@ -259,6 +287,8 @@ function updateBundleActionReplies() {
 }
 async function refreshBundleReviewStatus(options: { notify?: boolean } = {}) {
   if (bundleRefreshing.value) return
+  const refreshSequence = ++bundleRefreshSequence.value
+  const conversationAtStart = activeConversationId.value
   const currentId = Number(bundleId.value || 0)
   const currentInputAssetId = Number(generatedAssetId.value || 0)
   if (!currentId && !currentInputAssetId) return
@@ -271,27 +301,46 @@ async function refreshBundleReviewStatus(options: { notify?: boolean } = {}) {
         || (!currentId && currentInputAssetId > 0 && Number(item?.inputAssetId || 0) === currentInputAssetId)
     })
     if (!bundle) return
-    bundleId.value = Number(bundle.id || bundle.bundleId) || bundleId.value
-    bundleStatus.value = String(bundle.status || 'draft')
-    bundleComment.value = String(bundle.reviewComment || '')
+    // A user can switch history while the request is in flight. Never apply
+    // the previous conversation's review result to the newly selected one.
+    if (refreshSequence !== bundleRefreshSequence.value || conversationAtStart !== activeConversationId.value) return
+    const resolvedBundleId = Number(bundle.id || bundle.bundleId) || currentId
+    const resolvedBundleStatus = String(bundle.status || 'draft')
+    const resolvedBundleComment = String(bundle.reviewComment || '')
+    let nextImages: Array<{ view: string; label: string; assetId: number; previewUrl?: string }> | null = null
     if (Array.isArray(bundle.images) && bundle.images.length) {
-      multiviewImages.value = bundle.images
+      nextImages = bundle.images
         .filter((item: any) => Number(item?.assetId) > 0)
         .map((item: any) => ({ ...item, assetId: Number(item.assetId), previewUrl: item.previewUrl || '' }))
-      await Promise.all(multiviewImages.value.map(async item => {
+      await Promise.all(nextImages.map(async item => {
         if (!item.previewUrl) item.previewUrl = await previewForAsset(item.assetId)
       }))
     }
     const simulation = bundle.simulationImage
+    let nextSimulationAssetId: number | null = null
+    let nextSimulationPreviewUrl = ''
     if (simulation?.assetId) {
-      simulationAssetId.value = Number(simulation.assetId)
-      simulationPreviewUrl.value = imageUrl(simulation) || await previewForAsset(simulationAssetId.value)
+      nextSimulationAssetId = Number(simulation.assetId)
+      nextSimulationPreviewUrl = imageUrl(simulation) || await previewForAsset(nextSimulationAssetId)
+    }
+    if (refreshSequence !== bundleRefreshSequence.value || conversationAtStart !== activeConversationId.value) return
+    bundleId.value = resolvedBundleId || bundleId.value
+    bundleStatus.value = resolvedBundleStatus
+    bundleComment.value = resolvedBundleComment
+    if (nextImages) multiviewImages.value = nextImages
+    if (nextSimulationAssetId) {
+      simulationAssetId.value = nextSimulationAssetId
+      simulationPreviewUrl.value = nextSimulationPreviewUrl
     }
     updateBundleActionReplies()
-    if (options.notify !== false) notify(bundleStatus.value === 'approved' ? '审核已通过，可以申请打样' : `生产模拟图审核状态：${statusText(bundleStatus.value)}`)
+    if (options.notify !== false) notify(resolvedBundleStatus === 'approved' ? '审核已通过，可以申请打样' : `生产模拟图审核状态：${statusText(resolvedBundleStatus)}`)
   } catch (error: any) {
-    if (options.notify !== false) notify(error.message || '生产模拟图审核状态暂时无法读取', 'error')
-  } finally { bundleRefreshing.value = false }
+    if (refreshSequence === bundleRefreshSequence.value && options.notify !== false) {
+      notify(error.message || '生产模拟图审核状态暂时无法读取', 'error')
+    }
+  } finally {
+    if (refreshSequence === bundleRefreshSequence.value) bundleRefreshing.value = false
+  }
 }
 async function restoreDetail(detail: any) {
   resetConversationView()
@@ -337,7 +386,9 @@ async function restoreDetail(detail: any) {
   }
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
   if (!quickReplies.value.length && activeView.value === 'chat') initialReplies()
-  if (bundleId.value) await refreshBundleReviewStatus({ notify: false })
+  if (bundleId.value || generatedAssetId.value || multiviewImages.value.length >= 3) {
+    await refreshBundleReviewStatus({ notify: false })
+  }
   if (modelTask.value && ['running', 'queued'].includes(modelTask.value.status)) scheduleModelPolling()
   if (modelTask.value?.assetId && modelTask.value.status === 'succeeded') void refreshModelReviewStatus(modelTask.value.assetId)
 }
@@ -350,6 +401,7 @@ async function createConversation() {
   try {
     const created = await api<Conversation>('/api/creative/ai/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
     conversations.value = [created, ...conversations.value.filter(item => item.id !== created.id)]
+    historyPage.value = 1
     await selectConversation(created.id)
   } catch (error: any) { notify(error.message || '新建对话失败', 'error') }
 }
@@ -648,21 +700,137 @@ async function submitProduction() {
 async function loadProductionRequests() { try { productionRequests.value = await api<any[]>('/api/creative/ai/consumer-production/my') || [] } catch { productionRequests.value = [] } }
 async function loadMuseums() { try { museums.value = await api<any[]>('/api/creative/ai/consumer-production/museums') || [] } catch { museums.value = [] } }
 function stopPaymentPolling() { if (paymentTimer.value) window.clearInterval(paymentTimer.value); paymentTimer.value = null }
+function paymentTargetMatches(request: any) {
+  return Boolean(paymentRequest.value && request?.id
+    && String(paymentRequest.value.id) === String(request.id)
+    && Boolean(paymentRequest.value.professionalPayment) === Boolean(request.professionalPayment))
+}
+function paymentIsTerminal(status?: string) {
+  return ['paid', 'closed', 'cancelled', 'failed', 'expired', 'manual_review', 'payment_exception', 'refund_exception'].includes(String(status || ''))
+}
+const paymentLocked = computed(() => Boolean(paymentDialogOpen.value && (paymentLoading.value || paymentClosing.value || (paymentOrder.value && !paymentIsTerminal(paymentOrder.value.status)))))
+function leavePaymentDialog(options: { keepOrder?: boolean } = {}) {
+  stopPaymentPolling()
+  paymentDialogOpen.value = false
+  activeView.value = paymentReturnView.value
+  if (!options.keepOrder) {
+    paymentOrder.value = null
+    paymentQrUrl.value = ''
+    paymentRequest.value = null
+    paymentError.value = ''
+  }
+}
+async function closePaymentDialog() {
+  if (paymentLoading.value || paymentClosing.value) {
+    notify('正在准备支付订单，请稍候', 'error')
+    return
+  }
+  const order = paymentOrder.value
+  if (!order?.orderNo) {
+    leavePaymentDialog()
+    return
+  }
+  const status = String(order.status || '')
+  if (status === 'pending') {
+    if (order.canClose === false) {
+      notify('当前支付结果正在核对，请稍后刷新订单状态', 'error')
+      return
+    }
+    if (!window.confirm('尚未支付，确定取消并关闭这笔支付订单吗？打样申请和作品不会删除。')) return
+    paymentClosing.value = true
+    try {
+      const closed = await api<any>(`/api/payments/orders/${encodeURIComponent(order.orderNo)}/close`, { method: 'POST' })
+      paymentOrder.value = closed
+      notify('未支付订单已关闭，打样申请仍保留')
+      leavePaymentDialog()
+    } catch (error: any) {
+      // A payment can complete while the close request is in flight. Query the
+      // authoritative state before deciding whether it is safe to leave.
+      await refreshPayment()
+      const latestStatus = String(paymentOrder.value?.status || '')
+      if (latestStatus === 'paid') {
+        notify('打样费已支付，订单进入生产中')
+        leavePaymentDialog()
+      } else if (['closed', 'cancelled', 'failed', 'expired'].includes(latestStatus)) {
+        leavePaymentDialog()
+      } else {
+        notify(error.message || '支付订单暂时无法关闭，请稍后重试', 'error')
+      }
+    } finally {
+      paymentClosing.value = false
+    }
+    return
+  }
+  if (status === 'paid') {
+    await Promise.all([loadProductionRequests(), loadProfessionalSubmissions()])
+    leavePaymentDialog()
+    return
+  }
+  // An exception/manual-review result must remain visible in the order list;
+  // it cannot be locally closed because the official payment result is still
+  // authoritative.
+  leavePaymentDialog({ keepOrder: ['manual_review', 'payment_exception', 'refund_exception'].includes(status) })
+}
+function reopenPaymentDialog() {
+  if (!paymentOrder.value) return
+  paymentDialogOpen.value = true
+  if (!paymentIsTerminal(paymentOrder.value.status)) {
+    stopPaymentPolling()
+    paymentTimer.value = window.setInterval(refreshPayment, 2200)
+    void refreshPayment()
+  }
+}
+function handlePaymentBeforeUnload(event: BeforeUnloadEvent) {
+  if (!paymentLocked.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
 async function refreshPayment() {
   if (!paymentOrder.value?.orderNo) return
   try {
     const latest = await api<any>(`/api/payments/orders/${encodeURIComponent(paymentOrder.value.orderNo)}`)
+    const previousIntent = paymentIntent.value
     paymentOrder.value = latest
     if (latest.status === 'paid') {
       stopPaymentPolling()
-      await Promise.all([loadProductionRequests(), loadProfessionalSubmissions()])
-      notify('打样费已支付，订单进入生产中')
+      paymentIntent.value = 'paid'
+      paymentHint.value = '打样费已到账，申请已进入生产流程。现在可以返回订单查看进度。'
+      if (previousIntent !== 'paid') {
+        await Promise.all([loadProductionRequests(), loadProfessionalSubmissions()])
+        notify('打样费已支付，订单进入生产中')
+      }
     }
-    if (['closed', 'failed', 'expired'].includes(String(latest.status))) stopPaymentPolling()
+    if (['payment_exception', 'refund_exception', 'manual_review'].includes(String(latest.status))) {
+      stopPaymentPolling()
+      paymentIntent.value = 'exception'
+      paymentHint.value = '支付结果正在与微信官方核对，请勿重复支付。稍后可重新打开此订单查询。'
+    }
+    if (['closed', 'cancelled', 'failed', 'expired'].includes(String(latest.status))) {
+      stopPaymentPolling()
+      paymentIntent.value = 'failed'
+      paymentHint.value = latest.status === 'expired' ? '支付订单已过期，请重新发起支付。' : latest.status === 'cancelled' ? '支付订单已取消，请重新发起支付。' : '支付订单未完成，请重新发起支付。'
+    }
   } catch { /* polling is best effort */ }
 }
 async function paySample(request: any) {
-  if (!request?.id || !['unpaid', 'not_required'].includes(String(request.samplePaymentStatus || 'unpaid'))) return
+  if (!request?.id || !['unpaid', 'pending'].includes(String(request.samplePaymentStatus || 'unpaid'))) return
+  if (paymentDialogOpen.value && paymentLocked.value) {
+    if (paymentTargetMatches(request) && paymentIntent.value === 'awaiting') return
+    notify('请先完成当前打样费支付，再选择其他订单', 'error')
+    return
+  }
+  if (paymentOrder.value && paymentTargetMatches(request) && !paymentDialogOpen.value && !paymentIsTerminal(paymentOrder.value.status)) {
+    reopenPaymentDialog()
+    return
+  }
+  paymentRequest.value = request
+  paymentReturnView.value = activeView.value
+  paymentOrder.value = null
+  paymentQrUrl.value = ''
+  paymentError.value = ''
+  paymentIntent.value = 'awaiting'
+  paymentHint.value = '正在创建支付订单，请稍候…'
+  paymentDialogOpen.value = true
   paymentLoading.value = true
   try {
     const endpoint = request.professionalPayment ? '/api/payments/professional-submission-sample-orders' : '/api/payments/sample-orders'
@@ -671,9 +839,20 @@ async function paySample(request: any) {
     const channel = 'wechat'
     paymentOrder.value = await api<any>(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request.professionalPayment ? { submissionId: String(request.id), channel } : { requestId: String(request.id), channel }) })
     const codeUrl = String(paymentOrder.value?.codeUrl || '')
-    paymentQrUrl.value = codeUrl ? await QRCode.toDataURL(codeUrl, { width: 260, margin: 1 }) : ''
-    stopPaymentPolling(); paymentTimer.value = window.setInterval(refreshPayment, 2200)
-  } catch (error: any) { notify(error.message || '创建支付订单失败', 'error') } finally { paymentLoading.value = false }
+    if (!codeUrl) throw new Error('微信支付未返回二维码，请检查支付商户配置')
+    paymentQrUrl.value = await QRCode.toDataURL(codeUrl, { width: 300, margin: 1 })
+    paymentIntent.value = paymentOrder.value.status === 'paid' ? 'paid' : 'awaiting'
+    paymentHint.value = paymentOrder.value.status === 'paid' ? '打样费已到账，申请已进入生产流程。' : '请使用微信扫码支付。支付回调确认后，申请会自动进入生产中。'
+    stopPaymentPolling()
+    if (!paymentIsTerminal(paymentOrder.value.status)) paymentTimer.value = window.setInterval(refreshPayment, 2200)
+    await refreshPayment()
+  } catch (error: any) {
+    paymentError.value = error.message || '创建支付订单失败'
+    paymentIntent.value = 'failed'
+    paymentHint.value = paymentError.value
+    stopPaymentPolling()
+    notify(paymentError.value, 'error')
+  } finally { paymentLoading.value = false }
 }
 async function loadProfessionalSubmissions() { try { professionalSubmissions.value = await api<any[]>('/api/creative/ai/consumer-professional-submissions/my') || [] } catch { professionalSubmissions.value = [] } }
 function chooseProfessionalFile(event: Event) {
@@ -719,8 +898,14 @@ async function loadInitial() {
     }
   }
 }
-onMounted(() => { void loadInitial() })
-onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReferencePreview() })
+onMounted(() => {
+  window.addEventListener('beforeunload', handlePaymentBeforeUnload)
+  void loadInitial()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', handlePaymentBeforeUnload)
+  stopPaymentPolling(); stopModelPolling(); clearReferencePreview()
+})
 </script>
 
 <template>
@@ -734,13 +919,13 @@ onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReference
     <section v-if="creatorProfile === 'professional'" class="professional-top-panel">
       <div class="professional-top-copy"><span>PROFESSIONAL CREATOR · ZIP REVIEW</span><h2>先提交专业作品包</h2><p>上传包含效果图、3D 文件、尺寸、材质、工艺说明和版权材料的 ZIP，后台审核通过后会返回报价单。</p></div>
       <div class="professional-form"><label class="zip-picker"><input ref="submissionInput" type="file" accept=".zip,application/zip" @change="chooseProfessionalFile" /><strong>{{ professionalSubmissionFile?.name || '选择 ZIP 作品包' }}</strong><small>{{ professionalSubmissionFile ? `${(professionalSubmissionFile.size / 1024 / 1024).toFixed(1)} MB` : '最大 100MB' }}</small></label><input v-model="professionalSubmissionTitle" maxlength="200" placeholder="作品包名称" /><textarea v-model="professionalSubmissionNote" rows="2" maxlength="1000" placeholder="给审核员的说明（亮点、材质、工艺和审核重点）" /><button :disabled="professionalSubmissionBusy || !professionalSubmissionFile" @click="submitProfessionalSubmission">{{ professionalSubmissionBusy ? '正在提交…' : '提交专业作品包审核' }}</button></div>
-      <div v-if="professionalSubmissions.length" class="professional-history"><strong>最近提交</strong><article v-for="item in professionalSubmissions" :key="item.id"><div><b>{{ item.title }}</b><span>{{ statusText(item.status) }} · {{ formatTime(item.createdAt) }}</span><small v-if="item.quotedSampleFeeYuan">报价：¥{{ item.quotedSampleFeeYuan }} · {{ item.quotedSampleLeadTime || '交期待确认' }}</small></div><button v-if="item.status === 'approved' && item.samplePaymentStatus === 'unpaid'" :disabled="paymentLoading" @click="paySample({ ...item, professionalPayment: true })">支付打样费</button></article></div>
+      <div v-if="professionalSubmissions.length" class="professional-history"><strong>最近提交</strong><article v-for="item in professionalSubmissions" :key="item.id"><div><b>{{ item.title }}</b><span>{{ statusText(item.status) }} · {{ formatTime(item.createdAt) }}</span><small v-if="item.quotedSampleFeeYuan">报价：¥{{ item.quotedSampleFeeYuan }} · {{ item.quotedSampleLeadTime || '交期待确认' }}</small></div><button v-if="item.status === 'approved' && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))" :disabled="paymentLoading" @click="paySample({ ...item, professionalPayment: true })">{{ paymentTargetMatches({ ...item, professionalPayment: true }) && paymentOrder && !paymentIsTerminal(paymentOrder.status) ? '继续支付' : '支付打样费' }}</button></article></div>
     </section>
 
     <section class="workspace-grid">
       <aside class="history-sidebar" :class="{ collapsed: !historyPanelOpen }">
         <div class="sidebar-heading"><div><span>YOUR SESSIONS</span><h2>历史对话</h2></div><button title="收起历史对话" @click="historyPanelOpen = !historyPanelOpen">{{ historyPanelOpen ? '‹' : '›' }}</button></div>
-        <template v-if="historyPanelOpen"><button class="new-session" @click="createConversation">＋ 新建对话</button><div v-if="historyLoading" class="sidebar-empty">正在读取…</div><div v-else-if="!conversations.length" class="sidebar-empty">还没有历史对话<br /><small>新建一条对话开始创作</small></div><div v-else class="session-list"><button v-for="item in conversations" :key="item.id" :class="['session-item', { active: item.id === activeConversationId }]" @click="selectConversation(item.id)"><span class="session-mark">对</span><span class="session-copy"><strong>{{ item.productType || '未命名创作' }}</strong><small>{{ item.material || '尚未确定材质' }} · {{ formatTime(item.updatedAt) }}</small></span><i title="删除历史对话" @click="removeConversation(item, $event)">×</i></button></div><div class="sidebar-note">删除历史对话不会删除已生成的作品、3D 模型、审核记录或订单。</div></template>
+        <template v-if="historyPanelOpen"><button class="new-session" @click="createConversation">＋ 新建对话</button><div v-if="historyLoading" class="sidebar-empty">正在读取…</div><div v-else-if="!conversations.length" class="sidebar-empty">还没有历史对话<br /><small>新建一条对话开始创作</small></div><template v-else><div class="session-list"><button v-for="item in visibleConversations" :key="item.id" :class="['session-item', { active: item.id === activeConversationId }]" @click="selectConversation(item.id)"><span class="session-mark">对</span><span class="session-copy"><strong>{{ item.productType || '未命名创作' }}</strong><small>{{ item.material || '尚未确定材质' }} · {{ formatTime(item.updatedAt) }}</small></span><i title="删除历史对话" @click="removeConversation(item, $event)">×</i></button></div><nav v-if="historyTotalPages > 1" class="history-pagination" aria-label="历史对话分页"><button :disabled="historyPage <= 1" aria-label="上一页" @click="changeHistoryPage(historyPage - 1)">‹</button><span>{{ historyPage }} / {{ historyTotalPages }}</span><button :disabled="historyPage >= historyTotalPages" aria-label="下一页" @click="changeHistoryPage(historyPage + 1)">›</button></nav></template><div class="sidebar-note">删除历史对话不会删除已生成的作品、3D 模型、审核记录或订单。</div></template>
         <div class="sidebar-links"><button :class="{ active: activeView === 'chat' }" @click="activeView = 'chat'">对话创作</button><button :class="{ active: activeView === 'result' }" @click="activeView = 'result'">当前作品</button><button :class="{ active: activeView === 'orders' }" @click="activeView = 'orders'; loadProductionRequests()">订单与进度 <em v-if="productionRequests.length">{{ productionRequests.length }}</em></button></div>
       </aside>
 
@@ -748,7 +933,7 @@ onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReference
         <header class="chat-header"><div class="assistant-avatar">之</div><div><span>BETWEEN TASTE AI · 在线</span><h2>你的创作顾问</h2><small>{{ activeConversation ? `会话 ${activeConversation.sessionNo || activeConversation.id}` : '先新建一条创作对话' }}</small></div><div class="brief-chip"><b>{{ productName }}</b><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></header>
         <div v-if="activeView === 'chat'" class="chat-content"><div class="conversation-intro">我会先听懂你想做什么，自动绑定产品方向，再逐步确认灵感、材质和成品尺寸。确认后才开始生成，不会把每句闲聊直接塞进提示词。</div><div class="message-stream"><article v-for="item in messages" :key="item.id" :class="['message', item.role]"><div v-if="item.role === 'assistant'" class="message-avatar">之</div><div class="message-body"><div v-if="item.imageUrl" class="message-image"><img :src="item.imageUrl" alt="用户上传的参考图" /></div><p v-if="item.text">{{ item.text }}</p><small>{{ item.role === 'assistant' ? '之间 AI' : '我' }}</small></div><div v-if="item.role === 'user'" class="message-avatar user">我</div></article><article v-if="thinking" class="message assistant"><div class="message-avatar">之</div><div class="message-body thinking"><span></span><span></span><span></span><small>正在理解你的想法</small></div></article><div ref="messageEnd" /></div></div>
         <div v-else-if="activeView === 'result'" class="result-content"><div class="result-toolbar"><div><span>CREATIVE OUTPUT</span><h2>当前创作进度</h2></div><div class="result-toolbar-actions"><button v-if="bundleId" :disabled="bundleRefreshing" @click="refreshBundleReviewStatus()">{{ bundleRefreshing ? '刷新中…' : '刷新审核状态' }}</button><button @click="activeView = 'chat'">返回对话</button></div></div><section v-if="generatedPreviewUrl" class="output-card"><div class="output-image"><img :src="generatedPreviewUrl" alt="生成的产品图" /><b>产品视觉</b></div><div class="output-copy"><strong>{{ productName }}</strong><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></section><section v-if="replacementOpen" class="replacement-box"><strong>新参考图已上传，请补充改图要求</strong><textarea v-model="replacementPrompt" rows="3" placeholder="例如：保留新图主体和配色，转成当前产品的量产外观，背景简洁，不要文字。" /><button :disabled="busy || !replacementPrompt.trim()" @click="generateReplacement">根据新参考图生成</button></section><section v-if="simulationPreviewUrl || multiviewImages.length" class="output-card simulation-card"><div v-if="simulationPreviewUrl" class="output-image"><img :src="simulationPreviewUrl" alt="生产模拟图" /><b>生产模拟图</b></div><div class="view-strip"><div v-for="item in multiviewImages" :key="item.assetId"><img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.label" /><span>{{ item.label }}</span></div></div><div class="review-state" :class="statusClass(bundleStatus)"><strong>生产模拟图：{{ bundleStatus === 'approved' ? '审核已通过' : bundleStatus === 'review' ? '审核中' : bundleStatus === 'rejected' ? '审核未通过' : '待提交审核' }}</strong><small v-if="bundleComment">{{ bundleComment }}</small></div></section><section v-if="modelTask" class="model-status"><div><strong>3D 原型</strong><span>{{ modelTask.status === 'succeeded' ? '已完成' : modelTask.status === 'failed' ? '生成失败' : '生成中' }}</span></div><div class="progress"><i :style="{ width: `${Math.max(4, Math.min(100, Number(modelTask.progress || 0)))}%` }"></i></div><small v-if="modelTask.status === 'succeeded'">审核状态：{{ modelReviewLabel(modelReviewStatus) }}<template v-if="modelReviewComment"> · {{ modelReviewComment }}</template></small><small>{{ modelTask.errorMessage || (modelTask.status === 'succeeded' ? 'GLB 文件已保存到作品库，请先提交 3D 建模审核，审核通过后才能申请打样。' : `当前进度 ${Math.round(Number(modelTask.progress || 0))}%`) }}</small></section><div class="result-actions"><button v-for="item in generationActionReplies" :key="item.type" :class="{ primary: item.type === 'multiview' || item.type === 'bundle_production' }" :disabled="busy" @click="handleReply(item)">{{ item.label }}</button></div></div>
-        <div v-else class="orders-content"><div class="result-toolbar"><div><span>WORKFLOW ORDERS</span><h2>订单与生产进度</h2></div><button @click="loadProductionRequests">刷新</button></div><div v-if="!productionRequests.length" class="orders-empty">暂时没有打样订单<br /><small>作品审核通过后，可以在对话中申请打样。</small></div><article v-for="item in productionRequests" :key="item.id" class="order-card"><div><span>{{ item.productNo || item.requestNo || `订单 ${item.id}` }}</span><strong>{{ item.title || item.assetTitle || item.sampleProductName || '文创产品' }}</strong><small>{{ item.requestType === 'bulk' ? '批量生产' : '打样' }} · {{ item.quantity || 1 }} 件 · {{ formatTime(item.createdAt) }}</small></div><div class="order-status"><b :class="statusClass(item.status)">{{ statusText(item.status) }}</b><span v-if="item.samplePaymentStatus">{{ statusText(item.samplePaymentStatus) }}</span><button v-if="item.status === 'approved' && item.samplePaymentStatus === 'unpaid'" :disabled="paymentLoading" @click="paySample(item)">支付打样费</button></div></article><div v-if="paymentOrder" class="payment-card"><div><strong>打样费支付</strong><span>{{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功' : '等待支付确认' }}</span></div><img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" /><small>请使用微信扫码支付；支付回调成功后订单会自动进入生产中。</small></div></div>
+        <div v-else class="orders-content"><div class="result-toolbar"><div><span>WORKFLOW ORDERS</span><h2>订单与生产进度</h2></div><button @click="loadProductionRequests">刷新</button></div><div v-if="!productionRequests.length" class="orders-empty">暂时没有打样订单<br /><small>作品审核通过后，可以在对话中申请打样。</small></div><article v-for="item in productionRequests" :key="item.id" class="order-card"><div><span>{{ item.productNo || item.requestNo || `订单 ${item.id}` }}</span><strong>{{ item.title || item.assetTitle || item.sampleProductName || '文创产品' }}</strong><small>{{ item.requestType === 'bulk' ? '批量生产' : '打样' }} · {{ item.quantity || 1 }} 件 · {{ formatTime(item.createdAt) }}</small></div><div class="order-status"><b :class="statusClass(item.status)">{{ statusText(item.status) }}</b><span v-if="item.samplePaymentStatus">{{ statusText(item.samplePaymentStatus) }}</span><button v-if="item.status === 'approved' && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))" :disabled="paymentLoading" @click="paySample(item)">{{ paymentTargetMatches(item) && paymentOrder && !paymentIsTerminal(paymentOrder.status) ? '继续支付' : '支付打样费' }}</button></div></article><div v-if="paymentOrder && !paymentDialogOpen" class="payment-card"><div><strong>打样费支付</strong><span>{{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功，已进入生产' : paymentIntent === 'exception' ? '支付结果核对中' : '待支付' }}</span></div><img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" /><small>{{ paymentHint }}</small><button v-if="!paymentIsTerminal(paymentOrder.status)" @click="reopenPaymentDialog">继续支付</button></div></div>
 
         <footer v-if="activeView === 'chat'" class="chat-composer"><div class="quick-replies"><button v-for="item in quickReplies" :key="`${item.type}-${item.label}`" :class="{ confirm: item.type === 'confirm_generate', secondary: ['replace_image', 'add_detail'].includes(item.type) }" :disabled="busy || sending" @click="handleReply(item)">{{ item.label }}</button></div><div v-if="busy" class="busy-line"><i></i>{{ busyText }}</div><div class="composer-row"><button class="upload-button" title="上传参考图片" :disabled="busy || sending || inputLocked" @click="referenceInput?.click()">＋</button><textarea v-model="chatInput" :disabled="busy || sending || inputLocked" :placeholder="inputPlaceholder" rows="2" maxlength="1200" @keydown.enter.exact.prevent="sendChat()" /><button class="send-button" :disabled="busy || sending || inputLocked || !chatInput.trim()" @click="sendChat()">发送</button></div><div class="composer-foot"><span>AI 生成内容 · 请在商业使用前人工复核</span><span>{{ chatInput.length }}/1200</span></div></footer>
       </section>
@@ -756,12 +941,37 @@ onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReference
 
     <input ref="referenceInput" class="visually-hidden" type="file" accept="image/*" @change="onReferenceChange" />
     <div v-if="productionDialogOpen" class="dialog-mask" @click.self="productionDialogOpen = false"><section class="production-dialog"><header><div><span>PRODUCTION REQUEST</span><h2>申请打样</h2><small>{{ selectedRequest?.title || productName }}</small></div><button @click="productionDialogOpen = false">×</button></header><main><label><span>创作去向</span><select v-model="productionForm.purpose"><option value="personal">个人收藏 / 送礼</option><option value="museum_sale">售卖（景区、博物馆）</option></select></label><label v-if="productionForm.purpose === 'museum_sale'"><span>合作渠道</span><select v-model="productionForm.museumId" @change="selectMuseum"><option value="">请选择博物馆或景区</option><option v-for="museum in museumOptions" :key="museum.id" :value="museum.id">{{ museum.name }}</option></select></label><label><span>数量</span><input v-model.number="productionForm.quantity" type="number" min="1" /></label><label v-if="productionForm.purpose === 'personal'"><span>收件人</span><input v-model="productionForm.recipientName" placeholder="姓名" /></label><label v-if="productionForm.purpose === 'personal'"><span>手机号</span><input v-model="productionForm.recipientPhone" placeholder="用于寄送联系" /></label><label v-if="productionForm.purpose === 'personal'"><span>收货地址</span><textarea v-model="productionForm.recipientAddress" rows="2" placeholder="收货地址" /></label><label><span>申请说明</span><textarea v-model="productionForm.note" rows="3" placeholder="补充打样要求" /></label></main><footer><button @click="productionDialogOpen = false">取消</button><button class="primary" :disabled="productionSubmitting" @click="submitProduction">{{ productionSubmitting ? '提交中…' : '提交打样申请' }}</button></footer></section></div>
+
+    <div v-if="paymentDialogOpen" class="payment-dialog-mask" role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title">
+      <section class="payment-dialog" @click.stop>
+        <header>
+          <div><span>SAMPLE PAYMENT</span><h2 id="payment-dialog-title">支付打样费</h2><small>{{ paymentRequest?.title || paymentRequest?.sampleProductName || productName }}</small></div>
+          <button type="button" :disabled="paymentLoading || paymentClosing" title="关闭支付窗口" @click="closePaymentDialog">×</button>
+        </header>
+        <main>
+          <div v-if="paymentLoading" class="payment-loading"><i></i><strong>正在创建微信支付订单</strong><small>请稍候，正在准备二维码…</small></div>
+          <template v-else>
+            <div class="payment-summary"><span>本次打样费用</span><strong>¥{{ paymentOrder?.amountYuan || paymentRequest?.sampleFeeYuan || paymentRequest?.quotedSampleFeeYuan || '-' }}</strong></div>
+            <img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" class="payment-qr-large" />
+            <div v-else class="payment-qr-missing">{{ paymentError || '暂未生成二维码，请重试。' }}</div>
+            <p class="payment-hint" :class="{ error: paymentIntent === 'failed' }">{{ paymentHint }}</p>
+            <small v-if="paymentOrder?.orderNo" class="payment-order-no">订单号：{{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '已支付' : paymentOrder.status === 'manual_review' ? '待人工核验' : paymentOrder.status === 'payment_exception' ? '结果核对中' : paymentOrder.status === 'expired' ? '已过期' : '待支付' }}</small>
+          </template>
+        </main>
+        <footer>
+          <span v-if="paymentLocked">支付完成前请勿离开；如需稍后处理，请取消并关闭这笔未支付订单。</span>
+          <span v-else-if="paymentIntent === 'paid'">支付成功后订单已进入生产中。</span>
+          <button v-if="paymentIntent === 'failed'" type="button" class="primary" :disabled="paymentLoading" @click="paymentRequest && paySample(paymentRequest)">重新发起支付</button>
+          <button type="button" :class="{ primary: !paymentLocked }" :disabled="paymentClosing" @click="closePaymentDialog">{{ paymentClosing ? '正在关闭…' : paymentLocked ? '取消支付并关闭订单' : '返回订单' }}</button>
+        </footer>
+      </section>
+    </div>
   </main>
 </template>
 
 <style scoped>
 :global(*) { box-sizing: border-box; }
-.conversation-workspace { min-height: 100vh; padding: 26px 32px 40px; color: #25372d; background: #f4f7f3; font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.conversation-workspace { min-height: 100vh; min-height: 100dvh; padding: 26px 32px 40px; color: #25372d; background: #f4f7f3; font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; }
 .workspace-header { max-width: 1480px; margin: 0 auto 22px; display: grid; grid-template-columns: 240px minmax(0, 1fr) auto; align-items: center; gap: 26px; }
 .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .brand img { width: 42px; height: 42px; object-fit: contain; }
@@ -798,11 +1008,11 @@ onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReference
 .professional-history b { color: #42594a; font-size: 12px; }
 .professional-history span, .professional-history small { margin-top: 3px; color: #8b9a8f; font-size: 10px; }
 .professional-history button { flex: 0 0 auto; padding: 7px 9px; font-size: 11px; }
-.workspace-grid { max-width: 1480px; min-height: 690px; margin: 0 auto; display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 18px; }
-.history-sidebar, .chat-panel { min-height: 690px; border: 1px solid #dce7de; border-radius: 12px; background: #fff; box-shadow: 0 16px 42px rgba(48, 78, 57, .08); }
+.workspace-grid { max-width: 1480px; width: 100%; height: clamp(520px, calc(100vh - 250px), 760px); height: clamp(520px, calc(100dvh - 250px), 760px); min-height: 0; margin: 0 auto; display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 18px; }
+.history-sidebar, .chat-panel { height: 100%; min-height: 0; border: 1px solid #dce7de; border-radius: 12px; background: #fff; box-shadow: 0 16px 42px rgba(48, 78, 57, .08); }
 .history-sidebar { display: flex; flex-direction: column; overflow: hidden; }
 .history-sidebar.collapsed { width: 58px; }
-.history-sidebar.collapsed .sidebar-heading h2, .history-sidebar.collapsed .sidebar-heading span, .history-sidebar.collapsed .sidebar-links button:not(.active), .history-sidebar.collapsed .new-session, .history-sidebar.collapsed .session-list, .history-sidebar.collapsed .sidebar-note { display: none; }
+.history-sidebar.collapsed .sidebar-heading h2, .history-sidebar.collapsed .sidebar-heading span, .history-sidebar.collapsed .sidebar-links button:not(.active), .history-sidebar.collapsed .new-session, .history-sidebar.collapsed .session-list, .history-sidebar.collapsed .history-pagination, .history-sidebar.collapsed .sidebar-note { display: none; }
 .sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 18px 16px 13px; border-bottom: 1px solid #edf2ed; }
 .sidebar-heading span { color: #91a297; font-size: 9px; letter-spacing: .14em; }
 .sidebar-heading h2 { margin: 5px 0 0; font-size: 18px; }
@@ -812,7 +1022,7 @@ onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReference
 .new-session { margin: 14px 14px 10px; text-align: left; }
 .sidebar-empty { padding: 38px 15px; color: #9aa79f; font-size: 12px; line-height: 1.8; text-align: center; }
 .sidebar-empty small { color: #b0bbb3; }
-.session-list { display: grid; gap: 4px; padding: 0 9px; overflow: auto; }
+.session-list { display: grid; flex: 1 1 auto; gap: 4px; min-height: 0; padding: 0 9px; overflow: auto; }
 .session-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 7px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #567061; text-align: left; cursor: pointer; }
 .session-item:hover, .session-item.active { border-color: #c9dece; background: #f1f8f2; }
 .session-mark { display: grid; place-items: center; flex: 0 0 29px; width: 29px; height: 29px; border-radius: 8px; background: #e4f0e6; color: #538064; font-size: 12px; font-weight: 900; }
@@ -822,6 +1032,9 @@ onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReference
 .session-copy small { margin-top: 4px; color: #9aa79e; font-size: 10px; }
 .session-item i { flex: 0 0 auto; padding: 3px; color: #a6b3aa; font-size: 17px; font-style: normal; opacity: .2; }
 .session-item:hover i, .session-item.active i { opacity: 1; }
+.history-pagination { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 12px 5px; color: #8a9b8f; font-size: 10px; }
+.history-pagination button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid #d9e6db; border-radius: 6px; background: #f8fbf8; color: #5c8066; font-size: 17px; line-height: 1; cursor: pointer; }
+.history-pagination button:disabled { opacity: .35; cursor: not-allowed; }
 .sidebar-note { margin: auto 14px 14px; padding: 10px; border-top: 1px solid #edf2ed; color: #9ba8a0; font-size: 10px; line-height: 1.5; }
 .sidebar-links { display: grid; gap: 3px; margin-top: auto; padding: 10px; border-top: 1px solid #edf2ed; }
 .sidebar-links button { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px; border: 0; border-radius: 7px; background: transparent; color: #76897c; text-align: left; font-size: 12px; cursor: pointer; }
@@ -837,9 +1050,9 @@ onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReference
 .brief-chip b, .brief-chip span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brief-chip b { color: #4b6755; font-size: 12px; }
 .brief-chip span { margin-top: 4px; color: #9aa89f; font-size: 10px; }
-.chat-content, .result-content, .orders-content { flex: 1; min-height: 0; overflow: auto; }
+.chat-content, .result-content, .orders-content { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .conversation-intro { margin: 18px 22px 2px; padding: 10px 12px; border-left: 3px solid #9bbb9e; background: #f4f9f4; color: #718579; font-size: 12px; line-height: 1.6; }
-.message-stream { padding: 14px 24px 22px; }
+.message-stream { min-height: 100%; padding: 14px 24px 22px; }
 .message { display: flex; align-items: flex-start; gap: 9px; margin: 14px 0; }
 .message.user { justify-content: flex-end; }
 .message-avatar { flex: 0 0 30px; width: 30px; height: 30px; border-radius: 9px; font-size: 13px; }
@@ -872,7 +1085,33 @@ onBeforeUnmount(() => { stopPaymentPolling(); stopModelPolling(); clearReference
 .model-status { margin-bottom: 14px; padding: 12px; border: 1px solid #dce9df; border-radius: 9px; background: #f8fbf8; }.model-status > div:first-child { display: flex; justify-content: space-between; color: #52705d; font-size: 13px; }.model-status > div:first-child span { color: #83968a; font-size: 11px; }.progress { height: 8px; margin: 10px 0 7px; overflow: hidden; border-radius: 8px; background: #e3ece4; }.progress i { display: block; height: 100%; border-radius: inherit; background: #6a9a77; transition: width .3s; }.model-status small { color: #8a9b90; font-size: 10px; line-height: 1.5; }.result-actions { display: flex; flex-wrap: wrap; gap: 8px; }.result-actions button { padding: 9px 12px; border: 1px solid #c8ddcd; border-radius: 8px; background: #f5faf5; color: #4b775a; font-size: 11px; cursor: pointer; }.result-actions button.primary { border-color: #8dbb98; background: #e8f5ea; font-weight: 800; }
 .orders-empty { padding: 70px 20px; color: #9aa89f; font-size: 13px; line-height: 1.8; text-align: center; }.orders-empty small { color: #b0bbb3; }.order-card { display: flex; justify-content: space-between; gap: 14px; padding: 13px 0; border-bottom: 1px solid #edf2ed; }.order-card > div:first-child { min-width: 0; }.order-card span, .order-card strong, .order-card small { display: block; }.order-card span { color: #9aaa9f; font-size: 10px; }.order-card strong { margin-top: 4px; color: #4b6352; font-size: 13px; }.order-card small { margin-top: 4px; color: #8a9b90; font-size: 10px; }.order-status { display: flex; align-items: flex-end; flex: 0 0 auto; flex-direction: column; gap: 5px; }.order-status b, .order-status span { padding: 4px 7px; border-radius: 5px; background: #f1f5f1; color: #788a7d; font-size: 10px; font-weight: 700; }.order-status b.success, .order-status span.success { background: #eaf6ec; color: #4c7b58; }.order-status b.danger { background: #fff0ec; color: #a35c4a; }.order-status button { padding: 6px 8px; font-size: 10px; }.payment-card { display: flex; align-items: center; gap: 13px; margin-top: 17px; padding: 13px; border: 1px solid #d4e5d7; border-radius: 9px; background: #f4faf5; }.payment-card > div { display: grid; gap: 5px; flex: 1; }.payment-card strong { color: #476e52; font-size: 13px; }.payment-card span, .payment-card small { color: #819487; font-size: 10px; line-height: 1.5; }.payment-card img { width: 120px; height: 120px; }
 .dialog-mask { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(32, 48, 38, .45); }.production-dialog { width: min(520px, 100%); overflow: hidden; border-radius: 12px; background: #fff; box-shadow: 0 24px 70px rgba(22, 45, 29, .25); }.production-dialog header { display: flex; justify-content: space-between; padding: 18px 20px 13px; border-bottom: 1px solid #edf2ed; }.production-dialog header span { color: #7e9b86; font-size: 9px; letter-spacing: .14em; }.production-dialog h2 { margin: 5px 0 3px; font-size: 20px; }.production-dialog header small { color: #8b9b90; font-size: 11px; }.production-dialog header button { border: 0; background: transparent; color: #8b9b90; font-size: 24px; cursor: pointer; }.production-dialog main { display: grid; gap: 11px; padding: 18px 20px; }.production-dialog label { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 9px; }.production-dialog label > span { color: #6c8173; font-size: 12px; }.production-dialog textarea { resize: vertical; }.production-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 20px 17px; border-top: 1px solid #edf2ed; }.production-dialog footer button { min-width: 80px; padding: 9px 13px; border: 1px solid #d8e4da; border-radius: 8px; background: #fff; color: #698071; cursor: pointer; }.production-dialog footer .primary { border: 0; }
+.payment-dialog-mask { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(22, 38, 28, .58); overscroll-behavior: contain; }
+.payment-dialog { display: flex; flex-direction: column; width: min(430px, 100%); max-height: min(720px, calc(100dvh - 32px)); overflow: hidden; border: 1px solid #d3e4d6; border-radius: 14px; background: #fff; box-shadow: 0 28px 80px rgba(19, 42, 26, .3); }
+.payment-dialog header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 19px 21px 14px; border-bottom: 1px solid #edf2ed; }
+.payment-dialog header span { color: #72917c; font-size: 9px; font-weight: 900; letter-spacing: .16em; }
+.payment-dialog header h2 { margin: 6px 0 4px; color: #2f4b39; font-size: 21px; }
+.payment-dialog header small { display: block; max-width: 320px; overflow: hidden; color: #83948a; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.payment-dialog header button { flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #819287; font-size: 24px; line-height: 1; cursor: pointer; }
+.payment-dialog header button:hover { border-color: #dce9de; background: #f5faf5; }
+.payment-dialog header button:disabled { opacity: .4; cursor: wait; }
+.payment-dialog main { display: grid; min-height: 0; gap: 12px; overflow: auto; padding: 20px 21px 18px; text-align: center; }
+.payment-loading { display: grid; place-items: center; gap: 9px; min-height: 230px; color: #526d5c; }
+.payment-loading i { width: 28px; height: 28px; border: 3px solid #dbeade; border-top-color: #4c7d60; border-radius: 50%; animation: spin .8s linear infinite; }
+.payment-loading strong { font-size: 14px; }
+.payment-loading small { color: #91a197; font-size: 11px; }
+.payment-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #7e9184; font-size: 12px; }
+.payment-summary strong { color: #3e7150; font-size: 24px; }
+.payment-qr-large { display: block; width: min(300px, 72vw); height: auto; aspect-ratio: 1; margin: 2px auto 1px; border: 8px solid #fff; border-radius: 6px; box-shadow: 0 8px 24px rgba(43, 78, 53, .13); image-rendering: pixelated; }
+.payment-qr-missing { display: grid; place-items: center; min-height: 210px; padding: 18px; border: 1px dashed #e1cfc6; border-radius: 9px; background: #fff9f6; color: #a26755; font-size: 12px; line-height: 1.6; }
+.payment-hint { margin: 0; color: #687d70; font-size: 12px; line-height: 1.65; }
+.payment-hint.error { color: #a45f4d; }
+.payment-order-no { color: #a0ada5; font-size: 10px; }
+.payment-dialog footer { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; padding: 13px 21px 17px; border-top: 1px solid #edf2ed; }
+.payment-dialog footer span { flex: 1 1 100%; color: #98a69d; font-size: 10px; line-height: 1.5; }
+.payment-dialog footer button { min-width: 108px; padding: 9px 12px; border: 1px solid #d8e5da; border-radius: 8px; background: #fff; color: #688071; font: inherit; font-size: 11px; cursor: pointer; }
+.payment-dialog footer button.primary { border-color: #3f7053; background: #3f7053; color: #fff; font-weight: 800; }
+.payment-dialog footer button:disabled { opacity: .5; cursor: not-allowed; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; clip-path: inset(50%); }
 @media (max-width: 1050px) { .workspace-header { grid-template-columns: 1fr auto; }.brand { grid-column: 1 / -1; }.professional-top-panel { grid-template-columns: 1fr 1.2fr; }.professional-history { grid-column: 1 / -1; }.workspace-grid { grid-template-columns: 220px minmax(0, 1fr); } }
-@media (max-width: 760px) { .conversation-workspace { padding: 17px 12px 28px; }.workspace-header { display: flex; flex-wrap: wrap; gap: 12px; }.header-copy { order: 3; width: 100%; }.header-copy h1 { font-size: 25px; }.header-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }.professional-top-panel { grid-template-columns: 1fr; padding: 15px; }.professional-history { grid-column: auto; }.workspace-grid { display: block; min-height: 0; }.history-sidebar { min-height: auto; margin-bottom: 12px; }.history-sidebar.collapsed { width: auto; }.history-sidebar.collapsed .sidebar-heading h2, .history-sidebar.collapsed .sidebar-heading span, .history-sidebar.collapsed .sidebar-links button:not(.active), .history-sidebar.collapsed .new-session, .history-sidebar.collapsed .session-list, .history-sidebar.collapsed .sidebar-note { display: block; }.history-sidebar.collapsed .sidebar-heading button { transform: rotate(-90deg); }.session-list { max-height: 180px; }.chat-panel { min-height: 650px; }.chat-header { padding: 12px; }.brief-chip { display: none; }.message-stream { padding: 10px 13px 18px; }.message-body { max-width: 84%; }.result-content, .orders-content { padding: 15px; }.composer-row { grid-template-columns: 34px minmax(0, 1fr) 56px; }.composer-foot { font-size: 8px; }.professional-form { grid-template-columns: 1fr; }.professional-form input { grid-column: 1 / -1; } }
+@media (max-width: 760px) { .conversation-workspace { padding: 17px 12px 28px; }.workspace-header { display: flex; flex-wrap: wrap; gap: 12px; }.header-copy { order: 3; width: 100%; }.header-copy h1 { font-size: 25px; }.header-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }.professional-top-panel { grid-template-columns: 1fr; padding: 15px; }.professional-history { grid-column: auto; }.workspace-grid { display: block; height: auto; min-height: 0; }.history-sidebar { height: auto; min-height: auto; margin-bottom: 12px; }.history-sidebar.collapsed { width: auto; }.history-sidebar.collapsed .sidebar-heading h2, .history-sidebar.collapsed .sidebar-heading span, .history-sidebar.collapsed .sidebar-links button:not(.active), .history-sidebar.collapsed .new-session, .history-sidebar.collapsed .session-list, .history-sidebar.collapsed .sidebar-note { display: block; }.history-sidebar.collapsed .sidebar-heading button { transform: rotate(-90deg); }.session-list { max-height: 180px; }.chat-panel { height: clamp(500px, calc(100vh - 200px), 680px); height: clamp(500px, calc(100dvh - 200px), 680px); min-height: 0; }.chat-header { padding: 12px; }.brief-chip { display: none; }.message-stream { padding: 10px 13px 18px; }.message-body { max-width: 84%; }.result-content, .orders-content { padding: 15px; }.composer-row { grid-template-columns: 34px minmax(0, 1fr) 56px; }.composer-foot { font-size: 8px; }.professional-form { grid-template-columns: 1fr; }.professional-form input { grid-column: 1 / -1; } }
 </style>
