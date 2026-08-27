@@ -1560,7 +1560,17 @@ public class CreativeAiController {
     }
 
     private Long numberAsLong(Object value) {
-        return value instanceof Number ? ((Number) value).longValue() : null;
+        if (value instanceof Number number) return number.longValue();
+        if (value instanceof CharSequence text) {
+            String normalized = text.toString().trim();
+            if (normalized.isEmpty()) return null;
+            try {
+                return Long.valueOf(normalized);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private Long generatedKeyId(KeyHolder holder) {
@@ -3116,12 +3126,19 @@ public class CreativeAiController {
                                                         @RequestBody(required=false) Map<String,String> body) {
         Long userId = requireCurrentConsumerUser();
         List<Map<String,Object>> ownedAssets = jdbc.queryForList(
-                "SELECT asset_type assetType FROM digital_asset WHERE id=? AND created_by=? AND asset_type IN ('image','model')",
+                "SELECT asset_type assetType,status FROM digital_asset WHERE id=? AND created_by=? AND asset_type IN ('image','model')",
                 id, userId);
         if (ownedAssets.isEmpty()) throw new IllegalArgumentException("作品不存在、无权提交或不是可审核作品");
         Map<String,Object> ownedAsset = ownedAssets.get(0);
         if ("image".equals(String.valueOf(ownedAsset.get("assetType")))) {
             throw new IllegalStateException("单张产品图不能提交审核，请先生成三视图作品包或3D模型");
+        }
+        String assetStatus = str(ownedAsset.get("status"));
+        if ("review".equals(assetStatus)) {
+            throw new IllegalStateException("该 3D 模型已经提交审核，请勿重复提交");
+        }
+        if ("approved".equals(assetStatus)) {
+            throw new IllegalStateException("该 3D 模型已经审核通过，请勿重复提交");
         }
         CreativeProjectService.ProjectRef workflowProject = resolveWorkflowProject(null, null, id, userId);
         CreativeProjectService.ProjectRef requestedProject = resolveProjectRef(
@@ -3155,8 +3172,8 @@ public class CreativeAiController {
         String auditTag = ";用户提交审核" + (blank(purpose) ? "" : ";用途=" + purpose) + (blank(museumSource) ? "" : ";审批出处=" + museumSource) + (campaign==null ? "" : ";激励任务=" + campaign.key()) + (blank(note) ? "" : "-" + note);
         CampaignDefinition selectedCampaign=campaign;
         Map<String,Object> response=creditTransactions.execute(status -> {
-            int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND (asset_type='model' OR COALESCE(source_type,'ai_generated')<>'upload') AND COALESCE(status,'draft')<>'approved'", auditTag, id, userId);
-            if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已审核通过");
+            int n=jdbc.update("UPDATE digital_asset SET status='review', tags=CONCAT(COALESCE(tags,''), ?) WHERE id=? AND created_by=? AND asset_type IN ('image','model') AND (asset_type='model' OR COALESCE(source_type,'ai_generated')<>'upload') AND COALESCE(status,'draft') IN ('draft','rejected')", auditTag, id, userId);
+            if(n==0) throw new IllegalArgumentException("作品不存在、无权提交，或作品已经提交审核");
             if(selectedCampaign!=null) createCampaignParticipation(userId, selectedCampaign, id);
             Map<String,Object> out=new LinkedHashMap<>();
             out.put("success",true); out.put("id",id); out.put("status","review");
@@ -3632,14 +3649,49 @@ public class CreativeAiController {
 
     private String productNoForAsset(Long assetId) {
         if (assetId == null) return null;
+        Long current = assetId;
+        Long rootId = assetId;
+        Set<Long> visited = new HashSet<>();
+        String rootProductNo = "";
         try {
-            Map<String,Object> row = jdbc.queryForMap("SELECT product_no productNo,parent_asset_id parentAssetId FROM digital_asset WHERE id=?", assetId);
-            String existing = str(row.get("productNo"));
-            if (!blank(existing)) return existing;
-            Long parent = numberAsLong(row.get("parentAssetId"));
-            return "PRD-" + String.format("%010d", parent == null ? assetId : parent);
+            // Walk to the root instead of trusting the immediate parent. A
+            // conversational flow can derive several generations of assets
+            // (reference image -> generated image -> triptych -> GLB), and
+            // every generation must retain the same product identity.
+            while (current != null && visited.add(current)) {
+                Map<String,Object> row = jdbc.queryForMap(
+                        "SELECT product_no productNo,parent_asset_id parentAssetId FROM digital_asset WHERE id=?",
+                        current);
+                rootId = current;
+                Long parent = numberAsLong(row.get("parentAssetId"));
+                if (parent == null || parent.equals(current)) {
+                    rootProductNo = str(row.get("productNo"));
+                    break;
+                }
+                current = parent;
+            }
+            if (!blank(rootProductNo)) return rootProductNo;
+            return "PRD-" + String.format("%010d", rootId);
         } catch (DataAccessException ignored) {
-            return "PRD-" + String.format("%010d", assetId);
+            // product_no was added by an additive migration. Preserve the
+            // legacy fallback while that migration is still rolling out.
+            current = assetId;
+            rootId = assetId;
+            visited.clear();
+            try {
+                while (current != null && visited.add(current)) {
+                    Map<String,Object> row = jdbc.queryForMap(
+                            "SELECT parent_asset_id parentAssetId FROM digital_asset WHERE id=?", current);
+                    rootId = current;
+                    Long parent = numberAsLong(row.get("parentAssetId"));
+                    if (parent == null || parent.equals(current)) break;
+                    current = parent;
+                }
+            } catch (DataAccessException ignoredLegacy) {
+                // Keep the original asset id when even parent metadata is not
+                // available on a very old schema.
+            }
+            return "PRD-" + String.format("%010d", rootId);
         }
     }
 
@@ -5584,10 +5636,12 @@ public class CreativeAiController {
         }, kh);
         Long assetId=Objects.requireNonNull(kh.getKey()).longValue();
         // Keep derived assets (notably 3D models) attached to the same
-        // product number as their source image.
+        // product number as the root source image.  Using the immediate
+        // parent id here split chained generations into separate products.
         try {
-            Long rootId = parentAssetId == null ? assetId : parentAssetId;
-            String productNo = "PRD-" + String.format("%010d", rootId);
+            String productNo = parentAssetId == null
+                    ? "PRD-" + String.format("%010d", assetId)
+                    : productNoForAsset(parentAssetId);
             jdbc.update("UPDATE digital_asset SET product_no=? WHERE id=?", productNo, assetId);
         } catch (DataAccessException ignored) {
             // The additive migration may still be running during a rolling deploy.

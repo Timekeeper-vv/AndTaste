@@ -29,7 +29,7 @@ import GlobalAlert from './components/GlobalAlert.vue'
 import AiChat from './components/AiChat.vue'
 import AiAssistantPage from './components/AiAssistantPage.vue'
 import CustomerServiceDesk from './components/CustomerServiceDesk.vue'
-import ConsumerMobilePage from './components/ConsumerMobilePage.vue'
+import ConsumerConversationPage from './components/ConsumerConversationPage.vue'
 import ConsumerWorksReview from './components/ConsumerWorksReview.vue'
 import ConsumerAssetInventory from './components/ConsumerAssetInventory.vue'
 import ConsumerCreditManagement from './components/ConsumerCreditManagement.vue'
@@ -395,7 +395,7 @@ const pageLabels: Record<string, string> = {
     </div>
   </section>
 
-  <ConsumerMobilePage
+  <ConsumerConversationPage
     v-else-if="currentUser.role === 'user' && consumerDevice"
     :class="`consumer-device-${consumerDevice}`"
     :current-user="currentUser"
