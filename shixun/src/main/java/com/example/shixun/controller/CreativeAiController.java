@@ -4248,6 +4248,66 @@ public class CreativeAiController {
         return deduplicateAdminOrderRows(rows, limit);
     }
 
+    /** Full operator view for one order and its linked creative assets. */
+    @GetMapping("/admin/orders/{orderType}/{id}")
+    public Map<String, Object> adminOrderDetail(@PathVariable String orderType,
+                                                @PathVariable Long id) {
+        requireCreativeAdmin();
+        String type = nullToEmpty(orderType).trim().toLowerCase(Locale.ROOT);
+        if (id == null || id <= 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "订单编号无效");
+        if ("professional".equals(type) || "professional_submission".equals(type)) return professionalAdminOrderDetail(id);
+        List<Map<String, Object>> rows = queryProductionRequestRows(
+                productionRequestSelect(true, true) + " WHERE r.id=? LIMIT 1",
+                productionRequestSelect(false, true) + " WHERE r.id=? LIMIT 1",
+                List.of(id));
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "订单不存在");
+        Map<String, Object> order = new LinkedHashMap<>(rows.get(0));
+        Long userId = numberAsLong(order.get("userId"));
+        if (userId != null) {
+            List<Map<String, Object>> users = jdbc.queryForList(
+                    "SELECT id userId,username,phone,email,role,status FROM user WHERE id=? LIMIT 1", userId);
+            if (!users.isEmpty()) order.put("user", users.get(0));
+        }
+        Long assetId = numberAsLong(order.get("assetId"));
+        if (assetId != null) {
+            List<Map<String, Object>> assets = jdbc.queryForList(
+                    "SELECT id,asset_no assetNo,title,asset_type assetType,source_type sourceType,prompt,tags,format,parent_asset_id parentAssetId,created_by createdBy,created_at createdAt,metadata_json metadataJson FROM digital_asset WHERE id=? LIMIT 1", assetId);
+            if (!assets.isEmpty()) {
+                Map<String, Object> asset = new LinkedHashMap<>(assets.get(0));
+                String assetType = str(asset.get("assetType"));
+                asset.put("previewUrl", signedMediaUrl(assetId, "preview-content", authenticatedPrincipal()));
+                asset.put("fileUrl", signedMediaUrl(assetId, "model".equals(assetType) ? "model-content" : "content", authenticatedPrincipal()));
+                if ("model".equals(assetType)) asset.put("downloadUrl", "/api/creative/ai/assets/" + assetId + "/download-model?format=GLB");
+                order.put("asset", asset);
+            }
+        }
+        order.put("detailType", "production_request");
+        return order;
+    }
+
+    private Map<String, Object> professionalAdminOrderDetail(Long id) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT s.id,s.submission_no submissionNo,s.product_no productNo,s.user_id userId,u.username,u.phone,u.email,u.role uRole,u.status userStatus," +
+                        "s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_id museumId,s.museum_name museumName,s.note," +
+                        "s.status,s.review_comment reviewComment,s.quoted_sample_fee_yuan sampleFeeYuan,s.quoted_sample_lead_time sampleLeadTime,s.quoted_sample_note sampleQuoteNote," +
+                        "s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo,s.sample_paid_at samplePaidAt,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,s.updated_at updatedAt" +
+                        " FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id WHERE s.id=? LIMIT 1", id);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品订单不存在");
+        Map<String, Object> order = new LinkedHashMap<>(rows.get(0));
+        Map<String, Object> user = new LinkedHashMap<>();
+        user.put("userId", order.get("userId")); user.put("username", order.get("username"));
+        user.put("phone", order.get("phone")); user.put("email", order.get("email"));
+        user.put("role", order.get("uRole")); user.put("status", order.get("userStatus"));
+        order.put("user", user);
+        JwtService.Claims principal = authenticatedPrincipal();
+        String token = jwtService.issueProfessionalSubmissionAccessToken(principal.userId(), principal.username(), principal.role(), id);
+        order.put("downloadUrl", "/api/creative/ai/consumer-professional-submissions/" + id + "/download?access_token=" + URLEncoder.encode(token, StandardCharsets.UTF_8));
+        order.put("detailType", "professional_submission");
+        order.put("orderType", "professional");
+        order.put("quantity", 1);
+        return order;
+    }
+
     /**
      * Older workflow versions created a new request row when an operator
      * rejected and the user resubmitted the same product. Those rows are
@@ -4357,10 +4417,11 @@ public class CreativeAiController {
         String lead = body == null ? "" : nullToEmpty(body.get("sampleLeadTime")).trim();
         String material = body == null ? "" : nullToEmpty(body.get("sampleMaterial")).trim();
         String note = body == null ? "" : nullToEmpty(body.get("sampleQuoteNote")).trim();
-        int updated = jdbc.update("UPDATE consumer_production_request SET sample_fee_yuan=?,sample_lead_time=?,sample_material=?,sample_quote_note=?,status='approved',sample_payment_status='unpaid',review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND request_type='sample' AND status IN ('review','approved')",
+        String reviewComment = body == null ? "" : nullToEmpty(body.get("reviewComment")).trim();
+        int updated = jdbc.update("UPDATE consumer_production_request SET sample_fee_yuan=?,sample_lead_time=?,sample_material=?,sample_quote_note=?,status='approved',sample_payment_status='unpaid',review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND request_type='sample' AND status IN ('review','approved') AND COALESCE(sample_payment_status,'not_required') NOT IN ('pending','manual_review','paid')",
                 fee, blank(lead) ? null : lead, blank(material) ? null : material, blank(note) ? null : note,
-                "后台报价：" + note, authenticatedPrincipal().username(), id);
-        if (updated != 1) throw new IllegalStateException("打样申请不存在或当前状态不能报价");
+                blank(reviewComment) ? "后台报价：" + note : reviewComment, authenticatedPrincipal().username(), id);
+        if (updated != 1) throw new IllegalStateException("打样申请不存在、当前状态不能报价，或已进入支付流程");
         return Map.of("success", true, "id", id, "status", "approved", "samplePaymentStatus", "unpaid", "message", "报价单已保存，等待用户支付打样费");
     }
 
@@ -5861,6 +5922,7 @@ public class CreativeAiController {
                 Map<String,Object> bundle = multiViewBundleResponse(bundleId);
                 r.put("multiviewImages", bundle.get("images"));
                 r.put("multiviewViewCount", bundle.get("viewCount"));
+                r.put("simulationImage", bundle.get("simulationImage"));
             } else {
                 r.put("multiviewImages", List.of());
             }
