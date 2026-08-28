@@ -546,7 +546,9 @@ public class CreativeAiController {
      * directly (it is intentionally not a public static resource anymore).
      */
     private void addSignedAssetFields(Map<String, Object> result, Long assetId, String assetType) {
-        if (result == null || assetId == null || assetId <= 0 || blank(assetType)) return;
+        if (result == null || assetId == null || assetId <= 0) return;
+        addAssetProductFields(result, assetId);
+        if (blank(assetType)) return;
         // Scheduled Tripo polling also reuses the completion helpers outside a
         // servlet request.  There is no caller to receive a URL in that case;
         // simply leave the fields absent and let the next authenticated poll
@@ -562,6 +564,35 @@ public class CreativeAiController {
         if ("image".equals(assetType)) result.put("imageUrl", content);
     }
 
+    /** Attach the canonical product identity before any optional media signing. */
+    private void addAssetProductFields(Map<String, Object> result, Long assetId) {
+        if (result == null || assetId == null || assetId <= 0) return;
+        String productNo = str(result.get("productNo")).trim();
+        Long productId = numberAsLong(result.get("productId"));
+        if (blank(productNo) || productId == null) {
+            try {
+                Map<String, Object> identity = jdbc.queryForMap(
+                        "SELECT product_no productNo,product_id productId FROM digital_asset WHERE id=?", assetId);
+                if (blank(productNo)) productNo = str(identity.get("productNo")).trim();
+                if (productId == null) productId = numberAsLong(identity.get("productId"));
+            } catch (DataAccessException schemaNotReady) {
+                if (blank(productNo)) productNo = productNoForAsset(assetId);
+            }
+        }
+        if (blank(productNo)) productNo = productNoForAsset(assetId);
+        if (productId == null && !blank(productNo)) {
+            try {
+                productId = jdbc.queryForObject(
+                        "SELECT id FROM creative_product WHERE product_no=? LIMIT 1", Long.class, productNo);
+            } catch (DataAccessException ignored) {
+                // The canonical table is introduced by an additive migration.
+            }
+        }
+        if (!blank(productNo)) result.put("productNo", productNo);
+        if (productId != null) result.put("productId", productId);
+        else result.putIfAbsent("productId", null);
+    }
+
     private JwtService.Claims currentPrincipalOrNull() {
         RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
         Object value = attributes == null ? null : attributes.getAttribute(
@@ -573,6 +604,11 @@ public class CreativeAiController {
     private void addSignedAssetUrls(List<Map<String,Object>> rows) {
         JwtService.Claims principal = authenticatedPrincipal();
         for (Map<String,Object> row : rows) {
+            // Production-request rows have both a request id and an asset id.
+            // Always resolve product identity from the explicit asset id.
+            Object idValue = row.get("assetId") instanceof Number ? row.get("assetId") : row.get("id");
+            Long assetId = numberAsLong(idValue);
+            if (assetId != null) addAssetProductFields(row, assetId);
             if ("image".equals(String.valueOf(row.get("assetType")))
                     && "ai_generated".equals(String.valueOf(row.get("sourceType")))) {
                 // Legacy rows keep their stored title, but use the current product name in every client response.
@@ -584,9 +620,7 @@ public class CreativeAiController {
             // id whenever it is present; signing the request id produces a
             // valid-looking URL for the wrong record and leaves the client
             // unable to load its image/model.
-            Object idValue = row.get("assetId") instanceof Number ? row.get("assetId") : row.get("id");
-            if (!(idValue instanceof Number)) continue;
-            Long assetId = ((Number) idValue).longValue();
+            if (assetId == null) continue;
             boolean model = "model".equals(String.valueOf(row.get("assetType")));
             String preview = signedMediaUrl(assetId, "preview-content", principal);
             String content = signedMediaUrl(assetId, model ? "model-content" : "content", principal);
@@ -1049,6 +1083,7 @@ public class CreativeAiController {
         out.put("simulationAssetId", generated.simulationAssetId());
         out.put("simulationImage", generated.simulationImage());
         out.put("viewCount", generated.images().size());
+        addAssetProductFields(out, req.inputAssetId);
         out.put("message", "生产模拟图已生成，包含正面、侧面和背面，并保存三张视角切片用于建模");
         return out;
     }
@@ -1332,7 +1367,7 @@ public class CreativeAiController {
 
     private Map<String, Object> imageGenerationJobResponse(Long jobId) {
         Map<String, Object> job = jdbc.queryForMap(
-                "SELECT id,job_no jobNo,provider,model_name modelName,output_asset_id outputAssetId," +
+                "SELECT id,job_no jobNo,provider,model_name modelName,input_asset_id inputAssetId,output_asset_id outputAssetId," +
                         "product_key productKey,product_name productName,product_material productMaterial," +
                         "status,progress,attempt_count attemptCount,error_message errorMessage," +
                         "job_type jobType,result_payload_json resultPayloadJson,request_payload_json requestPayloadJson,created_by createdBy," +
@@ -1369,6 +1404,9 @@ public class CreativeAiController {
         out.put("finishedAt", job.get("finishedAt"));
         out.put("source", imageJobSource(provider, jobType));
         out.put("queueConcurrency", imageQueueConcurrency(provider, jobType));
+        Long identityAssetId = numberAsLong(job.get("outputAssetId"));
+        if (identityAssetId == null) identityAssetId = numberAsLong(job.get("inputAssetId"));
+        if (identityAssetId != null) addAssetProductFields(out, identityAssetId);
         Map<String, Object> requestPayload = jobJsonMap(job.get("requestPayloadJson"));
         String policyVersion = requestPayloadText(job.get("requestPayloadJson"), "policyVersion");
         String compiledPrompt = requestPayloadText(job.get("requestPayloadJson"), "compiledPrompt");
@@ -1650,6 +1688,7 @@ public class CreativeAiController {
         result.put("creativeBrief", creativeBriefMap(brief));
         result.put("referenceAnalysis", referenceAnalysis.visualBrief);
         result.put("referenceAnalysisSource", referenceAnalysis.source);
+        addAssetProductFields(result, assetId);
         result.put("message", "Seedream 5.0 已完成图生图并保存到作品库。");
         return result;
     }
@@ -1674,6 +1713,7 @@ public class CreativeAiController {
         result.put("simulationAssetId", generated.simulationAssetId());
         result.put("simulationImage", generated.simulationImage());
         result.put("viewCount", generated.images().size());
+        addAssetProductFields(result, inputAssetId);
         result.put("message", "生产模拟图已生成，包含正面、侧面和背面，并保存三张视角切片用于建模");
         addGenerationCommandFields(result, command);
         return result;
@@ -2428,6 +2468,7 @@ public class CreativeAiController {
             response.put("jobId", jobId); response.put("jobNo", jobNo); response.put("taskId", taskId);
             response.put("status", "running"); response.put("progress", 0); response.put("provider", "tripo");
             response.put("modelVersion", selectedModel); response.put("qualityPreset", isPSeriesModel(selectedModel)?"fast-preview":"production");
+            addAssetProductFields(response, primaryInputAssetId);
             addProjectIdentity(response,
                     workflowProject == null ? req.projectId : workflowProject.projectId(),
                     workflowProject == null ? req.versionId : workflowProject.versionId());
@@ -2574,6 +2615,7 @@ public class CreativeAiController {
             response.put("jobNo", jobNo);
             response.put("status", "succeeded");
             response.put("assetId", assetId);
+            addAssetProductFields(response, assetId);
             addProjectIdentity(response,
                     workflowProject == null ? req.projectId : workflowProject.projectId(),
                     workflowProject == null ? req.versionId : workflowProject.versionId());
@@ -2739,12 +2781,15 @@ public class CreativeAiController {
     }
 
     @PostMapping(value = "/consumer-professional-submissions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Transactional
     public Map<String,Object> uploadProfessionalSubmission(@RequestParam("file") MultipartFile file,
                                                            @RequestParam(required=false) String title,
                                                            @RequestParam(required=false) String note,
                                                            @RequestParam(required=false) String purpose,
                                                            @RequestParam(required=false) String museumId,
-                                                           @RequestParam(required=false) String museumName) throws Exception {
+                                                           @RequestParam(required=false) String museumName,
+                                                           @RequestParam(required=false) String productNo,
+                                                           @RequestParam(required=false) Long assetId) throws Exception {
         Long userId = requireCurrentConsumerUser();
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("请选择要提交的 ZIP 作品包");
         if (file.getSize() > 100L * 1024 * 1024) throw new IllegalArgumentException("ZIP 作品包不能超过 100MB");
@@ -2753,6 +2798,48 @@ public class CreativeAiController {
         if (!hasZipSignature(file)) throw new IllegalArgumentException("上传文件不是有效的 ZIP 作品包");
         String normalizedPurpose = Set.of("personal", "museum_sale").contains(purpose) ? purpose : "personal";
         if ("museum_sale".equals(normalizedPurpose) && blank(museumId)) throw new IllegalArgumentException("售卖作品包必须先选择合作博物馆");
+        // A professional ZIP can either start a new product or be attached to
+        // an existing product created by the conversational workflow.  The
+        // association is explicit; never infer it from a filename or title.
+        String linkedProductNo = nullToEmpty(productNo).trim();
+        if (assetId != null) {
+            requireAssetAccess(assetId);
+            String assetProductNo = productNoForAsset(assetId);
+            if (!blank(linkedProductNo) && !linkedProductNo.equalsIgnoreCase(assetProductNo)) {
+                throw new IllegalArgumentException("产品号与所选作品不一致");
+            }
+            linkedProductNo = assetProductNo;
+        }
+        if (!blank(linkedProductNo)) {
+            try {
+                List<Map<String,Object>> products = jdbc.queryForList(
+                        "SELECT user_id userId FROM creative_product WHERE product_no=? LIMIT 1", linkedProductNo);
+                if (products.isEmpty()) throw new IllegalArgumentException("产品号不存在，请先在作品流程中创建产品");
+                Long ownerId = numberAsLong(products.get(0).get("userId"));
+                if (ownerId != null && !ownerId.equals(userId)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "不能关联其他用户的产品号");
+            } catch (BadSqlGrammarException schemaNotReady) {
+                // On a node before V20260828, product numbers still live on
+                // the asset/workflow rows.  Keep explicit productNo usable.
+                if (assetId == null) throw schemaNotReady;
+            }
+        }
+        // A product can have many generated assets, but it may only have one
+        // professional ZIP submission.  Keep rejected/old rows as audit
+        // history and reject every second submission for the same product.
+        if (!blank(linkedProductNo)) {
+            try {
+                List<Map<String,Object>> existing = jdbc.queryForList(
+                        "SELECT id FROM consumer_professional_submission WHERE user_id=? AND product_no=? LIMIT 1",
+                        userId, linkedProductNo);
+                if (!existing.isEmpty()) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "同一产品只能提交一次专业作品包");
+                }
+            } catch (BadSqlGrammarException schemaNotReady) {
+                // The old table has no product_no.  It cannot contain an
+                // explicit product link, so defer the duplicate guard until
+                // after the migration rather than blocking legacy uploads.
+            }
+        }
         Path directory = creativeAssetRoot().resolve("professional-submissions").normalize();
         Files.createDirectories(directory);
         String stored = "professional-" + System.currentTimeMillis() + "-" + UUID.randomUUID() + ".zip";
@@ -2761,8 +2848,22 @@ public class CreativeAiController {
         String safeTitle = blank(title) ? original.replaceFirst("(?i)\\.zip$", "") : title.trim();
         jdbc.update("INSERT INTO consumer_professional_submission (submission_no,user_id,title,original_name,storage_name,file_size,purpose,museum_id,museum_name,note) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 submissionNo, userId, safeTitle, original, stored, file.getSize(), normalizedPurpose, nullToEmpty(museumId), nullToEmpty(museumName), nullToEmpty(note));
-        try { jdbc.update("UPDATE consumer_professional_submission SET product_no=? WHERE submission_no=?", "PRD-" + submissionNo, submissionNo); } catch (DataAccessException ignored) { }
-        return Map.of("success", true, "submissionNo", submissionNo, "status", "review", "message", "专业作品包已提交，审核员可在后台下载审核");
+        if (blank(linkedProductNo)) linkedProductNo = "PRD-" + submissionNo;
+        try {
+            jdbc.update("UPDATE consumer_professional_submission SET product_no=? WHERE submission_no=?", linkedProductNo, submissionNo);
+            syncCanonicalProduct(linkedProductNo, userId, Map.of("productName", safeTitle));
+            jdbc.update("UPDATE consumer_professional_submission s JOIN creative_product p ON p.product_no=s.product_no SET s.product_id=p.id WHERE s.submission_no=?", submissionNo);
+        } catch (DataAccessException ignored) {
+            // Product identity columns are additive; the submission itself is
+            // still valid during a rolling deployment.
+        }
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("submissionNo", submissionNo);
+        result.put("productNo", linkedProductNo);
+        result.put("status", "review");
+        result.put("message", "专业作品包已提交，审核员可在后台下载审核");
+        return result;
     }
 
     private boolean hasZipSignature(MultipartFile file) throws IOException {
@@ -3065,21 +3166,36 @@ public class CreativeAiController {
     @GetMapping("/assets")
     public List<Map<String, Object>> assets(@RequestParam(required = false) String type,
                                             @RequestParam(required = false, defaultValue = "100") int size) {
-        String cols="id, asset_no assetNo, title, asset_type assetType, source_type sourceType, file_url fileUrl, preview_url previewUrl, prompt, style_id styleId, parent_asset_id parentAssetId, version_no versionNo, status, format, tags, created_by createdBy, created_at createdAt";
+        String cols="id, asset_no assetNo, product_no productNo, product_id productId, title, asset_type assetType, source_type sourceType, file_url fileUrl, preview_url previewUrl, prompt, style_id styleId, parent_asset_id parentAssetId, version_no versionNo, status, format, tags, created_by createdBy, created_at createdAt";
+        String legacyCols="id, asset_no assetNo, title, asset_type assetType, source_type sourceType, file_url fileUrl, preview_url previewUrl, prompt, style_id styleId, parent_asset_id parentAssetId, version_no versionNo, status, format, tags, created_by createdBy, created_at createdAt";
         JwtService.Claims principal = authenticatedPrincipal();
         int limit = Math.max(1, Math.min(size, 500));
         if(!isCreativeAdmin(principal)){
             Long userId = requirePersistedAuthenticatedUser();
             String ownerFilter = "created_by=? AND NOT EXISTS (SELECT 1 FROM creative_multiview_bundle_item bi JOIN creative_multiview_bundle mb ON mb.id=bi.bundle_id WHERE bi.asset_id=digital_asset.id AND mb.status<>'archived')";
-            List<Map<String,Object>> rows = type != null && !type.isBlank()
-                    ? jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE asset_type=? AND "+ownerFilter+" ORDER BY id DESC LIMIT ?", type, userId, limit)
-                    : jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE "+ownerFilter+" ORDER BY id DESC LIMIT ?", userId, limit);
+            List<Map<String,Object>> rows;
+            try {
+                rows = type != null && !type.isBlank()
+                        ? jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE asset_type=? AND "+ownerFilter+" ORDER BY id DESC LIMIT ?", type, userId, limit)
+                        : jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE "+ownerFilter+" ORDER BY id DESC LIMIT ?", userId, limit);
+            } catch (DataAccessException legacySchema) {
+                rows = type != null && !type.isBlank()
+                        ? jdbc.queryForList("SELECT "+legacyCols+" FROM digital_asset WHERE asset_type=? AND "+ownerFilter+" ORDER BY id DESC LIMIT ?", type, userId, limit)
+                        : jdbc.queryForList("SELECT "+legacyCols+" FROM digital_asset WHERE "+ownerFilter+" ORDER BY id DESC LIMIT ?", userId, limit);
+            }
             addSignedAssetUrls(rows);
             return rows;
         }
-        List<Map<String,Object>> rows = type != null && !type.isBlank()
-                ? jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE asset_type=? ORDER BY id DESC LIMIT ?", type, limit)
-                : jdbc.queryForList("SELECT "+cols+" FROM digital_asset ORDER BY id DESC LIMIT ?", limit);
+        List<Map<String,Object>> rows;
+        try {
+            rows = type != null && !type.isBlank()
+                    ? jdbc.queryForList("SELECT "+cols+" FROM digital_asset WHERE asset_type=? ORDER BY id DESC LIMIT ?", type, limit)
+                    : jdbc.queryForList("SELECT "+cols+" FROM digital_asset ORDER BY id DESC LIMIT ?", limit);
+        } catch (DataAccessException legacySchema) {
+            rows = type != null && !type.isBlank()
+                    ? jdbc.queryForList("SELECT "+legacyCols+" FROM digital_asset WHERE asset_type=? ORDER BY id DESC LIMIT ?", type, limit)
+                    : jdbc.queryForList("SELECT "+legacyCols+" FROM digital_asset ORDER BY id DESC LIMIT ?", limit);
+        }
         addSignedAssetUrls(rows);
         return rows;
     }
@@ -3093,12 +3209,18 @@ public class CreativeAiController {
         // Excluding them here keeps the legacy single-asset list from showing
         // the same product three additional times, even if the bundle panel
         // is filtered or temporarily unavailable in the browser.
-        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND (a.asset_type='model' OR COALESCE(a.source_type,'ai_generated')<>'upload') AND NOT EXISTS (SELECT 1 FROM creative_multiview_bundle_item bi JOIN creative_multiview_bundle mb ON mb.id=bi.bundle_id WHERE bi.asset_id=a.id AND mb.status<>'archived')");
+        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.product_no productNo,a.product_id productId,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.asset_type IN ('image','model') AND (a.asset_type='model' OR COALESCE(a.source_type,'ai_generated')<>'upload') AND NOT EXISTS (SELECT 1 FROM creative_multiview_bundle_item bi JOIN creative_multiview_bundle mb ON mb.id=bi.bundle_id WHERE bi.asset_id=a.id AND mb.status<>'archived')");
         List<Object> args=new ArrayList<>();
         if(userId!=null){sql.append(" AND a.created_by=?");args.add(userId);}
         if(!blank(status)){sql.append(" AND a.status=?");args.add(status);}
         sql.append(" ORDER BY a.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,500)));
-        List<Map<String,Object>> rows = jdbc.queryForList(sql.toString(),args.toArray());
+        List<Map<String,Object>> rows;
+        try {
+            rows = jdbc.queryForList(sql.toString(),args.toArray());
+        } catch (DataAccessException legacySchema) {
+            String legacySql = sql.toString().replace("a.product_no productNo,a.product_id productId,", "");
+            rows = jdbc.queryForList(legacySql,args.toArray());
+        }
         addSignedAssetUrls(rows);
         return rows;
     }
@@ -3109,13 +3231,19 @@ public class CreativeAiController {
                                                             @RequestParam(required=false) String keyword,
                                                             @RequestParam(required=false,defaultValue="200") int size) {
         requireCreativeAdmin();
-        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt,a.updated_at updatedAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.status='approved' AND a.asset_type IN ('image','model') AND (a.asset_type='model' OR COALESCE(a.source_type,'ai_generated')<>'upload')");
+        StringBuilder sql=new StringBuilder("SELECT a.id,a.asset_no assetNo,a.product_no productNo,a.product_id productId,a.title,a.asset_type assetType,a.source_type sourceType,a.file_url fileUrl,a.preview_url previewUrl,a.prompt,a.status,a.format,a.tags,a.created_by createdBy,u.username createdByName,a.created_at createdAt,a.updated_at updatedAt FROM digital_asset a JOIN user u ON a.created_by=u.id WHERE u.role='user' AND a.status='approved' AND a.asset_type IN ('image','model') AND (a.asset_type='model' OR COALESCE(a.source_type,'ai_generated')<>'upload')");
         List<Object> args=new ArrayList<>();
         if(userId!=null){sql.append(" AND a.created_by=?");args.add(userId);}
         if(!blank(type) && Set.of("image","model").contains(type)){sql.append(" AND a.asset_type=?");args.add(type);}
         if(!blank(keyword)){sql.append(" AND (a.title LIKE ? OR a.prompt LIKE ? OR a.asset_no LIKE ? OR u.username LIKE ?)");String kw="%"+keyword.trim()+"%";args.add(kw);args.add(kw);args.add(kw);args.add(kw);}
         sql.append(" ORDER BY a.updated_at DESC,a.id DESC LIMIT ?");args.add(Math.max(1,Math.min(size,1000)));
-        List<Map<String,Object>> rows = jdbc.queryForList(sql.toString(),args.toArray());
+        List<Map<String,Object>> rows;
+        try {
+            rows = jdbc.queryForList(sql.toString(),args.toArray());
+        } catch (DataAccessException legacySchema) {
+            String legacySql = sql.toString().replace("a.product_no productNo,a.product_id productId,", "");
+            rows = jdbc.queryForList(legacySql,args.toArray());
+        }
         addSignedAssetUrls(rows);
         return rows;
     }
@@ -3319,11 +3447,23 @@ public class CreativeAiController {
                     insertMultiViewBundleItems(bundleId, assetIds);
                 }
                 if (Set.of("draft", "rejected").contains(existingStatus)) {
-                    jdbc.update("UPDATE creative_multiview_bundle SET simulation_asset_id=?,product_key=?,product_name=?,material=?,product_size=?,view_count=?,status='draft',review_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE id=? AND user_id=?",
-                            simulationAssetId,
-                            blank(productKey) ? null : productKey, blank(productName) ? null : productName,
-                            blank(material) ? null : material, blank(productSize) ? null : productSize,
-                            viewCount, bundleId, userId);
+                    try {
+                        jdbc.update("UPDATE creative_multiview_bundle SET simulation_asset_id=?,product_no=?,product_key=?,product_name=?,material=?,product_size=?,view_count=?,status='draft',review_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE id=? AND user_id=?",
+                                simulationAssetId,
+                                productNoForAsset(inputAssetId),
+                                blank(productKey) ? null : productKey, blank(productName) ? null : productName,
+                                blank(material) ? null : material, blank(productSize) ? null : productSize,
+                                viewCount, bundleId, userId);
+                    } catch (DataAccessException legacySchema) {
+                        // V20260826_02 adds product_no to the bundle table;
+                        // allow a duplicate callback to update a legacy row
+                        // before that migration has reached this node.
+                        jdbc.update("UPDATE creative_multiview_bundle SET simulation_asset_id=?,product_key=?,product_name=?,material=?,product_size=?,view_count=?,status='draft',review_comment=NULL,reviewed_by=NULL,reviewed_at=NULL,updated_at=NOW() WHERE id=? AND user_id=?",
+                                simulationAssetId,
+                                blank(productKey) ? null : productKey, blank(productName) ? null : productName,
+                                blank(material) ? null : material, blank(productSize) ? null : productSize,
+                                viewCount, bundleId, userId);
+                    }
                 }
             } else {
                 String bundleNo = no("MVB");
@@ -3365,6 +3505,9 @@ public class CreativeAiController {
                         Long.class, bundleNo);
                 insertMultiViewBundleItems(bundleId, assetIds);
             }
+            String canonicalProductNo = productNoForAsset(inputAssetId);
+            syncCanonicalProduct(canonicalProductNo, userId, Map.of("productKey", productKey, "productName", productName, "productMaterial", material, "productSize", productSize));
+            linkCanonicalProduct("creative_multiview_bundle", bundleId, canonicalProductNo);
             creativeProjects.bindBundle(bundleId,
                     project == null ? null : project.projectId(),
                     project == null ? null : project.versionId(), inputAssetId);
@@ -3467,7 +3610,7 @@ public class CreativeAiController {
                                                                    @RequestParam(required=false) Long userId,
                                                                    @RequestParam(required=false,defaultValue="200") int size) {
         requireCreativeAdmin();
-        StringBuilder sql = new StringBuilder("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,u.username,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b JOIN user u ON u.id=b.user_id WHERE 1=1");
+        StringBuilder sql = new StringBuilder("SELECT b.id,b.bundle_no bundleNo,b.product_no productNo,b.product_id productId,b.user_id userId,u.username,b.input_asset_id inputAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment,b.reviewed_by reviewedBy,b.reviewed_at reviewedAt,b.created_at createdAt,b.updated_at updatedAt FROM creative_multiview_bundle b JOIN user u ON u.id=b.user_id WHERE 1=1");
         List<Object> args = new ArrayList<>();
         if (!blank(status) && Set.of("draft", "review", "approved", "rejected", "archived").contains(status.trim())) {
             sql.append(" AND b.status=?"); args.add(status.trim());
@@ -3475,7 +3618,13 @@ public class CreativeAiController {
         if (userId != null) { sql.append(" AND b.user_id=?"); args.add(userId); }
         sql.append(" ORDER BY b.updated_at DESC,b.id DESC LIMIT ?");
         args.add(Math.max(1, Math.min(size, 500)));
-        List<Map<String,Object>> rows = jdbc.queryForList(sql.toString(), args.toArray());
+        List<Map<String,Object>> rows;
+        try {
+            rows = jdbc.queryForList(sql.toString(), args.toArray());
+        } catch (DataAccessException legacySchema) {
+            String legacySql = sql.toString().replace("b.product_no productNo,b.product_id productId,", "");
+            rows = jdbc.queryForList(legacySql, args.toArray());
+        }
         for (Map<String,Object> row : rows) {
             Map<String,Object> full = multiViewBundleResponse(numberAsLong(row.get("id")));
             row.put("images", full.get("images"));
@@ -3606,7 +3755,14 @@ public class CreativeAiController {
     private Map<String,Object> queryOwnedMultiViewBundle(Long id, Long userId) {
         List<Map<String,Object>> rows = jdbc.queryForList("SELECT id,view_count viewCount,status,product_name productName FROM creative_multiview_bundle WHERE id=? AND user_id=?", id, userId);
         if (rows.isEmpty()) throw new IllegalArgumentException("三视图作品包不存在或无权访问");
-        Map<String,Object> result = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.simulation_asset_id simulationAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment FROM creative_multiview_bundle b WHERE b.id=?", id);
+        Map<String,Object> result;
+        try {
+            result = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.product_no productNo,b.product_id productId,b.user_id userId,b.input_asset_id inputAssetId,b.simulation_asset_id simulationAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment FROM creative_multiview_bundle b WHERE b.id=?", id);
+        } catch (DataAccessException legacySchema) {
+            result = jdbc.queryForMap("SELECT b.id,b.bundle_no bundleNo,b.user_id userId,b.input_asset_id inputAssetId,b.simulation_asset_id simulationAssetId,b.product_key productKey,b.product_name productName,b.material,b.product_size productSize,b.view_count viewCount,b.status,b.purpose,b.museum_id museumId,b.museum_name museumName,b.campaign_key campaignKey,b.note,b.review_comment reviewComment FROM creative_multiview_bundle b WHERE b.id=?", id);
+        }
+        if (blank(str(result.get("productNo")))) result.put("productNo", productNoForAsset(numberAsLong(result.get("inputAssetId"))));
+        if (numberAsLong(result.get("productId")) == null) result.put("productId", canonicalProductId(str(result.get("productNo"))));
         result.putAll(optionalProjectVersion("creative_multiview_bundle", "id", id));
         return result;
     }
@@ -3644,7 +3800,17 @@ public class CreativeAiController {
         }
         if (!sampleRequests.isEmpty()) row.put("sampleRequest", sampleRequests.get(0));
         if (blank(str(row.get("productNo")))) row.put("productNo", productNoForAsset(numberAsLong(row.get("inputAssetId"))));
+        if (numberAsLong(row.get("productId")) == null) row.put("productId", canonicalProductId(str(row.get("productNo"))));
         return row;
+    }
+
+    private Long canonicalProductId(String productNo) {
+        if (blank(productNo)) return null;
+        try {
+            return jdbc.queryForObject("SELECT id FROM creative_product WHERE product_no=? LIMIT 1", Long.class, productNo.trim());
+        } catch (DataAccessException ignored) {
+            return null;
+        }
     }
 
     private String productNoForAsset(Long assetId) {
@@ -3692,6 +3858,48 @@ public class CreativeAiController {
                 // available on a very old schema.
             }
             return "PRD-" + String.format("%010d", rootId);
+        }
+    }
+
+    /**
+     * Keep the human-facing product number and the internal product row in
+     * sync whenever a new asset or workflow record is created.  The helper is
+     * deliberately best-effort so an older node can finish a rolling deploy
+     * before V20260828 has added the canonical product table.
+     */
+    private void syncCanonicalProduct(String productNo, Long userId, Map<String, Object> metadata) {
+        if (blank(productNo)) return;
+        try {
+            Map<String, Object> meta = metadata == null ? Map.of() : metadata;
+            String productName = firstNonBlank(str(meta.get("productName")), str(meta.get("productCategory")), str(meta.get("productType")));
+            String productKey = str(meta.get("productKey"));
+            String category = firstNonBlank(str(meta.get("productCategory")), str(meta.get("category")), str(meta.get("productType")));
+            String material = firstNonBlank(str(meta.get("productMaterial")), str(meta.get("material")));
+            String productSize = str(meta.get("productSize"));
+            jdbc.update("INSERT INTO creative_product(product_no,user_id,product_name,product_key,category,material,product_size) VALUES (?,?,?,?,?,?,?) "
+                            + "ON DUPLICATE KEY UPDATE user_id=COALESCE(creative_product.user_id,VALUES(user_id)),"
+                            + "product_name=COALESCE(NULLIF(creative_product.product_name,''),VALUES(product_name)),"
+                            + "product_key=COALESCE(NULLIF(creative_product.product_key,''),VALUES(product_key)),"
+                            + "category=COALESCE(NULLIF(creative_product.category,''),VALUES(category)),"
+                            + "material=COALESCE(NULLIF(creative_product.material,''),VALUES(material)),"
+                            + "product_size=COALESCE(NULLIF(creative_product.product_size,''),VALUES(product_size)),updated_at=CURRENT_TIMESTAMP",
+                    productNo.trim(), userId, blank(productName) ? null : productName,
+                    blank(productKey) ? null : productKey, blank(category) ? null : category,
+                    blank(material) ? null : material, blank(productSize) ? null : productSize);
+        } catch (DataAccessException ignored) {
+            // V20260828 is additive and may not have reached every node yet.
+        }
+    }
+
+    private void linkCanonicalProduct(String tableName, Long rowId, String productNo) {
+        if (rowId == null || blank(productNo)) return;
+        // tableName is only called with source-code constants, never client
+        // input. Keeping it dynamic avoids six almost identical SQL methods.
+        try {
+            jdbc.update("UPDATE " + tableName + " t JOIN creative_product p ON p.product_no=t.product_no "
+                            + "SET t.product_id=p.id WHERE t.id=?", rowId);
+        } catch (DataAccessException ignored) {
+            // Keep old schemas operational during the migration window.
         }
     }
 
@@ -3959,6 +4167,15 @@ public class CreativeAiController {
                     reused.put("status", row.get("status"));
                     reused.put("requestType", row.get("requestType"));
                     reused.put("samplePaymentStatus", row.get("samplePaymentStatus"));
+                    try {
+                        Map<String,Object> identity = jdbc.queryForMap(
+                                "SELECT product_no productNo,product_id productId FROM consumer_production_request WHERE id=?", row.get("id"));
+                        reused.put("productNo", identity.get("productNo"));
+                        reused.put("productId", identity.get("productId"));
+                    } catch (DataAccessException ignoredIdentity) {
+                        // Product identity columns are additive; legacy rows
+                        // remain valid without these optional response fields.
+                    }
                     reused.put("idempotent", true);
                     reused.put("message", "已返回之前提交的同一申请");
                     return reused;
@@ -4104,7 +4321,11 @@ public class CreativeAiController {
             });
         }
         Long id=jdbc.queryForObject("SELECT id FROM consumer_production_request WHERE request_no=?", Long.class, requestNo);
-        try { jdbc.update("UPDATE consumer_production_request SET product_no=? WHERE id=?", productNo, id); } catch (DataAccessException ignored) { }
+        try {
+            jdbc.update("UPDATE consumer_production_request SET product_no=? WHERE id=?", productNo, id);
+            syncCanonicalProduct(productNo, userId, Map.of("productName", sampleProductName, "productMaterial", ""));
+            linkCanonicalProduct("consumer_production_request", id, productNo);
+        } catch (DataAccessException ignored) { }
         // Reuse the validated asset/bundle reference. A client commonly opens
         // the production page with only an asset or bundle id; resolving the
         // project a second time from optional body fields used to drop the
@@ -4129,6 +4350,9 @@ public class CreativeAiController {
         }
         Map<String,Object> result = new LinkedHashMap<>();
         result.put("success",true); result.put("id",id); result.put("requestNo",requestNo); result.put("status","review");
+        result.put("productNo", productNo);
+        Long canonicalId = canonicalProductId(productNo);
+        if (canonicalId != null) result.put("productId", canonicalId);
         if (project != null) {
             result.put("projectId", project.projectId());
             result.put("versionId", project.versionId());
@@ -4336,7 +4560,6 @@ public class CreativeAiController {
 
     private String adminOrderIdentity(Map<String, Object> row) {
         String userId = normalizedOrderPart(row.get("userId"));
-        String requestType = firstNonBlank(str(row.get("requestType")), str(row.get("orderType"))).trim();
         String productIdentity = firstNonBlank(
                 str(row.get("productNo")),
                 str(row.get("multiviewProductNo")),
@@ -4344,8 +4567,12 @@ public class CreativeAiController {
                 normalizedOrderPart(row.get("assetId")),
                 str(row.get("requestNo")),
                 str(row.get("orderNo")));
-        if (blank(userId) || blank(requestType) || blank(productIdentity)) return null;
-        return userId + "|" + requestType.trim().toLowerCase(Locale.ROOT) + "|" + productIdentity.trim().toLowerCase(Locale.ROOT);
+        if (blank(userId) || blank(productIdentity)) return null;
+        // productNo is the canonical identity across image, multi-view, GLB,
+        // ZIP and payment records.  Do not include requestType here: a
+        // multi-view sample and a model sample for the same product must be
+        // rendered as one order row in the operator center.
+        return userId + "|" + productIdentity.trim().toLowerCase(Locale.ROOT);
     }
 
     private String normalizedOrderPart(Object value) {
@@ -5696,6 +5923,7 @@ public class CreativeAiController {
             return ps;
         }, kh);
         Long assetId=Objects.requireNonNull(kh.getKey()).longValue();
+        Object owner=meta==null?null:meta.get("createdByUserId");
         // Keep derived assets (notably 3D models) attached to the same
         // product number as the root source image.  Using the immediate
         // parent id here split chained generations into separate products.
@@ -5704,10 +5932,11 @@ public class CreativeAiController {
                     ? "PRD-" + String.format("%010d", assetId)
                     : productNoForAsset(parentAssetId);
             jdbc.update("UPDATE digital_asset SET product_no=? WHERE id=?", productNo, assetId);
+            syncCanonicalProduct(productNo, owner == null ? null : numberAsLong(owner), meta);
+            linkCanonicalProduct("digital_asset", assetId, productNo);
         } catch (DataAccessException ignored) {
             // The additive migration may still be running during a rolling deploy.
         }
-        Object owner=meta==null?null:meta.get("createdByUserId");
         if(owner instanceof Number) assignAssetOwner(assetId,((Number)owner).longValue());
         Long projectId = meta == null ? null : numberAsLong(meta.get("projectId"));
         Long versionId = meta == null ? null : numberAsLong(meta.get("versionId"));

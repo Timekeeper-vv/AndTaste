@@ -35,6 +35,7 @@ export interface ImageGenerationOptions {
   projectId?: ReadonlyValue<number | null>
   versionId?: ReadonlyValue<number | null>
   generatedAssetId: ReadonlyValue<number | null>
+  productNo?: ReadonlyValue<string>
   previewUrl: Ref<string>
   referenceAnalysis: Ref<string>
   busy: Ref<boolean>
@@ -156,6 +157,7 @@ export function useImageGeneration(options: ImageGenerationOptions) {
     return {
       product: options.selectedProduct.value,
       productKey: options.productKey.value,
+      ...(options.productNo?.value ? { productNo: options.productNo.value } : {}),
       productCategory: options.productCategory.value,
       productType: options.productType.value,
       material: options.material.value,

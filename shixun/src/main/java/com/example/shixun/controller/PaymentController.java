@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.shixun.service.CreativeProjectService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -266,7 +267,8 @@ public class PaymentController {
         try {
             creation = Objects.requireNonNull(transactions.execute(status -> {
                 List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT r.id,r.request_type,r.status,r.sample_product_name,r.sample_fee_yuan,r.sample_payment_status,r.sample_payment_order_no " +
+                    "SELECT r.id,r.request_type,r.status,r.sample_product_name,r.sample_fee_yuan,r.sample_payment_status,r.sample_payment_order_no," +
+                            "r.product_no productNo,r.product_id productId " +
                             "FROM consumer_production_request r WHERE r.id=? AND r.user_id=? FOR UPDATE", requestId, userId);
             if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "打样申请不存在");
             Map<String, Object> request = rows.get(0);
@@ -274,12 +276,15 @@ public class PaymentController {
             if (!"approved".equals(String.valueOf(request.get("status")))) throw new IllegalStateException("管理员审核通过后才能支付打样费");
             BigDecimal feeYuan = decimal(request.get("sample_fee_yuan"));
             if (feeYuan.signum() <= 0) throw new IllegalStateException("打样费用尚未配置，请联系管理员");
+            String productNo = nullableText(request.get("productNo"));
+            Long productId = nullableLong(request.get("productId"));
             String existingOrderNo = nullableText(request.get("sample_payment_order_no"));
             if (!blank(existingOrderNo)) {
                 List<Map<String, Object>> existing = jdbc.queryForList("SELECT status,channel FROM payment_order WHERE order_no=? AND user_id=? FOR UPDATE", existingOrderNo, userId);
                 if (!existing.isEmpty()) {
                     String existingStatus = String.valueOf(existing.get(0).get("status"));
                     if (Set.of("pending", "manual_review", "paid").contains(existingStatus)) {
+                        linkPaymentOrderProduct(existingOrderNo, productNo, productId);
                         return new SampleOrderCreation(existingOrderNo, true, feeYuan, String.valueOf(request.get("sample_product_name")), String.valueOf(existing.get(0).get("channel")));
                     }
                 }
@@ -288,7 +293,7 @@ public class PaymentController {
             CreditPackage pkg = new CreditPackage("sample_fee_" + requestId,
                     "打样费 · " + nullableText(request.get("sample_product_name")),
                     "审核通过后的作品打样费用", amountFen, BigDecimal.ZERO);
-            OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
+            OrderCreation order = createOrReusePendingOrder(userId, pkg, channel, productNo, productId);
             jdbc.update("UPDATE consumer_production_request SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=? AND user_id=?",
                     order.orderNo, requestId, userId);
                 return new SampleOrderCreation(order.orderNo, order.reused, feeYuan, nullableText(request.get("sample_product_name")), channel);
@@ -355,7 +360,8 @@ public class PaymentController {
         try {
             creation = Objects.requireNonNull(transactions.execute(status -> {
                 List<Map<String, Object>> rows = jdbc.queryForList(
-                        "SELECT id,request_type,status,product_name,quoted_total_price,sample_payment_status,sample_payment_order_no " +
+                        "SELECT r.id,r.request_type,r.status,p.product_name,r.quoted_total_price,r.sample_payment_status,r.sample_payment_order_no," +
+                                "r.product_no productNo,r.product_id productId " +
                                 "FROM creative_quote_request r JOIN creative_product_template p ON p.id=r.product_template_id " +
                                 "WHERE r.id=? AND r.user_id=? FOR UPDATE", requestId, userId);
                 if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "商品化报价申请不存在");
@@ -364,12 +370,15 @@ public class PaymentController {
                 if (!"accepted".equals(String.valueOf(request.get("status")))) throw new IllegalStateException("请先接受完整报价后再支付打样费");
                 BigDecimal feeYuan = decimal(request.get("quoted_total_price"));
                 if (feeYuan.signum() <= 0) throw new IllegalStateException("打样费用尚未配置，请联系运营");
+                String productNo = nullableText(request.get("productNo"));
+                Long productId = nullableLong(request.get("productId"));
                 String existingOrderNo = nullableText(request.get("sample_payment_order_no"));
                 if (!blank(existingOrderNo)) {
                     List<Map<String, Object>> existing = jdbc.queryForList("SELECT status,channel FROM payment_order WHERE order_no=? AND user_id=? FOR UPDATE", existingOrderNo, userId);
                     if (!existing.isEmpty()) {
                         String existingStatus = String.valueOf(existing.get(0).get("status"));
                         if (Set.of("pending", "manual_review", "paid").contains(existingStatus)) {
+                            linkPaymentOrderProduct(existingOrderNo, productNo, productId);
                             return new SampleOrderCreation(existingOrderNo, true, feeYuan, String.valueOf(request.get("product_name")), String.valueOf(existing.get(0).get("channel")));
                         }
                     }
@@ -377,7 +386,7 @@ public class PaymentController {
                 CreditPackage pkg = new CreditPackage("commercial_quote_sample_" + requestId,
                         "打样费 · " + nullableText(request.get("product_name")), "商品化报价确认后的作品打样费用",
                         feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
-                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
+                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel, productNo, productId);
                 jdbc.update("UPDATE creative_quote_request SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=? AND user_id=?",
                         order.orderNo, requestId, userId);
                 return new SampleOrderCreation(order.orderNo, order.reused, feeYuan, nullableText(request.get("product_name")), channel);
@@ -444,24 +453,28 @@ public class PaymentController {
         try {
             creation = Objects.requireNonNull(transactions.execute(status -> {
                 List<Map<String, Object>> rows = jdbc.queryForList(
-                        "SELECT id,title,status,quoted_sample_fee_yuan,quoted_sample_lead_time,sample_payment_status,sample_payment_order_no "
+                        "SELECT id,title,status,quoted_sample_fee_yuan,quoted_sample_lead_time,sample_payment_status,sample_payment_order_no," +
+                                "product_no productNo,product_id productId "
                                 + "FROM consumer_professional_submission WHERE id=? AND user_id=? FOR UPDATE", submissionId, userId);
                 if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品报价不存在");
                 Map<String, Object> submission = rows.get(0);
                 if (!"approved".equals(String.valueOf(submission.get("status")))) throw new IllegalStateException("专业作品尚未审核通过");
                 BigDecimal feeYuan = decimal(submission.get("quoted_sample_fee_yuan"));
                 if (feeYuan.signum() <= 0 || blank(nullableText(submission.get("quoted_sample_lead_time")))) throw new IllegalStateException("报价单尚未完整配置，请联系管理员");
+                String productNo = nullableText(submission.get("productNo"));
+                Long productId = nullableLong(submission.get("productId"));
                 String existingOrderNo = nullableText(submission.get("sample_payment_order_no"));
                 if (!blank(existingOrderNo)) {
                     List<Map<String, Object>> existing = jdbc.queryForList("SELECT status,channel FROM payment_order WHERE order_no=? AND user_id=? FOR UPDATE", existingOrderNo, userId);
                     if (!existing.isEmpty() && Set.of("pending", "manual_review", "paid").contains(String.valueOf(existing.get(0).get("status")))) {
+                        linkPaymentOrderProduct(existingOrderNo, productNo, productId);
                         return new SampleOrderCreation(existingOrderNo, true, feeYuan, nullableText(submission.get("title")), String.valueOf(existing.get(0).get("channel")));
                     }
                 }
                 CreditPackage pkg = new CreditPackage("professional_submission_sample_" + submissionId,
                         "打样费 · " + nullableText(submission.get("title")), "专业作品包审核通过后的打样费用",
                         feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
-                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
+                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel, productNo, productId);
                 jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=? AND user_id=?",
                         order.orderNo, submissionId, userId);
                 return new SampleOrderCreation(order.orderNo, order.reused, feeYuan, nullableText(submission.get("title")), channel);
@@ -525,7 +538,7 @@ public class PaymentController {
         try {
             creation = Objects.requireNonNull(transactions.execute(status -> {
                 List<Map<String, Object>> rows = jdbc.queryForList(
-                        "SELECT g.id,g.status,g.quoted_fee_yuan,g.payment_status,g.payment_order_no,p.product_name "
+                        "SELECT g.id,g.status,g.quoted_fee_yuan,g.payment_status,g.payment_order_no,g.product_no productNo,g.product_id productId,p.product_name "
                                 + "FROM commercial_professional_guidance_request g "
                                 + "LEFT JOIN creative_product_template p ON p.id=g.product_template_id "
                                 + "WHERE g.id=? AND g.user_id=? FOR UPDATE", guidanceId, userId);
@@ -538,6 +551,8 @@ public class PaymentController {
                 if (quotedFee == null) throw new IllegalStateException("专业指导费用尚未配置，请联系运营");
                 BigDecimal feeYuan = decimal(quotedFee);
                 if (feeYuan.signum() <= 0) throw new IllegalStateException("专业指导费用尚未配置，请联系运营");
+                String productNo = nullableText(guidance.get("productNo"));
+                Long productId = nullableLong(guidance.get("productId"));
                 String existingOrderNo = nullableText(guidance.get("payment_order_no"));
                 if (!blank(existingOrderNo)) {
                     List<Map<String, Object>> existing = jdbc.queryForList(
@@ -545,6 +560,7 @@ public class PaymentController {
                     if (!existing.isEmpty()) {
                         String existingStatus = String.valueOf(existing.get(0).get("status"));
                         if (Set.of("pending", "manual_review", "paid").contains(existingStatus)) {
+                            linkPaymentOrderProduct(existingOrderNo, productNo, productId);
                             return new GuidanceOrderCreation(existingOrderNo, true, feeYuan,
                                     nullableText(guidance.get("product_name")), String.valueOf(existing.get(0).get("channel")));
                         }
@@ -558,7 +574,7 @@ public class PaymentController {
                 CreditPackage pkg = new CreditPackage("commercial_guidance_" + guidanceId,
                         limit("专业指导费 · " + (blank(productName) ? "商品化申请" : productName), 100),
                         "商品化申请专业指导服务费用", feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
-                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel);
+                OrderCreation order = createOrReusePendingOrder(userId, pkg, channel, productNo, productId);
                 jdbc.update("UPDATE commercial_professional_guidance_request SET payment_status='pending',payment_order_no=? WHERE id=? AND user_id=?",
                         order.orderNo, guidanceId, userId);
                 return new GuidanceOrderCreation(order.orderNo, order.reused, feeYuan, productName, channel);
@@ -710,7 +726,7 @@ public class PaymentController {
         expireOverdueOrders(userId);
         int safeLimit = limit == null ? DEFAULT_ORDER_LIST_LIMIT : Math.max(1, Math.min(limit, MAX_ORDER_LIST_LIMIT));
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT p.order_no orderNo,p.product_code packageCode,p.product_name packageName,p.amount_fen amountFen," +
+                "SELECT p.order_no orderNo,p.product_code packageCode,p.product_no productNo,p.product_id productId,p.product_name packageName,p.amount_fen amountFen," +
                         "p.credit_amount credits,p.channel,p.status,p.code_url codeUrl,p.provider_order_no providerOrderNo," +
                         "p.paid_at paidAt,p.expired_at expiredAt,p.created_at createdAt,r.status refundStatus " +
                         "FROM payment_order p LEFT JOIN payment_refund r ON r.order_no=p.order_no " +
@@ -910,7 +926,7 @@ public class PaymentController {
     public List<Map<String, Object>> paymentExceptions(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         requireAdmin(principal);
-        return jdbc.queryForList("SELECT p.order_no orderNo,p.user_id userId,p.channel,p.status,p.amount_fen amountFen,p.credit_amount credits," +
+        return jdbc.queryForList("SELECT p.order_no orderNo,p.product_no productNo,p.product_id productId,p.user_id userId,p.channel,p.status,p.amount_fen amountFen,p.credit_amount credits," +
                 "p.provider_order_no providerOrderNo,p.updated_at updatedAt,r.refund_no refundNo,r.status refundStatus,r.provider_refund_id providerRefundId " +
                 "FROM payment_order p LEFT JOIN payment_refund r ON r.order_no=p.order_no " +
                 "WHERE p.status IN ('payment_exception','refund_unknown','refund_exception') " +
@@ -922,7 +938,7 @@ public class PaymentController {
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         requireAdmin(principal);
         expireOverdueOrders();
-        return jdbc.queryForList("SELECT p.order_no orderNo,u.username,p.product_name packageName,p.amount_fen amountFen,p.credit_amount credits,p.channel,p.status," +
+        return jdbc.queryForList("SELECT p.order_no orderNo,p.product_no productNo,p.product_id productId,u.username,p.product_name packageName,p.amount_fen amountFen,p.credit_amount credits,p.channel,p.status," +
                 "p.provider_order_no providerOrderNo,p.created_at createdAt,p.paid_at paidAt,p.expired_at expiredAt,r.refund_no refundNo,r.status refundStatus " +
                 "FROM payment_order p LEFT JOIN user u ON u.id=p.user_id LEFT JOIN payment_refund r ON r.order_no=p.order_no ORDER BY p.id DESC LIMIT 300");
     }
@@ -1082,7 +1098,20 @@ public class PaymentController {
     }
 
     private OrderCreation createOrReusePendingOrder(Long userId, CreditPackage pkg, String channel) {
+        return createOrReusePendingOrder(userId, pkg, channel, null, null);
+    }
+
+    /**
+     * Creates (or reuses) a pending order while carrying the canonical
+     * creative-product identity through the payment boundary.  Recharge
+     * orders call the three-argument overload and intentionally leave these
+     * fields null; physical sample/guidance payments pass the source product
+     * identity so every later payment view can join the same product.
+     */
+    private OrderCreation createOrReusePendingOrder(Long userId, CreditPackage pkg, String channel,
+                                                    String productNo, Long productId) {
         expireOverdueOrders(userId);
+        ProductLink product = resolveProductLink(productNo, productId);
         // Lock the canonical account even when it has no prior order. A query
         // against an empty order set cannot serialize two first-click requests.
         jdbc.queryForList("SELECT id FROM user WHERE id=? FOR UPDATE", userId);
@@ -1096,6 +1125,7 @@ public class PaymentController {
             String activeOrderNo = String.valueOf(active.get("order_no"));
             if ("pending".equals(activeStatus) && pkg.code.equals(String.valueOf(active.get("product_code")))
                     && channel.equals(String.valueOf(active.get("channel")))) {
+                linkPaymentOrderProduct(activeOrderNo, product.productNo(), product.productId());
                 return new OrderCreation(activeOrderNo, true);
             }
             if ("manual_review".equals(activeStatus)) {
@@ -1110,8 +1140,8 @@ public class PaymentController {
         for (int attempt = 1; attempt <= REFERENCE_INSERT_ATTEMPTS; attempt++) {
             String orderNo = newOrderNo();
             try {
-                jdbc.update("INSERT INTO payment_order(order_no,user_id,product_code,product_name,amount_fen,credit_amount,channel,status,expired_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                        orderNo, userId, pkg.code, pkg.name, pkg.amountFen, pkg.credits, channel, "pending", expiresAt);
+                jdbc.update("INSERT INTO payment_order(order_no,user_id,product_code,product_no,product_id,product_name,amount_fen,credit_amount,channel,status,expired_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        orderNo, userId, pkg.code, product.productNo(), product.productId(), pkg.name, pkg.amountFen, pkg.credits, channel, "pending", expiresAt);
                 return new OrderCreation(orderNo, false);
             } catch (DuplicateKeyException collision) {
                 if (attempt == REFERENCE_INSERT_ATTEMPTS) {
@@ -1121,6 +1151,43 @@ public class PaymentController {
             }
         }
         throw new IllegalStateException("支付订单创建繁忙，请稍后重试");
+    }
+
+    /**
+     * Links an already-created/reused order to the product identity.  This is
+     * also used for orders created before the canonical-product migration, so
+     * opening an existing payment flow progressively repairs its association.
+     */
+    private void linkPaymentOrderProduct(String orderNo, String productNo, Long productId) {
+        if (blank(orderNo)) return;
+        ProductLink product = resolveProductLink(productNo, productId);
+        if (product.productNo() == null && product.productId() == null) return;
+        jdbc.update("UPDATE payment_order SET product_no=COALESCE(?,product_no),product_id=COALESCE(?,product_id) WHERE order_no=?",
+                product.productNo(), product.productId(), orderNo);
+    }
+
+    /** Resolve either side of the product number/ID pair when one is absent. */
+    private ProductLink resolveProductLink(String productNo, Long productId) {
+        String normalizedNo = blank(productNo) ? null : productNo.trim();
+        Long normalizedId = productId;
+        try {
+            if (normalizedId == null && normalizedNo != null) {
+                List<Map<String, Object>> rows = jdbc.queryForList(
+                        "SELECT id FROM creative_product WHERE product_no=? LIMIT 1", normalizedNo);
+                if (!rows.isEmpty()) normalizedId = nullableLong(rows.get(0).get("id"));
+            }
+            if (normalizedNo == null && normalizedId != null) {
+                List<Map<String, Object>> rows = jdbc.queryForList(
+                        "SELECT product_no FROM creative_product WHERE id=? LIMIT 1", normalizedId);
+                if (!rows.isEmpty()) normalizedNo = nullableText(rows.get(0).get("product_no"));
+                if (blank(normalizedNo)) normalizedNo = null;
+            }
+        } catch (DataAccessException ignored) {
+            // During a rolling deployment the additive migration may not yet
+            // have reached this node. Preserve whichever source value exists;
+            // the next request will complete the pair after migration.
+        }
+        return new ProductLink(normalizedNo, normalizedId);
     }
 
     private Map<String, Object> createdOrderView(String orderNo, Long userId, String channel, boolean reused) throws Exception {
@@ -2588,7 +2655,7 @@ public class PaymentController {
     }
 
     private Map<String, Object> orderViewForAdmin(String orderNo) {
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.order_no orderNo,p.user_id userId,p.product_name packageName,p.amount_fen amountFen,p.credit_amount credits,p.channel,p.status," +
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.order_no orderNo,p.product_no productNo,p.product_id productId,p.user_id userId,p.product_name packageName,p.amount_fen amountFen,p.credit_amount credits,p.channel,p.status," +
                 "p.provider_order_no providerOrderNo,p.paid_at paidAt,p.expired_at expiredAt,p.created_at createdAt,r.refund_no refundNo,r.status refundStatus,r.provider_refund_id providerRefundId " +
                 "FROM payment_order p LEFT JOIN payment_refund r ON r.order_no=p.order_no WHERE p.order_no=?", orderNo);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "支付订单不存在");
@@ -2612,7 +2679,7 @@ public class PaymentController {
 
     private Map<String, Object> orderView(String orderNo, Long userId) {
         expireOverdueOrder(orderNo, userId);
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.order_no orderNo,p.product_code packageCode,p.product_name packageName,p.amount_fen amountFen," +
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.order_no orderNo,p.product_code packageCode,p.product_no productNo,p.product_id productId,p.product_name packageName,p.amount_fen amountFen," +
                 "p.credit_amount credits,p.channel,p.status,p.code_url codeUrl,p.provider_order_no providerOrderNo,p.paid_at paidAt,p.expired_at expiredAt,p.created_at createdAt," +
                 "r.refund_no refundNo,r.status refundStatus FROM payment_order p LEFT JOIN payment_refund r ON r.order_no=p.order_no WHERE p.order_no=? AND p.user_id=?", orderNo, userId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "支付订单不存在");
@@ -2851,6 +2918,7 @@ public class PaymentController {
     }
 
     private record CreditPackage(String code, String name, String description, long amountFen, BigDecimal credits) { }
+    private record ProductLink(String productNo, Long productId) { }
     private record SampleOrderCreation(String orderNo, boolean reused, BigDecimal feeYuan, String productName, String channel) { }
     private record GuidanceOrderCreation(String orderNo, boolean reused, BigDecimal feeYuan, String productName, String channel) { }
     private record OrderCreation(String orderNo, boolean reused) { }

@@ -205,7 +205,14 @@ public class CreativeWorkflowDetailService {
         String orderNo = text(request.get("samplePaymentOrderNo"));
         if (orderNo.isBlank()) return null;
         try {
-            List<Map<String, Object>> rows = jdbc.queryForList("SELECT order_no orderNo,status,channel,amount_fen amountFen,created_at createdAt,paid_at paidAt,updated_at updatedAt FROM payment_order WHERE order_no=? LIMIT 1", orderNo);
+            List<Map<String, Object>> rows;
+            try {
+                rows = jdbc.queryForList("SELECT order_no orderNo,product_no productNo,product_id productId,status,channel,amount_fen amountFen,created_at createdAt,paid_at paidAt,updated_at updatedAt FROM payment_order WHERE order_no=? LIMIT 1", orderNo);
+            } catch (Exception schemaNotReady) {
+                // V20260828 adds the canonical product columns additively;
+                // retain payment visibility while an older node is draining.
+                rows = jdbc.queryForList("SELECT order_no orderNo,status,channel,amount_fen amountFen,created_at createdAt,paid_at paidAt,updated_at updatedAt FROM payment_order WHERE order_no=? LIMIT 1", orderNo);
+            }
             return rows.isEmpty() ? null : canonicalize(rows.get(0));
         } catch (Exception ignored) { return null; }
     }
@@ -331,7 +338,7 @@ public class CreativeWorkflowDetailService {
                 "summary", "recommendation", "orderNo", "channel", "amountFen", "paidAt", "eventType", "decision", "rating",
                 "comment", "issueTagsJson", "evidenceAssetIdsJson", "payloadJson", "createdBy", "logisticsId", "carrierCode",
                 "carrierName", "trackingNo", "latestTrace", "alertLevel", "alertStatus", "exceptionNote", "shippedAt",
-                "signedAt", "estimatedArrival", "lastSyncedAt", "location", "content")) aliases.put(key.toLowerCase(Locale.ROOT), key);
+                "signedAt", "estimatedArrival", "lastSyncedAt", "location", "content", "productNo", "productId")) aliases.put(key.toLowerCase(Locale.ROOT), key);
         Map<String, Object> out = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : source.entrySet()) {
             String key = entry.getKey();

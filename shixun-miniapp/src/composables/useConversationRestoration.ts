@@ -21,6 +21,7 @@ export interface ConversationRestorationOptions {
   inspirationText: AnyRef<string>
   referenceAssetId: AnyRef<number | null>
   generatedAssetId: AnyRef<number | null>
+  productNo?: AnyRef<string>
   pendingImageJobId: AnyRef<number | null>
   pendingGenerationPrompt: AnyRef<string>
   pendingMultiViewJobId: AnyRef<number | null>

@@ -164,10 +164,16 @@ public class CommercialProductizationController {
         Long assetId = longValue(body.get("assetId"));
         if (assetId != null) requireOwnedAsset(assetId, userId);
         if (assetId != null) requireAssetProductMatch(assetId, product);
+        String productNo = canonicalProductNoForAsset(assetId);
         int quantity = positiveInt(body.get("quantity"), 1, 100000, "数量必须在1到100000之间");
         String requestType = enumValue(body.get("requestType"), Set.of("sample", "bulk", "personal"), "sample");
-        if (assetId != null) {
-            List<Map<String,Object>> existing = jdbc.queryForList("SELECT id FROM creative_quote_request WHERE user_id=? AND asset_id=? AND request_type=? AND status NOT IN ('rejected','closed') LIMIT 1", userId, assetId, requestType);
+        if (assetId != null || !blank(productNo)) {
+            List<Map<String,Object>> existing;
+            try {
+                existing = jdbc.queryForList("SELECT id FROM creative_quote_request WHERE user_id=? AND (product_no=? OR asset_id=?) AND request_type=? AND status NOT IN ('rejected','closed') LIMIT 1", userId, blank(productNo) ? null : productNo, assetId, requestType);
+            } catch (DataAccessException legacySchema) {
+                existing = jdbc.queryForList("SELECT id FROM creative_quote_request WHERE user_id=? AND asset_id=? AND request_type=? AND status NOT IN ('rejected','closed') LIMIT 1", userId, assetId, requestType);
+            }
             if (!existing.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "该作品已提交过一次有效申请，不能重复提交");
         }
         String purpose = enumValue(body.get("purpose"), Set.of("personal", "channel_sale", "museum_sale"), "personal");
@@ -177,13 +183,14 @@ public class CommercialProductizationController {
         jdbc.update("INSERT INTO creative_quote_request (request_no,user_id,asset_id,product_template_id,request_type,quantity,purpose,note,copyright_basis,copyright_confirmed,copyright_statement_version,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'new')",
                 requestNo, userId, assetId, product.get("id"), requestType, quantity, purpose, limit(text(body.get("note")), 1200), basis, true, COPYRIGHT_VERSION);
         Long applicationId = jdbc.queryForObject("SELECT id FROM creative_quote_request WHERE request_no=?", Long.class, requestNo);
-        if (assetId != null) {
-            try {
-                jdbc.update("UPDATE creative_quote_request q JOIN digital_asset a ON a.id=? SET q.product_no=a.product_no WHERE q.id=?", assetId, applicationId);
-            } catch (DataAccessException legacySchema) {
-                // product_no is added by the unified workflow migration; the
-                // request itself remains valid during a rolling upgrade.
-            }
+        if (blank(productNo)) productNo = "PRD-CQR-" + requestNo;
+        try {
+            jdbc.update("UPDATE creative_quote_request SET product_no=? WHERE id=?", productNo, applicationId);
+            syncCanonicalProduct(productNo, userId, product);
+            linkCanonicalProduct("creative_quote_request", applicationId, productNo);
+        } catch (DataAccessException legacySchema) {
+            // product identity is additive; the request remains valid during
+            // a rolling upgrade before V20260828 has reached this node.
         }
         audit("quote", String.valueOf(applicationId), "created", principal.username(), "用户提交报价/打样申请");
         Map<String, Object> out = result(requestNo, "报价申请已提交，运营会根据作品、数量和工艺条件人工确认");
@@ -191,6 +198,7 @@ public class CommercialProductizationController {
         out.put("requestId", applicationId);
         out.put("requestKind", "quote");
         out.put("request", createdQuoteRequest(applicationId, requestNo, assetId, requestType, quantity, purpose, product));
+        ((Map<String, Object>) out.get("request")).put("productNo", productNo);
         return out;
     }
 
@@ -204,7 +212,13 @@ public class CommercialProductizationController {
         Long assetId = longValue(body.get("assetId"));
         if (assetId == null) throw new IllegalArgumentException("代销申请必须关联一件自己的作品");
         requireOwnedAsset(assetId, userId);
-        List<Map<String,Object>> existing = jdbc.queryForList("SELECT id FROM creative_consignment_application WHERE user_id=? AND asset_id=? AND status NOT IN ('rejected','withdrawn') LIMIT 1", userId, assetId);
+        String productNo = canonicalProductNoForAsset(assetId);
+        List<Map<String,Object>> existing;
+        try {
+            existing = jdbc.queryForList("SELECT id FROM creative_consignment_application WHERE user_id=? AND (product_no=? OR asset_id=?) AND status NOT IN ('rejected','withdrawn') LIMIT 1", userId, blank(productNo) ? null : productNo, assetId);
+        } catch (DataAccessException legacySchema) {
+            existing = jdbc.queryForList("SELECT id FROM creative_consignment_application WHERE user_id=? AND asset_id=? AND status NOT IN ('rejected','withdrawn') LIMIT 1", userId, assetId);
+        }
         if (!existing.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "该作品已提交过有效代销申请，不能重复提交");
         Map<String, Object> product = product(body.get("templateCode"));
         requireAssetProductMatch(assetId, product);
@@ -224,8 +238,11 @@ public class CommercialProductizationController {
         jdbc.update("INSERT INTO creative_consignment_application (application_no,user_id,asset_id,product_template_id,channel_id,channel_name_snapshot,sales_mode,creator_share_percent,platform_service_percent,note,copyright_basis,copyright_confirmed,copyright_statement_version,authorization_note,status) VALUES (?,?,?,?,?,?, 'preorder',70.00,30.00,?,?,?,?,?,'pending_review')",
                 applicationNo, userId, assetId, product.get("id"), channelId, channelName, limit(text(body.get("note")), 1200), basis, true, COPYRIGHT_VERSION, limit(text(body.get("authorizationNote")), 1000));
         Long applicationId = jdbc.queryForObject("SELECT id FROM creative_consignment_application WHERE application_no=?", Long.class, applicationNo);
+        if (blank(productNo)) productNo = "PRD-CCA-" + applicationNo;
         try {
-            jdbc.update("UPDATE creative_consignment_application c JOIN digital_asset a ON a.id=? SET c.product_no=a.product_no WHERE c.id=?", assetId, applicationId);
+            jdbc.update("UPDATE creative_consignment_application SET product_no=? WHERE id=?", productNo, applicationId);
+            syncCanonicalProduct(productNo, userId, product);
+            linkCanonicalProduct("creative_consignment_application", applicationId, productNo);
         } catch (DataAccessException legacySchema) {
             // See the quote request above: identity backfill is best effort
             // until the additive migration has completed.
@@ -236,6 +253,7 @@ public class CommercialProductizationController {
         out.put("applicationId", applicationId);
         out.put("requestKind", "consignment");
         out.put("application", createdConsignmentApplication(applicationId, applicationNo, assetId, channelId, channelName, product));
+        ((Map<String, Object>) out.get("application")).put("productNo", productNo);
         out.put("request", out.get("application"));
         return out;
     }
@@ -270,7 +288,21 @@ public class CommercialProductizationController {
     }
 
     private Map<String, Object> consumerRequestPayload(Long userId) {
-        List<Map<String, Object>> quoteRequests = jdbc.queryForList(
+        List<Map<String, Object>> quoteRequests;
+        try {
+            quoteRequests = jdbc.queryForList(
+                "SELECT r.id AS `id`,r.request_no AS `requestNo`,r.product_no AS `productNo`,r.asset_id AS `assetId`,r.request_type AS `requestType`,"
+                        + "r.quantity AS `quantity`,r.purpose AS `purpose`,r.status AS `status`,"
+                        + "r.quoted_unit_price AS `quotedUnitPrice`,r.quoted_total_price AS `quotedTotalPrice`,r.quoted_lead_time AS `quotedLeadTime`,"
+                        + "r.operator_comment AS `operatorComment`,CASE WHEN r.request_type='sample' AND r.status='accepted' "
+                        + "AND r.sample_payment_status='not_required' THEN 'unpaid' ELSE r.sample_payment_status END AS `samplePaymentStatus`,"
+                        + "r.sample_payment_order_no AS `samplePaymentOrderNo`,r.sample_paid_at AS `samplePaidAt`,"
+                        + "COALESCE(p.template_code,CONCAT('archived-product-',r.product_template_id)) AS `templateCode`,"
+                        + "COALESCE(p.product_name,'历史商品化申请') AS `productName`,r.created_at AS `createdAt`,r.updated_at AS `updatedAt` "
+                        + "FROM creative_quote_request r LEFT JOIN creative_product_template p ON p.id=r.product_template_id "
+                        + "WHERE r.user_id=? ORDER BY r.id DESC LIMIT 100", userId);
+        } catch (DataAccessException legacySchema) {
+            quoteRequests = jdbc.queryForList(
                 "SELECT r.id AS `id`,r.request_no AS `requestNo`,r.asset_id AS `assetId`,r.request_type AS `requestType`,"
                         + "r.quantity AS `quantity`,r.purpose AS `purpose`,r.status AS `status`,"
                         + "r.quoted_unit_price AS `quotedUnitPrice`,r.quoted_total_price AS `quotedTotalPrice`,r.quoted_lead_time AS `quotedLeadTime`,"
@@ -281,7 +313,20 @@ public class CommercialProductizationController {
                         + "COALESCE(p.product_name,'历史商品化申请') AS `productName`,r.created_at AS `createdAt`,r.updated_at AS `updatedAt` "
                         + "FROM creative_quote_request r LEFT JOIN creative_product_template p ON p.id=r.product_template_id "
                         + "WHERE r.user_id=? ORDER BY r.id DESC LIMIT 100", userId);
-        List<Map<String, Object>> consignmentApplications = jdbc.queryForList(
+        }
+        List<Map<String, Object>> consignmentApplications;
+        try {
+            consignmentApplications = jdbc.queryForList(
+                "SELECT a.id AS `id`,a.application_no AS `applicationNo`,a.product_no AS `productNo`,a.asset_id AS `assetId`,a.channel_id AS `channelId`,"
+                        + "a.channel_name_snapshot AS `channelName`,a.sales_mode AS `salesMode`,"
+                        + "a.creator_share_percent AS `creatorSharePercent`,a.platform_service_percent AS `platformServicePercent`,"
+                        + "a.status AS `status`,a.operator_comment AS `operatorComment`,"
+                        + "COALESCE(p.template_code,CONCAT('archived-product-',a.product_template_id)) AS `templateCode`,"
+                        + "COALESCE(p.product_name,'历史商品化申请') AS `productName`,a.created_at AS `createdAt`,a.updated_at AS `updatedAt` "
+                        + "FROM creative_consignment_application a LEFT JOIN creative_product_template p ON p.id=a.product_template_id "
+                        + "WHERE a.user_id=? ORDER BY a.id DESC LIMIT 100", userId);
+        } catch (DataAccessException legacySchema) {
+            consignmentApplications = jdbc.queryForList(
                 "SELECT a.id AS `id`,a.application_no AS `applicationNo`,a.asset_id AS `assetId`,a.channel_id AS `channelId`,"
                         + "a.channel_name_snapshot AS `channelName`,a.sales_mode AS `salesMode`,"
                         + "a.creator_share_percent AS `creatorSharePercent`,a.platform_service_percent AS `platformServicePercent`,"
@@ -290,6 +335,7 @@ public class CommercialProductizationController {
                         + "COALESCE(p.product_name,'历史商品化申请') AS `productName`,a.created_at AS `createdAt`,a.updated_at AS `updatedAt` "
                         + "FROM creative_consignment_application a LEFT JOIN creative_product_template p ON p.id=a.product_template_id "
                         + "WHERE a.user_id=? ORDER BY a.id DESC LIMIT 100", userId);
+        }
         List<Map<String, Object>> selectionDemands = selectionDemandRequests(userId);
         List<Map<String, Object>> guidanceRequests = professionalGuidanceRequests(userId);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -308,7 +354,22 @@ public class CommercialProductizationController {
 
     private List<Map<String, Object>> professionalGuidanceRequests(Long userId) {
         if (!tableExists("commercial_professional_guidance_request")) return Collections.emptyList();
-        return jdbc.queryForList(
+        try {
+            return jdbc.queryForList(
+                "SELECT g.id AS `id`,g.guidance_no AS `guidanceNo`,g.application_type AS `applicationType`,"
+                        + "g.application_id AS `applicationId`,g.product_no AS `productNo`,g.asset_id AS `assetId`,g.product_template_id AS `productTemplateId`,"
+                        + "g.request_note AS `requestNote`,g.status AS `status`,g.quoted_fee_yuan AS `quotedFeeYuan`,"
+                        + "g.quoted_lead_time AS `quotedLeadTime`,g.operator_comment AS `operatorComment`,"
+                        + "g.guidance_result AS `guidanceResult`,g.payment_status AS `paymentStatus`,"
+                        + "g.payment_order_no AS `paymentOrderNo`,g.paid_at AS `paidAt`,g.quoted_by AS `quotedBy`,"
+                        + "g.quoted_at AS `quotedAt`,g.completed_at AS `completedAt`,"
+                        + "COALESCE(p.template_code,CONCAT('archived-product-',g.product_template_id)) AS `templateCode`,"
+                        + "COALESCE(p.product_name,'历史商品化申请') AS `productName`,g.created_at AS `createdAt`,g.updated_at AS `updatedAt` "
+                        + "FROM commercial_professional_guidance_request g "
+                        + "LEFT JOIN creative_product_template p ON p.id=g.product_template_id "
+                        + "WHERE g.user_id=? ORDER BY g.id DESC LIMIT 100", userId);
+        } catch (DataAccessException legacySchema) {
+            return jdbc.queryForList(
                 "SELECT g.id AS `id`,g.guidance_no AS `guidanceNo`,g.application_type AS `applicationType`,"
                         + "g.application_id AS `applicationId`,g.asset_id AS `assetId`,g.product_template_id AS `productTemplateId`,"
                         + "g.request_note AS `requestNote`,g.status AS `status`,g.quoted_fee_yuan AS `quotedFeeYuan`,"
@@ -321,6 +382,7 @@ public class CommercialProductizationController {
                         + "FROM commercial_professional_guidance_request g "
                         + "LEFT JOIN creative_product_template p ON p.id=g.product_template_id "
                         + "WHERE g.user_id=? ORDER BY g.id DESC LIMIT 100", userId);
+        }
     }
 
     /**
@@ -481,6 +543,20 @@ public class CommercialProductizationController {
                 guidanceNo, applicationType, applicationId, userId, longValue(application.get("asset_id")),
                 longValue(application.get("product_template_id")), note);
         Long guidanceId = jdbc.queryForObject("SELECT id FROM commercial_professional_guidance_request WHERE guidance_no=?", Long.class, guidanceNo);
+        String guidanceProductNo = canonicalProductNoForAsset(longValue(application.get("asset_id")));
+        if (blank(guidanceProductNo)) {
+            try {
+                String sourceTable = "quote".equals(applicationType) ? "creative_quote_request" : "creative_consignment_application";
+                guidanceProductNo = jdbc.queryForObject("SELECT product_no FROM " + sourceTable + " WHERE id=?", String.class, applicationId);
+            } catch (DataAccessException ignored) { }
+        }
+        if (!blank(guidanceProductNo)) {
+            try {
+                jdbc.update("UPDATE commercial_professional_guidance_request SET product_no=? WHERE id=?", guidanceProductNo, guidanceId);
+                syncCanonicalProduct(guidanceProductNo, userId, Map.of());
+                linkCanonicalProduct("commercial_professional_guidance_request", guidanceId, guidanceProductNo);
+            } catch (DataAccessException ignored) { }
+        }
         audit(applicationType, String.valueOf(applicationId), "guidance_requested", principal.username(),
                 blank(note) ? "用户申请专业指导" : note);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -592,7 +668,7 @@ public class CommercialProductizationController {
         // guidance screen uses the actual first workflow state, `requested`.
         if ("new".equals(status)) status = "requested";
         String sql = "SELECT g.id,g.guidance_no guidanceNo,g.application_type applicationType,g.application_id applicationId,"
-                + "g.user_id userId,u.username,g.asset_id assetId,g.product_template_id productTemplateId,g.request_note requestNote,"
+                + "g.user_id userId,u.username,g.asset_id assetId,g.product_no productNo,g.product_template_id productTemplateId,g.request_note requestNote,"
                 + "g.status,g.quoted_fee_yuan quotedFeeYuan,g.quoted_lead_time quotedLeadTime,g.operator_comment operatorComment,"
                 + "g.guidance_result guidanceResult,g.payment_status paymentStatus,g.payment_order_no paymentOrderNo,g.paid_at paidAt,"
                 + "g.quoted_by quotedBy,g.quoted_at quotedAt,g.completed_at completedAt,g.created_at createdAt,g.updated_at updatedAt,"
@@ -605,11 +681,26 @@ public class CommercialProductizationController {
                 + "LEFT JOIN creative_product_template p ON p.id=g.product_template_id "
                 + "LEFT JOIN creative_quote_request q ON g.application_type='quote' AND q.id=g.application_id "
                 + "LEFT JOIN creative_consignment_application a ON g.application_type='consignment' AND a.id=g.application_id";
-        if ("all".equals(status)) return jdbc.queryForList(sql + " ORDER BY g.id DESC LIMIT 300");
-        if (!Set.of("requested", "quoted", "in_progress", "completed", "closed").contains(status)) {
+        String suffix;
+        Object[] args;
+        if ("all".equals(status)) {
+            suffix = " ORDER BY g.id DESC LIMIT 300";
+            args = new Object[0];
+        } else {
+            suffix = " WHERE g.status=? ORDER BY g.id DESC LIMIT 300";
+            args = new Object[]{status};
+        }
+        if (!"all".equals(status) && !Set.of("requested", "quoted", "in_progress", "completed", "closed").contains(status)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "指导工单状态不正确");
         }
-        return jdbc.queryForList(sql + " WHERE g.status=? ORDER BY g.id DESC LIMIT 300", status);
+        try {
+            return jdbc.queryForList(sql + suffix, args);
+        } catch (DataAccessException legacySchema) {
+            // V20260828 adds the canonical product number additively. Keep
+            // the operator screen usable while an older node is draining.
+            String legacySql = sql.replace("g.product_no productNo,", "NULL productNo,");
+            return jdbc.queryForList(legacySql + suffix, args);
+        }
     }
 
     @PutMapping("/admin/professional-guidance/{id}")
@@ -667,6 +758,36 @@ public class CommercialProductizationController {
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT p.id,p.template_code templateCode,p.product_name productName,o.option_key optionKey FROM creative_product_template p LEFT JOIN selection_option o ON o.id=p.selection_option_id WHERE p.template_code=? AND p.published=1 AND p.supply_status <> 'suspended'", String.valueOf(code).trim());
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "商品方向不存在或暂未开放");
         return rows.get(0);
+    }
+
+    private String canonicalProductNoForAsset(Long assetId) {
+        if (assetId == null) return "";
+        try {
+            List<String> rows = jdbc.query("SELECT product_no FROM digital_asset WHERE id=?", (rs, rowNum) -> rs.getString(1), assetId);
+            return rows.isEmpty() || blank(rows.get(0)) ? "" : rows.get(0).trim();
+        } catch (DataAccessException ignored) {
+            return "";
+        }
+    }
+
+    private void syncCanonicalProduct(String productNo, Long userId, Map<String, Object> product) {
+        if (blank(productNo)) return;
+        try {
+            String productName = text(product == null ? null : product.get("productName"));
+            String productKey = text(product == null ? null : product.get("optionKey"));
+            jdbc.update("INSERT INTO creative_product(product_no,user_id,product_name,product_key) VALUES (?,?,?,?) "
+                            + "ON DUPLICATE KEY UPDATE user_id=COALESCE(creative_product.user_id,VALUES(user_id)),"
+                            + "product_name=COALESCE(NULLIF(creative_product.product_name,''),VALUES(product_name)),"
+                            + "product_key=COALESCE(NULLIF(creative_product.product_key,''),VALUES(product_key)),updated_at=CURRENT_TIMESTAMP",
+                    productNo, userId, blank(productName) ? null : productName, blank(productKey) ? null : productKey);
+        } catch (DataAccessException ignored) { }
+    }
+
+    private void linkCanonicalProduct(String tableName, Long rowId, String productNo) {
+        if (rowId == null || blank(productNo)) return;
+        try {
+            jdbc.update("UPDATE " + tableName + " t JOIN creative_product p ON p.product_no=t.product_no SET t.product_id=p.id WHERE t.id=?", rowId);
+        } catch (DataAccessException ignored) { }
     }
 
     @SuppressWarnings("unchecked")

@@ -7,6 +7,7 @@
     </view>
 
     <view class="notice"><text>专业作品审核</text><text>仅接受 ZIP 作品包，最大 100MB。建议包含效果图、尺寸、材质、工艺说明和版权材料。</text><text class="web-hint">专业作品包建议用电脑端访问 https://zhijiansk.com/，体验更佳哦。</text></view>
+    <view v-if="linkedContext" class="linked-context"><text>当前对话作品</text><text>产品号：{{ linkedContext.productNo || '未关联产品号' }}</text><text>{{ linkedContext.productName || '已生成文创产品' }} · 作品 #{{ linkedContext.assetId }}</text><text>提交后会自动关联当前产品，后台审核与打样流程使用同一个产品号。</text></view>
 
     <view class="card">
       <text class="section-title">1 · 上传作品包</text>
@@ -41,7 +42,7 @@
       <view class="records-head"><text class="section-title">我的专业提交</text><text @tap="loadRecords">刷新</text></view>
       <view v-if="!records.length" class="empty">还没有专业作品提交记录</view>
       <view v-for="record in records" :key="record.id || record.submissionNo" class="record">
-        <view class="record-top"><view><text class="record-title">{{ record.title || record.originalName }}</text><text class="record-no">{{ record.submissionNo }} · {{ formatDate(record.createdAt) }}</text></view><text class="status" :class="`status-${record.status}`">{{ statusLabel(record.status) }}</text></view>
+        <view class="record-top"><view><text class="product-no">产品号：{{ record.productNo || '未关联产品号' }}</text><text class="record-title">{{ record.title || record.originalName }}</text><text class="record-no">{{ record.submissionNo }} · {{ formatDate(record.createdAt) }}</text></view><text class="status" :class="`status-${record.status}`">{{ statusLabel(record.status) }}</text></view>
         <text class="record-meta">{{ record.purpose === 'museum_sale' ? `渠道：${record.museumName || '待选择'}` : '个人创作' }}</text>
         <view v-if="['approved', 'processing'].includes(String(record.status)) && record.quotedSampleFeeYuan" class="quote-box">
           <text class="quote-title">打样报价单</text>
@@ -58,8 +59,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import { getMuseums, getMyProfessionalSubmissions, uploadProfessionalSubmission, type ProfessionalSubmission } from '../../api/creative'
-import { requireSession } from '../../utils/session'
+import { getSession, requireSession } from '../../utils/session'
 
 const filePath = ref('')
 const fileName = ref('')
@@ -76,10 +78,30 @@ const province = ref('')
 const museum = ref<any>(null)
 const provinceIndex = ref(0)
 const museumIndex = ref(0)
+const PROFESSIONAL_SUBMISSION_CONTEXT_KEY = 'professional_submission_context'
+const linkedContext = ref<Record<string, any> | null>(null)
 const provinces = computed(() => [...new Set(museums.value.map(item => item.province).filter(Boolean))])
 const filteredMuseums = computed(() => museums.value.filter(item => item.province === province.value))
 const museumNames = computed(() => filteredMuseums.value.map(item => `${item.name} · ${item.channelType === 'scenic_spot' ? '景区' : '博物馆'}`))
 const canSubmit = computed(() => Boolean(filePath.value && copyrightConfirmed.value && (purpose.value === 'personal' || museum.value)))
+
+function restoreLinkedContext() {
+  const raw = uni.getStorageSync(PROFESSIONAL_SUBMISSION_CONTEXT_KEY)
+  if (!raw || typeof raw !== 'object' || Number(raw.assetId) <= 0) {
+    linkedContext.value = null
+    return
+  }
+  // Storage is shared by accounts on the same device. Ignore a context left
+  // by another account instead of sending its asset id with this upload.
+  const owner = String(raw.userName || '').trim()
+  const current = String(getSession()?.user?.username || '').trim()
+  if (!owner || !current || owner !== current) {
+    uni.removeStorageSync(PROFESSIONAL_SUBMISSION_CONTEXT_KEY)
+    linkedContext.value = null
+    return
+  }
+  linkedContext.value = { ...raw, assetId: Number(raw.assetId) }
+}
 
 function chooseZip() {
   fileError.value = ''
@@ -108,9 +130,26 @@ async function submit() {
   if (!canSubmit.value || loading.value) return
   loading.value = true
   try {
-    const result = await uploadProfessionalSubmission(filePath.value, { title: title.value, note: note.value, purpose: purpose.value, museumId: museum.value?.id == null ? '' : String(museum.value.id), museumName: museum.value?.name || '' })
+    const formData: Record<string, string> = {
+      title: title.value,
+      note: note.value,
+      purpose: purpose.value,
+      museumId: museum.value?.id == null ? '' : String(museum.value.id),
+      museumName: museum.value?.name || '',
+    }
+    const assetId = Number(linkedContext.value?.assetId || 0)
+    if (Number.isFinite(assetId) && assetId > 0) formData.assetId = String(assetId)
+    const productNo = String(linkedContext.value?.productNo || '').trim()
+    if (productNo) formData.productNo = productNo
+    const productId = String(linkedContext.value?.productId || '').trim()
+    if (productId) formData.productId = productId
+    const result = await uploadProfessionalSubmission(filePath.value, formData)
     await loadRecords()
     filePath.value = ''; fileName.value = ''; fileSize.value = 0; title.value = ''; note.value = ''; copyrightConfirmed.value = false
+    // A successful package starts its own review record. Do not accidentally
+    // attach a later, unrelated ZIP to the previous conversation's product.
+    uni.removeStorageSync(PROFESSIONAL_SUBMISSION_CONTEXT_KEY)
+    linkedContext.value = null
     uni.showModal({ title: '提交成功', content: `${result?.submissionNo || '作品包'}已进入专业审核，审核结果会显示在本页。`, showCancel: false })
   } catch (error: any) { uni.showToast({ title: error?.message || '提交失败，请稍后重试', icon: 'none' }) } finally { loading.value = false }
 }
@@ -125,7 +164,12 @@ function payQuote(record: ProfessionalSubmission) {
 }
 onMounted(async () => {
   if (!requireSession()) return
+  restoreLinkedContext()
   await Promise.all([loadRecords(), getMuseums().then(data => { museums.value = data }).catch(() => {})])
+})
+onShow(() => {
+  if (getSession()) restoreLinkedContext()
+  else linkedContext.value = null
 })
 </script>
 
@@ -134,4 +178,5 @@ onMounted(async () => {
 .quote-box{margin-top:14rpx;padding:15rpx;border:1rpx solid #d5e5d8;border-radius:13rpx;background:#eff7f0}.quote-title,.quote-line,.quote-status{display:block}.quote-title{color:#47735b;font-size:21rpx;font-weight:850}.quote-line{margin-top:6rpx;color:#607b6a;font-size:19rpx;line-height:1.45}.quote-status{margin-top:8rpx;color:#7e6e5e;font-size:18rpx}.quote-pay{height:58rpx;line-height:58rpx;margin-top:11rpx;padding:0 20rpx;border:0;border-radius:10rpx;background:#557a66;color:#fff;font-size:20rpx}
 .status-processing{color:#4d7a65;background:#e5f2e8}
 .notice .web-hint{color:#9a6a53;font-weight:700}
+.linked-context{display:flex;flex-direction:column;gap:6rpx;margin-top:14rpx;padding:17rpx 20rpx;border:1rpx solid #d8e5da;border-radius:15rpx;background:#f1f7f1;color:#5f7968;font-size:19rpx;line-height:1.45}.linked-context text:first-child{color:#4c705a;font-size:21rpx;font-weight:800}.linked-context text:nth-child(2){color:#3f5f4d;font-size:23rpx;font-weight:800}.linked-context text:last-child{color:#7c9182;font-size:17rpx}
 </style>

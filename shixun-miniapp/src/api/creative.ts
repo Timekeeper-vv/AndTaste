@@ -247,6 +247,8 @@ export interface SeedreamMultiViewRequest extends CreativeGenerationRequest {
 }
 
 export interface SeedreamMultiViewImage {
+  productNo?: string
+  productId?: number | string
   view: 'front' | 'left' | 'back' | 'right'
   label: string
   assetId: number
@@ -262,6 +264,8 @@ export interface SeedreamMultiViewImage {
  * front, left and back panels. Older servers simply omit this object.
  */
 export interface SeedreamProductionSimulationImage {
+  productNo?: string
+  productId?: number | string
   assetId: number
   label?: string
   previewUrl?: string
@@ -272,6 +276,8 @@ export interface SeedreamProductionSimulationImage {
 }
 
 export interface SeedreamMultiViewResult {
+  productNo?: string
+  productId?: number | string
   provider?: string
   model?: string
   message?: string
@@ -308,6 +314,7 @@ export interface ProfessionalSubmission {
   id?: number
   submissionNo?: string
   productNo?: string
+  productId?: number | string
   title?: string
   originalName?: string
   fileSize?: number
@@ -400,7 +407,7 @@ export interface CreativePreflightReport {
 }
 
 /** 对指定项目版本运行可追溯的生产预检，结果会写入项目时间线。 */
-export const runCreativePreflight = (projectId: number | string, versionId: number | string, body?: { assetId?: number | string; bundleId?: number | string }) => request<CreativePreflightReport>(
+export const runCreativePreflight = (projectId: number | string, versionId: number | string, body?: { assetId?: number | string; bundleId?: number | string; productNo?: string }) => request<CreativePreflightReport>(
   `/api/creative/projects/${encodeURIComponent(String(projectId))}/versions/${encodeURIComponent(String(versionId))}/preflight`,
   { method: 'POST', data: body || {}, header: { 'content-type': 'application/json' } },
 )
@@ -443,6 +450,8 @@ export interface MultiViewBundleSimulationImage extends SeedreamProductionSimula
 export interface MultiViewBundle {
   id: number
   bundleId?: number
+  productNo?: string
+  productId?: number | string
   projectId?: number
   versionId?: number
   bundleNo?: string
@@ -494,6 +503,8 @@ export const submitMultiViewBundleReview = (bundleId: number | string, body: Rev
 export interface ProductionSubmission {
   assetId?: number
   bundleId?: number
+  productNo?: string
+  productId?: number | string
   projectId?: number | string
   versionId?: number | string
   /** Stable key kept by the submit page so a retry cannot create another request. */
@@ -510,7 +521,28 @@ export interface ProductionSubmission {
   note?: string
 }
 
-export const getProductionRequests = () => request<any[]>('/api/creative/ai/consumer-production/my')
+export interface ProductionRequest {
+  id?: number | string
+  requestNo?: string
+  productNo?: string
+  productId?: number | string
+  assetId?: number | string
+  bundleId?: number | string
+  multiviewBundleId?: number | string
+  projectId?: number | string
+  versionId?: number | string
+  requestType?: 'sample' | 'bulk' | string
+  title?: string
+  sampleProductName?: string
+  status?: string
+  samplePaymentStatus?: string
+  sampleWorkflowStatus?: string
+  quantity?: number
+  createdAt?: string
+  [key: string]: unknown
+}
+
+export const getProductionRequests = () => request<ProductionRequest[]>('/api/creative/ai/consumer-production/my')
 export const createSamplePaymentOrder = (requestId: number | string, channel: PaymentChannel = 'wechat_jsapi') => request<PaymentOrder>('/api/payments/sample-orders', {
   method: 'POST', data: { requestId: String(requestId), channel }, header: { 'content-type': 'application/json' },
 })
@@ -547,6 +579,8 @@ export interface CreativeWorkflowFlow {
 
 /** One read model for review, payment, sampling, feedback, logistics and bulk handoff. */
 export interface CreativeWorkflowDetail {
+  productNo?: string
+  productId?: number | string
   request?: Record<string, any> | null
   project?: Record<string, any> | null
   version?: Record<string, any> | null
@@ -581,6 +615,8 @@ export interface SampleLifecycleEvent {
 export interface SampleLifecycle {
   id: number | string
   requestNo?: string
+  productNo?: string
+  productId?: number | string
   requestType?: 'sample' | 'bulk' | string
   title?: string
   assetId?: number | string
@@ -735,6 +771,8 @@ export interface WechatVirtualPaymentParams {
 
 export interface PaymentOrder {
   orderNo: string
+  productNo?: string
+  productId?: number | string
   packageCode?: string
   channel?: PaymentChannel | string
   status?: string

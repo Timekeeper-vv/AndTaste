@@ -151,7 +151,7 @@ import {
   type CreativeProductLike,
   type CreativeProductProfile,
 } from '../../utils/creativeEngineRuntime'
-import { requireSession } from '../../utils/session'
+import { getSession, requireSession } from '../../utils/session'
 import { useImageGeneration } from '../../composables/useImageGeneration'
 import { useMultiViewGeneration } from '../../composables/useMultiViewGeneration'
 import { useModelGeneration, type ModelTask } from '../../composables/useModelGeneration'
@@ -212,6 +212,7 @@ const requestedSessionId = ref<number | null>(null)
 const projectId = ref<number | null>(null)
 const versionId = ref<number | null>(null)
 const generatedAssetId = ref<number | null>(null)
+const productNo = ref('')
 const pendingImageJobId = ref<number | null>(null)
 const pendingGenerationPrompt = ref('')
 const pendingMultiViewJobId = ref<number | null>(null)
@@ -259,6 +260,32 @@ const autoGenerationInFlight = ref(false)
 const modelRefreshing = ref(false)
 const campaignContext = ref<CampaignContext | null>(null)
 const campaignAttached = ref(false)
+
+// The professional upload page is opened from the management workspace, so
+// it cannot receive the active conversation refs directly. Keep only the
+// explicit, account-bound product context needed to attach a later ZIP upload;
+// the backend still validates the asset owner and derives the canonical
+// product number from the asset itself.
+const PROFESSIONAL_SUBMISSION_CONTEXT_KEY = 'professional_submission_context'
+function persistProfessionalSubmissionContext(assetId: number, productNo?: string) {
+  const id = Number(assetId)
+  if (!Number.isFinite(id) || id <= 0) return
+  const session = getSession()
+  const product = selectedProduct.value
+  uni.setStorageSync(PROFESSIONAL_SUBMISSION_CONTEXT_KEY, {
+    assetId: id,
+    productNo: String(productNo || '').trim(),
+    sessionId: Number(sessionId.value) || null,
+    projectId: Number(projectId.value) || null,
+    versionId: Number(versionId.value) || null,
+    userName: String(session?.user?.username || ''),
+    productKey: String(product?.key || ''),
+    productName: String(product?.name || ''),
+    material: String(material.value || ''),
+    productSize: String(productSize.value || ''),
+    updatedAt: new Date().toISOString(),
+  })
+}
 const productCatalog = useProductCatalog({
   onError: (error: any) => uni.showToast({ title: error?.message || '选品目录暂不可用，请稍后重试', icon: 'none' }),
 })
@@ -778,6 +805,7 @@ const conversationRestoration = useConversationRestoration({
   inspirationText,
   referenceAssetId,
   generatedAssetId,
+  productNo,
   pendingImageJobId,
   pendingGenerationPrompt,
   pendingMultiViewJobId,
@@ -1090,6 +1118,7 @@ async function completeGeneratedProductImage(result: any, generationPrompt: stri
   pendingImageJobId.value = null
   pendingGenerationPrompt.value = ''
   generatedAssetId.value = assetId
+  persistProfessionalSubmissionContext(assetId, result?.productNo)
   previewUrl.value = imageUrl(result) || await freshAssetPreview(assetId)
   referenceAnalysis.value = String(result?.referenceAnalysis || '')
   let productForm = selectedProduct.value.key || 'general'
@@ -1165,6 +1194,7 @@ async function completeRefinedProductImage(result: any, generationPrompt: string
   const newAssetId = Number(result?.assetId || result?.id)
   if (!Number.isFinite(newAssetId) || newAssetId <= 0) throw new Error('修改后的产品图没有保存成功，请重试')
   generatedAssetId.value = newAssetId
+  persistProfessionalSubmissionContext(newAssetId, result?.productNo)
   previewUrl.value = imageUrl(result) || await freshAssetPreview(newAssetId)
   referenceAnalysis.value = String(result?.referenceAnalysis || referenceAnalysis.value || '')
   multiviewImages.value = []
@@ -1208,6 +1238,7 @@ const imageGeneration = useImageGeneration({
   projectId,
   versionId,
   generatedAssetId,
+  productNo,
   previewUrl,
   referenceAnalysis,
   busy,
@@ -1615,6 +1646,10 @@ function restart() {
 }
 
 watch(chatInput, scheduleChatDraftSave)
+watch(generatedAssetId, assetId => {
+  if (assetId) persistProfessionalSubmissionContext(assetId)
+  else uni.removeStorageSync(PROFESSIONAL_SUBMISSION_CONTEXT_KEY)
+})
 onLoad(options => {
   campaignContext.value = campaignFromStorage()
   const parsedSessionId = Number(options?.sessionId || 0)

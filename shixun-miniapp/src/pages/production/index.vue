@@ -6,7 +6,7 @@
       <text class="sub">审核通过的三视图作品包或 3D 作品可以提交。平台确认申请后再进入打样与后续生产安排。</text>
     </view>
 
-    <view class="work-card"><text class="work-label">{{ bundleId ? '三视图作品包' : '申请作品' }}</text><text class="work-title">{{ assetTitle || (bundleId ? '三视图作品' : '3D 作品') }}</text><text class="work-id">{{ bundleId ? `作品包编号：${bundleNo || bundleId}` : `作品编号：${assetId || '-'}` }}</text></view>
+    <view class="work-card"><text class="work-label">产品号：{{ productNo || '未关联产品号' }}</text><text class="work-title">{{ assetTitle || (bundleId ? '三视图作品' : '3D 作品') }}</text><text class="work-id">{{ bundleId ? `作品包编号：${bundleNo || bundleId}` : `作品编号：${assetId || '-'}` }}</text></view>
     <view v-if="sourceLoading" class="source-loading">正在读取已审核的作品包，请稍候…</view>
     <view v-else-if="sourceError" class="source-error"><text>{{ sourceError }}</text><button type="button" @tap="reloadSource">重新读取</button></view>
 
@@ -79,6 +79,7 @@ const bundleId = ref<number | null>(null)
 const projectId = ref<number | null>(null)
 const versionId = ref<number | null>(null)
 const bundleNo = ref('')
+const productNo = ref('')
 const bundleImages = ref<any[]>([])
 const assetTitle = ref('')
 const requestType = ref<'sample' | 'bulk'>('sample')
@@ -187,6 +188,7 @@ async function runPreflight() {
     preflight.value = await runCreativePreflightApi(projectId.value, versionId.value, {
       assetId: assetId.value || undefined,
       bundleId: bundleId.value || undefined,
+      productNo: productNo.value || undefined,
     })
     if (preflight.value?.status === 'blocked') {
       uni.showModal({ title: '暂不能提交打样', content: preflight.value?.issues?.[0] || '当前版本未通过生产预检', showCancel: false })
@@ -219,6 +221,7 @@ async function submit() {
     const response = await submitProductionRequest({
       assetId: assetId.value || undefined,
       bundleId: bundleId.value || undefined,
+      productNo: productNo.value || undefined,
       projectId: projectId.value || undefined,
       versionId: versionId.value || undefined,
       idempotencyKey: idempotency.key,
@@ -235,8 +238,10 @@ async function submit() {
     })
     const lifecycleProjectId = response?.projectId || projectId.value
     const lifecycleVersionId = response?.versionId || versionId.value
+    const lifecycleProductNo = response?.productNo || productNo.value
+    const lifecycleProductQuery = lifecycleProductNo ? `&productNo=${encodeURIComponent(String(lifecycleProductNo))}` : ''
     const lifecycleUrl = requestType.value === 'sample' && response?.id && lifecycleProjectId && lifecycleVersionId
-      ? `/pages/sample-lifecycle/index?projectId=${encodeURIComponent(String(lifecycleProjectId))}&versionId=${encodeURIComponent(String(lifecycleVersionId))}&requestId=${encodeURIComponent(String(response.id))}&title=${encodeURIComponent(assetTitle.value || '样品申请')}`
+      ? `/pages/sample-lifecycle/index?projectId=${encodeURIComponent(String(lifecycleProjectId))}&versionId=${encodeURIComponent(String(lifecycleVersionId))}&requestId=${encodeURIComponent(String(response.id))}&title=${encodeURIComponent(assetTitle.value || '样品申请')}${lifecycleProductQuery}`
       : ''
     uni.showModal({
       title: '申请已提交',
@@ -280,6 +285,7 @@ async function loadBundle(bundleKey: number) {
       throw new Error('该三视图作品包尚未审核通过，暂不能申请打样')
     }
     bundleNo.value = String(bundle.bundleNo || '')
+    productNo.value = String(bundle.productNo || productNo.value || '')
     projectId.value = Number(bundle.projectId) > 0 ? Number(bundle.projectId) : null
     versionId.value = Number(bundle.versionId) > 0 ? Number(bundle.versionId) : null
     bundleImages.value = Array.isArray(bundle.images) ? bundle.images : []
@@ -307,6 +313,7 @@ onLoad((query: any) => {
   if (Number.isFinite(parsedProjectId) && parsedProjectId > 0) projectId.value = parsedProjectId
   if (Number.isFinite(parsedVersionId) && parsedVersionId > 0) versionId.value = parsedVersionId
   const parsedBundleId = Number(query?.bundleId)
+  productNo.value = safelyDecode(query?.productNo)
   const requestedTitle = safelyDecode(query?.title)
   requestType.value = String(query?.requestType || '') === 'bulk' ? 'bulk' : 'sample'
   if (Number.isFinite(parsedBundleId) && parsedBundleId > 0) {

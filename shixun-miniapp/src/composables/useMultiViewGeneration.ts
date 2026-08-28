@@ -32,6 +32,7 @@ export interface MultiViewGenerationOptions {
   productSize: ReadonlyValue<string>
   prompt: ReadonlyValue<string>
   generatedAssetId: Ref<number | null>
+  productNo?: Ref<string>
   projectId?: ReadonlyValue<number | null>
   versionId?: ReadonlyValue<number | null>
   busy: Ref<boolean>
@@ -189,6 +190,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
 
   function applyMultiViewBundle(bundle: MultiViewBundle | null | undefined) {
     if (!bundle) return
+    if (options.productNo && bundle.productNo) options.productNo.value = String(bundle.productNo)
     const bundleId = positiveId(bundle.id || bundle.bundleId)
     if (bundleId) options.multiviewBundleId.value = bundleId
     const inputAssetId = positiveId(bundle.inputAssetId)
@@ -220,6 +222,7 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     if (options.simulationImage) options.simulationImage.value = simulationImage
     options.multiviewImages.value = hydratedImages
     const bundle = await resolveBundle(inputAssetId, hydratedImages, simulationAssetId)
+    if (options.productNo && result?.productNo) options.productNo.value = String(result.productNo)
     const finalPrompt = generationPrompt || pendingMultiViewPrompt.value || compileMultiViewRequest({ inputAssetId }).prompt
     applyMultiViewBundle(bundle)
     pendingMultiViewJobId.value = null
@@ -441,7 +444,8 @@ export function useMultiViewGeneration(options: MultiViewGenerationOptions) {
     const title = options.productType.value || '生产模拟图作品'
     const projectQuery = options.projectId?.value ? `&projectId=${encodeURIComponent(String(options.projectId.value))}` : ''
     const versionQuery = options.versionId?.value ? `&versionId=${encodeURIComponent(String(options.versionId.value))}` : ''
-    uni.navigateTo({ url: `/pages/production/index?bundleId=${encodeURIComponent(String(options.multiviewBundleId.value))}&title=${encodeURIComponent(title)}${projectQuery}${versionQuery}` })
+    const productQuery = options.productNo?.value ? `&productNo=${encodeURIComponent(String(options.productNo.value))}` : ''
+    uni.navigateTo({ url: `/pages/production/index?bundleId=${encodeURIComponent(String(options.multiviewBundleId.value))}&title=${encodeURIComponent(title)}${projectQuery}${versionQuery}${productQuery}` })
   }
 
   function clearPendingMultiView() {

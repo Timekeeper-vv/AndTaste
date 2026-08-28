@@ -12,6 +12,7 @@ const emit = defineEmits<{ alert: [message: string, type?: 'success' | 'error'];
 type CreatorProfile = 'amateur' | 'professional'
 type ChatRole = 'assistant' | 'user'
 type QuickReply = { label: string; type: string; value?: string }
+type ProductIdentity = { productNo?: string; productId?: number }
 type Product = {
   key: string
   optionKey?: string
@@ -33,6 +34,8 @@ type ChatMessage = {
 }
 type Conversation = {
   id: number
+  productNo?: string
+  productId?: number
   projectId?: number
   versionId?: number
   sessionNo?: string
@@ -42,6 +45,12 @@ type Conversation = {
   status?: string
   updatedAt?: string
   createdAt?: string
+}
+type MultiViewImage = ProductIdentity & {
+  view: string
+  label: string
+  assetId: number
+  previewUrl?: string
 }
 
 const api = async <T = any>(url: string, init: RequestInit = {}): Promise<T> => {
@@ -95,7 +104,7 @@ const generatedAssetId = ref<number | null>(null)
 const generatedPreviewUrl = ref('')
 const simulationAssetId = ref<number | null>(null)
 const simulationPreviewUrl = ref('')
-const multiviewImages = ref<Array<{ view: string; label: string; assetId: number; previewUrl?: string }>>([])
+const multiviewImages = ref<MultiViewImage[]>([])
 const bundleId = ref<number | null>(null)
 const bundleStatus = ref('')
 const bundleComment = ref('')
@@ -138,6 +147,11 @@ const selectedProduct = computed(() => {
   return products.value.find(item => item.key === key || item.name === name) || null
 })
 const productName = computed(() => String(brief.value.productName || brief.value.productType || selectedProduct.value?.name || '文创产品'))
+const canonicalProductNo = computed(() => String(brief.value.productNo || '').trim())
+const canonicalProductId = computed(() => {
+  const value = Number(brief.value.productId)
+  return Number.isFinite(value) && value > 0 ? value : null
+})
 const material = computed(() => String(brief.value.material || ''))
 const productSize = computed(() => String(brief.value.productSize || ''))
 const hasCompleteBrief = computed(() => Boolean(productName.value && material.value && productSize.value && (brief.value.inspiration || brief.value.referenceAssetId)))
@@ -264,6 +278,14 @@ function applyBrief(next: Record<string, any> | undefined) {
   if (!next) return
   const merged = { ...brief.value, ...next }
   if (next.productType && !next.productName) merged.productName = next.productType
+  // Product identity is assigned by the server and must survive later chat
+  // turns whose brief payload does not include these canonical fields.
+  const nextProductNo = String(next.productNo || '').trim()
+  const nextProductId = Number(next.productId)
+  if (nextProductNo) merged.productNo = nextProductNo
+  else if (brief.value.productNo) merged.productNo = brief.value.productNo
+  if (Number.isFinite(nextProductId) && nextProductId > 0) merged.productId = nextProductId
+  else if (brief.value.productId) merged.productId = brief.value.productId
   brief.value = merged
   if (next.referenceAssetId) {
     const referenceAssetId = Number(next.referenceAssetId)
@@ -272,6 +294,35 @@ function applyBrief(next: Record<string, any> | undefined) {
       // Only apply it while the same reference is still active.
       if (url && Number(brief.value.referenceAssetId) === referenceAssetId) selectedReferenceUrl.value = url
     })
+  }
+}
+function productIdentityFrom(...sources: any[]): ProductIdentity {
+  let productNo = ''
+  let productId: number | undefined
+  for (const source of sources.flatMap(value => Array.isArray(value) ? value : [value])) {
+    if (!source || typeof source !== 'object') continue
+    if (!productNo) productNo = String(source.productNo || '').trim()
+    if (!productId) {
+      const value = Number(source.productId)
+      if (Number.isFinite(value) && value > 0) productId = value
+    }
+    if (productNo && productId) break
+  }
+  return { ...(productNo ? { productNo } : {}), ...(productId ? { productId } : {}) }
+}
+function applyProductIdentity(...sources: any[]): ProductIdentity {
+  const identity = productIdentityFrom(...sources)
+  if (identity.productNo || identity.productId) {
+    applyBrief(identity)
+    const conversation = conversations.value.find(item => item.id === activeConversationId.value)
+    if (conversation) Object.assign(conversation, identity)
+  }
+  return identity
+}
+function currentProductIdentity(): ProductIdentity {
+  return {
+    ...(canonicalProductNo.value ? { productNo: canonicalProductNo.value } : {}),
+    ...(canonicalProductId.value ? { productId: canonicalProductId.value } : {}),
   }
 }
 function eventPayload(event: any) { return event?.payload && typeof event.payload === 'object' ? event.payload : {} }
@@ -313,7 +364,7 @@ async function refreshBundleReviewStatus(options: { notify?: boolean } = {}) {
     const resolvedBundleId = Number(bundle.id || bundle.bundleId) || currentId
     const resolvedBundleStatus = String(bundle.status || 'draft')
     const resolvedBundleComment = String(bundle.reviewComment || '')
-    let nextImages: Array<{ view: string; label: string; assetId: number; previewUrl?: string }> | null = null
+    let nextImages: MultiViewImage[] | null = null
     if (Array.isArray(bundle.images) && bundle.images.length) {
       nextImages = bundle.images
         .filter((item: any) => Number(item?.assetId) > 0)
@@ -330,6 +381,7 @@ async function refreshBundleReviewStatus(options: { notify?: boolean } = {}) {
       nextSimulationPreviewUrl = imageUrl(simulation) || await previewForAsset(nextSimulationAssetId)
     }
     if (refreshSequence !== bundleRefreshSequence.value || conversationAtStart !== activeConversationId.value) return
+    applyProductIdentity(bundle, simulation, nextImages || [])
     bundleId.value = resolvedBundleId || bundleId.value
     bundleStatus.value = resolvedBundleStatus
     bundleComment.value = resolvedBundleComment
@@ -353,9 +405,11 @@ async function restoreDetail(detail: any) {
   activeConversationId.value = Number(detail?.id) || null
   projectId.value = Number(detail?.projectId) || null
   versionId.value = Number(detail?.versionId) || null
+  applyProductIdentity(detail, detail?.brief)
   const events = Array.isArray(detail?.events) ? detail.events : []
   for (const event of events) {
     const payload = eventPayload(event)
+    applyProductIdentity(payload, payload.brief, payload.result, payload.simulationImage, payload.images)
     if (event.eventType === 'chat_state') applyBrief(payload)
     if (event.eventType === 'chat_user_message' && (payload.message || payload.action?.label)) addMessage('user', payload.message || payload.action.label)
     if (event.eventType === 'chat_assistant_message') {
@@ -381,7 +435,7 @@ async function restoreDetail(detail: any) {
     if (event.eventType === 'model_submitted' || event.eventType === 'model_completed' || event.eventType === 'model_failed') {
       modelReviewStatus.value = String(payload.assetStatus || modelReviewStatus.value || '')
       modelReviewComment.value = String(payload.reviewComment || modelReviewComment.value || '')
-      modelTask.value = { jobId: Number(payload.modelJobId), status: event.eventType === 'model_completed' ? 'succeeded' : event.eventType === 'model_failed' ? 'failed' : String(payload.status || 'running'), progress: Number(payload.progress || 0), assetId: Number(payload.assetId || payload.modelAssetId) || null, errorMessage: payload.errorMessage || '' }
+      modelTask.value = { jobId: Number(payload.modelJobId), status: event.eventType === 'model_completed' ? 'succeeded' : event.eventType === 'model_failed' ? 'failed' : String(payload.status || 'running'), progress: Number(payload.progress || 0), assetId: Number(payload.assetId || payload.modelAssetId) || null, errorMessage: payload.errorMessage || '', ...productIdentityFrom(payload) }
       activeView.value = 'result'
     }
     if (event.eventType === 'model_review_submitted') {
@@ -428,7 +482,10 @@ async function removeConversation(item: Conversation, event?: Event) {
 }
 async function saveEvent(step: string, eventType: string, payload: Record<string, any> = {}) {
   if (!activeConversationId.value) return
-  try { await api(`/api/creative/ai/conversations/${activeConversationId.value}/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ step, eventType, payload }) }) } catch { /* persistence must not interrupt the creation turn */ }
+  const identity = productIdentityFrom(payload, currentProductIdentity())
+  if (identity.productNo || identity.productId) applyProductIdentity(identity)
+  const persistedPayload = { ...payload, ...currentProductIdentity() }
+  try { await api(`/api/creative/ai/conversations/${activeConversationId.value}/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ step, eventType, payload: persistedPayload }) }) } catch { /* persistence must not interrupt the creation turn */ }
 }
 function thinkingLabel(action?: QuickReply, message = '') {
   if (['product', 'category'].includes(String(action?.type))) return '正在整理产品方向'
@@ -553,12 +610,13 @@ async function generateProductImage(replacement = false) {
     })
     const queued = await api<any>(reference ? '/api/creative/ai/image-to-image' : '/api/creative/ai/ark/text-to-image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, queue: true }) })
     const result = await pollImageJob(queued)
+    const identity = applyProductIdentity(result)
     const id = Number(result.assetId || result.id)
     if (!id) throw new Error('产品图没有返回作品编号')
     generatedAssetId.value = id
     generatedPreviewUrl.value = imageUrl(result) || await previewForAsset(id)
     simulationAssetId.value = null; simulationPreviewUrl.value = ''; multiviewImages.value = []; bundleId.value = null; bundleStatus.value = ''; modelTask.value = null; modelReviewStatus.value = ''; modelReviewComment.value = ''
-    await saveEvent('image', replacement ? 'image_refined' : 'image_generated', { generatedAssetId: id, previewUrl: generatedPreviewUrl.value, productType: productName.value, material: material.value, productSize: productSize.value, referenceAssetId: brief.value.referenceAssetId || null })
+    await saveEvent('image', replacement ? 'image_refined' : 'image_generated', { generatedAssetId: id, previewUrl: generatedPreviewUrl.value, productType: productName.value, material: material.value, productSize: productSize.value, referenceAssetId: brief.value.referenceAssetId || null, ...identity })
     activeView.value = 'result'
     quickReplies.value = [{ type: 'multiview', label: '满意，生成生产模拟图' }, { type: 'refine', label: '不满意，告诉我怎么改' }, { type: 'replace_image', label: '重新上传图片生成' }, { type: 'model', label: '生成 3D 原型' }]
     chatStage.value = 'image_ready'
@@ -571,15 +629,17 @@ async function generateMultiView() {
   try {
     const queued = await api<any>('/api/creative/ai/volcengine/seedream/multiview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildCreativeGenerationPayload({ provider: 'ark', queue: true, inputAssetId: generatedAssetId.value, projectId: projectId.value || undefined, versionId: versionId.value || undefined, prompt: `将${productName.value}转为包含正面、侧面和背面的标准生产模拟图。材质：${material.value}；尺寸：${productSize.value}`, rawPrompt: String(brief.value.inspiration || ''), productKey: brief.value.productKey, productType: productName.value, productCategory: brief.value.categoryName || brief.value.categoryKey, material: material.value, productSize: productSize.value, viewCount: 3, size: '2K', watermark: true })) })
     const result = await pollImageJob(queued)
-    const images = (Array.isArray(result.images) ? result.images : []).filter((item: any) => item.assetId).map((item: any) => ({ ...item, assetId: Number(item.assetId), label: item.label || ({ front: '正面', left: '侧面', back: '背面' } as Record<string, string>)[item.view] || '视图' }))
+    const resultIdentity = applyProductIdentity(result, result.simulationImage, result.images)
+    const images: MultiViewImage[] = (Array.isArray(result.images) ? result.images : []).filter((item: any) => item.assetId).map((item: any) => ({ ...item, assetId: Number(item.assetId), label: item.label || ({ front: '正面', left: '侧面', back: '背面' } as Record<string, string>)[item.view] || '视图' }))
     if (images.length < 3) throw new Error('生产模拟图没有完整返回三个视角')
     await Promise.all(images.map(async (item: any) => { item.previewUrl = imageUrl(item) || await previewForAsset(item.assetId) }))
     multiviewImages.value = images
     simulationAssetId.value = Number(result.simulationAssetId || result.simulationImage?.assetId) || null
     simulationPreviewUrl.value = simulationAssetId.value ? await previewForAsset(simulationAssetId.value) : imageUrl(result.simulationImage)
     const bundle = await api<any>('/api/creative/ai/consumer-multiview-bundles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inputAssetId: generatedAssetId.value, projectId: projectId.value || undefined, versionId: versionId.value || undefined, productKey: brief.value.productKey, productName: productName.value, material: material.value, productSize: productSize.value, viewCount: 3, images: images.map((item: any) => ({ view: item.view, assetId: item.assetId, label: item.label })), ...(simulationAssetId.value ? { simulationAssetId: simulationAssetId.value } : {}) }) })
+    const identity = applyProductIdentity(bundle, resultIdentity, images)
     bundleId.value = Number(bundle.id || bundle.bundleId); bundleStatus.value = String(bundle.status || 'draft'); bundleComment.value = String(bundle.reviewComment || '')
-    await saveEvent('multiview', 'multiview_generated', { inputAssetId: generatedAssetId.value, bundleId: bundleId.value, bundleNo: bundle.bundleNo, bundleStatus: bundleStatus.value, simulationAssetId: simulationAssetId.value, images: images.map((item: any) => ({ view: item.view, assetId: item.assetId, label: item.label })) })
+    await saveEvent('multiview', 'multiview_generated', { inputAssetId: generatedAssetId.value, bundleId: bundleId.value, bundleNo: bundle.bundleNo, bundleStatus: bundleStatus.value, simulationAssetId: simulationAssetId.value, images: images.map((item: any) => ({ view: item.view, assetId: item.assetId, label: item.label, ...productIdentityFrom(item) })), ...identity })
     updateBundleActionReplies(); activeView.value = 'result'
     assistant('生产模拟图已保存为一个作品包：完整横向图用于查看，三个视角切片用于建模和审核。请先提交整包审核。')
   } catch (error: any) { notify(error.message || '生产模拟图生成失败', 'error') } finally { busy.value = false; busyText.value = '之间正在处理…' }
@@ -590,7 +650,7 @@ async function submitBundleReview() {
   try {
     const result = await api<any>(`/api/creative/ai/consumer-multiview-bundles/${bundleId.value}/submit-review`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ purpose: productionForm.value.purpose, museumId: productionForm.value.museumId || undefined, projectId: projectId.value || undefined, versionId: versionId.value || undefined, note: '由网站对话式创作提交的生产模拟图作品包' }) })
     bundleStatus.value = String(result.status || 'review'); bundleComment.value = String(result.reviewComment || '')
-    await saveEvent('multiview', 'multiview_review_submitted', { bundleId: bundleId.value, status: bundleStatus.value })
+    await saveEvent('multiview', 'multiview_review_submitted', { bundleId: bundleId.value, status: bundleStatus.value, ...currentProductIdentity() })
     updateBundleActionReplies()
     notify(result.message || '生产模拟图已提交审核')
   } catch (error: any) { notify(error.message || '提交审核失败', 'error') } finally { busy.value = false; busyText.value = '之间正在处理…' }
@@ -634,7 +694,7 @@ async function submitModelReview() {
     })
     modelReviewStatus.value = String(result.status || 'review')
     modelReviewComment.value = String(result.reviewComment || '')
-    await saveEvent('model', 'model_review_submitted', { assetId, assetStatus: modelReviewStatus.value, projectId: projectId.value, versionId: versionId.value })
+    await saveEvent('model', 'model_review_submitted', { assetId, assetStatus: modelReviewStatus.value, projectId: projectId.value, versionId: versionId.value, ...currentProductIdentity() })
     chatStage.value = 'model_review'
     setModelActionReplies()
     notify(result.message || '3D 模型已提交审核')
@@ -651,8 +711,9 @@ async function generateModel() {
     if (!jobId) throw new Error('3D 服务没有返回任务编号')
     modelReviewStatus.value = ''
     modelReviewComment.value = ''
-    modelTask.value = { jobId, status: String(result.status || 'running'), progress: Number(result.progress || 0), assetId: Number(result.assetId) || null }
-    await saveEvent('model', 'model_submitted', { modelJobId: jobId, modelAssetId: result.assetId, inputAssetId: generatedAssetId.value, status: modelTask.value.status })
+    const identity = applyProductIdentity(result)
+    modelTask.value = { jobId, status: String(result.status || 'running'), progress: Number(result.progress || 0), assetId: Number(result.assetId) || null, ...identity }
+    await saveEvent('model', 'model_submitted', { modelJobId: jobId, modelAssetId: result.assetId, inputAssetId: generatedAssetId.value, status: modelTask.value.status, ...identity })
     activeView.value = 'result'; quickReplies.value = [{ type: 'works', label: '查看订单和作品' }]; chatStage.value = 'model_running'; assistant('3D 建模任务已提交，完成后会出现在作品与订单状态中。')
     scheduleModelPolling()
     if (modelTask.value.status === 'succeeded') {
@@ -669,14 +730,15 @@ function scheduleModelPolling() {
     if (!modelTask.value || ['succeeded', 'failed'].includes(String(modelTask.value.status))) return
     try {
       const latest = await api<any>(`/api/creative/ai/tripo/tasks/${modelTask.value.jobId}`)
-      modelTask.value = { ...modelTask.value, ...latest, progress: Number(latest.progress || 0), assetId: Number(latest.assetId || latest.modelAssetId || modelTask.value.assetId) || null }
+      const identity = applyProductIdentity(latest)
+      modelTask.value = { ...modelTask.value, ...latest, progress: Number(latest.progress || 0), assetId: Number(latest.assetId || latest.modelAssetId || modelTask.value.assetId) || null, ...identity }
       modelReviewStatus.value = String(latest.assetStatus || modelReviewStatus.value || 'draft')
       modelReviewComment.value = String(latest.reviewComment || modelReviewComment.value || '')
       if (modelTask.value.status === 'succeeded') {
-        if (modelTask.value.assetId) await saveEvent('model', 'model_completed', { modelJobId: modelTask.value.jobId, assetId: modelTask.value.assetId, assetStatus: modelReviewStatus.value, progress: 100 })
+        if (modelTask.value.assetId) await saveEvent('model', 'model_completed', { modelJobId: modelTask.value.jobId, assetId: modelTask.value.assetId, assetStatus: modelReviewStatus.value, progress: 100, ...currentProductIdentity() })
         chatStage.value = 'model_ready'; setModelActionReplies(); assistant(modelReviewStatus.value === 'approved' ? '3D 模型已经生成并通过审核，可以申请打样。' : '3D 模型已经生成并保存，请先提交 3D 建模审核，审核通过后才能申请打样。')
       } else if (modelTask.value.status === 'failed') {
-        await saveEvent('model', 'model_failed', { modelJobId: modelTask.value.jobId, errorMessage: modelTask.value.errorMessage || modelTask.value.error })
+        await saveEvent('model', 'model_failed', { modelJobId: modelTask.value.jobId, errorMessage: modelTask.value.errorMessage || modelTask.value.error, ...currentProductIdentity() })
         assistant('3D 建模没有完成，失败原因已保存，可以检查产品图后重新提交。')
       } else modelPollTimer.value = window.setTimeout(poll, 5000)
     } catch { modelPollTimer.value = window.setTimeout(poll, 7000) }
@@ -698,7 +760,7 @@ async function submitProduction() {
   if (productionForm.value.purpose === 'museum_sale' && !productionForm.value.museumId) { notify('售卖路径请选择博物馆或景区', 'error'); return }
   productionSubmitting.value = true
   try {
-    const body: Record<string, any> = { assetId: target.assetId || undefined, bundleId: target.bundleId || bundleId.value || undefined, projectId: projectId.value || undefined, versionId: versionId.value || undefined, requestType: 'sample', title: target.title || productName.value, quantity: Math.max(1, Number(productionForm.value.quantity || 1)), purpose: productionForm.value.purpose, recipientName: productionForm.value.recipientName, recipientPhone: productionForm.value.recipientPhone, recipientAddress: productionForm.value.recipientAddress, note: productionForm.value.note, ...(productionForm.value.museumId ? { museumDistribution: [{ museumId: productionForm.value.museumId, museumName: productionForm.value.museumName, quantity: Math.max(1, Number(productionForm.value.quantity || 1)) }] } : {}) }
+    const body: Record<string, any> = { ...currentProductIdentity(), assetId: target.assetId || undefined, bundleId: target.bundleId || bundleId.value || undefined, projectId: projectId.value || undefined, versionId: versionId.value || undefined, requestType: 'sample', title: target.title || productName.value, quantity: Math.max(1, Number(productionForm.value.quantity || 1)), purpose: productionForm.value.purpose, recipientName: productionForm.value.recipientName, recipientPhone: productionForm.value.recipientPhone, recipientAddress: productionForm.value.recipientAddress, note: productionForm.value.note, ...(productionForm.value.museumId ? { museumDistribution: [{ museumId: productionForm.value.museumId, museumName: productionForm.value.museumName, quantity: Math.max(1, Number(productionForm.value.quantity || 1)) }] } : {}) }
     const data = await api<any>('/api/creative/ai/consumer-production/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     productionDialogOpen.value = false; notify(data.message || '打样申请已提交，等待后台报价'); await loadProductionRequests(); activeView.value = 'orders'
   } catch (error: any) { notify(error.message || '打样申请提交失败', 'error') } finally { productionSubmitting.value = false }
@@ -885,7 +947,19 @@ async function submitProfessionalSubmission() {
   if (file.size > 100 * 1024 * 1024) { notify('ZIP 作品包不能超过 100MB', 'error'); return }
   professionalSubmissionBusy.value = true
   try {
-    const form = new FormData(); form.append('file', file); form.append('title', professionalSubmissionTitle.value.trim() || file.name.replace(/\.zip$/i, '')); form.append('note', professionalSubmissionNote.value.trim()); form.append('purpose', 'personal')
+    const form = new FormData()
+    form.append('file', file)
+    form.append('title', professionalSubmissionTitle.value.trim() || file.name.replace(/\.zip$/i, ''))
+    form.append('note', professionalSubmissionNote.value.trim())
+    form.append('purpose', 'personal')
+    // Keep a professional ZIP attached to the product created in this
+    // conversation. The server derives the canonical product number from
+    // assetId and validates ownership; never derive it from a file name.
+    const currentAssetId = Number(generatedAssetId.value || 0)
+    if (Number.isFinite(currentAssetId) && currentAssetId > 0) form.append('assetId', String(currentAssetId))
+    const currentProductNo = String(brief.value.productNo || '').trim()
+    if (currentProductNo) form.append('productNo', currentProductNo)
+    if (canonicalProductId.value) form.append('productId', String(canonicalProductId.value))
     await api('/api/creative/ai/consumer-professional-submissions', { method: 'POST', body: form })
     professionalSubmissionFile.value = null; professionalSubmissionTitle.value = ''; professionalSubmissionNote.value = ''; await loadProfessionalSubmissions(); notify('专业作品包已提交审核')
   } catch (error: any) { notify(error.message || '提交专业作品包失败', 'error') } finally { professionalSubmissionBusy.value = false }
@@ -938,7 +1012,7 @@ onBeforeUnmount(() => {
       <section class="chat-panel">
         <header class="chat-header"><div class="assistant-avatar">之</div><div><span>BETWEEN TASTE AI · 在线</span><h2>你的创作顾问</h2><small>{{ activeConversation ? `会话 ${activeConversation.sessionNo || activeConversation.id}` : '先新建一条创作对话' }}</small></div><div class="brief-chip"><b>{{ productName }}</b><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></header>
         <div v-if="activeView === 'chat'" ref="chatContent" class="chat-content"><div class="conversation-intro">我会先听懂你想做什么，自动绑定产品方向，再逐步确认灵感、材质和成品尺寸。确认后才开始生成，不会把每句闲聊直接塞进提示词。</div><div class="message-stream"><article v-for="item in messages" :key="item.id" :class="['message', item.role]"><div v-if="item.role === 'assistant'" class="message-avatar">之</div><div class="message-body"><div v-if="item.imageUrl" class="message-image"><img :src="item.imageUrl" alt="用户上传的参考图" /></div><p v-if="item.text">{{ item.text }}</p><small>{{ item.role === 'assistant' ? '之间 AI' : '我' }}</small></div><div v-if="item.role === 'user'" class="message-avatar user">我</div></article><article v-if="thinking" class="message assistant"><div class="message-avatar">之</div><div class="message-body thinking"><span></span><span></span><span></span><small>正在理解你的想法</small></div></article></div></div>
-        <div v-else-if="activeView === 'result'" class="result-content"><div class="result-toolbar"><div><span>CREATIVE OUTPUT</span><h2>当前创作进度</h2></div><div class="result-toolbar-actions"><button v-if="bundleId" :disabled="bundleRefreshing" @click="refreshBundleReviewStatus()">{{ bundleRefreshing ? '刷新中…' : '刷新审核状态' }}</button><button @click="activeView = 'chat'">返回对话</button></div></div><section v-if="generatedPreviewUrl" class="output-card"><div class="output-image"><img :src="generatedPreviewUrl" alt="生成的产品图" /><b>产品视觉</b></div><div class="output-copy"><strong>{{ productName }}</strong><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></section><section v-if="replacementOpen" class="replacement-box"><strong>新参考图已上传，请补充改图要求</strong><textarea v-model="replacementPrompt" rows="3" placeholder="例如：保留新图主体和配色，转成当前产品的量产外观，背景简洁，不要文字。" /><button :disabled="busy || !replacementPrompt.trim()" @click="generateReplacement">根据新参考图生成</button></section><section v-if="simulationPreviewUrl || multiviewImages.length" class="output-card simulation-card"><div v-if="simulationPreviewUrl" class="output-image"><img :src="simulationPreviewUrl" alt="生产模拟图" /><b>生产模拟图</b></div><div class="view-strip"><div v-for="item in multiviewImages" :key="item.assetId"><img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.label" /><span>{{ item.label }}</span></div></div><div class="review-state" :class="statusClass(bundleStatus)"><strong>生产模拟图：{{ bundleStatus === 'approved' ? '审核已通过' : bundleStatus === 'review' ? '审核中' : bundleStatus === 'rejected' ? '审核未通过' : '待提交审核' }}</strong><small v-if="bundleComment">{{ bundleComment }}</small></div></section><section v-if="modelTask" class="model-status"><div><strong>3D 原型</strong><span>{{ modelTask.status === 'succeeded' ? '已完成' : modelTask.status === 'failed' ? '生成失败' : '生成中' }}</span></div><div class="progress"><i :style="{ width: `${Math.max(4, Math.min(100, Number(modelTask.progress || 0)))}%` }"></i></div><small v-if="modelTask.status === 'succeeded'">审核状态：{{ modelReviewLabel(modelReviewStatus) }}<template v-if="modelReviewComment"> · {{ modelReviewComment }}</template></small><small>{{ modelTask.errorMessage || (modelTask.status === 'succeeded' ? 'GLB 文件已保存到作品库，请先提交 3D 建模审核，审核通过后才能申请打样。' : `当前进度 ${Math.round(Number(modelTask.progress || 0))}%`) }}</small></section><div class="result-actions"><button v-for="item in generationActionReplies" :key="item.type" :class="{ primary: item.type === 'multiview' || item.type === 'bundle_production' }" :disabled="busy" @click="handleReply(item)">{{ item.label }}</button></div></div>
+        <div v-else-if="activeView === 'result'" class="result-content"><div class="result-toolbar"><div><div class="result-product-identity"><span>产品号</span><strong :class="{ missing: !canonicalProductNo }">{{ canonicalProductNo || '未关联产品号' }}</strong><small v-if="canonicalProductId">内部产品 ID：{{ canonicalProductId }}</small></div><span>CREATIVE OUTPUT</span><h2>当前创作进度</h2></div><div class="result-toolbar-actions"><button v-if="bundleId" :disabled="bundleRefreshing" @click="refreshBundleReviewStatus()">{{ bundleRefreshing ? '刷新中…' : '刷新审核状态' }}</button><button @click="activeView = 'chat'">返回对话</button></div></div><section v-if="generatedPreviewUrl" class="output-card"><div class="output-image"><img :src="generatedPreviewUrl" alt="生成的产品图" /><b>产品视觉</b></div><div class="output-copy"><strong>{{ productName }}</strong><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></section><section v-if="replacementOpen" class="replacement-box"><strong>新参考图已上传，请补充改图要求</strong><textarea v-model="replacementPrompt" rows="3" placeholder="例如：保留新图主体和配色，转成当前产品的量产外观，背景简洁，不要文字。" /><button :disabled="busy || !replacementPrompt.trim()" @click="generateReplacement">根据新参考图生成</button></section><section v-if="simulationPreviewUrl || multiviewImages.length" class="output-card simulation-card"><div v-if="simulationPreviewUrl" class="output-image"><img :src="simulationPreviewUrl" alt="生产模拟图" /><b>生产模拟图</b></div><div class="view-strip"><div v-for="item in multiviewImages" :key="item.assetId"><img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.label" /><span>{{ item.label }}</span></div></div><div class="review-state" :class="statusClass(bundleStatus)"><strong>生产模拟图：{{ bundleStatus === 'approved' ? '审核已通过' : bundleStatus === 'review' ? '审核中' : bundleStatus === 'rejected' ? '审核未通过' : '待提交审核' }}</strong><small v-if="bundleComment">{{ bundleComment }}</small></div></section><section v-if="modelTask" class="model-status"><div><strong>3D 原型</strong><span>{{ modelTask.status === 'succeeded' ? '已完成' : modelTask.status === 'failed' ? '生成失败' : '生成中' }}</span></div><div class="progress"><i :style="{ width: `${Math.max(4, Math.min(100, Number(modelTask.progress || 0)))}%` }"></i></div><small v-if="modelTask.status === 'succeeded'">审核状态：{{ modelReviewLabel(modelReviewStatus) }}<template v-if="modelReviewComment"> · {{ modelReviewComment }}</template></small><small>{{ modelTask.errorMessage || (modelTask.status === 'succeeded' ? 'GLB 文件已保存到作品库，请先提交 3D 建模审核，审核通过后才能申请打样。' : `当前进度 ${Math.round(Number(modelTask.progress || 0))}%`) }}</small></section><div class="result-actions"><button v-for="item in generationActionReplies" :key="item.type" :class="{ primary: item.type === 'multiview' || item.type === 'bundle_production' }" :disabled="busy" @click="handleReply(item)">{{ item.label }}</button></div></div>
         <div v-else class="orders-content"><div class="result-toolbar"><div><span>WORKFLOW ORDERS</span><h2>订单与生产进度</h2></div><button @click="loadProductionRequests">刷新</button></div><div v-if="!productionRequests.length" class="orders-empty">暂时没有打样订单<br /><small>作品审核通过后，可以在对话中申请打样。</small></div><article v-for="item in productionRequests" :key="item.id" class="order-card"><div><span>{{ item.productNo || item.requestNo || `订单 ${item.id}` }}</span><strong>{{ item.title || item.assetTitle || item.sampleProductName || '文创产品' }}</strong><small>{{ item.requestType === 'bulk' ? '批量生产' : '打样' }} · {{ item.quantity || 1 }} 件 · {{ formatTime(item.createdAt) }}</small></div><div class="order-status"><b :class="statusClass(item.status)">{{ statusText(item.status) }}</b><span v-if="item.samplePaymentStatus">{{ statusText(item.samplePaymentStatus) }}</span><button v-if="item.status === 'approved' && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))" :disabled="paymentLoading" @click="paySample(item)">{{ paymentTargetMatches(item) && paymentOrder && !paymentIsTerminal(paymentOrder.status) ? '继续支付' : '支付打样费' }}</button></div></article><div v-if="paymentOrder && !paymentDialogOpen" class="payment-card"><div><strong>打样费支付</strong><span>{{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功，已进入生产' : paymentIntent === 'exception' ? '支付结果核对中' : '待支付' }}</span></div><img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" /><small>{{ paymentHint }}</small><button v-if="!paymentIsTerminal(paymentOrder.status)" @click="reopenPaymentDialog">继续支付</button></div></div>
 
         <footer v-if="activeView === 'chat'" class="chat-composer"><div class="quick-replies"><button v-for="item in quickReplies" :key="`${item.type}-${item.label}`" :class="{ confirm: item.type === 'confirm_generate', secondary: ['replace_image', 'add_detail'].includes(item.type) }" :disabled="busy || sending" @click="handleReply(item)">{{ item.label }}</button></div><div v-if="busy" class="busy-line"><i></i>{{ busyText }}</div><div class="composer-row"><button class="upload-button" title="上传参考图片" :disabled="busy || sending || inputLocked" @click="referenceInput?.click()">＋</button><textarea v-model="chatInput" :disabled="busy || sending || inputLocked" :placeholder="inputPlaceholder" rows="2" maxlength="1200" @keydown.enter.exact.prevent="sendChat()" /><button class="send-button" :disabled="busy || sending || inputLocked || !chatInput.trim()" @click="sendChat()">发送</button></div><div class="composer-foot"><span>AI 生成内容 · 请在商业使用前人工复核</span><span>{{ chatInput.length }}/1200</span></div></footer>
@@ -1085,7 +1159,7 @@ onBeforeUnmount(() => {
 .composer-row textarea { min-height: 52px; resize: none; border: 1px solid #d9e5db; border-radius: 9px; padding: 9px 11px; color: #405748; background: #f7faf7; font: inherit; font-size: 13px; line-height: 1.5; outline: none; }.composer-row textarea:focus { border-color: #9fc2a5; background: #fff; }.composer-row textarea::placeholder { color: #a1afa5; }
 .upload-button, .send-button { border: 1px solid #d4e3d7; border-radius: 9px; background: #f6faf6; color: #5c8268; cursor: pointer; }.upload-button { font-size: 22px; }.send-button { border: 0; background: #3f7053; color: #fff; font-size: 12px; font-weight: 800; }
 .composer-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; color: #a8b2ab; font-size: 9px; }.composer-foot span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.result-content, .orders-content { padding: 21px 24px; }.result-toolbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 14px; }.result-toolbar h2 { margin: 5px 0 0; font-size: 21px; }.result-toolbar button { padding: 6px 0 6px 8px; color: #5d8669; font-size: 12px; }
+.result-content, .orders-content { padding: 21px 24px; }.result-toolbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 14px; }.result-toolbar h2 { margin: 5px 0 0; font-size: 21px; }.result-toolbar button { padding: 6px 0 6px 8px; color: #5d8669; font-size: 12px; }.result-product-identity { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 9px; margin-bottom: 9px; padding-bottom: 8px; border-bottom: 1px solid #e6eee7; }.result-product-identity span { color: #668875; letter-spacing: .1em; }.result-product-identity strong { color: #315e43; font-size: 15px; letter-spacing: .04em; }.result-product-identity strong.missing { color: #9aa89f; font-weight: 600; }.result-product-identity small { color: #9aa89f; font-size: 10px; }
 .output-card { overflow: hidden; margin-bottom: 14px; border: 1px solid #dfe9e0; border-radius: 10px; background: #fbfdfb; }.output-image { position: relative; overflow: hidden; background: #edf4ee; }.output-image img { display: block; width: 100%; max-height: 420px; object-fit: contain; }.output-image b { position: absolute; top: 9px; left: 9px; padding: 4px 7px; border-radius: 5px; background: rgba(46, 74, 57, .75); color: #fff; font-size: 10px; }.output-copy { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; }.output-copy strong { color: #476151; font-size: 13px; }.output-copy span { color: #91a198; font-size: 11px; }
 .replacement-box { margin-bottom: 14px; padding: 13px; border: 1px solid #ead8cf; border-radius: 10px; background: #fff9f6; }.replacement-box strong { color: #805a4b; font-size: 13px; }.replacement-box textarea { display: block; width: 100%; margin: 9px 0; padding: 9px; resize: vertical; border: 1px solid #eadbd4; border-radius: 7px; font: inherit; font-size: 12px; }.replacement-box button { font-size: 12px; }
 .simulation-card { padding: 12px; }.view-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; padding-top: 9px; }.view-strip div { overflow: hidden; border: 1px solid #e1e9e2; border-radius: 7px; background: #f1f5f1; }.view-strip img { display: block; width: 100%; height: 105px; object-fit: contain; }.view-strip span { display: block; padding: 5px; color: #6a7d70; font-size: 10px; text-align: center; }.review-state { display: grid; gap: 4px; margin-top: 10px; padding: 9px 10px; border-radius: 7px; background: #f4f7f4; color: #687a6d; font-size: 12px; }.review-state.success { background: #eef8f0; color: #4b7b58; }.review-state.danger { background: #fff3ef; color: #a35d4a; }.review-state small { line-height: 1.5; }
