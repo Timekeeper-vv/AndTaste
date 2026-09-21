@@ -148,6 +148,7 @@ APP_DIR=/opt/smart_pig BRANCH=main bash scripts/aliyun-safe-update.sh
 
 - 数据库使用 `mysqldump --single-transaction` 压缩备份，并执行 `gzip -t` 校验；不会执行 `DROP DATABASE`、清空表或覆盖线上数据。
 - `shixun/data/creative-assets`、`static/generated`、`static/uploads` 和 `.env` 会单独备份；构建脚本只替换前端静态包。
+- 服务器如果残留上一次构建生成的 `shixun/src/main/resources/static` 文件，脚本会先完成备份，再只恢复这段静态构建目录的 Git 版本；其他业务文件改动仍会直接阻止更新。
 - 服务器工作区有未提交改动、远端不是快进版本、数据库备份失败、候选版本健康检查失败时，更新会停止。
 - 切换失败时自动恢复旧 JAR 和旧 systemd 服务文件。数据库不会自动回滚，因为直接导入旧备份可能覆盖备份之后的新订单；如确需数据库恢复，请先停止写入并人工确认备份时间点。
 - 备份目录不会自动删除。确认新版本稳定后，再按业务保留周期清理旧备份。

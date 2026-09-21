@@ -42,6 +42,7 @@ MYSQL_ADMIN_USER="${MYSQL_ADMIN_USER:-root}"
 MYSQL_ADMIN_PASSWORD="${MYSQL_ADMIN_PASSWORD:-}"
 BACKEND_DIR="$ROOT_DIR/shixun"
 STATIC_DIR="$BACKEND_DIR/src/main/resources/static"
+STATIC_REL="shixun/src/main/resources/static"
 CREATIVE_ASSET_PRIVATE_ROOT="${CREATIVE_ASSET_PRIVATE_ROOT:-$BACKEND_DIR/data/creative-assets}"
 OLD_JAR_PATH=""
 OLD_HEAD=""
@@ -139,7 +140,27 @@ prepare_backup(){
   backup_runtime_data
 }
 
+normalize_generated_static_changes(){
+  local dirty line path
+  dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
+  [ -n "$dirty" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    path="${line:3}"
+    case "$path" in
+      "$STATIC_REL"|"$STATIC_REL"/*) ;;
+      *) die "服务器工作区有非构建产物改动，已停止：$line" ;;
+    esac
+  done <<< "$dirty"
+  [ -f "$BACKUP_DIR/static-bundle.tgz" ] || die "静态资源备份缺失，拒绝清理工作区"
+  warn "检测到前端构建产物改动；已备份后恢复 Git 静态目录，保留 generated/uploads"
+  find "$STATIC_DIR" -mindepth 1 -maxdepth 1 \
+    ! -name generated ! -name uploads -exec rm -rf -- {} +
+  git -C "$ROOT_DIR" restore --source=HEAD --staged --worktree -- "$STATIC_REL"
+}
+
 update_code(){
+  normalize_generated_static_changes
   [ -z "$(git -C "$ROOT_DIR" status --porcelain)" ] || die "服务器工作区有未提交改动，已停止；请先保存或清理后再更新"
   info "获取 origin/$BRANCH，并仅允许快进更新"
   git -C "$ROOT_DIR" fetch origin "$BRANCH"
