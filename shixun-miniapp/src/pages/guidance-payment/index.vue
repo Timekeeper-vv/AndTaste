@@ -29,6 +29,8 @@ const paymentOrder = ref<PaymentOrder | null>(null)
 const intent = ref<'awaiting' | 'paid' | 'exception'>('awaiting')
 const hint = ref('微信支付已受理，正在等待官方回调确认，请勿重复支付。')
 let timer: ReturnType<typeof setInterval> | null = null
+let pollAttempts = 0
+const MAX_POLL_ATTEMPTS = 60
 
 const fee = (value: any) => Number(value || 0).toFixed(2).replace(/\.00$/, '')
 function stop() { if (timer) clearInterval(timer); timer = null }
@@ -73,10 +75,11 @@ async function pay() {
   }
 }
 
-function startPolling() { stop(); timer = setInterval(() => void refresh(), 2500); void refresh() }
+function startPolling() { stop(); pollAttempts = 0; timer = setInterval(() => void refresh(), 2500); void refresh() }
 async function refresh() {
   if (!paymentOrder.value?.orderNo) return
   try {
+    pollAttempts += 1
     const latest = await getPaymentOrder(paymentOrder.value.orderNo)
     paymentOrder.value = latest
     if (latest.status === 'paid') {
@@ -88,6 +91,10 @@ async function refresh() {
       stop()
       intent.value = 'exception'
       hint.value = '支付结果正在与微信官方核对，请勿重复支付。'
+    } else if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+      stop()
+      intent.value = 'exception'
+      hint.value = '暂未收到最终支付结果，请点击查询订单状态，确认后再决定是否继续。'
     }
   } catch { /* Keep polling through transient network failures. */ }
 }
