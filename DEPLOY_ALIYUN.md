@@ -130,12 +130,36 @@ mysql -u <数据库账号> -p shixun < shixun/src/main/resources/db/migration/V2
 
 访问：`http://服务器公网IP/` 或 `http://你的域名/`。
 
-## 5. 代码更新后一键发布
+## 5. 代码更新
+
+已有线上数据的生产环境不要直接执行 `git pull && production`，请使用下面的安全更新流程。
+
+### 5.1 推荐：安全更新（保留线上数据）
+
+已有线上数据时，建议使用下面的安全更新脚本。它会在更新前将数据库、`.env`、应用配置、三视图/生产文件等运行时资产，以及旧版 JAR 保存到 `/opt/smart_pig-backups/时间戳/`，然后只允许 `origin/main` 快进更新。新版本先在 `18080` 候选端口启动并通过健康检查，才会切换 `smart-pig.service`。
 
 ```bash
 cd /opt/smart_pig
-git pull
-bash scripts/aliyun-start.sh production
+chmod +x scripts/aliyun-safe-update.sh
+APP_DIR=/opt/smart_pig BRANCH=main bash scripts/aliyun-safe-update.sh
+```
+
+脚本的保护规则：
+
+- 数据库使用 `mysqldump --single-transaction` 压缩备份，并执行 `gzip -t` 校验；不会执行 `DROP DATABASE`、清空表或覆盖线上数据。
+- `shixun/data/creative-assets`、`static/generated`、`static/uploads` 和 `.env` 会单独备份；构建脚本只替换前端静态包。
+- 服务器工作区有未提交改动、远端不是快进版本、数据库备份失败、候选版本健康检查失败时，更新会停止。
+- 切换失败时自动恢复旧 JAR 和旧 systemd 服务文件。数据库不会自动回滚，因为直接导入旧备份可能覆盖备份之后的新订单；如确需数据库恢复，请先停止写入并人工确认备份时间点。
+- 备份目录不会自动删除。确认新版本稳定后，再按业务保留周期清理旧备份。
+
+以上是防止“发布过程误删数据”的保护，不等同于异机容灾。正式环境请将 `/opt/smart_pig-backups/` 定期同步到阿里云 OSS，或同时配置 RDS 自动备份和 ECS 云盘快照。
+
+更新完成后检查：
+
+```bash
+systemctl status smart-pig --no-pager -l
+curl -fsS http://127.0.0.1:8080/actuator/health/readiness
+journalctl -u smart-pig -n 100 --no-pager
 ```
 
 如果只想用普通后台进程而不安装 systemd：
