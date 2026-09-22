@@ -73,6 +73,18 @@ find_current_jar(){
     ! -name '*.original' ! -name '*sources.jar' -print -quit 2>/dev/null || true
 }
 
+archive_with_change_warning(){
+  local label="$1" archive="$2" rc=0
+  shift 2
+  tar "$@" || rc=$?
+  [ -s "$archive" ] || die "$label 备份为空：$archive"
+  if [ "$rc" -gt 1 ]; then
+    die "$label 备份失败（tar退出码 $rc）：$archive"
+  elif [ "$rc" -eq 1 ]; then
+    warn "$label 备份期间文件发生变化，已保留可读备份：$archive"
+  fi
+}
+
 dump_database(){
   [ -n "$DB_PASSWORD" ] || die "DB_PASSWORD 为空，已停止更新"
   [[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]] || die "DB_NAME 格式不合法"
@@ -108,17 +120,21 @@ backup_runtime_data(){
     local parent name
     parent="$(dirname "$CREATIVE_ASSET_PRIVATE_ROOT")"
     name="$(basename "$CREATIVE_ASSET_PRIVATE_ROOT")"
-    tar -C "$parent" -czf "$BACKUP_DIR/creative-assets.tgz" "$name"
+    archive_with_change_warning "creative-assets" "$BACKUP_DIR/creative-assets.tgz" \
+      -C "$parent" -czf "$BACKUP_DIR/creative-assets.tgz" "$name"
   fi
   if [ -d "$STATIC_DIR/generated" ]; then
-    tar -C "$STATIC_DIR" -czf "$BACKUP_DIR/static-generated.tgz" generated
+    archive_with_change_warning "static/generated" "$BACKUP_DIR/static-generated.tgz" \
+      -C "$STATIC_DIR" -czf "$BACKUP_DIR/static-generated.tgz" generated
   fi
   if [ -d "$STATIC_DIR/uploads" ]; then
-    tar -C "$STATIC_DIR" -czf "$BACKUP_DIR/static-uploads.tgz" uploads
+    archive_with_change_warning "static/uploads" "$BACKUP_DIR/static-uploads.tgz" \
+      -C "$STATIC_DIR" -czf "$BACKUP_DIR/static-uploads.tgz" uploads
   fi
   if [ -d "$STATIC_DIR" ]; then
     # Build replaces only these web-bundle files. generated/uploads stay live.
-    tar -C "$STATIC_DIR" --exclude='./generated' --exclude='./uploads' \
+    archive_with_change_warning "static bundle" "$BACKUP_DIR/static-bundle.tgz" \
+      -C "$STATIC_DIR" --exclude='./generated' --exclude='./uploads' \
       -czf "$BACKUP_DIR/static-bundle.tgz" .
   fi
   chmod 600 "$BACKUP_DIR"/* 2>/dev/null || true
