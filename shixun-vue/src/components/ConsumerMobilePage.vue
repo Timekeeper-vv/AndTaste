@@ -68,6 +68,8 @@ const libraryLoading = ref(false)
 const libraryLoadError = ref('')
 const imageResult = ref<any>(null)
 const doubaoMultiViewResult = ref<any[]>([])
+const doubaoMultiViewBundleId = ref<number | null>(null)
+const doubaoMultiViewBundleStatus = ref('')
 const doubaoReferenceAssetId = ref<number | null>(null)
 const doubaoReferencePreviewUrl = ref('')
 const modelResult = ref<any>(null)
@@ -1091,6 +1093,7 @@ onMounted(() => {
   // Start with the destination gate. The creator-mode choice opens once after
   // the user selects that destination, avoiding two consecutive prompts.
   load()
+  resumePendingJobIfAny()
 })
 onBeforeUnmount(() => {
   if (modelTimer.value) clearTimeout(modelTimer.value)
@@ -1304,6 +1307,26 @@ async function generateDoubaoMultiView() {
     try { return await secureAssetResult(item, 'image') } catch { return { ...item, previewUrl: '', fileUrl: '' } }
   }))
   if (!doubaoMultiViewResult.value.length) throw new Error('Doubao 未返回多视图结果')
+  try {
+    const bundleResponse = await fetch('/api/creative/ai/consumer-multiview-bundles', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        inputAssetId: doubaoReferenceAssetId.value,
+        productKey: selectedProductKey.value,
+        productName: productProfile.value.label,
+        material: selectedMaterial.value,
+        productSize: selectedProductSize.value,
+        viewCount: doubaoMultiViewResult.value.length,
+        images: doubaoMultiViewResult.value.map((item: any) => ({ view: item.view, assetId: item.assetId, label: item.label })),
+        ...(data.simulationAssetId ? { simulationAssetId: data.simulationAssetId } : {}),
+      }),
+    })
+    if (bundleResponse.ok) {
+      const bundle = await bundleResponse.json()
+      doubaoMultiViewBundleId.value = Number(bundle.id || bundle.bundleId) || null
+      doubaoMultiViewBundleStatus.value = String(bundle.status || 'draft')
+    }
+  } catch { /* bundle persistence is best-effort; the images remain in the asset library either way */ }
   await load(); phase.value = 'done'
   emit('alert', data.message || 'Doubao 多视图已保存，可直接用于 3D 建模', 'success')
 }
@@ -1321,12 +1344,55 @@ function useDoubaoMultiViewFor3d() {
 
 const waitForArkImageJob = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))
 
-async function submitQueuedImageAndWait(endpoint: string, payload: Record<string, any>) {
-  const submit = await fetch(endpoint, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-  })
-  if (!submit.ok) { const err = await submit.json().catch(() => null); throw new Error(err?.message || `HTTP ${submit.status}`) }
-  let job: any = await submit.json()
+const PENDING_JOB_STORAGE_KEY = 'smartpig.pendingImageJob'
+
+function rememberPendingJob(jobId: number | string) {
+  try { sessionStorage.setItem(PENDING_JOB_STORAGE_KEY, JSON.stringify({ jobId, startedAt: Date.now() })) } catch { /* storage unavailable */ }
+}
+function forgetPendingJob() {
+  try { sessionStorage.removeItem(PENDING_JOB_STORAGE_KEY) } catch { /* storage unavailable */ }
+}
+function readPendingJob(): { jobId: number; startedAt: number } | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_JOB_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    const jobId = Number(parsed?.jobId)
+    if (!jobId) return null
+    return { jobId, startedAt: Number(parsed?.startedAt) || Date.now() }
+  } catch { return null }
+}
+
+async function resumePendingJobIfAny() {
+  const pending = readPendingJob()
+  if (!pending) return
+  try {
+    const poll = await fetch(`/api/creative/ai/image-jobs/${pending.jobId}`, { cache: 'no-store' })
+    if (!poll.ok) { forgetPendingJob(); return }
+    let job: any = await poll.json()
+    if (job.status !== 'queued' && job.status !== 'running') { forgetPendingJob(); return }
+    busy.value = true; setStage('检测到上次生成任务仍在进行，继续等待…', 'generate')
+    try {
+      job = await pollQueuedImageJob(job)
+      if (job.jobType === 'multi_view') {
+        const rawImages = Array.isArray(job.images) ? job.images : []
+        doubaoMultiViewResult.value = await Promise.all(rawImages.map(async (item: any) => {
+          try { return await secureAssetResult(item, 'image') } catch { return { ...item, previewUrl: '', fileUrl: '' } }
+        }))
+        emit('alert', job.message || 'Doubao 多视图已保存，可直接用于 3D 建模', 'success')
+      } else {
+        imageResult.value = await secureAssetResult(job, 'image')
+        await prepareAssetPreview(job.assetId, 'image')
+        emit('alert', '上次提交的图片已生成，可查看结果', 'success')
+      }
+      await load(); await nextTick(); imageAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'center' }); phase.value = 'done'
+    } finally {
+      forgetPendingJob()
+    }
+  } catch { forgetPendingJob() } finally { busy.value = false; stage.value = '' }
+}
+
+async function pollQueuedImageJob(job: any) {
   const deadline = Date.now() + 45 * 60 * 1000
   let transientFailures = 0
   const updateStage = (current: any) => {
@@ -1334,12 +1400,7 @@ async function submitQueuedImageAndWait(endpoint: string, payload: Record<string
       const ahead = Math.max(0, Number(current.queuePosition || 1) - 1)
       setStage(ahead > 0 ? `已进入生成队列，前面还有 ${ahead} 项任务` : '已进入生成队列，马上开始', 'generate')
     } else if (current.status === 'running') {
-      const message = current.jobType === 'multi_view'
-        ? '正在生成一致的产品多视图，请稍候'
-        : current.jobType === 'image_to_image'
-          ? '正在依据参考图生成产品视觉，请稍候'
-          : '之间大模型正在生成图片，请稍候'
-      setStage(message, 'generate')
+      setStage(current.message || '正在生成，请稍候', 'generate')
     }
   }
   updateStage(job)
@@ -1359,6 +1420,21 @@ async function submitQueuedImageAndWait(endpoint: string, payload: Record<string
   }
   if (job.status === 'failed') throw new Error(job.errorMessage || job.message || '图片生成失败')
   if (job.status !== 'succeeded') throw new Error(job.message || '图片生成状态异常，请稍后到作品库查看')
+  return job
+}
+
+async function submitQueuedImageAndWait(endpoint: string, payload: Record<string, any>) {
+  const submit = await fetch(endpoint, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  })
+  if (!submit.ok) { const err = await submit.json().catch(() => null); throw new Error(err?.message || `HTTP ${submit.status}`) }
+  let job: any = await submit.json()
+  if (job.jobId) rememberPendingJob(job.jobId)
+  try {
+    job = await pollQueuedImageJob(job)
+  } finally {
+    forgetPendingJob()
+  }
   return job
 }
 

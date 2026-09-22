@@ -2,6 +2,9 @@ package com.example.shixun.controller;
 
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
+import com.example.shixun.service.NotificationService;
+import com.example.shixun.service.ProjectService;
+import com.example.shixun.service.TaskAssignmentService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
@@ -28,19 +31,27 @@ public class WorkflowController {
     private static final List<String> REQUIRED_APPROVERS = List.of("审批员1", "审批员2", "审批员3", "审批员4");
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
+    private final TaskAssignmentService taskAssignmentService;
+    private final NotificationService notificationService;
+    private final ProjectService projectService;
 
-    public WorkflowController(JdbcTemplate jdbc, ObjectMapper mapper) {
+    public WorkflowController(JdbcTemplate jdbc, ObjectMapper mapper, TaskAssignmentService taskAssignmentService, NotificationService notificationService, ProjectService projectService) {
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.taskAssignmentService = taskAssignmentService;
+        this.notificationService = notificationService;
+        this.projectService = projectService;
     }
 
     @GetMapping("/definitions")
     public Map<String, Object> definitions() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("flows", List.of(
-                Map.of("key", "standard", "name", "四人会签审批", "desc", "审批员1-4 全部同意后自动通过", "steps", flowToMap(stepsFor("standard"))),
-                Map.of("key", "twoLevel", "name", "四人会签审批", "desc", "审批员1-4 全部同意后自动通过，适合财务、生产等关键事项", "steps", flowToMap(stepsFor("twoLevel"))),
-                Map.of("key", "countersign", "name", "四人会签审批", "desc", "固定四名审批员会签，缺一不可", "steps", flowToMap(stepsFor("countersign")))
+                Map.of("key", "design", "name", "设计师落地审核", "desc", "由设计师审核模型是否可落地", "steps", flowToMap(stepsFor("design"))),
+                Map.of("key", "project", "name", "项目经理审核", "desc", "由项目经理协调项目阶段", "steps", flowToMap(stepsFor("project"))),
+                Map.of("key", "production", "name", "生产报价与排产", "desc", "由生产岗位处理报价和排产", "steps", flowToMap(stepsFor("production"))),
+                Map.of("key", "finance", "name", "财务收款确认", "desc", "由财务岗位确认收款", "steps", flowToMap(stepsFor("finance"))),
+                Map.of("key", "logistics", "name", "仓储物流履约", "desc", "由物流岗位处理入库出库和物流", "steps", flowToMap(stepsFor("logistics")))
         ));
         result.put("categoryDefaults", Map.of(
                 "finance", "twoLevel",
@@ -138,6 +149,9 @@ public class WorkflowController {
         Long id = jdbc.queryForObject("SELECT id FROM workflow_application WHERE app_no=?", Long.class, appNo);
         insertLog(id, "submit", applicant, role, "提交申请", null, null, 0);
         notifyRoles(id, steps.get(0), "审批待办", title + " 等待处理");
+        if ("sample".equals(flowType)) {
+            projectService.createProject(title, "sample", applicant, null, id);
+        }
         return loadApplication(id, true);
     }
 
@@ -212,10 +226,84 @@ public class WorkflowController {
         JwtService.Claims principal = authenticatedPrincipal();
         // Keep the query parameter for compatibility with older clients, but
         // never use a caller-supplied receiver to select another user's notices.
-        if ("admin".equals(principal.role()) || "technician".equals(principal.role())) {
-            return jdbc.queryForList("SELECT id, application_id applicationId, receiver, title, message, read_flag readFlag, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_notification WHERE receiver=? OR receiver IN ('admin','technician') ORDER BY id DESC LIMIT 50", principal.username());
+        if ("admin".equals(principal.role())) {
+            return jdbc.queryForList("SELECT id, application_id applicationId, receiver, title, message, read_flag readFlag, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_notification ORDER BY id DESC LIMIT 50");
         }
-        return jdbc.queryForList("SELECT id, application_id applicationId, receiver, title, message, read_flag readFlag, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_notification WHERE receiver=? ORDER BY id DESC LIMIT 50", principal.username());
+        return jdbc.queryForList("SELECT id, application_id applicationId, receiver, title, message, read_flag readFlag, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') createdAt FROM workflow_notification WHERE receiver=? OR receiver=? ORDER BY id DESC LIMIT 50", principal.username(), principal.role());
+    }
+
+    @GetMapping("/my-tasks")
+    public List<Map<String, Object>> getMyTasks() {
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateRole(principal.role(), false);
+        return taskAssignmentService.getPendingTasksByRole(principal.role(), principal.username());
+    }
+
+    @GetMapping("/my-submissions")
+    public List<Map<String, Object>> getMySubmissions() {
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateRole(principal.role(), true);
+        return taskAssignmentService.getMySubmissions(principal.username());
+    }
+
+    @PostMapping("/applications/{id}/approve-and-forward")
+    public Map<String, Object> approveAndForward(@PathVariable Long id, @RequestBody WorkflowForwardRequest req) {
+        JwtService.Claims principal = authenticatedPrincipal();
+        validateRole(principal.role(), false);
+        if (req == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
+
+        Map<String, Object> current = loadApplication(id, false);
+        ensurePending(current);
+        validateCurrentHandler(current, principal);
+
+        String comment = blank(req.comment) ? "同意" : req.comment.trim();
+        insertLog(id, "approve", principal.username(), principal.role(), comment);
+
+        if (blank(req.nextStage)) {
+            jdbc.update("UPDATE workflow_application SET status='approved', approver=?, approval_comment=?, approved_at=CURRENT_TIMESTAMP, finished_at=CURRENT_TIMESTAMP, current_handler=NULL WHERE id=?",
+                    principal.username(), comment, id);
+            syncSampleRequestStatus(id, "approved", principal.username());
+            syncBulkProductionStatus(id, "approved", principal.username());
+            insertNotice(id, String.valueOf(current.get("applicant")), "申请已通过", String.valueOf(current.get("title")) + " 已审批通过");
+            return loadApplication(id, true);
+        }
+
+        String applicationType = taskAssignmentService.getApplicationType(id);
+        String nextHandler = taskAssignmentService.assignTaskByStage(applicationType, req.nextStage);
+
+        jdbc.update(
+            "UPDATE workflow_application SET current_handler=?, current_step_name=?, approver=?, approval_comment=? WHERE id=?",
+            nextHandler, req.nextStage, principal.username(), comment, id
+        );
+
+        notificationService.notifyRole(nextHandler, "新任务待处理",
+            String.valueOf(current.get("title")) + " - " + req.nextStage, id);
+
+        insertNotice(id, String.valueOf(current.get("applicant")), "申请已进入下一环节",
+            String.valueOf(current.get("title")) + " 已进入 " + req.nextStage);
+
+        return loadApplication(id, true);
+    }
+
+    @GetMapping("/notifications/unread-count")
+    public Map<String, Object> getUnreadCount() {
+        JwtService.Claims principal = authenticatedPrincipal();
+        int count = notificationService.getUnreadCount(principal.username());
+        return Map.of("count", count);
+    }
+
+    @PostMapping("/notifications/{id}/mark-read")
+    public Map<String, Object> markNotificationRead(@PathVariable Long id) {
+        JwtService.Claims principal = authenticatedPrincipal();
+        notificationService.markAsRead(id, principal.username());
+        return Map.of("success", true);
+    }
+
+    @PostMapping("/notifications/mark-all-read")
+    public Map<String, Object> markAllNotificationsRead() {
+        JwtService.Claims principal = authenticatedPrincipal();
+        notificationService.markAllAsRead(principal.username());
+        return Map.of("success", true);
     }
 
     private Map<String, Object> approveStep(Long id, WorkflowActionRequest req, JwtService.Claims principal) {
@@ -439,7 +527,7 @@ public class WorkflowController {
     }
 
     private boolean isSubmitter(JwtService.Claims principal) {
-        return principal != null && "feeder".equals(principal.role());
+        return principal != null && "user".equals(principal.role());
     }
 
     private long countApplications(String status, String category, String applicant, String applicantRole) {
@@ -491,9 +579,9 @@ public class WorkflowController {
     private void validateRole(String role, boolean submit) {
         String r = normalizeRole(role, "");
         if (submit) {
-            if (!List.of("admin", "technician", "feeder").contains(r)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交申请");
+            if (!List.of("admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder").contains(r)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交申请");
         } else {
-            if (!List.of("admin", "technician").contains(r)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限审批");
+            if (!List.of("admin", "finance", "project_manager", "designer", "production", "logistics", "technician").contains(r)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限审批");
         }
     }
 
@@ -518,16 +606,37 @@ public class WorkflowController {
 
     private String normalizeFlowType(String flowType, String category, String typeKey) {
         String f = blank(flowType) ? defaultFlowType(category, typeKey) : flowType.trim();
-        return List.of("standard", "twoLevel", "countersign").contains(f) ? f : defaultFlowType(category, typeKey);
+        return List.of("sample", "design", "project", "production", "finance", "logistics").contains(f) ? f : defaultFlowType(category, typeKey);
     }
 
     private String defaultFlowType(String category, String typeKey) {
-        if ("finance".equals(category) || "production".equals(category)) return "twoLevel";
-        return "standard";
+        if ("finance".equals(category)) return "finance";
+        if ("logistics".equals(category) || "warehouse".equals(category)) return "logistics";
+        if ("projectDepartment".equals(category) || "marketDepartment".equals(category) || "chain".equals(category)) return "project";
+        // 打样和大货走完整的六步审批流程
+        if ("production".equals(category) || "supplyChain".equals(category)) return "sample";
+        if (typeKey != null && (typeKey.contains("sample") || typeKey.contains("bulk") || typeKey.contains("打样") || typeKey.contains("大货"))) return "sample";
+        return "design";
     }
 
     private List<FlowStep> stepsFor(String flowType) {
-        return List.of(new FlowStep("四人会签审批", List.of("technician"), "all", REQUIRED_APPROVERS.size(), REQUIRED_APPROVERS));
+        return switch (flowType) {
+            // 完整打样/大货生产流程：设计师初审 → 项目经理审核 → 设计师生产文件 → 生产报价 → 财务收款 → 物流发货
+            case "sample" -> List.of(
+                new FlowStep("设计师初审", List.of("designer"), "any", 1, List.of()),
+                new FlowStep("项目经理审核", List.of("project_manager"), "any", 1, List.of()),
+                new FlowStep("设计师制作生产文件", List.of("designer"), "any", 1, List.of()),
+                new FlowStep("生产报价", List.of("production"), "any", 1, List.of()),
+                new FlowStep("财务收款", List.of("finance"), "any", 1, List.of()),
+                new FlowStep("物流发货", List.of("logistics"), "any", 1, List.of())
+            );
+            case "design" -> List.of(new FlowStep("3D设计落地审核", List.of("designer"), "any", 1, List.of()));
+            case "project" -> List.of(new FlowStep("项目经理审核", List.of("project_manager"), "any", 1, List.of()));
+            case "production" -> List.of(new FlowStep("生产报价与排产", List.of("production"), "any", 1, List.of()));
+            case "finance" -> List.of(new FlowStep("财务收款确认", List.of("finance"), "any", 1, List.of()));
+            case "logistics" -> List.of(new FlowStep("仓储物流履约", List.of("logistics"), "any", 1, List.of()));
+            default -> List.of(new FlowStep("项目经理审核", List.of("project_manager"), "any", 1, List.of()));
+        };
     }
 
     private List<Map<String, Object>> flowToMap(List<FlowStep> steps) {
@@ -546,7 +655,7 @@ public class WorkflowController {
         return list;
     }
 
-    private String flowName(String flowType) { return "四人会签审批"; }
+    private String flowName(String flowType) { return stepsFor(flowType).get(0).name; }
 
     private String handlerLabel(FlowStep step) { return step.approvers.isEmpty() ? String.join("/", step.roles) : String.join("/", step.approvers); }
 
@@ -628,5 +737,10 @@ public class WorkflowController {
         public String title;
         public String comment;
         public Map<String, String> fields;
+    }
+
+    public static class WorkflowForwardRequest {
+        public String comment;
+        public String nextStage;
     }
 }

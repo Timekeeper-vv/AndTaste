@@ -18,7 +18,7 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/production/sample-logistics")
 public class FactorySampleLogisticsController {
-    private static final Set<String> STAFF_ROLES = Set.of("admin", "technician", "feeder");
+    private static final Set<String> STAFF_ROLES = Set.of("admin", "logistics", "project_manager", "production");
     private final SampleLogisticsService logistics;
     private final JdbcTemplate jdbc;
 

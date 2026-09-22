@@ -581,6 +581,23 @@ async function generateReplacement() {
   await saveEvent('inspiration', 'image_reference_replacement_prompt', { prompt: note, inputAssetId: brief.value.referenceAssetId, previousGeneratedAssetId: generatedAssetId.value })
   await generateProductImage(true)
 }
+const PENDING_JOB_STORAGE_KEY = 'smartpig.pendingConversationImageJob'
+function rememberPendingJob(jobId: number | string, jobType: string) {
+  try { sessionStorage.setItem(PENDING_JOB_STORAGE_KEY, JSON.stringify({ jobId, jobType, startedAt: Date.now() })) } catch { /* storage unavailable */ }
+}
+function forgetPendingJob() {
+  try { sessionStorage.removeItem(PENDING_JOB_STORAGE_KEY) } catch { /* storage unavailable */ }
+}
+function readPendingJob(): { jobId: number; jobType: string } | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_JOB_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    const jobId = Number(parsed?.jobId)
+    if (!jobId) return null
+    return { jobId, jobType: String(parsed?.jobType || '') }
+  } catch { return null }
+}
 async function pollImageJob(job: any) {
   let current = job
   const deadline = Date.now() + 45 * 60 * 1000
@@ -588,7 +605,7 @@ async function pollImageJob(job: any) {
     if (Date.now() > deadline) throw new Error('任务仍在后台排队，请稍后到作品库查看')
     await new Promise(resolve => window.setTimeout(resolve, 2200))
     current = await api(`/api/creative/ai/image-jobs/${current.jobId}`)
-    busyText.value = current.status === 'queued' ? `已进入生成队列${current.queuePosition ? `，前面还有 ${Math.max(0, current.queuePosition - 1)} 项` : ''}` : `生成中 ${Math.round(Number(current.progress || 0))}%`
+    busyText.value = current.status === 'queued' ? `已进入生成队列${current.queuePosition ? `，前面还有 ${Math.max(0, current.queuePosition - 1)} 项` : ''}` : (current.message || `生成中 ${Math.round(Number(current.progress || 0))}%`)
   }
   if (current.status === 'failed') throw new Error(current.errorMessage || current.message || '生成失败')
   if (current.status !== 'succeeded') throw new Error(current.message || '生成状态异常')
@@ -609,7 +626,9 @@ async function generateProductImage(replacement = false) {
       productSize: productSize.value, inputAssetId: reference ? Number(brief.value.referenceAssetId) : null, refinement: replacement, refinementNote: replacement ? String(brief.value.inspiration || '') : '', projectId: projectId.value || undefined, versionId: versionId.value || undefined, queue: true,
     })
     const queued = await api<any>(reference ? '/api/creative/ai/image-to-image' : '/api/creative/ai/ark/text-to-image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, queue: true }) })
+    if (queued.jobId) rememberPendingJob(queued.jobId, queued.jobType || 'text_to_image')
     const result = await pollImageJob(queued)
+    forgetPendingJob()
     const identity = applyProductIdentity(result)
     const id = Number(result.assetId || result.id)
     if (!id) throw new Error('产品图没有返回作品编号')
@@ -628,7 +647,9 @@ async function generateMultiView() {
   busy.value = true; busyText.value = '正在生成一张包含正面、侧面和背面的生产模拟图…'
   try {
     const queued = await api<any>('/api/creative/ai/volcengine/seedream/multiview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildCreativeGenerationPayload({ provider: 'ark', queue: true, inputAssetId: generatedAssetId.value, projectId: projectId.value || undefined, versionId: versionId.value || undefined, prompt: `将${productName.value}转为包含正面、侧面和背面的标准生产模拟图。材质：${material.value}；尺寸：${productSize.value}`, rawPrompt: String(brief.value.inspiration || ''), productKey: brief.value.productKey, productType: productName.value, productCategory: brief.value.categoryName || brief.value.categoryKey, material: material.value, productSize: productSize.value, viewCount: 3, size: '2K', watermark: true })) })
+    if (queued.jobId) rememberPendingJob(queued.jobId, 'multi_view')
     const result = await pollImageJob(queued)
+    forgetPendingJob()
     const resultIdentity = applyProductIdentity(result, result.simulationImage, result.images)
     const images: MultiViewImage[] = (Array.isArray(result.images) ? result.images : []).filter((item: any) => item.assetId).map((item: any) => ({ ...item, assetId: Number(item.assetId), label: item.label || ({ front: '正面', left: '侧面', back: '背面' } as Record<string, string>)[item.view] || '视图' }))
     if (images.length < 3) throw new Error('生产模拟图没有完整返回三个视角')
@@ -964,6 +985,49 @@ async function submitProfessionalSubmission() {
     professionalSubmissionFile.value = null; professionalSubmissionTitle.value = ''; professionalSubmissionNote.value = ''; await loadProfessionalSubmissions(); notify('专业作品包已提交审核')
   } catch (error: any) { notify(error.message || '提交专业作品包失败', 'error') } finally { professionalSubmissionBusy.value = false }
 }
+async function resumePendingJobIfAny() {
+  const pending = readPendingJob()
+  if (!pending || busy.value) return
+  try {
+    let current: any = await api(`/api/creative/ai/image-jobs/${pending.jobId}`)
+    if (current.status !== 'queued' && current.status !== 'running') { forgetPendingJob(); return }
+    busy.value = true; busyText.value = '检测到上次生成任务仍在进行，继续等待…'
+    try {
+      current = await pollImageJob(current)
+      if (current.jobType === 'multi_view') {
+        const resultIdentity = applyProductIdentity(current, current.simulationImage, current.images)
+        const images: MultiViewImage[] = (Array.isArray(current.images) ? current.images : []).filter((item: any) => item.assetId).map((item: any) => ({ ...item, assetId: Number(item.assetId), label: item.label || ({ front: '正面', left: '侧面', back: '背面' } as Record<string, string>)[item.view] || '视图' }))
+        await Promise.all(images.map(async (item: any) => { item.previewUrl = imageUrl(item) || await previewForAsset(item.assetId) }))
+        multiviewImages.value = images
+        simulationAssetId.value = Number(current.simulationAssetId || current.simulationImage?.assetId) || null
+        simulationPreviewUrl.value = simulationAssetId.value ? await previewForAsset(simulationAssetId.value) : imageUrl(current.simulationImage)
+        if (images.length >= 3 && generatedAssetId.value) {
+          const bundle = await api<any>('/api/creative/ai/consumer-multiview-bundles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inputAssetId: generatedAssetId.value, projectId: projectId.value || undefined, versionId: versionId.value || undefined, productKey: brief.value.productKey, productName: productName.value, material: material.value, productSize: productSize.value, viewCount: 3, images: images.map((item: any) => ({ view: item.view, assetId: item.assetId, label: item.label })), ...(simulationAssetId.value ? { simulationAssetId: simulationAssetId.value } : {}) }) })
+          const identity = applyProductIdentity(bundle, resultIdentity, images)
+          bundleId.value = Number(bundle.id || bundle.bundleId); bundleStatus.value = String(bundle.status || 'draft'); bundleComment.value = String(bundle.reviewComment || '')
+          await saveEvent('multiview', 'multiview_generated', { inputAssetId: generatedAssetId.value, bundleId: bundleId.value, bundleNo: bundle.bundleNo, bundleStatus: bundleStatus.value, simulationAssetId: simulationAssetId.value, images: images.map((item: any) => ({ view: item.view, assetId: item.assetId, label: item.label, ...productIdentityFrom(item) })), ...identity })
+          updateBundleActionReplies()
+        }
+        activeView.value = 'result'
+        assistant('之前提交的生产模拟图已生成，可以查看结果了。')
+      } else {
+        const identity = applyProductIdentity(current)
+        const id = Number(current.assetId || current.id)
+        if (id) {
+          generatedAssetId.value = id
+          generatedPreviewUrl.value = imageUrl(current) || await previewForAsset(id)
+          await saveEvent('image', 'image_generated', { generatedAssetId: id, previewUrl: generatedPreviewUrl.value, productType: productName.value, material: material.value, productSize: productSize.value, ...identity })
+          activeView.value = 'result'
+          quickReplies.value = [{ type: 'multiview', label: '满意，生成生产模拟图' }, { type: 'refine', label: '不满意，告诉我怎么改' }, { type: 'replace_image', label: '重新上传图片生成' }, { type: 'model', label: '生成 3D 原型' }]
+          chatStage.value = 'image_ready'
+          assistant('之前提交的产品视觉已生成并保存，可以继续下一步了。')
+        }
+      }
+    } finally {
+      forgetPendingJob()
+    }
+  } catch { forgetPendingJob() } finally { busy.value = false; busyText.value = '之间正在处理…' }
+}
 async function loadInitial() {
   await Promise.all([loadProducts(), loadHistory(), loadProductionRequests(), loadMuseums(), creatorProfile.value === 'professional' ? loadProfessionalSubmissions() : Promise.resolve()])
   if (conversations.value.length) await selectConversation(conversations.value[0].id)
@@ -977,6 +1041,7 @@ async function loadInitial() {
       initialReplies()
     }
   }
+  await resumePendingJobIfAny()
 }
 onMounted(() => {
   window.addEventListener('beforeunload', handlePaymentBeforeUnload)

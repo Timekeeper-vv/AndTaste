@@ -9,18 +9,19 @@ interface MenuGroup { group: string; items: MenuItem[] }
 const props = defineProps<{ currentUser: User; currentPage: PageName; collapsed: boolean }>()
 const emit = defineEmits<{ 'switch-page': [page: PageName]; 'logout': []; 'toggle': [] }>()
 
-const roleLabels: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工', designer: '设计师', user: 'C端用户' }
-const roleColors: Record<Role, string> = { admin: '#ef4444', technician: '#7c3aed', feeder: '#0d9488', designer: '#2563eb', user: '#b4532a' }
+const roleLabels: Record<Role, string> = { admin: '超级管理员', finance: '财务', project_manager: '项目经理', designer: '设计师', production: '生产', logistics: '物流', technician: '审批主管（旧）', feeder: '员工（旧）', user: 'C端用户' }
+const roleColors: Record<Role, string> = { admin: '#ef4444', finance: '#0f766e', project_manager: '#d97706', designer: '#2563eb', production: '#7c3aed', logistics: '#0891b2', technician: '#7c3aed', feeder: '#0d9488', user: '#b4532a' }
 
-const ALL_ROLES: Role[] = ['admin', 'technician', 'feeder']
-const MANAGER_ROLES: Role[] = ['admin', 'technician']
-const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'technician', 'feeder']
+const ALL_ROLES: Role[] = ['admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const MANAGER_ROLES: Role[] = ['admin', 'project_manager']
+const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
-const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'technician', 'feeder', 'designer']
+const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'project_manager', 'designer']
 
 const allMenus: MenuGroup[] = [
   { group: '总览', items: [
     { key: 'dashboard', label: '经营看板', roles: ALL_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>` },
+    { key: 'myWorkspace', label: '我的工作台', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>` },
     { key: 'approvalCenter', label: '审批中心', roles: MANAGER_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>` },
     { key: 'professionalWorksReview', label: '专业作品审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
     { key: 'multiviewReview', label: '多视图审核', parentKey: 'approvalCenter', roles: SUPER_ADMIN_ROLES, icon: `<svg></svg>` },
@@ -119,6 +120,19 @@ const allMenus: MenuGroup[] = [
   ]},
 ]
 
+const rolePageAllow: Record<string, Set<PageName>> = {
+  // 财务：只看财务相关模块 + 工作台
+  finance: new Set(['dashboard','myWorkspace','finance','financeAssetScrap','financePublicPayment','financePettyCash','financePersonalExpense','financePromotionApproval','financeSeal','financePettyCashRepay','financeTravel','financeInvoice','financeSpecialExpense','financePettyCashWriteoff','aiAssistant']),
+  // 项目经理：项目协同、生产申请、仓储物流、客服 + 工作台
+  project_manager: new Set(['dashboard','myWorkspace','approvalCenter','professionalWorksReview','multiviewReview','consumerAssetInventory','consumerProductionReview','orderManagement','commercialProductization','professionalGuidance','customerService','projectDemand','projectInitiation','projectInquiry','chain','chainMarketing','chainNewProduct','chainPriceAdjust','marketDemand','marketPromotion','marketEcommerceNewProduct','marketShooting','marketProductCopy','createProductionProject','sampleApplication','bulkProductionApplication','warehouseLogistics','warehouseProducts','warehouseInventory','warehouseInbound','warehouseOutbound','warehousePick','warehouseAlerts','logistics','designers','aiAssistant']),
+  // 设计师：创意设计模块 + 工作台
+  designer: new Set(['dashboard','myWorkspace','studio','creative2d','creative3d','creativeReview','aiAssistant']),
+  // 生产：生产管理模块、供应商 + 工作台
+  production: new Set(['dashboard','myWorkspace','scaleUp','production','sampleApplication','sampleWorkOrders','sampleProduction','bulkProductionApplication','bulkProductionWorkOrders','bulkProduction','supplierList','aiAssistant']),
+  // 物流：仓储与履约模块 + 工作台
+  logistics: new Set(['dashboard','myWorkspace','warehouseLogistics','warehouseProducts','warehouseInventory','warehouseInbound','warehouseOutbound','warehousePick','warehouseAlerts','logistics','aiAssistant']),
+}
+
 const menus = computed<MenuGroup[]>(() => {
   const role: Role = props.currentUser?.role || 'admin'
   const seen = new Set<PageName>()
@@ -129,6 +143,7 @@ const menus = computed<MenuGroup[]>(() => {
       // a repeated config item cannot render duplicate navigation buttons.
       items: g.items
         .filter(item => item.roles.includes(role))
+        .filter(item => role === 'admin' || !rolePageAllow[role] || rolePageAllow[role].has(item.key) || (item.parentKey && rolePageAllow[role].has(item.parentKey)))
         .filter(item => {
           if (seen.has(item.key)) return false
           seen.add(item.key)

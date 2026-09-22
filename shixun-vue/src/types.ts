@@ -1,8 +1,8 @@
 /**
- * 角色编码保持兼容历史数据：
- * admin=超级管理员，technician=审批主管，feeder=员工，designer=设计师，user=C端用户。
+ * 后台角色：超级管理员、财务、项目经理、设计师、生产、物流；user 为 C 端用户。
+ * technician/feeder 保留用于历史账号兼容，后续可由管理员迁移。
  */
-export type Role = 'admin' | 'technician' | 'feeder' | 'designer' | 'user'
+export type Role = 'admin' | 'finance' | 'project_manager' | 'designer' | 'production' | 'logistics' | 'technician' | 'feeder' | 'user'
 export type AlertType = 'success' | 'error'
 
 export type PageName =
@@ -84,6 +84,7 @@ export type PageName =
   | 'logistics'
   | 'designers'
   | 'users'
+  | 'myWorkspace'
 
 export interface User {
   id: number

@@ -47,7 +47,7 @@ public class CreativeWorkflowDetailController {
     private JwtService.Claims requireStaff() {
         RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
         Object value = attributes == null ? null : attributes.getAttribute(JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
-        if (!(value instanceof JwtService.Claims claims) || claims.userId() == null || !java.util.Set.of("admin", "technician", "feeder").contains(claims.role())) {
+        if (!(value instanceof JwtService.Claims claims) || claims.userId() == null || !java.util.Set.of("admin", "project_manager", "designer").contains(claims.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有后台生产人员可以查看流程详情");
         }
         Integer active = jdbc.queryForObject("SELECT COUNT(*) FROM user WHERE id=? AND role=? AND COALESCE(status,'active')='active'", Integer.class, claims.userId(), claims.role());

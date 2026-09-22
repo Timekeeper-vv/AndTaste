@@ -103,8 +103,8 @@ async function openOrDownloadModel(r: any) {
   if (!r.assetId) return
   if (format === 'GLB') {
     try {
-      const url = await requestAssetPreviewUrl(r.assetId)
-      window.open(url, '_blank', 'noopener,noreferrer')
+      const access = await requestAssetPreviewAccess(r.assetId)
+      window.open(access.previewUrl, '_blank', 'noopener,noreferrer')
     } catch (e: any) {
       emit('alert', `模型预览失败：${e?.message || e}`, 'error')
     }

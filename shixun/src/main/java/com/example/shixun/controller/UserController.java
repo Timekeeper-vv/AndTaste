@@ -57,9 +57,9 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 public class UserController {
 
     private static final Logger log = LoggerFactory.getLogger(UserController.class);
-    private static final Set<String> SUPPORTED_ROLES = Set.of("admin", "technician", "feeder", "designer", "user");
-    private static final Set<String> STAFF_ROLES = Set.of("admin", "technician", "feeder");
-    private static final Set<String> USER_MANAGER_ROLES = Set.of("admin", "technician");
+    private static final Set<String> SUPPORTED_ROLES = Set.of("admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder", "user");
+    private static final Set<String> STAFF_ROLES = Set.of("admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder");
+    private static final Set<String> USER_MANAGER_ROLES = Set.of("admin", "project_manager");
     private static final int MIN_PASSWORD_LENGTH = 12;
 
     private final UserService userService;
@@ -177,7 +177,7 @@ public class UserController {
             user.setRole("user");
         } else {
             requireAdmin(principal);
-            if (user.getRole() == null || user.getRole().isBlank()) user.setRole("feeder");
+            if (user.getRole() == null || user.getRole().isBlank()) user.setRole("project_manager");
         }
         validateUser(user);
         validatePassword(user.getPassword());
@@ -1310,7 +1310,7 @@ public class UserController {
 
     private void requireManager(JwtService.Claims principal) {
         if (principal == null || !USER_MANAGER_ROLES.contains(principal.role())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅管理员或审批主管可查看用户账号");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅超级管理员或项目经理可查看用户账号");
         }
     }
 

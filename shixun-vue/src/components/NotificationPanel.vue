@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
 
-type SystemNotification = { type: 'warning' | 'info'; category?: string; title: string; message: string }
+type SystemNotification = { type?: 'warning' | 'info'; category?: string; title: string; message: string; readFlag?: number; createdAt?: string }
 const notifications = ref<SystemNotification[]>([])
 const open = ref<boolean>(false)
 const unread = ref<number>(0)
@@ -10,10 +10,11 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 
 async function fetchNotifications() {
   try {
-    const res = await fetch('/api/notifications')
+    const res = await fetch('/api/workflows/notifications')
     if (res.ok) {
-      notifications.value = await res.json()
-      if (!open.value) unread.value = notifications.value.length
+      const rows = await res.json()
+      notifications.value = (Array.isArray(rows) ? rows : []).map((n: SystemNotification) => ({ ...n, type: n.type || 'info' }))
+      if (!open.value) unread.value = notifications.value.filter(n => !n.readFlag).length
     }
   } catch { /* silent */ }
 }

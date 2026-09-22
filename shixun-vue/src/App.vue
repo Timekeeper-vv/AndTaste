@@ -23,7 +23,6 @@ import SampleApplicationPage from './components/SampleApplicationPage.vue'
 import BulkProductionWorkOrderPage from './components/BulkProductionWorkOrderPage.vue'
 import BulkProductionApplicationPage from './components/BulkProductionApplicationPage.vue'
 import FinanceApplicationPage from './components/FinanceApplicationPage.vue'
-import ApprovalCenter from './components/ApprovalCenter.vue'
 import NotificationPanel from './components/NotificationPanel.vue'
 import GlobalAlert from './components/GlobalAlert.vue'
 import AiChat from './components/AiChat.vue'
@@ -38,25 +37,26 @@ import HistoricalSalesManagement from './components/HistoricalSalesManagement.vu
 import ConsumerProductionReview from './components/ConsumerProductionReview.vue'
 import OrderManagement from './components/OrderManagement.vue'
 import CommercialProductization from './components/CommercialProductization.vue'
+import ApprovalCenter from './components/ApprovalCenter.vue'
+import RoleWorkspace from './components/RoleWorkspace.vue'
 import { isEmbeddedMiniapp, notifyMiniapp } from './utils/miniappBridge'
 
-// 角色兼容说明：
-// admin      = 超级管理员：拥有全部功能，包括账号权限、审批和系统配置
-// technician = 审批主管：可查看业务模块并处理审批，但不能管理账号角色
-// feeder     = 员工：可制作内容、发起/提交申请，不能审批和管理账号
-// designer   = 设计师：仅可使用创意设计下的 2D、3D、智能评估三个功能
-// user       = C端用户：仅进入手机端轻量创作界面
-const ALL_ROLES: Role[] = ['admin', 'technician', 'feeder']
-const MANAGER_ROLES: Role[] = ['admin', 'technician']
-const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'technician', 'feeder']
+// 后台角色按岗位隔离；technician/feeder 仅为历史账号兼容，不出现在新账号选项中。
+const ALL_ROLES: Role[] = ['admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const MANAGER_ROLES: Role[] = ['admin', 'project_manager']
+const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
-const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'technician', 'feeder', 'designer']
+const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'project_manager', 'designer']
+const FINANCE_ROLES: Role[] = ['admin', 'finance', 'project_manager']
+const PRODUCTION_ROLES: Role[] = ['admin', 'project_manager', 'production']
+const LOGISTICS_ROLES: Role[] = ['admin', 'project_manager', 'logistics']
+const PROJECT_ROLES: Role[] = ['admin', 'project_manager']
 const CONSUMER_ROLES: Role[] = ['user']
 
 const PAGE_ROLES: Record<string, Role[]> = {
   consumerMobile:CONSUMER_ROLES,
   dashboard:    ALL_ROLES,
-  approvalCenter:MANAGER_ROLES,
+  approvalCenter:ALL_ROLES,
   consumerWorksReview:SUPER_ADMIN_ROLES,
   professionalWorksReview:SUPER_ADMIN_ROLES,
   multiviewReview:SUPER_ADMIN_ROLES,
@@ -69,7 +69,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   commercialProductization:MANAGER_ROLES,
   professionalGuidance:MANAGER_ROLES,
   aiAssistant:  ALL_ROLES,
-  customerService: ALL_ROLES,
+  customerService: ['admin', 'project_manager'],
   studio:       STAFF_WORKFLOW_ROLES,
   creative2d:   CREATIVE_DESIGN_ROLES,
   creative3d:   CREATIVE_DESIGN_ROLES,
@@ -102,36 +102,37 @@ const PAGE_ROLES: Record<string, Role[]> = {
   attendanceOutgoing:STAFF_WORKFLOW_ROLES,
   supplierList:STAFF_WORKFLOW_ROLES,
   sampleWorkOrders:STAFF_WORKFLOW_ROLES,
-  finance:      STAFF_WORKFLOW_ROLES,
-  financeAssetScrap:STAFF_WORKFLOW_ROLES,
-  financePublicPayment:STAFF_WORKFLOW_ROLES,
-  financePettyCash:STAFF_WORKFLOW_ROLES,
-  financePersonalExpense:STAFF_WORKFLOW_ROLES,
-  financePromotionApproval:MANAGER_ROLES,
-  financeSeal:STAFF_WORKFLOW_ROLES,
-  financePettyCashRepay:STAFF_WORKFLOW_ROLES,
-  financeTravel:STAFF_WORKFLOW_ROLES,
-  financeInvoice:STAFF_WORKFLOW_ROLES,
-  financeSpecialExpense:STAFF_WORKFLOW_ROLES,
-  financePettyCashWriteoff:STAFF_WORKFLOW_ROLES,
-  scaleUp:      STAFF_WORKFLOW_ROLES,
-  createProductionProject:STAFF_WORKFLOW_ROLES,
-  production:   STAFF_WORKFLOW_ROLES,
-  sampleApplication:STAFF_WORKFLOW_ROLES,
-  sampleProduction:STAFF_WORKFLOW_ROLES,
-  bulkProductionApplication:STAFF_WORKFLOW_ROLES,
-  bulkProductionWorkOrders:STAFF_WORKFLOW_ROLES,
-  bulkProduction:STAFF_WORKFLOW_ROLES,
-  logistics:    MANAGER_ROLES,
-  warehouseLogistics:MANAGER_ROLES,
-  warehouseProducts:MANAGER_ROLES,
-  warehouseInventory:MANAGER_ROLES,
-  warehouseInbound:MANAGER_ROLES,
-  warehouseOutbound:MANAGER_ROLES,
-  warehousePick:MANAGER_ROLES,
-  warehouseAlerts:MANAGER_ROLES,
-  designers:    MANAGER_ROLES,
+  finance:      FINANCE_ROLES,
+  financeAssetScrap:FINANCE_ROLES,
+  financePublicPayment:FINANCE_ROLES,
+  financePettyCash:FINANCE_ROLES,
+  financePersonalExpense:FINANCE_ROLES,
+  financePromotionApproval:FINANCE_ROLES,
+  financeSeal:FINANCE_ROLES,
+  financePettyCashRepay:FINANCE_ROLES,
+  financeTravel:FINANCE_ROLES,
+  financeInvoice:FINANCE_ROLES,
+  financeSpecialExpense:FINANCE_ROLES,
+  financePettyCashWriteoff:FINANCE_ROLES,
+  scaleUp:      [...PRODUCTION_ROLES, ...CREATIVE_DESIGN_ROLES],
+  createProductionProject:PROJECT_ROLES,
+  production:   PRODUCTION_ROLES,
+  sampleApplication:[...PROJECT_ROLES, ...PRODUCTION_ROLES],
+  sampleProduction:PRODUCTION_ROLES,
+  bulkProductionApplication:[...PROJECT_ROLES, ...PRODUCTION_ROLES],
+  bulkProductionWorkOrders:PRODUCTION_ROLES,
+  bulkProduction:PRODUCTION_ROLES,
+  logistics:    LOGISTICS_ROLES,
+  warehouseLogistics:LOGISTICS_ROLES,
+  warehouseProducts:LOGISTICS_ROLES,
+  warehouseInventory:LOGISTICS_ROLES,
+  warehouseInbound:LOGISTICS_ROLES,
+  warehouseOutbound:LOGISTICS_ROLES,
+  warehousePick:LOGISTICS_ROLES,
+  warehouseAlerts:LOGISTICS_ROLES,
+  designers:    [...PROJECT_ROLES, 'designer'],
   users:        SUPER_ADMIN_ROLES,
+  myWorkspace:  STAFF_WORKFLOW_ROLES,
 }
 
 function hasAccess(page: string, role?: Role): boolean {
@@ -140,6 +141,15 @@ function hasAccess(page: string, role?: Role): boolean {
 
 function firstAllowedPage(role: Role): PageName {
   return (Object.keys(PAGE_ROLES).find(p => hasAccess(p, role)) || 'dashboard') as PageName
+}
+
+function roleHome(role: Role): PageName {
+  if (role === 'finance') return 'myWorkspace'
+  if (role === 'project_manager') return 'myWorkspace'
+  if (role === 'designer') return 'myWorkspace'
+  if (role === 'production') return 'myWorkspace'
+  if (role === 'logistics') return 'myWorkspace'
+  return firstAllowedPage(role)
 }
 
 const currentUser = ref<User | null>(null)
@@ -218,7 +228,7 @@ async function restoreSession(): Promise<void> {
     }
     currentUser.value = data.user as User
     sessionStorage.setItem('currentUser', JSON.stringify(data.user))
-    currentPage.value = firstAllowedPage(data.user.role || 'admin')
+    currentPage.value = roleHome(data.user.role || 'admin')
     prepareConsumerDeviceSelection(data.user as User, { askAgain: false })
   } catch {
     sessionStorage.removeItem('accessToken')
@@ -268,7 +278,7 @@ function onLogin(session: AuthSession): void {
     localStorage.setItem('accessToken', session.token)
     localStorage.setItem('currentUser', JSON.stringify(session.user))
   }
-  currentPage.value = firstAllowedPage(session.user.role || 'admin')
+  currentPage.value = roleHome(session.user.role || 'admin')
   prepareConsumerDeviceSelection(session.user, { askAgain: true })
 }
 
@@ -366,6 +376,7 @@ const pageLabels: Record<string, string> = {
   warehouseAlerts:'库存预警',
   designers:    '设计师/创作者',
   users:        '账号权限',
+  myWorkspace:  '我的工作台',
 }
 </script>
 
@@ -447,6 +458,7 @@ const pageLabels: Record<string, string> = {
       <!-- Main content -->
       <main class="app-main">
         <CreativeDashboard    v-if="currentPage === 'dashboard'"   @switch-page="p => { if (hasAccess(p, currentUser?.role)) currentPage = p as PageName }" @alert="showAlert" />
+        <RoleWorkspace v-if="currentPage === 'myWorkspace'" :current-user="currentUser" @alert="showAlert" />
         <ApprovalCenter v-if="currentPage === 'approvalCenter'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerWorksReview v-if="currentPage === 'consumerWorksReview'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerWorksReview v-if="currentPage === 'professionalWorksReview'" :current-user="currentUser" mode="professional" @alert="showAlert" />

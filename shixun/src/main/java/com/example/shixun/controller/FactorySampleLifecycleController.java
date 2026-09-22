@@ -17,7 +17,7 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/production/sample-lifecycle")
 public class FactorySampleLifecycleController {
-    private static final Set<String> STAFF_ROLES = Set.of("admin", "technician", "feeder");
+    private static final Set<String> STAFF_ROLES = Set.of("admin", "project_manager", "production", "logistics");
     private final FactorySampleLifecycleService lifecycle;
     private final SampleLogisticsService logistics;
     private final JdbcTemplate jdbc;

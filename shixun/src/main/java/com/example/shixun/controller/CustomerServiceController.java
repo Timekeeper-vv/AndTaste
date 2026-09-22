@@ -170,7 +170,7 @@ public class CustomerServiceController {
         return userId;
     }
     private boolean isStaff(JwtService.Claims principal) {
-        return principal != null && ("admin".equals(principal.role()) || "technician".equals(principal.role()) || "feeder".equals(principal.role()));
+        return principal != null && ("admin".equals(principal.role()) || "project_manager".equals(principal.role()));
     }
     private void requireStaff(JwtService.Claims principal) { if (!isStaff(principal)) throw new IllegalStateException("仅管理端账号可处理客服消息"); }
     private String userName(Long id) { return jdbc.queryForObject("SELECT username FROM user WHERE id=?", String.class, id); }

@@ -2,6 +2,7 @@ package com.example.shixun.controller;
 
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
+import com.example.shixun.service.ProjectService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -27,10 +28,12 @@ public class SupplyChainBulkProductionController {
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
+    private final ProjectService projectService;
 
-    public SupplyChainBulkProductionController(JdbcTemplate jdbc, ObjectMapper mapper) {
+    public SupplyChainBulkProductionController(JdbcTemplate jdbc, ObjectMapper mapper, ProjectService projectService) {
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.projectService = projectService;
     }
 
     @GetMapping("/verify")
@@ -199,6 +202,7 @@ public class SupplyChainBulkProductionController {
                 workflowId, "submit", applicant, role, "提交大货生产申请");
         jdbc.update("UPDATE supply_chain_bulk_production_order SET workflow_application_id=?, approval_status='审批中', current_handler='审批中心', work_order_status='待审批', updated_by=? WHERE id=? AND deleted=0",
                 workflowId, applicant, id);
+        projectService.createProject(title, "bulk", applicant, text(row.get("productName")), workflowId);
         return detail(id);
     }
 
@@ -223,7 +227,7 @@ public class SupplyChainBulkProductionController {
     }
 
     private void validateSubmitterRole(JwtService.Claims principal) {
-        if (!Set.of("admin", "technician", "feeder").contains(principal.role())) {
+        if (!Set.of("admin", "project_manager", "production").contains(principal.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交审批");
         }
     }

@@ -18,13 +18,17 @@ const form = ref<UserForm>({ id: '', username: '', age: '', email: '', phone: ''
 
 const roleOptions: Array<{ value: Role; label: string }> = [
   { value: 'admin',      label: '超级管理员' },
-  { value: 'technician', label: '审批主管' },
-  { value: 'feeder',     label: '员工' },
+  { value: 'finance',    label: '财务' },
+  { value: 'project_manager', label: '项目经理' },
   { value: 'designer',   label: '设计师' },
+  { value: 'production', label: '生产' },
+  { value: 'logistics',  label: '物流' },
+  { value: 'technician', label: '审批主管（旧）' },
+  { value: 'feeder',     label: '员工（旧）' },
   { value: 'user',       label: 'C端用户' },
 ]
-const roleLabelMap: Record<Role, string> = { admin: '超级管理员', technician: '审批主管', feeder: '员工', designer: '设计师', user: 'C端用户' }
-const roleBadgeClass: Record<Role, string> = { admin: 'badge-admin', technician: 'badge-approver', feeder: 'badge-employee', designer: 'badge-designer', user: 'badge-user' }
+const roleLabelMap: Record<Role, string> = { admin: '超级管理员', finance: '财务', project_manager: '项目经理', designer: '设计师', production: '生产', logistics: '物流', technician: '审批主管（旧）', feeder: '员工（旧）', user: 'C端用户' }
+const roleBadgeClass: Record<Role, string> = { admin: 'badge-admin', finance: 'badge-employee', project_manager: 'badge-approver', designer: 'badge-designer', production: 'badge-approver', logistics: 'badge-employee', technician: 'badge-approver', feeder: 'badge-employee', user: 'badge-user' }
 const searchQuery = ref<string>('')
 const currentPage = ref<number>(1)
 const pageSize = ref<number>(10)

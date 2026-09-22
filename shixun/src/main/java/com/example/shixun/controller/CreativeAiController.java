@@ -11,6 +11,7 @@ import com.example.shixun.service.GenerationCommand;
 import com.example.shixun.service.ProductPromptPolicy;
 import com.example.shixun.service.ReferenceImagePreparationService;
 import com.example.shixun.service.ProductionSimulationImageService;
+import com.example.shixun.service.ProjectService;
 import com.example.shixun.service.ai.ArkImageQueueService;
 import com.example.shixun.service.ai.ArkImageWorkflowService;
 import com.example.shixun.service.ai.SeedreamProviderClient;
@@ -114,6 +115,7 @@ public class CreativeAiController {
     private final ArkImageQueueService arkImageQueueService;
     private final ArkImageWorkflowService arkImageWorkflowService;
     private final CreativeProjectService creativeProjects;
+    private final ProjectService projectService;
     private final com.example.shixun.service.CreativePreflightService creativePreflight;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).followRedirects(HttpClient.Redirect.NORMAL).build();
 
@@ -230,6 +232,7 @@ public class CreativeAiController {
                                 ArkImageQueueService arkImageQueueService,
                                 ArkImageWorkflowService arkImageWorkflowService,
                                 CreativeProjectService creativeProjects,
+                                ProjectService projectService,
                                 com.example.shixun.service.CreativePreflightService creativePreflight) {
         this.jdbc = jdbc;
         this.creditTransactions = new TransactionTemplate(transactionManager);
@@ -242,6 +245,7 @@ public class CreativeAiController {
         this.arkImageQueueService = arkImageQueueService;
         this.arkImageWorkflowService = arkImageWorkflowService;
         this.creativeProjects = creativeProjects;
+        this.projectService = projectService;
         this.creativePreflight = creativePreflight;
     }
 
@@ -456,7 +460,26 @@ public class CreativeAiController {
         Long ownerId = assetOwnerId(assetId);
         if (ownerId == null || !ownerId.equals(userId)) {
             if (isSampleLifecycleEvidenceAsset(assetId, userId)) return;
+            if (isProjectReviewAsset(assetId, userId, principal.role())) return;
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权访问其他用户的作品");
+        }
+    }
+
+    /** Staff working the project workbench (currently assigned to the stage, or
+     * having already worked a prior stage) can preview/download the asset the
+     * project is about to be reviewed on, without owning it. */
+    private boolean isProjectReviewAsset(Long assetId, Long userId, String role) {
+        if (assetId == null || userId == null || blank(role)) return false;
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT p.id FROM project p WHERE (p.asset_id=? OR EXISTS (" +
+                    "SELECT 1 FROM project_asset pa WHERE pa.project_id=p.id AND pa.asset_id=?)) " +
+                    "AND (p.current_assignee_role=? OR EXISTS (" +
+                    "SELECT 1 FROM project_member m JOIN user u ON u.username=m.username WHERE m.project_id=p.id AND u.id=?))",
+                    assetId, assetId, role, userId);
+            return !rows.isEmpty();
+        } catch (DataAccessException ignored) {
+            return false;
         }
     }
 
@@ -1419,7 +1442,7 @@ public class CreativeAiController {
             out.put("message", "已进入图片任务队列，轮到后会自动开始");
         } else if ("running".equals(status)) {
             out.put("queuePosition", 0);
-            out.put("message", runningImageJobMessage(provider, jobType));
+            out.put("message", runningImageJobMessage(provider, jobType, numberAsInt(job.get("progress"))));
         } else if ("failed".equals(status)) {
             out.put("queuePosition", 0);
             out.put("message", blank(str(job.get("errorMessage"))) ? "图片生成失败" : str(job.get("errorMessage")));
@@ -1495,10 +1518,21 @@ public class CreativeAiController {
         return 0;
     }
 
-    private String runningImageJobMessage(String provider, String jobType) {
-        if ("multi_view".equals(jobType)) return "正在生成一致的产品多视图";
-        if ("image_to_image".equals(jobType)) return "正在依据参考图生成产品视觉";
-        if ("volcengine_ark".equals(provider)) return "之间大模型正在生成产品图";
+    private String runningImageJobMessage(String provider, String jobType, int progress) {
+        boolean isMultiView = "multi_view".equals(jobType);
+        boolean isImageToImage = "image_to_image".equals(jobType);
+        if (progress >= 70) {
+            if (isMultiView) return "火山方舟已生成图片，正在整理正/侧/背视角并保存到作品库";
+            return "图片已生成，正在保存到作品库";
+        }
+        if (progress >= 20) {
+            if (isMultiView) return "正在向火山方舟提交多视图生成请求，请稍候";
+            if (isImageToImage) return "正在依据参考图向火山方舟提交生成请求";
+            if ("volcengine_ark".equals(provider)) return "正在向火山方舟提交生成请求";
+        }
+        if (isMultiView) return "已提交多视图生成请求，正在连接火山方舟…";
+        if (isImageToImage) return "已提交图生图请求，正在连接火山方舟…";
+        if ("volcengine_ark".equals(provider)) return "已提交生成请求，正在连接火山方舟…";
         return "正在生成图片";
     }
 
@@ -3050,18 +3084,25 @@ public class CreativeAiController {
     @GetMapping("/assets/{id}/content")
     public ResponseEntity<byte[]> assetContent(@PathVariable Long id) throws Exception {
         requireAssetAccess(id);
-        Map<String,Object> asset=jdbc.queryForMap("SELECT file_url fileUrl,preview_url previewUrl,format FROM digital_asset WHERE id=?",id);
+        Map<String,Object> asset=jdbc.queryForMap("SELECT title,file_url fileUrl,preview_url previewUrl,format FROM digital_asset WHERE id=?",id);
         String url=String.valueOf(asset.get("fileUrl")==null?asset.get("previewUrl"):asset.get("fileUrl"));
+        String format=str(asset.get("format")).toLowerCase(Locale.ROOT);
+        String fileName=blank(str(asset.get("title")))?"production-files.zip":str(asset.get("title")).replaceAll("[\\r\\n]", "").trim();
+        boolean zip="zip".equals(format)||url.toLowerCase(Locale.ROOT).endsWith(".zip");
         if(url.startsWith("http://")||url.startsWith("https://")) {
             HttpResponse<byte[]> response=http.send(HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),HttpResponse.BodyHandlers.ofByteArray());
             if(response.statusCode()<200||response.statusCode()>=300) throw new IOException("读取图片失败 HTTP "+response.statusCode());
-            String ct=response.headers().firstValue("content-type").orElse("image/png");
-            return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(MediaType.parseMediaType(ct)).body(response.body());
+            String ct=zip?"application/zip":response.headers().firstValue("content-type").orElse("image/png");
+            ResponseEntity.BodyBuilder result=ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(MediaType.parseMediaType(ct));
+            if(zip) result.header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename*=UTF-8''"+URLEncoder.encode(fileName,StandardCharsets.UTF_8).replace("+","%20"));
+            return result.body(response.body());
         }
         Path file=resolvePublicAssetFile(url,"图片文件不存在：");
         String lower=file.getFileName().toString().toLowerCase(Locale.ROOT);
-        MediaType type=lower.endsWith(".jpg")||lower.endsWith(".jpeg")?MediaType.IMAGE_JPEG:lower.endsWith(".webp")?MediaType.parseMediaType("image/webp"):MediaType.IMAGE_PNG;
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(type).body(Files.readAllBytes(file));
+        MediaType type=zip?MediaType.parseMediaType("application/zip"):lower.endsWith(".jpg")||lower.endsWith(".jpeg")?MediaType.IMAGE_JPEG:lower.endsWith(".webp")?MediaType.parseMediaType("image/webp"):MediaType.IMAGE_PNG;
+        ResponseEntity.BodyBuilder result=ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(type);
+        if(zip) result.header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename*=UTF-8''"+URLEncoder.encode(fileName,StandardCharsets.UTF_8).replace("+","%20"));
+        return result.body(Files.readAllBytes(file));
     }
 
     @GetMapping("/assets/{id}/model-content")
@@ -3110,12 +3151,13 @@ public class CreativeAiController {
         requireAssetAccess(id);
         JwtService.Claims principal = authenticatedPrincipal();
         Map<String,Object> asset = jdbc.queryForMap("SELECT asset_type assetType FROM digital_asset WHERE id=?", id);
-        String endpoint = "model".equals(String.valueOf(asset.get("assetType"))) ? "model-content" : "content";
+        String assetType = String.valueOf(asset.get("assetType"));
+        String endpoint = "model".equals(assetType) ? "model-content" : "content";
         String token = jwtService.issueMediaAccessToken(principal.userId(), principal.username(), principal.role(), id);
         String encodedToken = URLEncoder.encode(token, StandardCharsets.UTF_8);
         String url = "/api/creative/ai/assets/" + id + "/" + endpoint + "?access_token=" + encodedToken;
         String previewUrl = "/api/creative/ai/assets/" + id + "/preview-content?access_token=" + encodedToken;
-        return Map.of("assetId", id, "accessToken", token, "url", url, "previewUrl", previewUrl, "expiresIn", 300, "message", "预览链接将在5分钟后失效");
+        return Map.of("assetId", id, "assetType", assetType, "accessToken", token, "url", url, "previewUrl", previewUrl, "expiresIn", 300, "message", "预览链接将在5分钟后失效");
     }
 
     /**
@@ -3599,8 +3641,36 @@ public class CreativeAiController {
                     "human_review", "multiview_review_submitted", "user", userId,
                     Map.of("bundleId", id, "viewCount", viewCount, "purpose", purpose));
         }
+
+        // Create the designer -> product-manager workbench review. Keeping this
+        // optional lets an older rolling-deployment node accept submissions
+        // until the collaboration tables have migrated on every node.
+        Long collaborationProjectId = null;
+        try {
+            String username = jdbc.queryForObject("SELECT username FROM user WHERE id=? LIMIT 1", String.class, userId);
+            String productName = str(bundle.get("productName"));
+            String title = blank(productName) ? "三视图作品审核" : productName + " - 三视图审核";
+            Map<String, Object> projectData = projectService.createProject(title, "multiview", username,
+                    firstNonBlank(str(bundle.get("productNo")), productName), null);
+            collaborationProjectId = ((Number) projectData.get("id")).longValue();
+            for (Map.Entry<String, Long> entry : assetIds.entrySet()) {
+                String viewType = entry.getKey();
+                Long assetId = entry.getValue();
+                Map<String, Object> asset = jdbc.queryForMap(
+                    "SELECT id, file_url, title, format FROM digital_asset WHERE id=? LIMIT 1", assetId);
+                String fileName = str(asset.get("title")) + "." + str(asset.get("format"));
+                jdbc.update(
+                    "INSERT INTO project_asset (project_id, asset_id, asset_type, file_name, file_url, file_size, mime_type, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+                    collaborationProjectId, assetId, viewType, fileName, asset.get("file_url"),
+                    0, "image/" + str(asset.get("format")), username);
+            }
+        } catch (DataAccessException ignored) {
+            collaborationProjectId = null;
+        }
+
         Map<String,Object> out = multiViewBundleResponse(id);
         out.put("success", true);
+        if (collaborationProjectId != null) out.put("collaborationProjectId", collaborationProjectId);
         out.put("message", campaign == null ? "三视图作品包已提交人工审核" : "三视图作品包已提交优先征集审核，通过后积分将自动到账");
         return out;
     }
@@ -3638,10 +3708,23 @@ public class CreativeAiController {
     @Transactional
     public Map<String,Object> reviewConsumerMultiViewBundle(@PathVariable Long id,
                                                              @RequestBody Map<String,String> body) {
-        requireCreativeAdmin();
+        JwtService.Claims principal = authenticatedPrincipal();
+        Long taskId = body == null ? null : numberAsLong(body.get("taskId"));
+        Map<String,Object> workspaceTask = null;
+        if (taskId == null) {
+            requireCreativeAdmin();
+        } else {
+            if (!Set.of("designer", "project_manager", "admin").contains(principal.role())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前岗位无权审核三视图作品包");
+            }
+            workspaceTask = projectService.validateMultiViewReviewTask(taskId, id, principal.role());
+        }
         String status = body == null ? "" : nullToEmpty(body.get("status")).trim();
         if (!Set.of("approved", "rejected", "review").contains(status)) {
             throw new IllegalArgumentException("审核状态只能是 approved / rejected / review");
+        }
+        if (workspaceTask != null && "review".equals(status)) {
+            throw new IllegalArgumentException("工作台任务只能通过或不通过");
         }
         String comment = body == null ? "" : nullToEmpty(body.get("comment"));
         if ("rejected".equals(status) && blank(comment)) throw new IllegalArgumentException("三视图审核不通过时必须填写原因");
@@ -3661,10 +3744,19 @@ public class CreativeAiController {
         }
         Map<String,Long> assetIds = multiViewBundleItemIds(id);
         if (assetIds.size() < 3) throw new IllegalStateException("三视图作品包明细不完整，无法审核");
+        String taskStageKey = workspaceTask == null ? "" : str(workspaceTask.get("stageKey"));
+        if ("designer_review".equals(taskStageKey) && "approved".equals(status)) {
+            projectService.completeMultiViewReviewTask(taskId, id, principal.username(), principal.role(), comment);
+            Map<String,Object> out = multiViewBundleResponse(id);
+            out.put("success", true);
+            out.put("status", currentStatus);
+            out.put("message", "设计师初审已通过，已流转至产品经理复审");
+            return out;
+        }
         Long simulationAssetId = numberAsLong(bundle.get("simulationAssetId"));
         Set<Long> reviewAssetIds = new LinkedHashSet<>(assetIds.values());
         if (simulationAssetId != null) reviewAssetIds.add(simulationAssetId);
-        String operator = authenticatedPrincipal().username();
+        String operator = principal.username();
         jdbc.update("UPDATE creative_multiview_bundle SET status=?,review_comment=?,reviewed_by=?,reviewed_at=?,updated_at=NOW() WHERE id=?",
                 status, blank(comment) ? null : comment, blank(operator) ? "admin" : operator,
                 "review".equals(status) ? null : LocalDateTime.now(), id);
@@ -3679,10 +3771,17 @@ public class CreativeAiController {
         if (workflowProject != null) {
             String target = "approved".equals(status) ? "approved" : "rejected".equals(status) ? "needs_revision" : "human_review";
             creativeProjects.transitionProject(workflowProject.projectId(), workflowProject.versionId(), bundleOwner,
-                    target, "multiview_review_" + status, "staff", authenticatedPrincipal().userId(),
+                    target, "multiview_review_" + status, "staff", principal.userId(),
                     Map.of("bundleId", id, "comment", comment));
         }
         BigDecimal reward = settleCampaignRewardForReview(assetIds.get("front"), status, blank(operator) ? "admin" : operator);
+        if (workspaceTask != null) {
+            if ("rejected".equals(status)) {
+                projectService.rejectMultiViewReviewTask(taskId, id, operator, principal.role(), comment);
+            } else if ("approved".equals(status)) {
+                projectService.completeMultiViewReviewTask(taskId, id, operator, principal.role(), comment);
+            }
+        }
         Map<String,Object> out = multiViewBundleResponse(id);
         out.put("success", true); out.put("status", status); out.put("campaignReward", reward);
         out.put("message", "approved".equals(status) ? "三视图作品包审核通过，可申请打样" : "rejected".equals(status) ? "三视图作品包已驳回" : "三视图作品包已退回待审核");
@@ -4347,6 +4446,14 @@ public class CreativeAiController {
             }
             recordWorkflowEvent(workflowProject, userId, "production_request_submitted", "user", userId,
                     Map.of("requestId", id, "requestType", requestType, "assetId", assetId));
+        }
+        if ("sample".equals(requestType)) {
+            try {
+                String ownerUsername = jdbc.queryForObject("SELECT username FROM user WHERE id=?", String.class, userId);
+                projectService.createProject(title, "sample", ownerUsername, productNo, null, assetId);
+            } catch (DataAccessException ignored) {
+                // Collaboration tables may still be migrating during a rolling deployment.
+            }
         }
         Map<String,Object> result = new LinkedHashMap<>();
         result.put("success",true); result.put("id",id); result.put("requestNo",requestNo); result.put("status","review");
