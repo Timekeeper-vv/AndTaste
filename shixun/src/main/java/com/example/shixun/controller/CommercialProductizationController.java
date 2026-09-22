@@ -826,7 +826,7 @@ public class CommercialProductizationController {
 
     private void requireStaff(JwtService.Claims principal) {
         if (principal == null || principal.userId() == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
-        if (!Set.of("admin", "technician").contains(principal.role())) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有运营审核人员可以处理商品化申请");
+        if (!Set.of("admin", "company_admin", "technician").contains(principal.role())) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有运营审核人员可以处理商品化申请");
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM user WHERE id=? AND role=? AND COALESCE(status,'active')='active'", Integer.class, principal.userId(), principal.role());
         if (count == null || count == 0) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前审核身份已失效");
     }

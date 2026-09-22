@@ -78,7 +78,8 @@ const roleLabel = computed(() => {
     production: '生产部门',
     finance: '财务',
     logistics: '物流',
-    admin: '超级管理员'
+    admin: '超级管理员',
+    company_admin: '后台管理员'
   }
   return labels[props.currentUser.role || 'admin'] || '员工'
 })

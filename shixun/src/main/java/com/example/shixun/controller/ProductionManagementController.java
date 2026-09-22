@@ -444,7 +444,7 @@ public class ProductionManagementController {
     }
 
     private void validateSubmitterRole(JwtService.Claims principal) {
-        if (!Set.of("admin", "project_manager", "production").contains(principal.role())) {
+        if (!Set.of("admin", "company_admin", "project_manager", "production").contains(principal.role())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交审批");
         }
     }

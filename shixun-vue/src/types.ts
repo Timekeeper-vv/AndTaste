@@ -2,7 +2,7 @@
  * 后台角色：超级管理员、财务、项目经理、设计师、生产、物流；user 为 C 端用户。
  * technician/feeder 保留用于历史账号兼容，后续可由管理员迁移。
  */
-export type Role = 'admin' | 'finance' | 'project_manager' | 'designer' | 'production' | 'logistics' | 'technician' | 'feeder' | 'user'
+export type Role = 'admin' | 'company_admin' | 'finance' | 'project_manager' | 'designer' | 'production' | 'logistics' | 'technician' | 'feeder' | 'user'
 export type AlertType = 'success' | 'error'
 
 export type PageName =

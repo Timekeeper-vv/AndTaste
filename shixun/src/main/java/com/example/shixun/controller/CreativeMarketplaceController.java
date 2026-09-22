@@ -242,7 +242,7 @@ public class CreativeMarketplaceController {
         if (principal == null || principal.userId() == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
         }
-        if (!Set.of("admin", "project_manager", "designer").contains(principal.role())) return false;
+        if (!Set.of("admin", "company_admin", "project_manager", "designer").contains(principal.role())) return false;
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM user WHERE id=? AND role=?", Integer.class,
                 principal.userId(), principal.role());
         if (count == null || count == 0) {

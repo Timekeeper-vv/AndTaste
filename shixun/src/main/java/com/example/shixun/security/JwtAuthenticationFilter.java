@@ -21,7 +21,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     /** Server-side marker consumed by controllers that need the authenticated principal. */
     public static final String AUTHENTICATED_CLAIMS_ATTRIBUTE = "com.example.shixun.security.JwtAuthenticationFilter.claims";
 
-    private static final Set<String> BACK_OFFICE_ROLES = Set.of("admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder");
+    private static final Set<String> BACK_OFFICE_ROLES = Set.of("admin", "company_admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder");
 
     private final JwtService jwtService;
     private final ObjectMapper mapper;

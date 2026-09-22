@@ -579,9 +579,9 @@ public class WorkflowController {
     private void validateRole(String role, boolean submit) {
         String r = normalizeRole(role, "");
         if (submit) {
-            if (!List.of("admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder").contains(r)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交申请");
+            if (!List.of("admin", "company_admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder").contains(r)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限提交申请");
         } else {
-            if (!List.of("admin", "finance", "project_manager", "designer", "production", "logistics", "technician").contains(r)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限审批");
+            if (!List.of("admin", "company_admin", "finance", "project_manager", "designer", "production", "logistics", "technician").contains(r)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权限审批");
         }
     }
 

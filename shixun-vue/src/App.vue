@@ -42,15 +42,16 @@ import RoleWorkspace from './components/RoleWorkspace.vue'
 import { isEmbeddedMiniapp, notifyMiniapp } from './utils/miniappBridge'
 
 // 后台角色按岗位隔离；technician/feeder 仅为历史账号兼容，不出现在新账号选项中。
-const ALL_ROLES: Role[] = ['admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
-const MANAGER_ROLES: Role[] = ['admin', 'project_manager']
-const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const ALL_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const MANAGER_ROLES: Role[] = ['admin', 'company_admin', 'project_manager']
+const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
-const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'project_manager', 'designer']
-const FINANCE_ROLES: Role[] = ['admin', 'finance', 'project_manager']
-const PRODUCTION_ROLES: Role[] = ['admin', 'project_manager', 'production']
-const LOGISTICS_ROLES: Role[] = ['admin', 'project_manager', 'logistics']
-const PROJECT_ROLES: Role[] = ['admin', 'project_manager']
+const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'company_admin', 'project_manager', 'designer']
+const CREATIVE_MODEL_ROLES: Role[] = ['admin', 'project_manager', 'designer']
+const FINANCE_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager']
+const PRODUCTION_ROLES: Role[] = ['admin', 'company_admin', 'project_manager', 'production']
+const LOGISTICS_ROLES: Role[] = ['admin', 'company_admin', 'project_manager', 'logistics']
+const PROJECT_ROLES: Role[] = ['admin', 'company_admin', 'project_manager']
 const CONSUMER_ROLES: Role[] = ['user']
 
 const PAGE_ROLES: Record<string, Role[]> = {
@@ -69,10 +70,10 @@ const PAGE_ROLES: Record<string, Role[]> = {
   commercialProductization:MANAGER_ROLES,
   professionalGuidance:MANAGER_ROLES,
   aiAssistant:  ALL_ROLES,
-  customerService: ['admin', 'project_manager'],
+  customerService: ['admin', 'company_admin', 'project_manager'],
   studio:       STAFF_WORKFLOW_ROLES,
   creative2d:   CREATIVE_DESIGN_ROLES,
-  creative3d:   CREATIVE_DESIGN_ROLES,
+  creative3d:   CREATIVE_MODEL_ROLES,
   creativeReview:CREATIVE_DESIGN_ROLES,
   chain:        STAFF_WORKFLOW_ROLES,
   chainMarketing:STAFF_WORKFLOW_ROLES,
@@ -144,6 +145,7 @@ function firstAllowedPage(role: Role): PageName {
 }
 
 function roleHome(role: Role): PageName {
+  if (role === 'company_admin') return 'dashboard'
   if (role === 'finance') return 'myWorkspace'
   if (role === 'project_manager') return 'myWorkspace'
   if (role === 'designer') return 'myWorkspace'

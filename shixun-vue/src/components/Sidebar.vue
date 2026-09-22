@@ -9,14 +9,15 @@ interface MenuGroup { group: string; items: MenuItem[] }
 const props = defineProps<{ currentUser: User; currentPage: PageName; collapsed: boolean }>()
 const emit = defineEmits<{ 'switch-page': [page: PageName]; 'logout': []; 'toggle': [] }>()
 
-const roleLabels: Record<Role, string> = { admin: '超级管理员', finance: '财务', project_manager: '项目经理', designer: '设计师', production: '生产', logistics: '物流', technician: '审批主管（旧）', feeder: '员工（旧）', user: 'C端用户' }
-const roleColors: Record<Role, string> = { admin: '#ef4444', finance: '#0f766e', project_manager: '#d97706', designer: '#2563eb', production: '#7c3aed', logistics: '#0891b2', technician: '#7c3aed', feeder: '#0d9488', user: '#b4532a' }
+const roleLabels: Record<Role, string> = { admin: '超级管理员', company_admin: '后台管理员', finance: '财务', project_manager: '项目经理', designer: '设计师', production: '生产', logistics: '物流', technician: '审批主管（旧）', feeder: '员工（旧）', user: 'C端用户' }
+const roleColors: Record<Role, string> = { admin: '#ef4444', company_admin: '#7c3aed', finance: '#0f766e', project_manager: '#d97706', designer: '#2563eb', production: '#7c3aed', logistics: '#0891b2', technician: '#7c3aed', feeder: '#0d9488', user: '#b4532a' }
 
-const ALL_ROLES: Role[] = ['admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
-const MANAGER_ROLES: Role[] = ['admin', 'project_manager']
-const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const ALL_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const MANAGER_ROLES: Role[] = ['admin', 'company_admin', 'project_manager']
+const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
-const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'project_manager', 'designer']
+const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'company_admin', 'project_manager', 'designer']
+const CREATIVE_MODEL_ROLES: Role[] = ['admin', 'project_manager', 'designer']
 
 const allMenus: MenuGroup[] = [
   { group: '总览', items: [
@@ -36,7 +37,7 @@ const allMenus: MenuGroup[] = [
   { group: '创意与生产', items: [
     { key: 'studio', label: '创意设计', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l1.8 5.4L19 9l-5.2 1.6L12 16l-1.8-5.4L5 9l5.2-1.6L12 2z"/><path d="M19 15l.9 2.7L22 19l-2.1.7L19 22l-.9-2.3L16 19l2.1-1.3L19 15z"/></svg>` },
     { key: 'creative2d', label: '2D创意生图', parentKey: 'studio', roles: CREATIVE_DESIGN_ROLES, icon: `<svg></svg>` },
-    { key: 'creative3d', label: '3D辅助建模', parentKey: 'studio', roles: CREATIVE_DESIGN_ROLES, icon: `<svg></svg>` },
+    { key: 'creative3d', label: '3D辅助建模', parentKey: 'studio', roles: CREATIVE_MODEL_ROLES, icon: `<svg></svg>` },
     { key: 'creativeReview', label: '智能评估', parentKey: 'studio', roles: CREATIVE_DESIGN_ROLES, icon: `<svg></svg>` },
     { key: 'scaleUp', label: '生产管理', roles: STAFF_WORKFLOW_ROLES, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h16"/><path d="M7 16V8"/><path d="M12 16V5"/><path d="M17 16v-3"/></svg>` },
     { key: 'createProductionProject', label: '创建项目', parentKey: 'scaleUp', roles: STAFF_WORKFLOW_ROLES, icon: `<svg></svg>` },
