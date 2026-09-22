@@ -107,6 +107,7 @@ dump_database(){
 }
 
 backup_runtime_data(){
+  local env_backups=() verification_files=()
   info "备份 .env、应用配置和运行时资产"
   cp -p "$ENV_FILE" "$BACKUP_DIR/env"
   if [ -f "$BACKEND_DIR/application-local.properties" ]; then
@@ -123,6 +124,23 @@ backup_runtime_data(){
     archive_with_change_warning "creative-assets" "$BACKUP_DIR/creative-assets.tgz" \
       -C "$parent" -czf "$BACKUP_DIR/creative-assets.tgz" "$name"
   fi
+  if [ -d "$ROOT_DIR/secrets" ]; then
+    archive_with_change_warning "secrets" "$BACKUP_DIR/secrets.tgz" \
+      -C "$ROOT_DIR" -czf "$BACKUP_DIR/secrets.tgz" secrets
+  fi
+  shopt -s nullglob
+  env_backups=("$ROOT_DIR"/.env.*)
+  if [ "${#env_backups[@]}" -gt 0 ]; then
+    archive_with_change_warning ".env 历史备份" "$BACKUP_DIR/env-history.tgz" \
+      -C "$ROOT_DIR" -czf "$BACKUP_DIR/env-history.tgz" "${env_backups[@]##*/}"
+  fi
+  verification_files=("$ROOT_DIR"/shixun-vue/public/*.txt)
+  if [ "${#verification_files[@]}" -gt 0 ]; then
+    archive_with_change_warning "域名校验文件" "$BACKUP_DIR/verification-files.tgz" \
+      -C "$ROOT_DIR/shixun-vue/public" -czf "$BACKUP_DIR/verification-files.tgz" \
+      "${verification_files[@]##*/}"
+  fi
+  shopt -u nullglob
   if [ -d "$STATIC_DIR/generated" ]; then
     archive_with_change_warning "static/generated" "$BACKUP_DIR/static-generated.tgz" \
       -C "$STATIC_DIR" -czf "$BACKUP_DIR/static-generated.tgz" generated
@@ -157,22 +175,22 @@ prepare_backup(){
 }
 
 normalize_generated_static_changes(){
-  local dirty line path static_dirty=0 remaining=""
-  dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
-  [ -n "$dirty" ] || return 0
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    path="${line:3}"
-    path="${path#\"}"
-    path="${path%\"}"
+  local tracked_dirty path static_dirty=0
+  tracked_dirty="$({
+    git -C "$ROOT_DIR" diff --name-only
+    git -C "$ROOT_DIR" diff --cached --name-only
+  } | sort -u)"
+  [ -n "$tracked_dirty" ] || {
+    info "未检测到已跟踪代码改动；服务器本地运行文件将原地保留"
+    return 0
+  }
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
     case "$path" in
       "$STATIC_REL"|"$STATIC_REL"/*) static_dirty=1 ;;
-      .env.*|shixun/data|shixun/data/*|secrets|secrets/*|shixun-vue/public/*.txt|nohup.out|loongcollector.sh|openclaw_installer.sh|tmp|tmp/*|et\ -a)
-        warn "保留服务器本地运行文件：$path"
-        ;;
-      *) die "服务器工作区有非构建产物改动，已停止：$line" ;;
+      *) die "服务器存在已跟踪的业务代码改动，已停止：$path" ;;
     esac
-  done <<< "$dirty"
+  done <<< "$tracked_dirty"
   if [ "$static_dirty" -eq 1 ]; then
     [ -f "$BACKUP_DIR/static-bundle.tgz" ] || die "静态资源备份缺失，拒绝清理工作区"
     warn "检测到前端构建产物改动；已备份后恢复 Git 静态目录，保留 generated/uploads 和顶层校验 txt 文件"
@@ -180,19 +198,9 @@ normalize_generated_static_changes(){
       ! -name generated ! -name uploads ! -name '*.txt' -exec rm -rf -- {} +
     git -C "$ROOT_DIR" restore --source=HEAD --staged --worktree -- "$STATIC_REL"
   fi
-
-  dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    path="${line:3}"
-    path="${path#\"}"
-    path="${path%\"}"
-    case "$path" in
-      .env.*|shixun/data|shixun/data/*|secrets|secrets/*|shixun-vue/public/*.txt|nohup.out|loongcollector.sh|openclaw_installer.sh|tmp|tmp/*|et\ -a) ;;
-      *) remaining+="$line"$'\n' ;;
-    esac
-  done <<< "$dirty"
-  [ -z "$remaining" ] || die "服务器工作区有未提交改动，已停止；请先保存或清理后再更新：${remaining//$'\n'/ }"
+  git -C "$ROOT_DIR" diff --quiet && git -C "$ROOT_DIR" diff --cached --quiet || \
+    die "已跟踪代码改动未能安全恢复，更新已停止"
+  info "未跟踪的服务器运行文件保持原样，不参与 Git 更新"
 }
 
 update_code(){
@@ -228,7 +236,7 @@ start_candidate(){
   nohup env SERVER_ADDRESS=127.0.0.1 \
     java ${JAVA_OPTS:--Xms512m -Xmx1536m -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai} \
     -jar "$NEW_JAR_PATH" --server.port="$CANDIDATE_PORT" --server.address=127.0.0.1 \
-    --spring.task.scheduling.enabled=false > "$candidate_log" 2>&1 &
+    --app.scheduling.enabled=false > "$candidate_log" 2>&1 &
   CANDIDATE_PID="$!"
   if ! wait_app_health "$CANDIDATE_PORT"; then
     tail -100 "$candidate_log" >&2 || true
