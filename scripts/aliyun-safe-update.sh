@@ -175,9 +175,9 @@ normalize_generated_static_changes(){
   done <<< "$dirty"
   if [ "$static_dirty" -eq 1 ]; then
     [ -f "$BACKUP_DIR/static-bundle.tgz" ] || die "静态资源备份缺失，拒绝清理工作区"
-    warn "检测到前端构建产物改动；已备份后恢复 Git 静态目录，保留 generated/uploads"
+    warn "检测到前端构建产物改动；已备份后恢复 Git 静态目录，保留 generated/uploads 和顶层校验 txt 文件"
     find "$STATIC_DIR" -mindepth 1 -maxdepth 1 \
-      ! -name generated ! -name uploads -exec rm -rf -- {} +
+      ! -name generated ! -name uploads ! -name '*.txt' -exec rm -rf -- {} +
     git -C "$ROOT_DIR" restore --source=HEAD --staged --worktree -- "$STATIC_REL"
   fi
 
