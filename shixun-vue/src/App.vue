@@ -42,9 +42,9 @@ import RoleWorkspace from './components/RoleWorkspace.vue'
 import { isEmbeddedMiniapp, notifyMiniapp } from './utils/miniappBridge'
 
 // 后台角色按岗位隔离；technician/feeder 仅为历史账号兼容，不出现在新账号选项中。
-const ALL_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const ALL_ROLES: Role[] = ['admin', 'company_admin', 'backoffice_user', 'finance', 'project_manager', 'designer', 'production', 'logistics']
 const MANAGER_ROLES: Role[] = ['admin', 'company_admin', 'project_manager']
-const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'company_admin', 'backoffice_user', 'finance', 'project_manager', 'designer', 'production', 'logistics']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
 const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'company_admin', 'project_manager', 'designer']
 const CREATIVE_MODEL_ROLES: Role[] = ['admin', 'project_manager', 'designer']
@@ -69,7 +69,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   orderManagement:SUPER_ADMIN_ROLES,
   commercialProductization:MANAGER_ROLES,
   professionalGuidance:MANAGER_ROLES,
-  aiAssistant:  ALL_ROLES,
+  aiAssistant:  [...ALL_ROLES, 'backoffice_user'],
   customerService: ['admin', 'company_admin', 'project_manager'],
   studio:       STAFF_WORKFLOW_ROLES,
   creative2d:   CREATIVE_DESIGN_ROLES,
@@ -146,6 +146,7 @@ function firstAllowedPage(role: Role): PageName {
 
 function roleHome(role: Role): PageName {
   if (role === 'company_admin') return 'dashboard'
+  if (role === 'backoffice_user') return 'myWorkspace'
   if (role === 'finance') return 'myWorkspace'
   if (role === 'project_manager') return 'myWorkspace'
   if (role === 'designer') return 'myWorkspace'

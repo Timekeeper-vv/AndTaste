@@ -15,7 +15,7 @@ import java.util.*;
  */
 @Service
 public class CreativeWorkflowDetailService {
-    private static final Set<String> STAFF_ROLES = Set.of("admin", "company_admin", "technician", "feeder");
+    private static final Set<String> STAFF_ROLES = Set.of("admin", "company_admin", "backoffice_user", "technician", "feeder");
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
 

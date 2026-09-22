@@ -57,8 +57,8 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 public class UserController {
 
     private static final Logger log = LoggerFactory.getLogger(UserController.class);
-    private static final Set<String> SUPPORTED_ROLES = Set.of("admin", "company_admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder", "user");
-    private static final Set<String> STAFF_ROLES = Set.of("admin", "company_admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder");
+    private static final Set<String> SUPPORTED_ROLES = Set.of("admin", "company_admin", "backoffice_user", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder", "user");
+    private static final Set<String> STAFF_ROLES = Set.of("admin", "company_admin", "backoffice_user", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder");
     private static final Set<String> USER_MANAGER_ROLES = Set.of("admin", "project_manager");
     private static final int MIN_PASSWORD_LENGTH = 12;
 

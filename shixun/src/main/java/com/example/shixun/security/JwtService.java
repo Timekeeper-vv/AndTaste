@@ -26,7 +26,7 @@ public class JwtService {
     private static final String ASSET_READ_SCOPE = "asset:read";
     private static final String ASSET_MATERIAL_LAB_SCOPE = "asset:material-lab";
     private static final String PROFESSIONAL_SUBMISSION_READ_SCOPE = "professional-submission:read";
-    private static final Set<String> SUPPORTED_ROLES = Set.of("admin", "company_admin", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder", "user");
+    private static final Set<String> SUPPORTED_ROLES = Set.of("admin", "company_admin", "backoffice_user", "finance", "project_manager", "designer", "production", "logistics", "technician", "feeder", "user");
 
     private final ObjectMapper mapper;
     private final byte[] secret;

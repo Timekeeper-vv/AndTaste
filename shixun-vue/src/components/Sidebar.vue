@@ -9,12 +9,12 @@ interface MenuGroup { group: string; items: MenuItem[] }
 const props = defineProps<{ currentUser: User; currentPage: PageName; collapsed: boolean }>()
 const emit = defineEmits<{ 'switch-page': [page: PageName]; 'logout': []; 'toggle': [] }>()
 
-const roleLabels: Record<Role, string> = { admin: '超级管理员', company_admin: '后台管理员', finance: '财务', project_manager: '项目经理', designer: '设计师', production: '生产', logistics: '物流', technician: '审批主管（旧）', feeder: '员工（旧）', user: 'C端用户' }
-const roleColors: Record<Role, string> = { admin: '#ef4444', company_admin: '#7c3aed', finance: '#0f766e', project_manager: '#d97706', designer: '#2563eb', production: '#7c3aed', logistics: '#0891b2', technician: '#7c3aed', feeder: '#0d9488', user: '#b4532a' }
+const roleLabels: Record<Role, string> = { admin: '超级管理员', company_admin: '后台管理员', backoffice_user: '普通后台用户', finance: '财务', project_manager: '项目经理', designer: '设计师', production: '生产', logistics: '物流', technician: '审批主管（旧）', feeder: '员工（旧）', user: 'C端用户' }
+const roleColors: Record<Role, string> = { admin: '#ef4444', company_admin: '#7c3aed', backoffice_user: '#64748b', finance: '#0f766e', project_manager: '#d97706', designer: '#2563eb', production: '#7c3aed', logistics: '#0891b2', technician: '#7c3aed', feeder: '#0d9488', user: '#b4532a' }
 
-const ALL_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const ALL_ROLES: Role[] = ['admin', 'company_admin', 'backoffice_user', 'finance', 'project_manager', 'designer', 'production', 'logistics']
 const MANAGER_ROLES: Role[] = ['admin', 'company_admin', 'project_manager']
-const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'company_admin', 'finance', 'project_manager', 'designer', 'production', 'logistics']
+const STAFF_WORKFLOW_ROLES: Role[] = ['admin', 'company_admin', 'backoffice_user', 'finance', 'project_manager', 'designer', 'production', 'logistics']
 const SUPER_ADMIN_ROLES: Role[] = ['admin']
 const CREATIVE_DESIGN_ROLES: Role[] = ['admin', 'company_admin', 'project_manager', 'designer']
 const CREATIVE_MODEL_ROLES: Role[] = ['admin', 'project_manager', 'designer']
@@ -122,6 +122,8 @@ const allMenus: MenuGroup[] = [
 ]
 
 const rolePageAllow: Record<string, Set<PageName>> = {
+  // 普通后台用户：可办理日常内部申请和协同，不进入管理审批、账号权限、C端、3D、多视图等模块。
+  backoffice_user: new Set(['dashboard','myWorkspace','studio','chain','chainMarketing','chainNewProduct','chainPriceAdjust','marketDemand','marketPromotion','marketEcommerceNewProduct','marketShooting','marketProductCopy','projectDemand','projectInitiation','projectInquiry','hrManagement','hrNewProductIncentive','hrResignation','hrTraining','hrHolidayOvertime','hrTransfer','hrPolicyApproval','hrRegularization','hrRecruitment','attendanceManagement','attendanceCardRepair','attendanceLeave','attendanceBusinessTrip','attendanceOutgoing','supplierList','finance','financeAssetScrap','financePublicPayment','financePettyCash','financePersonalExpense','financeSeal','financePettyCashRepay','financeTravel','financeInvoice','financeSpecialExpense','financePettyCashWriteoff','aiAssistant']),
   // 财务：只看财务相关模块 + 工作台
   finance: new Set(['dashboard','myWorkspace','finance','financeAssetScrap','financePublicPayment','financePettyCash','financePersonalExpense','financePromotionApproval','financeSeal','financePettyCashRepay','financeTravel','financeInvoice','financeSpecialExpense','financePettyCashWriteoff','aiAssistant']),
   // 项目经理：项目协同、生产申请、仓储物流、客服 + 工作台
