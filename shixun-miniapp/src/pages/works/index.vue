@@ -1,9 +1,10 @@
 <template>
   <view class="page">
-    <view class="intro">
+    <view class="mini-top"><text class="mini-back" @tap="goHome">‹</text><text class="mini-title">我的作品</text><view class="mini-menu"><text>•••</text><text>◉</text></view></view>
+    <view v-if="signedIn" class="intro">
       <view>
         <text class="title">我的作品</text>
-        <text class="sub">查看和管理已生成的图片、模型与灵感素材</text>
+        <text class="sub">查看和管理已生成的图片、三视图与模型</text>
       </view>
       <button v-if="signedIn" class="refresh" size="mini" :loading="loading" @tap="refresh(true)">刷新</button>
       <button v-else class="back-home" size="mini" @tap="goHome">返回首页</button>
@@ -19,6 +20,11 @@
 
     <template v-else>
       <AiGeneratedNotice class="ai-disclosure" compact description="带有“AI生成”标识的图片、生产模拟图和 3D 原型由人工智能生成。展示、商业使用、打样和生产前请完成人工复核与权利核验。" />
+      <view class="work-stats">
+        <view :class="{ active: activeWorkFilter === 'all' }" @tap="activeWorkFilter = 'all'"><text>{{ totalWorkCount }}</text><text>全部作品</text></view>
+        <view :class="{ active: activeWorkFilter === 'review' }" @tap="activeWorkFilter = 'review'"><text>{{ reviewWorkCount }}</text><text>待审核</text></view>
+        <view :class="{ active: activeWorkFilter === 'sample' }" @tap="activeWorkFilter = 'sample'"><text>{{ sampleWorkCount }}</text><text>待打样</text></view>
+      </view>
 
       <view v-if="loadError && !assets.length && !multiviewBundles.length" class="load-error">
         <text class="load-error-title">作品暂时未能打开</text>
@@ -26,7 +32,7 @@
         <button class="load-retry" @tap="refresh(true)">重新加载</button>
       </view>
 
-      <view v-else-if="!visibleAssets.length && !multiviewBundles.length" class="empty">
+      <view v-else-if="!filteredAssets.length && !filteredBundles.length" class="empty">
         <text>还没有作品，去开始第一件创作吧。</text>
         <button class="create-first" @tap="goCreate">开始创作</button>
       </view>
@@ -35,9 +41,9 @@
         <view v-if="loadError" class="cache-warning" @tap="refresh(true)">
           <text>暂时无法更新最新作品</text><text>重新加载 ›</text>
         </view>
-        <view class="section-head"><text>作品库</text><text>{{ totalWorkCount }} 件</text></view>
+        <view class="section-head"><text>{{ activeWorkFilter === 'all' ? '作品库' : activeWorkFilter === 'review' ? '待审核作品' : '待打样作品' }}</text><text>{{ filteredWorkCount }} 件</text></view>
 
-        <view v-for="bundle in multiviewBundles" :key="`bundle-${bundle.id}`" class="multiview-bundle-card">
+        <view v-for="bundle in filteredBundles" :key="`bundle-${bundle.id}`" class="multiview-bundle-card">
           <view class="bundle-card-head"><view><text class="product-no">产品号：{{ bundle.productNo || '未关联产品号' }}</text><text>生产模拟图作品包 · {{ bundle.bundleNo || `#${bundle.id}` }}</text></view><text class="status" :class="String(bundle.status || 'draft')">{{ statusText(bundle.status || 'draft') }}</text></view>
           <view v-if="bundleSimulationSrc(bundle)" class="bundle-simulation-preview" @tap="previewBundleSimulation(bundle)"><image :src="bundleSimulationSrc(bundle)" mode="aspectFit" /><text>完整生产模拟图</text></view>
           <view v-else-if="bundle.simulationAssetId" class="bundle-simulation-placeholder"><text>完整生产模拟图已保存</text><text>预览加载中</text></view>
@@ -46,35 +52,16 @@
           <view class="bundle-card-body"><text class="bundle-title">{{ bundle.productName || '生产模拟图文创作品' }}</text><text class="meta">{{ bundle.material || '材质待定' }} · {{ bundle.productSize || '尺寸待定' }} · {{ bundle.viewCount || 3 }} 张视角切片</text><text v-if="bundle.status === 'rejected' && bundle.reviewComment" class="bundle-reject-reason">未通过原因：{{ bundle.reviewComment }}</text><view class="actions"><button v-if="['draft','rejected'].includes(String(bundle.status || 'draft'))" size="mini" :loading="submittingBundleId === bundle.id" @tap="submitBundleReview(bundle)">{{ bundle.status === 'rejected' ? '重新提交生产模拟图审核' : '提交生产模拟图审核' }}</button><button v-if="bundle.status === 'approved'" size="mini" class="production" @tap="applyBundleProduction(bundle)">申请打样</button><button v-if="sampleLifecycleRoute(bundle, 'bundle')" size="mini" class="sample-progress" @tap="openSampleLifecycle(bundle, 'bundle')">样品进度</button><button size="mini" @tap="copyBundle(bundle)">复制作品包编号</button></view></view>
         </view>
 
-        <view v-for="item in visibleAssets" :key="item.id" class="asset">
-          <view class="asset-media">
-            <image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" @error="handlePreviewError(item)" />
-            <view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view>
-            <text v-if="isAiGenerated(item)" class="ai-output-badge">AI生成</text>
+        <view v-for="item in filteredAssets" :key="item.id" class="asset">
+          <view class="asset-main">
+            <view class="asset-media"><image v-if="previewSrc(item)" :src="previewSrc(item)" mode="aspectFill" class="cover" @error="handlePreviewError(item)" /><view v-else class="model">{{ item.assetType === 'model' ? '3D' : 'AI' }}</view><text v-if="isAiGenerated(item)" class="ai-output-badge">AI生成</text></view>
+            <view class="body"><view class="row"><text class="name">{{ item.title || '未命名作品' }}</text><text class="status" :class="assetDisplayStatus(item)">{{ statusText(assetDisplayStatus(item)) }}</text></view><text class="meta">{{ item.assetType === 'model' ? '3D 模型' : 'AI 图片' }} · {{ item.format?.toUpperCase() || '文件' }}</text><view v-if="materialFor(item)" class="material-summary"><text>本次工艺</text><text>{{ materialFor(item)?.name }}</text><text>{{ materialFor(item)?.hint }}</text></view><text class="product-no asset-product-no">产品号：{{ item.productNo || '未关联产品号' }}</text><text v-if="source(item)" class="source">审批出处：{{ source(item) }}</text></view>
           </view>
-          <view class="body">
-            <text class="product-no asset-product-no">产品号：{{ item.productNo || '未关联产品号' }}</text>
-            <view class="row"><text class="name">{{ item.title || '未命名作品' }}</text><text class="status" :class="assetDisplayStatus(item)">{{ statusText(assetDisplayStatus(item)) }}</text></view>
-            <text class="meta">{{ item.assetType === 'model' ? '3D 模型' : 'AI 图片' }} · {{ item.format?.toUpperCase() || '文件' }}</text>
-            <view v-if="materialFor(item)" class="material-summary">
-              <text>本次工艺</text><text>{{ materialFor(item)?.name }}</text><text>{{ materialFor(item)?.hint }}</text>
-            </view>
-            <text v-if="source(item)" class="source">审批出处：{{ source(item) }}</text>
-            <view class="actions">
-              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button>
-              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" @tap="openMaterialLab(item)">换材质（PPC / 搪胶 / 毛绒）</button>
-              <button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="export" :loading="downloadingModelId === String(item.id)" @tap="chooseModelExport(item)">导出模型</button>
-              <button v-if="canRunDesignReview(item)" size="mini" class="design-review" @tap="openDesignReview(item)">AI 深度评审</button>
-              <button v-if="canSubmitReview(item)" size="mini" :loading="submittingId === item.id" @tap="submitReview(item)">提交审核</button>
-              <text v-else-if="item.assetType === 'image'" class="review-gate-tip">完成三视图或 3D 原型后可提交审核</text>
-              <button v-if="canApplyProduction(item)" size="mini" class="production" @tap="applyProduction(item)">打样 / 生产</button>
-              <button v-if="sampleLifecycleRoute(item, 'asset')" size="mini" class="sample-progress" @tap="openSampleLifecycle(item, 'asset')">样品进度</button>
-              <button size="mini" @tap="copy(item)">复制编号</button>
-            </view>
-          </view>
+          <view class="actions"><button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" @tap="preview(item)">查看 3D</button><button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="material" @tap="openMaterialLab(item)">换材质</button><button v-if="item.assetType === 'model' && !isGenerating(assetDisplayStatus(item))" size="mini" class="export" :loading="downloadingModelId === String(item.id)" @tap="chooseModelExport(item)">导出模型</button><button v-if="canRunDesignReview(item)" size="mini" class="design-review" @tap="openDesignReview(item)">AI 深度评审</button><button v-if="canSubmitReview(item)" size="mini" :loading="submittingId === item.id" @tap="submitReview(item)">提交审核</button><text v-else-if="item.assetType === 'image'" class="review-gate-tip">完成三视图或 3D 原型后可提交审核</text><button v-if="canApplyProduction(item)" size="mini" class="production" @tap="applyProduction(item)">申请打样</button><button v-if="sampleLifecycleRoute(item, 'asset')" size="mini" class="sample-progress" @tap="openSampleLifecycle(item, 'asset')">样品进度</button><button size="mini" @tap="copy(item)">复制编号</button></view>
         </view>
       </view>
     </template>
+    <view class="bottom-nav"><view @tap="goHome"><text>⌂</text><text>首页</text></view><view class="active"><text>▣</text><text>作品</text></view><view @tap="goProfile"><text>◉</text><text>我的</text></view></view>
   </view>
 </template>
 
@@ -111,6 +98,7 @@ const loadError = ref('')
 const submittingId = ref<number | null>(null)
 const submittingBundleId = ref<number | null>(null)
 const downloadingModelId = ref('')
+const activeWorkFilter = ref<'all' | 'review' | 'sample'>('all')
 const signedIn = ref(Boolean(readMiniSession()?.token))
 const DESKTOP_MODEL_URL = 'https://www.zhijiansk.com/'
 const threeDimensionalPolicyConfirmed = ref(false)
@@ -132,6 +120,13 @@ const isInternalReferenceAsset = (asset: any) => {
 }
 const visibleAssets = computed(() => assets.value.filter(asset => !isInternalReferenceAsset(asset) && !bundleAssetIds.value.has(String(asset.id))))
 const totalWorkCount = computed(() => visibleAssets.value.length + multiviewBundles.value.length)
+const isAwaitingReview = (item: any) => ['draft', 'review', 'rejected'].includes(String(item?.status || 'draft'))
+const isAwaitingSample = (item: any) => String(item?.status || '') === 'approved'
+const reviewWorkCount = computed(() => visibleAssets.value.filter(isAwaitingReview).length + multiviewBundles.value.filter(isAwaitingReview).length)
+const sampleWorkCount = computed(() => visibleAssets.value.filter(isAwaitingSample).length + multiviewBundles.value.filter(isAwaitingSample).length)
+const filteredAssets = computed(() => activeWorkFilter.value === 'all' ? visibleAssets.value : visibleAssets.value.filter(activeWorkFilter.value === 'review' ? isAwaitingReview : isAwaitingSample))
+const filteredBundles = computed(() => activeWorkFilter.value === 'all' ? multiviewBundles.value : multiviewBundles.value.filter(activeWorkFilter.value === 'review' ? isAwaitingReview : isAwaitingSample))
+const filteredWorkCount = computed(() => filteredAssets.value.length + filteredBundles.value.length)
 
 const isAiGenerated = (asset: any) => String(asset?.sourceType || '') === 'ai_generated'
 const previewSrc = (asset: any) => {
@@ -474,6 +469,10 @@ function goHome() {
   uni.reLaunch({ url: '/pages/home/index' })
 }
 
+function goProfile() {
+  uni.navigateTo({ url: '/pages/profile/index' })
+}
+
 function promptLogin(action: string) {
   uni.showModal({
     title: `登录后可${action}`,
@@ -692,7 +691,15 @@ onPullDownRefresh(() => {
 </style>
 
 <style scoped lang="scss">
+.page{min-height:100vh;box-sizing:border-box;padding:calc(26rpx + env(safe-area-inset-top)) 30rpx calc(154rpx + env(safe-area-inset-bottom));background:#fff}.mini-top{position:relative;display:flex;align-items:center;justify-content:center;height:66rpx;margin-bottom:14rpx}.mini-back{position:absolute;left:0;top:-9rpx;color:#222;font-size:58rpx;font-weight:200;line-height:1}.mini-title{font-size:30rpx;font-weight:800}.mini-menu{position:absolute;right:0;display:flex;align-items:center;gap:14rpx;padding:8rpx 17rpx;border:1rpx solid #e3e3e3;border-radius:30rpx;color:#222;font-size:24rpx}.intro{padding:12rpx 4rpx 17rpx}.title{font-family:"PingFang SC",sans-serif;font-size:43rpx}.sub{margin-top:7rpx;color:#919191;font-size:20rpx}.ai-disclosure{margin:0 0 18rpx;border-radius:15rpx}.work-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:13rpx;margin:0 0 27rpx}.work-stats view{display:flex;min-height:116rpx;align-items:center;justify-content:center;flex-direction:column;border:1rpx solid #e7edf2;border-radius:18rpx;background:#fff;color:#777;box-shadow:0 6rpx 16rpx rgba(51,83,114,.06)}.work-stats view text:first-child{font-size:35rpx;font-weight:800}.work-stats view text:last-child{margin-top:5rpx;font-size:19rpx}.work-stats view:nth-child(2) text:first-child{color:#ee835e}.work-stats view:nth-child(3) text:first-child{color:#ff8e73}.work-stats .active{border-color:#92dfd0;background:#f3fffb;color:#079c83;box-shadow:0 7rpx 19rpx rgba(1,177,146,.13)}.section-head{margin:12rpx 3rpx 17rpx;font-family:"PingFang SC",sans-serif;font-size:29rpx}.asset{display:block;overflow:hidden;margin-bottom:19rpx;border:1rpx solid #e7eef3;border-radius:22rpx;background:#fff;box-shadow:0 8rpx 22rpx rgba(48,85,118,.08)}.asset-main{display:flex;padding:14rpx 14rpx 0}.asset-media{width:206rpx;height:206rpx;flex:0 0 206rpx;border-radius:16rpx;overflow:hidden}.asset-media .cover,.asset-media .model{width:206rpx;height:206rpx}.body{padding:4rpx 0 4rpx 18rpx}.name{font-size:27rpx;color:#252525}.status{padding:6rpx 10rpx;border-radius:25rpx;font-size:17rpx}.meta,.source{margin-top:8rpx;color:#929292;font-size:18rpx}.asset-product-no{margin:10rpx 0 0;color:#5c806f;font-size:18rpx}.material-summary{margin-top:8rpx}.material-summary text:nth-child(2){font-size:18rpx}.material-summary text:last-child{font-size:15rpx}.actions{margin:15rpx 14rpx 14rpx;padding-top:13rpx;border-top:1rpx solid #edf0f2;gap:9rpx}.actions button{min-width:132rpx;height:52rpx;line-height:52rpx;border-radius:9rpx;font-size:18rpx}.review-gate-tip{min-height:48rpx;font-size:16rpx}.multiview-bundle-card{border-color:#dfeae9;border-radius:22rpx;box-shadow:0 8rpx 22rpx rgba(42,119,102,.08)}.bottom-nav{position:fixed;z-index:20;right:28rpx;bottom:20rpx;left:28rpx;display:grid;grid-template-columns:repeat(3,1fr);height:84rpx;padding:10rpx 12rpx;border:0;border-radius:42rpx;background:linear-gradient(90deg,#12d8bd,#00b9a6);box-shadow:0 12rpx 28rpx rgba(0,161,141,.24)}.bottom-nav view{display:flex;align-items:center;justify-content:center;gap:4rpx;flex-direction:column;color:#dffff8;font-size:18rpx}.bottom-nav view text:first-child{font-size:28rpx;line-height:1}.bottom-nav .active{color:#fff;font-weight:800}.empty,.load-error,.guest-state{margin-top:12rpx;border-radius:22rpx;background:#fff;box-shadow:0 7rpx 20rpx rgba(51,83,114,.06)}
+</style>
+
+<style scoped lang="scss">
 .page{background:radial-gradient(ellipse at 10% 0%,rgba(151,177,163,.17),transparent 29%),linear-gradient(180deg,#faf8f3,#f0e9df)}.title{font-family:"Songti SC","STSong",serif;color:#302b26}.sub{color:#82786d}.refresh{background:#edf3ed;color:#607b6e}.section-head{font-family:"Songti SC","STSong",serif}.asset,.job-card{border:1rpx solid rgba(129,112,93,.13);box-shadow:0 9rpx 21rpx rgba(67,53,37,.055)}.cover{background:#eef2eb}.model,.job-icon{background:linear-gradient(145deg,#5f7f71,#9eb5a8)}.job-card.failed .job-icon{background:linear-gradient(145deg,#865346,#bf765f)}.status{background:#f5ece4;color:#9d5c48}.status.approved,.status.succeeded,.status.paid{background:#e7f1e8;color:#567a67}.status.running,.status.queued,.status.processing{background:#f6f0df;color:#9b7540}.meta,.source,.generation,.progress-text{color:#8c8176}.source{color:#7d9587}.project-entry{background:#edf3ed;color:#5f7a69}.progress-line{background:#ebe5dc}.progress-value{background:linear-gradient(90deg,#a56e58,#6e8b7c)}.actions button{background:#f2f5ef;color:#59776a}.actions .material{background:#dcece2;color:#426d5a}.actions .export{background:#e8edf5;color:#526b85}.actions .production{background:#efe1d5;color:#8c5947}.actions .design-review{background:#eeeaf5;color:#6b5b8b}.create-first{border-radius:17rpx;background:linear-gradient(135deg,#3e3933,#617e71)}.material-summary{display:flex;align-items:center;flex-wrap:wrap;gap:7rpx;margin-top:11rpx}.material-summary text:first-child{padding:3rpx 8rpx;border-radius:8rpx;background:#eef2ec;color:#728578;font-size:16rpx;font-weight:800}.material-summary text:nth-child(2){color:#476c5b;font-size:20rpx;font-weight:850}.material-summary text:last-child{color:#978c80;font-size:17rpx}
 .back-home{margin:4rpx 0 0;border:1rpx solid #d5e0d6;background:#fffdf9;color:#587666;font-size:21rpx}.guest-state{display:flex;align-items:center;flex-direction:column;margin:16rpx 0 36rpx;padding:64rpx 38rpx 48rpx;border:1rpx solid rgba(113,136,120,.22);border-radius:16rpx;background:rgba(255,253,249,.9);box-shadow:0 12rpx 30rpx rgba(67,53,37,.06);text-align:center}.guest-mark{display:grid;place-items:center;width:88rpx;height:88rpx;border-radius:16rpx;background:#edf3ed;color:#567765;font-family:"Songti SC","STSong",serif;font-size:42rpx;font-weight:700}.guest-title{display:block;margin-top:27rpx;color:#37332d;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:700}.guest-copy{display:block;margin-top:13rpx;color:#877d72;font-size:23rpx;line-height:1.7}.guest-login,.guest-browse{width:100%;height:84rpx;line-height:84rpx;margin:32rpx 0 0;border-radius:12rpx;font-size:26rpx;font-weight:800}.guest-login{background:#456a59;color:#fffdf8}.guest-browse{margin-top:16rpx;border:1rpx solid #d7dfd7;background:#fffdfa;color:#557364}
 .load-error{display:flex;align-items:center;flex-direction:column;margin:20rpx 0;padding:90rpx 42rpx 70rpx;border:1rpx solid #e6d9c9;border-radius:16rpx;background:#fffdf9;text-align:center}.load-error-title{color:#4c4137;font-family:"Songti SC","STSong",serif;font-size:34rpx;font-weight:700}.load-error-copy{display:block;margin-top:16rpx;color:#897c70;font-size:23rpx;line-height:1.7}.load-retry{width:280rpx;height:82rpx;line-height:82rpx;margin-top:30rpx;border-radius:12rpx;background:#456a59;color:#fffdf8;font-size:25rpx;font-weight:800}.cache-warning{display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin:8rpx 0 22rpx;padding:17rpx 18rpx;border:1rpx solid #eadfc9;border-radius:12rpx;background:#fff9ed;color:#88704f;font-size:20rpx;line-height:1.5}.cache-warning text:first-child{min-width:0;flex:1}.cache-warning text:last-child{flex:none;color:#617967;font-weight:800;white-space:nowrap}
+</style>
+
+<style scoped lang="scss">
+.page{min-height:100vh;box-sizing:border-box;padding:calc(26rpx + env(safe-area-inset-top)) 30rpx calc(154rpx + env(safe-area-inset-bottom));background:#fff}.mini-top{position:relative;display:flex;align-items:center;justify-content:center;height:66rpx;margin-bottom:14rpx}.mini-back{position:absolute;left:0;top:-9rpx;color:#222;font-size:58rpx;font-weight:200;line-height:1}.mini-title{font-size:30rpx;font-weight:800}.mini-menu{position:absolute;right:0;display:flex;align-items:center;gap:14rpx;padding:8rpx 17rpx;border:1rpx solid #e3e3e3;border-radius:30rpx;color:#222;font-size:24rpx}.intro{padding:12rpx 4rpx 17rpx}.title{font-family:"PingFang SC",sans-serif;color:#222;font-size:43rpx}.sub{margin-top:7rpx;color:#919191;font-size:20rpx}.ai-disclosure{margin:0 0 18rpx;border-radius:15rpx}.work-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:13rpx;margin:0 0 27rpx}.work-stats view{display:flex;min-height:116rpx;align-items:center;justify-content:center;flex-direction:column;border:1rpx solid #e7edf2;border-radius:18rpx;background:#fff;color:#777;box-shadow:0 6rpx 16rpx rgba(51,83,114,.06)}.work-stats view text:first-child{font-size:35rpx;font-weight:800}.work-stats view text:last-child{margin-top:5rpx;font-size:19rpx}.work-stats view:nth-child(2) text:first-child{color:#ee835e}.work-stats view:nth-child(3) text:first-child{color:#ff8e73}.work-stats .active{border-color:#92dfd0;background:#f3fffb;color:#079c83;box-shadow:0 7rpx 19rpx rgba(1,177,146,.13)}.section-head{margin:12rpx 3rpx 17rpx;font-family:"PingFang SC",sans-serif;font-size:29rpx}.asset{display:block;overflow:hidden;margin-bottom:19rpx;border:1rpx solid #e7eef3;border-radius:22rpx;background:#fff;box-shadow:0 8rpx 22rpx rgba(48,85,118,.08)}.asset-main{display:flex;padding:14rpx 14rpx 0}.asset-media{width:206rpx;height:206rpx;flex:0 0 206rpx;border-radius:16rpx;overflow:hidden}.asset-media .cover,.asset-media .model{width:206rpx;height:206rpx}.body{padding:4rpx 0 4rpx 18rpx}.name{font-size:27rpx;color:#252525}.status{padding:6rpx 10rpx;border-radius:25rpx;font-size:17rpx}.meta,.source{margin-top:8rpx;color:#929292;font-size:18rpx}.asset-product-no{margin:10rpx 0 0;color:#5c806f;font-size:18rpx}.material-summary{margin-top:8rpx}.material-summary text:nth-child(2){font-size:18rpx}.material-summary text:last-child{font-size:15rpx}.actions{margin:15rpx 14rpx 14rpx;padding-top:13rpx;border-top:1rpx solid #edf0f2;gap:9rpx}.actions button{min-width:132rpx;height:52rpx;line-height:52rpx;border-radius:9rpx;font-size:18rpx}.review-gate-tip{min-height:48rpx;font-size:16rpx}.multiview-bundle-card{border-color:#dfeae9;border-radius:22rpx;box-shadow:0 8rpx 22rpx rgba(42,119,102,.08)}.bottom-nav{position:fixed;z-index:20;right:28rpx;bottom:20rpx;left:28rpx;display:grid;grid-template-columns:repeat(3,1fr);height:84rpx;padding:10rpx 12rpx;border:0;border-radius:42rpx;background:linear-gradient(90deg,#12d8bd,#00b9a6);box-shadow:0 12rpx 28rpx rgba(0,161,141,.24)}.bottom-nav view{display:flex;align-items:center;justify-content:center;gap:4rpx;flex-direction:column;color:#dffff8;font-size:18rpx}.bottom-nav view text:first-child{font-size:28rpx;line-height:1}.bottom-nav .active{color:#fff;font-weight:800}.empty,.load-error,.guest-state{margin-top:12rpx;border-radius:22rpx;background:#fff;box-shadow:0 7rpx 20rpx rgba(51,83,114,.06)}
 </style>

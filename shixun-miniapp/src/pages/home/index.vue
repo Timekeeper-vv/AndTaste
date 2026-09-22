@@ -1,18 +1,6 @@
 <template>
   <view class="page">
-    <view class="topbar">
-      <view class="brand" @tap="changeContext">
-        <text class="brand-seal">之</text>
-        <view class="brand-copy">
-          <text class="brand-name">之间智造</text>
-          <view class="brand-subtitle"><text>切换角色/用途</text><text>›</text></view>
-        </view>
-      </view>
-      <view class="top-actions">
-        <view v-if="loggedIn" class="credit-chip" @tap="go('/pages/recharge/index')"><text>积分</text><text>{{ credits }}</text></view>
-        <view class="profile-entry" @tap="openProfile"><text>我</text></view>
-      </view>
-    </view>
+    <view class="topbar"><view class="brand" @tap="changeContext"><text class="brand-seal">间</text></view><view class="top-actions"><view v-if="loggedIn" class="credit-chip" @tap="go('/pages/recharge/index')"><text>⚡</text><text>{{ credits }}</text></view><view class="notice-entry"><text>♧</text><text v-if="loggedIn" class="notice-count">8</text></view><view class="profile-entry" @tap="openProfile"><text>◯</text></view></view></view>
 
     <scroll-view scroll-y class="page-scroll" :show-scrollbar="false">
       <view class="content">
@@ -21,52 +9,31 @@
           <view v-else class="hero-fallback" aria-hidden="true"><view class="artifact-card"><text>之</text><view /><view /></view></view>
           <view v-if="heroVisualUrl" class="hero-visual-shade" />
           <view class="hero-copy">
-            <text class="hero-kicker">AI 对话创作</text>
-            <text class="hero-title">从一个想法开始</text>
-            <text class="hero-description">描述灵感，逐步完成一件作品。</text>
+            <text class="hero-kicker">完成首次 AI 创作</text>
+            <text class="hero-title">创作有礼</text>
+            <text class="hero-description">即可获得 30 创作积分</text>
             <view class="hero-link" @tap="startConversation"><text>用对话开始</text><text>›</text></view>
           </view>
           <view v-if="heroVisualUrl" class="hero-caption"><view class="ai-dot" /><text>之间智造效果图</text></view>
         </view>
 
-        <view class="section-head path-heading"><view><text>创作入口</text><text>常用工具</text></view></view>
-        <view class="creation-entry primary-entry" @tap="startConversation">
-          <view class="entry-icon conversation-icon"><text>◌</text></view>
-          <view class="entry-copy"><text>对话式创作</text><text>说出想法，逐步完成一件作品</text></view>
-          <view class="entry-arrow primary-arrow"><text>›</text></view>
-        </view>
-
-        <view v-if="loggedIn" class="history-section">
-          <view class="section-head history-heading">
-            <view><text>历史对话</text><text>{{ conversations.length ? `${conversations.length} 个会话` : '按会话保存创作进度' }}</text></view>
-            <view class="new-conversation" @tap="startNewConversation"><text>＋</text><text>新建</text></view>
-          </view>
-          <view v-if="conversations.length" class="conversation-history-list">
-            <view v-for="conversation in conversations" :key="conversation.id" class="conversation-history-item" @tap="openConversation(conversation)">
-              <view class="history-mark">对</view>
-              <view class="history-copy">
-                <view class="history-title-row"><text>{{ conversationTitle(conversation) }}</text><text>{{ formatConversationTime(conversation.updatedAt || conversation.createdAt) }}</text></view>
-                <text class="history-detail">{{ conversationStage(conversation) }}<text v-if="conversation.productSize"> · {{ conversation.productSize }}</text></text>
-              </view>
-              <view class="history-item-actions"><view class="history-delete" :class="{ loading: deletingConversationId === conversation.id }" :aria-label="`删除${conversationTitle(conversation)}`" @tap.stop="removeConversation(conversation)"><text>{{ deletingConversationId === conversation.id ? '…' : '删除' }}</text></view><text class="history-arrow">›</text></view>
-            </view>
-          </view>
-          <view v-else class="history-empty" @tap="startNewConversation"><text class="history-empty-mark">＋</text><view><text>还没有历史对话</text><text>开始一次创作后，进度会自动保存在这里</text></view><text class="history-arrow">›</text></view>
-        </view>
+        <view class="section-head path-heading"><view><text>创意工坊</text></view><text class="history-link" @tap="openConversationHistory">历史对话 ›</text></view>
+        <view class="creation-entry primary-entry" @tap="startConversation"><view class="entry-copy"><text>说出你的想法，让<span>创意</span>从这里开始…</text><view class="prompt-input"><text>说说你想做什么...</text><text>→</text></view><scroll-view scroll-x class="chips"><text v-for="chip in ['食品饮品','文房器物','日用生活','创意工坊']" :key="chip">● {{ chip }}</text></scroll-view></view></view>
 
         <view class="secondary-entry-grid">
-          <view class="creation-entry secondary-entry" @tap="openCommercial">
-            <view class="entry-icon commercial-icon"><text>□</text></view>
-            <view class="entry-copy"><text>商品化申请</text><text>报价 · 打样 · 渠道</text></view>
+          <view class="creation-entry secondary-entry product-entry" @tap="openCommercial">
+            <view class="entry-copy"><text>产品智造</text><text>快速打样 · 小批量起订</text><text>成熟工艺 · 产品落地</text></view>
             <text class="secondary-arrow">›</text>
           </view>
-          <view class="creation-entry secondary-entry works-entry" @tap="openWorks">
-            <view class="entry-icon works-icon"><text>◇</text></view>
-            <view class="entry-copy"><text>作品与灵感</text><text>{{ assetCount ? `${assetCount} 件作品待管理` : '查看并管理作品' }}</text></view>
+          <view class="creation-entry secondary-entry works-entry" @tap="openCommercial">
+            <view class="entry-copy"><text>渠道合作</text><text>博物馆 · 景区 · 商业空间</text><text>征集合​​作 · 产品上架</text></view>
             <text class="secondary-arrow">›</text>
           </view>
         </view>
 
+        <view class="section-head campaign-heading"><view><text>馆方征集 · 投稿通道</text></view><text>全部征集 ›</text></view>
+        <view class="home-campaign" v-for="campaign in campaignsPreview" :key="campaign.key" @tap="selectHomeCampaign(campaign)"><view class="home-campaign-art">馆</view><view class="home-campaign-copy"><text>{{ campaign.targetName }}｜{{ campaign.title }}</text><text>{{ campaign.collectionStyle }} · 文创转化</text><text>作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="home-campaign-points">+{{ campaign.rewardAmount }}</text></view>
+        <view class="inspiration-head"><text>灵感库</text><text @tap="openWorks">寻找灵感 ›</text></view><scroll-view scroll-x class="inspiration-scroll"><view v-for="(asset,index) in inspirationAssets" :key="asset.id || index" class="inspiration-card" @tap="openWorks"><image v-if="inspirationSrc(asset)" :src="inspirationSrc(asset)" mode="aspectFill"/><view v-else class="inspiration-placeholder">灵感</view><text>{{ asset.title || ['藏戏面具摆件','猫猫公交吊坠','双尾虎擦手巾'][index % 3] }}</text></view></scroll-view>
         <view v-if="isProfessional" class="management-workspace">
           <view class="section-head management-heading"><view><text>管理工作台</text><text>集中处理</text></view></view>
           <view class="workspace-entry" @tap="openProfessional">
@@ -78,19 +45,14 @@
       </view>
     </scroll-view>
 
-    <view class="bottom-nav">
-      <view class="nav-item active" @tap="refreshHome"><text class="nav-icon">⌂</text><text>首页</text></view>
-      <view class="nav-item create-nav" @tap="startConversation"><text class="create-icon">＋</text><text>新建创作</text></view>
-      <view class="nav-item" @tap="openWorks"><text class="nav-icon">□</text><text>作品</text></view>
-      <view class="nav-item" @tap="openProfile"><text class="nav-icon">◯</text><text>我的</text></view>
-    </view>
+    <view class="bottom-nav"><view class="nav-item active" @tap="refreshHome"><text class="nav-icon">⌂</text><text>首页</text></view><view class="nav-item" @tap="openWorks"><text class="nav-icon">▣</text><text>作品</text></view><view class="nav-item" @tap="openProfile"><text class="nav-icon">♙</text><text>我的</text></view></view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { deleteConversation, getAssetPreviewAccess, getAssets, getConversations, getCredits, getProductionRequests, type ConversationSession } from '../../api/creative'
+import { deleteConversation, getAssetPreviewAccess, getAssets, getConversations, getCredits, getProductionRequests, getPublicCreatorCampaigns, type ConversationSession, type CreatorCampaign } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { getCommercialRequests } from '../../api/commercial'
 import { getSession, requireSession } from '../../utils/session'
@@ -99,15 +61,19 @@ const user = ref(getSession()?.user)
 const credits = ref(0)
 const assets = ref<any[]>([])
 const conversations = ref<ConversationSession[]>([])
+const campaigns = ref<CreatorCampaign[]>([])
 const deletingConversationId = ref<number | null>(null)
 const productionRequests = ref<any[]>([])
 const commercialRequests = ref({ quoteRequests: [] as any[], consignmentApplications: [] as any[], selectionDemands: [] as any[] })
 const refreshing = ref(false)
 const heroVisualUrl = ref('')
+const inspirationPreviewUrls = ref<Record<string, string>>({})
 const creatorMode = ref<'amateur' | 'professional'>(readCreatorMode())
 
 const loggedIn = computed(() => Boolean(user.value))
 const isProfessional = computed(() => creatorMode.value === 'professional')
+const campaignsPreview = computed(() => campaigns.value.slice(0, 2))
+const inspirationAssets = computed(() => assets.value.filter(asset => asset?.assetType === 'image').slice(0, 6))
 const assetCount = computed(() => assets.value.length)
 const commercialRequestCount = computed(() => productionRequests.value.length
   + commercialRequests.value.quoteRequests.length
@@ -144,6 +110,18 @@ function startNewConversation() {
 function openConversation(session: ConversationSession) {
   if (!requireSession() || !session?.id) return
   go(`/pages/conversation-create/index?sessionId=${encodeURIComponent(String(session.id))}`)
+}
+
+function openConversationHistory() {
+  if (!requireSession()) return
+  if (conversations.value[0]) openConversation(conversations.value[0])
+  else startNewConversation()
+}
+
+function selectHomeCampaign(campaign: CreatorCampaign) {
+  uni.setStorageSync('pending_creator_campaign', { ...campaign, selectedAt: Date.now() })
+  uni.showToast({ title: '征集方向已选择', icon: 'none' })
+  if (!getSession()) go('/pages/login/index')
 }
 
 function removeConversation(session: ConversationSession) {
@@ -237,6 +215,23 @@ async function hydrateHeroVisual() {
   }
 }
 
+function inspirationSrc(asset: any) {
+  return inspirationPreviewUrls.value[String(asset?.id || '')] || ''
+}
+
+async function hydrateInspirationVisuals() {
+  const pairs = await Promise.all(inspirationAssets.value.map(async asset => {
+    try {
+      const access = await getAssetPreviewAccess(asset.id)
+      const url = absoluteMediaUrl(access?.previewUrl || access?.url, String(asset.id), access?.accessToken)
+      return url ? [String(asset.id), url] as const : null
+    } catch {
+      return null
+    }
+  }))
+  inspirationPreviewUrls.value = Object.fromEntries(pairs.filter(Boolean) as Array<readonly [string, string]>)
+}
+
 function normalizeCommercialRequests(value: any) {
   return {
     quoteRequests: Array.isArray(value?.quoteRequests) ? value.quoteRequests : [],
@@ -256,12 +251,14 @@ async function refreshHome() {
     getCommercialRequests(),
     getConversations(),
   ])
+  const campaignResult = await Promise.allSettled([getPublicCreatorCampaigns()])
   if (creditResult.status === 'fulfilled') credits.value = Number(creditResult.value?.balance) || 0
   if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
   if (requestResult.status === 'fulfilled') productionRequests.value = Array.isArray(requestResult.value) ? requestResult.value : []
   if (commercialResult.status === 'fulfilled') commercialRequests.value = normalizeCommercialRequests(commercialResult.value)
   if (conversationResult.status === 'fulfilled') conversations.value = Array.isArray(conversationResult.value) ? conversationResult.value : []
-  await hydrateHeroVisual()
+  if (campaignResult[0].status === 'fulfilled') campaigns.value = Array.isArray(campaignResult[0].value) ? campaignResult[0].value : []
+  await Promise.all([hydrateHeroVisual(), hydrateInspirationVisuals()])
   refreshing.value = false
 }
 
@@ -271,11 +268,13 @@ onShow(() => {
   if (user.value) void refreshHome()
   else {
     heroVisualUrl.value = ''
+    inspirationPreviewUrls.value = {}
     credits.value = 0
     assets.value = []
     productionRequests.value = []
     commercialRequests.value = normalizeCommercialRequests(null)
     conversations.value = []
+    void getPublicCreatorCampaigns().then(value => { campaigns.value = Array.isArray(value) ? value : [] }).catch(() => { campaigns.value = [] })
   }
 })
 </script>
@@ -290,4 +289,8 @@ onShow(() => {
 .bottom-nav{position:fixed;z-index:10;right:0;bottom:0;left:0;display:grid;grid-template-columns:repeat(4,1fr);height:116rpx;padding:12rpx 20rpx calc(12rpx + env(safe-area-inset-bottom));box-sizing:content-box;border-top:1rpx solid #dfe4df;background:rgba(250,251,248,.97)}.nav-item{display:flex;align-items:center;justify-content:center;min-width:0;flex-direction:column;gap:6rpx;color:#8b958f;font-size:17rpx}.nav-icon{font-size:30rpx;line-height:1}.nav-item.active{color:#315f4b;font-weight:750}.create-icon{display:grid;place-items:center;width:76rpx;height:76rpx;margin-top:-36rpx;border:4rpx solid #f7f7f3;border-radius:50%;background:#264d3e;color:#fffdf8;font-size:42rpx;font-weight:400;line-height:1;box-shadow:0 10rpx 20rpx rgba(33,68,52,.2)}.create-nav{color:#365849;font-weight:700}
 .history-section{margin-top:28rpx}.history-heading{margin:0 0 14rpx}.new-conversation{display:flex;align-items:center;gap:4rpx;padding:8rpx 12rpx;border:1rpx solid #cbdccf;border-radius:10rpx;background:#f0f7f1;color:#47715a;font-size:17rpx;font-weight:700}.new-conversation text:first-child{font-size:24rpx;line-height:1}.conversation-history-list{display:flex;flex-direction:column;gap:9rpx}.conversation-history-item,.history-empty{display:flex;align-items:center;gap:13rpx;min-height:86rpx;padding:13rpx 14rpx;box-sizing:border-box;border:1rpx solid #e0e7e1;border-radius:14rpx;background:#fff;box-shadow:0 4rpx 12rpx rgba(33,56,46,.025)}.conversation-history-item:active,.history-empty:active{background:#f1f7f1}.history-mark,.history-empty-mark{display:grid;place-items:center;flex:none;width:48rpx;height:48rpx;border-radius:13rpx;background:#edf4ee;color:#527963;font-family:"Songti SC","STSong",serif;font-size:23rpx;font-weight:800}.history-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:7rpx}.history-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:10rpx;min-width:0}.history-title-row text:first-child{overflow:hidden;color:#344b3f;font-size:20rpx;font-weight:750;text-overflow:ellipsis;white-space:nowrap}.history-title-row text:last-child{flex:none;color:#9aa59e;font-size:14rpx}.history-detail{overflow:hidden;color:#819088;font-size:15rpx;text-overflow:ellipsis;white-space:nowrap}.history-arrow{flex:none;color:#84948b;font-size:30rpx;line-height:1}.history-empty{border-style:dashed;background:#fbfcfa}.history-empty-mark{background:#f5f7f3;color:#769081;font-family:inherit;font-size:27rpx}.history-empty view{display:flex;min-width:0;flex:1;flex-direction:column;gap:5rpx}.history-empty view text:first-child{color:#52695b;font-size:18rpx;font-weight:750}.history-empty view text:last-child{overflow:hidden;color:#9aa59e;font-size:14rpx;text-overflow:ellipsis;white-space:nowrap}
 .history-item-actions{display:flex;align-items:center;gap:9rpx;flex:none}.history-delete{display:flex;align-items:center;justify-content:center;min-width:64rpx;height:46rpx;padding:0 7rpx;border:1rpx solid #efd8d0;border-radius:9rpx;background:#fff8f5;color:#b45f4a;font-size:14rpx}.history-delete:active{background:#fbe9e3}.history-delete.loading{opacity:.6}
- </style>
+</style>
+
+<style scoped lang="scss">
+.page{background:#fff;color:#202d29}.topbar{height:calc(118rpx + env(safe-area-inset-top));padding:calc(57rpx + env(safe-area-inset-top)) 32rpx 12rpx;background:#fff}.brand-seal{width:56rpx;height:56rpx;border-radius:18rpx;background:linear-gradient(145deg,#11d7b7,#00a994);font-size:34rpx}.brand-copy{display:none}.top-actions{gap:17rpx}.credit-chip{padding:10rpx 16rpx;border:0;border-radius:30rpx;background:#101615;color:#fff;font-size:20rpx}.credit-chip text:last-child{color:#fff;font-size:23rpx}.notice-entry{position:relative;display:grid;place-items:center;width:58rpx;height:58rpx;border:2rpx solid #0bc6a5;border-radius:50%;color:#08b99a;font-size:27rpx}.notice-count{position:absolute;right:-7rpx;top:-9rpx;display:grid;place-items:center;width:30rpx;height:30rpx;border-radius:50%;background:#ff5861;color:#fff;font-size:17rpx}.profile-entry{width:58rpx;height:58rpx;border:1rpx solid #dedede;border-radius:50%;background:#fff;color:#333;font-size:24rpx}.page-scroll{height:calc(100vh - 118rpx - env(safe-area-inset-top))}.content{padding:10rpx 32rpx calc(160rpx + env(safe-area-inset-bottom))}.hero{height:250rpx;border-radius:23rpx;background:linear-gradient(110deg,#eef7ff,#f4f7fb 58%,#fff0e4)}.hero::after{position:absolute;right:24rpx;top:25rpx;width:220rpx;height:190rpx;border-radius:52% 48% 44% 55%;background:radial-gradient(circle at 40% 30%,#ffe4a5 0 10%,transparent 11%),linear-gradient(145deg,#ffb1ad,#ff746f 42%,#fff0d0 44% 52%,#ffae8e 54% 73%,#ff6b72);box-shadow:0 28rpx 35rpx rgba(210,121,107,.22);transform:rotate(14deg);content:'';opacity:.82}.hero-copy{padding:35rpx 0 0 27rpx}.hero-kicker{color:#172c43;font-size:19rpx}.hero-title{font-size:49rpx;color:#143259}.hero-description{color:#506278;font-size:22rpx}.hero-link{margin-top:17rpx;border:0;color:#1e6bd6;font-size:20rpx}.hero-caption{display:none}.path-heading{margin-top:39rpx}.section-head>view text:first-child{font-family:"PingFang SC",sans-serif;color:#1f2523;font-size:31rpx}.history-link{color:#888;font-size:19rpx}.primary-entry{min-height:250rpx;padding:28rpx 28rpx;border:0;border-radius:24rpx;background:#fff;box-shadow:0 9rpx 25rpx rgba(66,94,87,.08)}.primary-entry .entry-copy>text:first-child{color:#252525;font-size:30rpx;font-weight:800}.primary-entry .entry-copy>text:first-child span{color:#256ee3}.prompt-input{display:flex;align-items:center;justify-content:space-between;margin-top:25rpx;padding:12rpx 13rpx 12rpx 27rpx;border-radius:50rpx;background:#f1f4f8;color:#a0a5aa;font-size:23rpx}.prompt-input text:last-child{display:grid;place-items:center;width:58rpx;height:58rpx;border-radius:50%;background:#2b65d5;color:#fff;font-size:38rpx;line-height:1}.chips{width:calc(100% + 12rpx);margin-top:20rpx;white-space:nowrap}.chips text{display:inline-block;margin-right:12rpx;padding:9rpx 15rpx;border:2rpx solid #7ca8ff;border-radius:30rpx;color:#376dd7;font-size:18rpx}.secondary-entry-grid{gap:17rpx;margin-top:18rpx}.secondary-entry{height:188rpx;border:0;border-radius:23rpx;padding:23rpx;background:#f7f7f7;box-shadow:none}.product-entry{background:linear-gradient(180deg,#fff0dd,#f4f4f4)}.works-entry{background:linear-gradient(180deg,#dffaf4,#f4f4f4)}.secondary-entry .entry-copy{margin-top:auto}.secondary-entry .entry-copy text:first-child{color:#efa441;font-size:27rpx}.works-entry .entry-copy text:first-child{color:#05aa96}.secondary-entry .entry-copy text:last-child{color:#555;font-size:18rpx}.secondary-entry .entry-copy text:nth-child(3){margin-top:5rpx;color:#888;font-size:17rpx}.secondary-arrow{display:none}.campaign-heading{margin-top:39rpx}.campaign-heading>text{color:#888;font-size:19rpx}.home-campaign{display:flex;align-items:center;gap:17rpx;margin-bottom:15rpx;padding:12rpx;border-left:8rpx solid #07bfa0;border-radius:21rpx;background:#fff;box-shadow:0 8rpx 22rpx rgba(14,160,129,.1)}.home-campaign-art{display:grid;place-items:center;width:135rpx;height:117rpx;border-radius:17rpx;background:#def4ec;color:#138a6f;font-family:"Songti SC","STSong",serif;font-size:55rpx}.home-campaign-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:8rpx}.home-campaign-copy text:first-child{overflow:hidden;color:#2a332f;font-size:23rpx;font-weight:800;text-overflow:ellipsis;white-space:nowrap}.home-campaign-copy text:nth-child(2),.home-campaign-copy text:nth-child(3){color:#999;font-size:17rpx}.home-campaign-points{padding:8rpx 12rpx;border-radius:30rpx;background:#07bea0;color:#fff;font-size:19rpx;font-weight:800}.inspiration-head{display:flex;align-items:center;justify-content:space-between;margin:31rpx 0 16rpx;color:#222;font-size:29rpx;font-weight:800}.inspiration-head text:last-child{color:#888;font-size:19rpx;font-weight:400}.inspiration-scroll{width:calc(100% + 12rpx);margin-left:-6rpx;white-space:nowrap}.inspiration-card{display:inline-flex;overflow:hidden;width:185rpx;height:225rpx;margin:0 7rpx;border-radius:17rpx;background:#f6f6f6;vertical-align:top;flex-direction:column}.inspiration-card image,.inspiration-placeholder{display:block;width:100%;height:190rpx;background:#e9ecea}.inspiration-placeholder{display:grid;place-items:center;color:#9aac9f;font-size:25rpx}.inspiration-card>text{padding:9rpx 10rpx;color:#fff;font-size:18rpx;background:rgba(28,28,28,.55);transform:translateY(-38rpx)}.bottom-nav{right:28rpx;bottom:20rpx;left:28rpx;grid-template-columns:repeat(3,1fr);height:84rpx;padding:10rpx 12rpx;border:0;border-radius:40rpx;background:linear-gradient(90deg,#12d8bd,#00b9a6);box-shadow:0 12rpx 28rpx rgba(0,161,141,.24)}.nav-item{color:#dffff8;font-size:18rpx}.nav-icon{font-size:30rpx}.nav-item.active{color:#fff;background:none}.create-nav{display:none}
+</style>

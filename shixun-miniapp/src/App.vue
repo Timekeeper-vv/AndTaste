@@ -17,7 +17,7 @@ onLaunch(() => {
 
 <style lang="scss">
 page {
-  background: #f7f3ed;
+  background: #ffffff;
   color: #292622;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
 }

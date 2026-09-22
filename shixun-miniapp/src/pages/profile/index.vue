@@ -1,121 +1,34 @@
 <template>
   <view class="page">
-    <view class="ink-wash ink-wash-one" />
-    <view class="ink-wash ink-wash-two" />
-
+    <view class="mini-top"><text class="mini-title">我的</text><view class="mini-menu"><text>•••</text><text>◉</text></view></view>
     <view class="profile-hero">
-      <view class="seal-avatar">{{ displayName.slice(0, 1).toUpperCase() }}</view>
-      <view class="identity">
-        <text class="eyebrow">MY ATELIER</text>
-        <text class="name">{{ displayName }}</text>
-        <text class="role">{{ loggedIn ? `${creatorModeLabel} · 灵感与作品都在这里沉淀` : '先浏览首页，登录后再管理作品与订单' }}</text>
-      </view>
+      <view class="seal-avatar">间</view>
+      <view class="identity"><text class="eyebrow">MY ATELIER</text><text class="name">{{ displayName }}</text><text class="role">{{ loggedIn ? '灵感与作品都在这里沉淀' : '登录后管理作品与订单' }}</text></view>
     </view>
 
-    <view v-if="!loggedIn" class="guest-card">
-      <text class="guest-kicker">GUEST MODE</text>
-      <text class="guest-title">先随意看看，再决定是否登录。</text>
-      <text class="guest-copy">首页、选品方向和公开内容均可浏览；创作、保存、下单时再由你主动登录。</text>
-      <button class="guest-login" @tap="goLogin">登录后管理我的创作</button>
-      <text class="guest-home" @tap="goHome">暂不登录，返回首页继续浏览</text>
-    </view>
+    <view v-if="!loggedIn" class="guest-card"><text class="guest-kicker">GUEST MODE</text><text class="guest-title">登录后查看创作资产</text><text class="guest-copy">作品、审核进度和商城订单都会安全保存在你的账户中。</text><button class="guest-login" @tap="goLogin">登录</button><text class="guest-home" @tap="goHome">返回首页继续浏览</text></view>
 
-    <view v-else class="welcome-card">
-      <view>
-        <text class="welcome-kicker">之间智造 · 创作服务</text>
-        <text class="welcome-title">把一个灵感，慢慢做成一件好作品。</text>
+    <template v-else>
+      <view class="token-card"><view><text>Token　余额</text><text>{{ creditBalance }}</text><text>创作消耗 Token · 充值或任务获取</text></view><text class="token-button" @tap="go('/pages/recharge/index')">＋ 充值</text></view>
+      <view class="order-card"><view class="order-head"><text>我的订单</text><text @tap="go('/pages/orders/index')">全部订单 ›</text></view><view class="order-grid"><view @tap="go('/pages/orders/index')"><text class="order-icon red">▰</text><text>{{ orderCounts.pendingPay }}</text><text>待付款</text></view><view @tap="go('/pages/orders/index')"><text class="order-icon blue">➜</text><text>{{ orderCounts.pendingShip }}</text><text>待发货</text></view><view @tap="go('/pages/orders/index')"><text class="order-icon orange">▣</text><text>{{ orderCounts.pendingReceive }}</text><text>待收货</text></view></view></view>
+      <view class="section-heading"><text>ACCOUNT · 账户与服务</text><text @tap="go('/pages/conversation-create/index')">历史对话 ›</text></view>
+      <view class="menu-card">
+        <view class="menu-row" @tap="go('/pages/works/index')"><view class="menu-icon artwork">作</view><view class="menu-copy"><text>我的作品</text><text>查看创作成果与审核状态</text></view><text class="arrow">›</text></view>
+        <view class="menu-row" @tap="openAddress"><view class="menu-icon rights">收</view><view class="menu-copy"><text>收货地址</text><text>下单时维护收件人与配送信息</text></view><text class="arrow">›</text></view>
+        <view class="menu-row" @tap="go('/pages/support/index?tab=chat')"><view class="menu-icon service">问</view><view class="menu-copy"><text>在线客服</text><text>创作咨询 · 打样咨询 · 售后优化</text></view><view class="service-badge">8</view><text class="arrow">›</text></view>
       </view>
-      <text class="welcome-seal">印</text>
-    </view>
+      <button class="logout" @tap="logout">退出当前账号</button>
+    </template>
 
-    <view v-if="loggedIn" class="section-heading">
-      <text>创作与账户</text>
-      <text>ACCOUNT</text>
-    </view>
-    <view v-if="loggedIn" class="menu-card">
-      <view class="menu-row" @tap="go('/pages/works/index')">
-        <view class="menu-icon artwork">作</view>
-        <view class="menu-copy"><text>我的作品</text><text>查看创作成果与审核状态</text></view>
-        <text class="arrow">›</text>
-      </view>
-      <view class="menu-row" @tap="go('/pages/commercial/index')">
-        <view class="menu-icon market">做</view>
-        <view class="menu-copy"><text>商品化申请</text><text>申请报价、打样或渠道代销</text></view>
-        <text class="arrow">›</text>
-      </view>
-      <view class="menu-row" @tap="go('/pages/recharge/index')">
-        <view class="menu-icon credit">点</view>
-        <view class="menu-copy"><text>积分充值</text><text>管理创作所需积分</text></view>
-        <text class="arrow">›</text>
-      </view>
-      <view class="menu-row" @tap="go('/pages/sample-payment/index')">
-        <view class="menu-icon">¥</view>
-        <view class="menu-copy"><text>打样费支付</text><text>审核通过后在这里完成支付</text></view>
-        <text class="menu-arrow">›</text>
-      </view>
-      <view class="menu-row" @tap="go('/pages/production-requests/index')">
-        <view class="menu-icon production">流</view>
-        <view class="menu-copy"><text>我的生产申请</text><text>审核、支付、制作和样品反馈统一查看</text></view>
-        <text class="arrow">›</text>
-      </view>
-      <view class="menu-row" @tap="go('/pages/purpose/index')">
-        <view class="menu-icon purpose">向</view>
-        <view class="menu-copy"><text>切换创作模式与用途</text><text>{{ creatorModeLabel }} · 个人创作或景区、博物馆售卖</text></view>
-        <text class="arrow">›</text>
-      </view>
-      <view v-if="creatorMode === 'professional'" class="menu-row" @tap="go('/pages/professional/index')">
-        <view class="menu-icon professional">专</view>
-        <view class="menu-copy"><text>专业作品提交</text><text>上传 ZIP 作品包，查看评审进度</text></view>
-        <text class="arrow">›</text>
-      </view>
-    </view>
-
-    <view v-if="loggedIn" class="section-heading market-heading">
-      <text>文创商城</text>
-      <text>MARKET &amp; ORDERS</text>
-    </view>
-    <view v-if="loggedIn" class="menu-card market-card">
-      <view class="menu-row" @tap="go('/pages/market/index')">
-        <view class="menu-icon market">集</view>
-        <view class="menu-copy"><text>文创商城</text><text>浏览已审核的文化作品与实体衍生品</text></view>
-        <text class="arrow">›</text>
-      </view>
-      <view class="menu-row" @tap="go('/pages/orders/index')">
-        <view class="menu-icon orders">单</view>
-        <view class="menu-copy"><text>我的商城订单</text><text>查看已创建订单和当前处理状态</text></view>
-        <text class="arrow">›</text>
-      </view>
-    </view>
-
-    <view v-if="loggedIn" class="section-heading service-heading">
-      <text>服务与保障</text>
-      <text>CARE &amp; RIGHTS</text>
-    </view>
-    <view v-if="loggedIn" class="menu-card service-card">
-      <view class="menu-row" @tap="go('/pages/support/index?tab=chat')">
-        <view class="menu-icon service">问</view>
-        <view class="menu-copy"><text>在线客服</text><text>查看历史消息，咨询创作、生产与订单</text></view>
-        <view class="service-badge">在线</view>
-        <text class="arrow">›</text>
-      </view>
-      <view class="menu-row" @tap="go('/pages/support/index?tab=rights')">
-        <view class="menu-icon rights">权</view>
-        <view class="menu-copy"><text>版权咨询</text><text>为作品登记著作权、专利或 IP 咨询</text></view>
-        <text class="arrow">›</text>
-      </view>
-    </view>
-
-    <button v-if="loggedIn" class="logout" @tap="logout">退出当前账号</button>
-    <view class="bottom-nav">
-      <view @tap="goHome"><text>⌂</text><text>首页</text></view>
-      <view @tap="go('/pages/works/index')"><text>▣</text><text>作品</text></view>
-      <view class="active"><text>◉</text><text>我的</text></view>
-    </view>
+    <view class="bottom-nav"><view @tap="goHome"><text>⌂</text><text>首页</text></view><view @tap="go('/pages/works/index')"><text>▣</text><text>作品</text></view><view class="active"><text>◉</text><text>我的</text></view></view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
+import { getCredits } from '../../api/creative'
+import { getMarketplaceOrders, type MarketplaceOrder } from '../../api/marketplace'
 import { clearSession, getSession } from '../../utils/session'
 
 const user = ref(getSession()?.user)
@@ -123,9 +36,31 @@ const loggedIn = computed(() => Boolean(user.value))
 const creatorMode = ref<'amateur' | 'professional'>((uni.getStorageSync('creation_context') || {}).creatorMode === 'professional' ? 'professional' : 'amateur')
 const displayName = computed(() => user.value?.username || '创作用户')
 const creatorModeLabel = computed(() => creatorMode.value === 'professional' ? '专业创作用户' : '业余创作用户')
+const creditBalance = ref(0)
+const orders = ref<MarketplaceOrder[]>([])
+const orderCounts = computed(() => orders.value.reduce((counts, order) => {
+  const status = String(order.orderStatus || '').toLowerCase()
+  if (['pending_pay', 'pending_payment', 'created'].includes(status)) counts.pendingPay += 1
+  if (['paid', 'pending_ship', 'pending_shipment', 'processing'].includes(status)) counts.pendingShip += 1
+  if (['shipped', 'in_transit', 'pending_receive', 'pending_receipt'].includes(status)) counts.pendingReceive += 1
+  return counts
+}, { pendingPay: 0, pendingShip: 0, pendingReceive: 0 }))
 const go = (url: string) => uni.navigateTo({ url })
 const goHome = () => uni.reLaunch({ url: '/pages/home/index' })
 const goLogin = () => uni.navigateTo({ url: '/pages/login/index?from=profile' })
+
+function openAddress() {
+  uni.showToast({ title: '收货地址在确认订单时维护', icon: 'none' })
+}
+
+onShow(() => {
+  user.value = getSession()?.user
+  if (!user.value) return
+  void Promise.allSettled([getCredits(), getMarketplaceOrders()]).then(([creditResult, orderResult]) => {
+    if (creditResult.status === 'fulfilled') creditBalance.value = Number(creditResult.value?.balance) || 0
+    if (orderResult.status === 'fulfilled') orders.value = Array.isArray(orderResult.value) ? orderResult.value : []
+  })
+})
 
 function logout() {
   uni.showModal({
@@ -189,4 +124,8 @@ function logout() {
 .bottom-nav view text:first-child { color: #849489; font-size: 27rpx; line-height: 1; }
 .bottom-nav .active { color: #4f7563; background: #edf4ed; font-weight: 800; }
 .bottom-nav .active text:first-child { color: #547b69; }
+</style>
+
+<style scoped lang="scss">
+.page{overflow:visible;padding:calc(28rpx + env(safe-area-inset-top)) 32rpx calc(150rpx + env(safe-area-inset-bottom));background:#fff;color:#222}.mini-top{position:relative;display:flex;align-items:center;justify-content:center;height:68rpx;margin-bottom:14rpx}.mini-title{font-size:30rpx;font-weight:800}.mini-menu{position:absolute;right:0;display:flex;align-items:center;gap:14rpx;padding:8rpx 17rpx;border:1rpx solid #e4e4e4;border-radius:30rpx;color:#333;font-size:24rpx}.profile-hero{padding:16rpx 0 28rpx}.seal-avatar{width:82rpx;height:82rpx;border:0;border-radius:26rpx;background:linear-gradient(145deg,#12d5b7,#00a58e);font-size:47rpx}.eyebrow{color:#8b9792;font-size:17rpx}.name{margin-top:4rpx;font-family:"PingFang SC",sans-serif;font-size:38rpx}.role{margin-top:6rpx;color:#8d9591;font-size:20rpx}.welcome-card{display:none}.token-card{display:flex;align-items:center;justify-content:space-between;margin:8rpx 0 27rpx;padding:22rpx 26rpx;border-radius:28rpx;background:linear-gradient(110deg,#0ccbb0,#003e35);color:#fff}.token-card view{display:flex;flex-direction:column}.token-card view text:first-child{font-size:19rpx}.token-card view text:nth-child(2){margin-top:3rpx;font-size:49rpx;font-weight:700}.token-card view text:last-child{margin-top:1rpx;color:#b8f6e8;font-size:17rpx}.token-button{padding:10rpx 19rpx;border-radius:30rpx;background:#0ce4c0;font-size:21rpx;font-weight:800}.order-card{padding:25rpx 23rpx;border:1rpx solid #e1edf7;border-radius:24rpx;background:#fff;box-shadow:0 8rpx 22rpx rgba(81,117,157,.1)}.order-head{display:flex;align-items:center;justify-content:space-between}.order-head text:first-child{font-family:"PingFang SC",sans-serif;font-size:29rpx;font-weight:800}.order-head text:last-child{color:#888;font-size:19rpx}.order-grid{display:grid;grid-template-columns:repeat(3,1fr);margin-top:26rpx}.order-grid view{display:flex;align-items:center;flex-direction:column;gap:6rpx}.order-icon{font-size:37rpx}.order-icon.red{color:#fa7d77}.order-icon.blue{color:#63a7ef}.order-icon.orange{color:#ff9d56}.order-grid view text:nth-child(2){font-size:29rpx;font-weight:800}.order-grid view text:last-child{color:#888;font-size:18rpx}.section-heading{margin:31rpx 5rpx 15rpx}.section-heading text:first-child{font-family:"PingFang SC",sans-serif;font-size:25rpx}.section-heading text:last-child{font-size:18rpx}.menu-card{border:1rpx solid #e6eef4;border-radius:23rpx;background:#fff;box-shadow:0 7rpx 20rpx rgba(60,91,117,.07)}.menu-row{min-height:107rpx;padding:0 22rpx;border-bottom:1rpx solid #eef1f3}.menu-icon{width:57rpx;height:57rpx;margin-right:17rpx;border-radius:17rpx}.menu-copy text:first-child{font-size:27rpx}.menu-copy text:last-child{font-size:19rpx}.logout{height:82rpx;margin-top:34rpx;border:0;background:#f1f5f3;color:#719083;font-size:24rpx}.bottom-nav{right:28rpx;bottom:20rpx;left:28rpx;grid-template-columns:repeat(3,1fr);height:84rpx;padding:10rpx 12rpx;border:0;border-radius:40rpx;background:linear-gradient(90deg,#12d8bd,#00b9a6);box-shadow:0 12rpx 28rpx rgba(0,161,141,.24)}.bottom-nav view{color:#dffff8;font-size:18rpx}.bottom-nav .active{color:#fff;background:none}.service-badge{display:grid;place-items:center;width:32rpx;height:32rpx;padding:0;border-radius:50%;background:#ff5c61;color:#fff;font-size:17rpx}
 </style>
