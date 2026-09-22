@@ -141,27 +141,42 @@ prepare_backup(){
 }
 
 normalize_generated_static_changes(){
-  local dirty line path
+  local dirty line path static_dirty=0 remaining=""
   dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
   [ -n "$dirty" ] || return 0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     path="${line:3}"
     case "$path" in
-      "$STATIC_REL"|"$STATIC_REL"/*) ;;
+      "$STATIC_REL"|"$STATIC_REL"/*) static_dirty=1 ;;
+      .env.backup-*)
+        warn "保留本地配置备份文件：$path"
+        ;;
       *) die "服务器工作区有非构建产物改动，已停止：$line" ;;
     esac
   done <<< "$dirty"
-  [ -f "$BACKUP_DIR/static-bundle.tgz" ] || die "静态资源备份缺失，拒绝清理工作区"
-  warn "检测到前端构建产物改动；已备份后恢复 Git 静态目录，保留 generated/uploads"
-  find "$STATIC_DIR" -mindepth 1 -maxdepth 1 \
-    ! -name generated ! -name uploads -exec rm -rf -- {} +
-  git -C "$ROOT_DIR" restore --source=HEAD --staged --worktree -- "$STATIC_REL"
+  if [ "$static_dirty" -eq 1 ]; then
+    [ -f "$BACKUP_DIR/static-bundle.tgz" ] || die "静态资源备份缺失，拒绝清理工作区"
+    warn "检测到前端构建产物改动；已备份后恢复 Git 静态目录，保留 generated/uploads"
+    find "$STATIC_DIR" -mindepth 1 -maxdepth 1 \
+      ! -name generated ! -name uploads -exec rm -rf -- {} +
+    git -C "$ROOT_DIR" restore --source=HEAD --staged --worktree -- "$STATIC_REL"
+  fi
+
+  dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    path="${line:3}"
+    case "$path" in
+      .env.backup-*) ;;
+      *) remaining+="$line"$'\n' ;;
+    esac
+  done <<< "$dirty"
+  [ -z "$remaining" ] || die "服务器工作区有未提交改动，已停止；请先保存或清理后再更新：${remaining//$'\n'/ }"
 }
 
 update_code(){
   normalize_generated_static_changes
-  [ -z "$(git -C "$ROOT_DIR" status --porcelain)" ] || die "服务器工作区有未提交改动，已停止；请先保存或清理后再更新"
   info "获取 origin/$BRANCH，并仅允许快进更新"
   git -C "$ROOT_DIR" fetch origin "$BRANCH"
   local remote_head
