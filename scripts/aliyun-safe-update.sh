@@ -231,6 +231,10 @@ update_code(){
 
 start_candidate(){
   local candidate_log="$BACKUP_DIR/candidate.log"
+  if command -v lsof >/dev/null 2>&1 && \
+     [ -n "$(lsof -nP -iTCP:"$CANDIDATE_PORT" -sTCP:LISTEN -t 2>/dev/null || true)" ]; then
+    die "候选端口 $CANDIDATE_PORT 已被占用；未切换正式服务"
+  fi
   info "在 127.0.0.1:$CANDIDATE_PORT 启动候选版本做健康检查"
   cd "$BACKEND_DIR"
   nohup env SERVER_ADDRESS=127.0.0.1 \
@@ -238,11 +242,19 @@ start_candidate(){
     -jar "$NEW_JAR_PATH" --server.port="$CANDIDATE_PORT" --server.address=127.0.0.1 \
     --app.scheduling.enabled=false > "$candidate_log" 2>&1 &
   CANDIDATE_PID="$!"
-  if ! wait_app_health "$CANDIDATE_PORT"; then
-    tail -100 "$candidate_log" >&2 || true
-    die "候选版本健康检查失败；旧服务仍保持运行"
-  fi
-  ok "候选版本健康检查通过"
+  for _ in {1..60}; do
+    if ! kill -0 "$CANDIDATE_PID" 2>/dev/null; then
+      tail -100 "$candidate_log" >&2 || true
+      die "候选版本进程提前退出；旧服务仍保持运行"
+    fi
+    if curl -fsS --max-time 5 "http://127.0.0.1:${CANDIDATE_PORT}${HEALTH_PATH}" >/dev/null 2>&1; then
+      ok "候选版本健康检查通过"
+      return
+    fi
+    sleep 2
+  done
+  tail -100 "$candidate_log" >&2 || true
+  die "候选版本健康检查超时；旧服务仍保持运行"
 }
 
 stop_candidate(){
