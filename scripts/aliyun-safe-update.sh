@@ -147,10 +147,12 @@ normalize_generated_static_changes(){
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     path="${line:3}"
+    path="${path#\"}"
+    path="${path%\"}"
     case "$path" in
       "$STATIC_REL"|"$STATIC_REL"/*) static_dirty=1 ;;
-      .env.backup-*)
-        warn "保留本地配置备份文件：$path"
+      .env.*|shixun/data|shixun/data/*|secrets|secrets/*|shixun-vue/public/*.txt|nohup.out|loongcollector.sh|openclaw_installer.sh|tmp|tmp/*|et\ -a)
+        warn "保留服务器本地运行文件：$path"
         ;;
       *) die "服务器工作区有非构建产物改动，已停止：$line" ;;
     esac
@@ -167,8 +169,10 @@ normalize_generated_static_changes(){
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     path="${line:3}"
+    path="${path#\"}"
+    path="${path%\"}"
     case "$path" in
-      .env.backup-*) ;;
+      .env.*|shixun/data|shixun/data/*|secrets|secrets/*|shixun-vue/public/*.txt|nohup.out|loongcollector.sh|openclaw_installer.sh|tmp|tmp/*|et\ -a) ;;
       *) remaining+="$line"$'\n' ;;
     esac
   done <<< "$dirty"
@@ -250,10 +254,14 @@ on_exit(){
   trap - EXIT
   set +e
   stop_candidate
-  if [ "$rc" -ne 0 ] && [ "$BUILD_STARTED" -eq 1 ]; then
-    restore_old_service
-    warn "更新失败。数据库备份保留在：$DB_BACKUP"
-    warn "不要直接导入数据库备份覆盖线上库；如确需恢复，请先停止写入并人工确认备份时间点"
+  if [ "$rc" -ne 0 ]; then
+    if [ "$BUILD_STARTED" -eq 1 ]; then
+      restore_old_service
+    fi
+    if [ -n "$BACKUP_DIR" ]; then
+      warn "更新失败；数据库和运行文件备份保留在：$BACKUP_DIR"
+      warn "不要直接导入数据库备份覆盖线上库；如确需恢复，请先停止写入并人工确认备份时间点"
+    fi
   fi
   if [ "$rc" -eq 0 ]; then
     ok "安全更新完成；备份保留在：$BACKUP_DIR"
