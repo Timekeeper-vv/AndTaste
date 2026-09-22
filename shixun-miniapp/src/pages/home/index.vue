@@ -1,20 +1,17 @@
 <template>
   <view class="page">
-    <view class="topbar"><view class="brand" @tap="changeContext"><text class="brand-seal">间</text></view><view class="top-actions"><view v-if="loggedIn" class="credit-chip" @tap="go('/pages/recharge/index')"><text>⚡</text><text>{{ credits }}</text></view><view class="notice-entry"><text>♧</text><text v-if="loggedIn" class="notice-count">8</text></view><view class="profile-entry" @tap="openProfile"><text>◯</text></view></view></view>
+    <view class="topbar"><view class="brand" @tap="changeContext"><image class="brand-seal" src="/static/ui-design/brand-logo.png" mode="aspectFit" /></view><view class="top-actions"><view v-if="loggedIn" class="credit-chip" @tap="go('/pages/recharge/index')"><text>⚡</text><text>{{ credits }}</text></view><view class="notice-entry"><text>♧</text><text v-if="loggedIn" class="notice-count">8</text></view><view class="profile-entry" @tap="openProfile"><text>◯</text></view></view></view>
 
     <scroll-view scroll-y class="page-scroll" :show-scrollbar="false">
       <view class="content">
         <view class="hero">
-          <image v-if="heroVisualUrl" :src="heroVisualUrl" mode="aspectFill" class="hero-visual" />
-          <view v-else class="hero-fallback" aria-hidden="true"><view class="artifact-card"><text>之</text><view /><view /></view></view>
-          <view v-if="heroVisualUrl" class="hero-visual-shade" />
+          <image src="/static/ui-design/home-gift.jpg" mode="aspectFit" class="hero-gift" />
           <view class="hero-copy">
             <text class="hero-kicker">完成首次 AI 创作</text>
             <text class="hero-title">创作有礼</text>
             <text class="hero-description">即可获得 30 创作积分</text>
             <view class="hero-link" @tap="startConversation"><text>用对话开始</text><text>›</text></view>
           </view>
-          <view v-if="heroVisualUrl" class="hero-caption"><view class="ai-dot" /><text>之间智造效果图</text></view>
         </view>
 
         <view class="section-head path-heading"><view><text>创意工坊</text></view><text class="history-link" @tap="openConversationHistory">历史对话 ›</text></view>
@@ -22,17 +19,19 @@
 
         <view class="secondary-entry-grid">
           <view class="creation-entry secondary-entry product-entry" @tap="openCommercial">
+            <image class="secondary-art" src="/static/ui-design/product-making.jpg" mode="aspectFill" />
             <view class="entry-copy"><text>产品智造</text><text>快速打样 · 小批量起订</text><text>成熟工艺 · 产品落地</text></view>
             <text class="secondary-arrow">›</text>
           </view>
           <view class="creation-entry secondary-entry works-entry" @tap="openCommercial">
+            <image class="secondary-art" src="/static/ui-design/channel-cooperation.jpg" mode="aspectFill" />
             <view class="entry-copy"><text>渠道合作</text><text>博物馆 · 景区 · 商业空间</text><text>征集合​​作 · 产品上架</text></view>
             <text class="secondary-arrow">›</text>
           </view>
         </view>
 
         <view class="section-head campaign-heading"><view><text>馆方征集 · 投稿通道</text></view><text>全部征集 ›</text></view>
-        <view class="home-campaign" v-for="campaign in campaignsPreview" :key="campaign.key" @tap="selectHomeCampaign(campaign)"><view class="home-campaign-art">馆</view><view class="home-campaign-copy"><text>{{ campaign.targetName }}｜{{ campaign.title }}</text><text>{{ campaign.collectionStyle }} · 文创转化</text><text>作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="home-campaign-points">+{{ campaign.rewardAmount }}</text></view>
+        <view class="home-campaign" v-for="(campaign,index) in campaignsPreview" :key="campaign.key" @tap="selectHomeCampaign(campaign)"><image class="home-campaign-art" :src="campaignImage(index)" mode="aspectFill" /><view class="home-campaign-copy"><text>{{ campaign.targetName }}｜{{ campaign.title }}</text><text>{{ campaign.collectionStyle }} · 文创转化</text><text>作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="home-campaign-points">+{{ campaign.rewardAmount }}</text></view>
         <view class="inspiration-head"><text>灵感库</text><text @tap="openWorks">寻找灵感 ›</text></view><scroll-view scroll-x class="inspiration-scroll"><view v-for="(asset,index) in inspirationAssets" :key="asset.id || index" class="inspiration-card" @tap="openWorks"><image v-if="inspirationSrc(asset)" :src="inspirationSrc(asset)" mode="aspectFill"/><view v-else class="inspiration-placeholder">灵感</view><text>{{ asset.title || ['藏戏面具摆件','猫猫公交吊坠','双尾虎擦手巾'][index % 3] }}</text></view></scroll-view>
         <view v-if="isProfessional" class="management-workspace">
           <view class="section-head management-heading"><view><text>管理工作台</text><text>集中处理</text></view></view>
@@ -69,11 +68,24 @@ const refreshing = ref(false)
 const heroVisualUrl = ref('')
 const inspirationPreviewUrls = ref<Record<string, string>>({})
 const creatorMode = ref<'amateur' | 'professional'>(readCreatorMode())
+const campaignFallbacks: CreatorCampaign[] = [
+  { key: 'design-bronze', title: '青铜器主题', targetName: '国家博物馆', channelCode: 'design-bronze', collectionStyle: '青铜纹样 · 器物元素', recommendedProducts: [], brief: '', promptHint: '', rewardAmount: 80 },
+  { key: 'design-lacquer', title: '漆器纹样主题', targetName: '湖北省博物馆', channelCode: 'design-lacquer', collectionStyle: '漆器纹样 · 色彩元素', recommendedProducts: [], brief: '', promptHint: '', rewardAmount: 60 },
+]
+const inspirationFallbacks = [
+  { id: 'design-mask', title: '藏戏面具摆件', localUrl: '/static/ui-design/inspiration-mask.jpg' },
+  { id: 'design-cat', title: '猫猫公交吊坠', localUrl: '/static/ui-design/inspiration-cat.jpg' },
+  { id: 'design-tiger', title: '双尾虎擦手巾', localUrl: '/static/ui-design/work-tiger.jpg' },
+]
 
 const loggedIn = computed(() => Boolean(user.value))
 const isProfessional = computed(() => creatorMode.value === 'professional')
-const campaignsPreview = computed(() => campaigns.value.slice(0, 2))
-const inspirationAssets = computed(() => assets.value.filter(asset => asset?.assetType === 'image').slice(0, 6))
+const campaignsPreview = computed(() => (campaigns.value.length ? campaigns.value : campaignFallbacks).slice(0, 2))
+const inspirationAssets = computed(() => {
+  const live = assets.value.filter(asset => asset?.assetType === 'image').slice(0, 6)
+  return live.length ? live : inspirationFallbacks
+})
+const campaignImage = (index: number) => index % 2 ? '/static/ui-design/campaign-drum.jpg' : '/static/ui-design/campaign-bronze.jpg'
 const assetCount = computed(() => assets.value.length)
 const commercialRequestCount = computed(() => productionRequests.value.length
   + commercialRequests.value.quoteRequests.length
@@ -119,6 +131,10 @@ function openConversationHistory() {
 }
 
 function selectHomeCampaign(campaign: CreatorCampaign) {
+  if (campaign.key.startsWith('design-')) {
+    uni.showToast({ title: '征集活动数据加载中', icon: 'none' })
+    return
+  }
   uni.setStorageSync('pending_creator_campaign', { ...campaign, selectedAt: Date.now() })
   uni.showToast({ title: '征集方向已选择', icon: 'none' })
   if (!getSession()) go('/pages/login/index')
@@ -216,11 +232,11 @@ async function hydrateHeroVisual() {
 }
 
 function inspirationSrc(asset: any) {
-  return inspirationPreviewUrls.value[String(asset?.id || '')] || ''
+  return asset?.localUrl || inspirationPreviewUrls.value[String(asset?.id || '')] || ''
 }
 
 async function hydrateInspirationVisuals() {
-  const pairs = await Promise.all(inspirationAssets.value.map(async asset => {
+  const pairs = await Promise.all(inspirationAssets.value.filter(asset => !asset.localUrl).map(async asset => {
     try {
       const access = await getAssetPreviewAccess(asset.id)
       const url = absoluteMediaUrl(access?.previewUrl || access?.url, String(asset.id), access?.accessToken)
@@ -292,5 +308,5 @@ onShow(() => {
 </style>
 
 <style scoped lang="scss">
-.page{background:#fff;color:#202d29}.topbar{height:calc(118rpx + env(safe-area-inset-top));padding:calc(57rpx + env(safe-area-inset-top)) 32rpx 12rpx;background:#fff}.brand-seal{width:56rpx;height:56rpx;border-radius:18rpx;background:linear-gradient(145deg,#11d7b7,#00a994);font-size:34rpx}.brand-copy{display:none}.top-actions{gap:17rpx}.credit-chip{padding:10rpx 16rpx;border:0;border-radius:30rpx;background:#101615;color:#fff;font-size:20rpx}.credit-chip text:last-child{color:#fff;font-size:23rpx}.notice-entry{position:relative;display:grid;place-items:center;width:58rpx;height:58rpx;border:2rpx solid #0bc6a5;border-radius:50%;color:#08b99a;font-size:27rpx}.notice-count{position:absolute;right:-7rpx;top:-9rpx;display:grid;place-items:center;width:30rpx;height:30rpx;border-radius:50%;background:#ff5861;color:#fff;font-size:17rpx}.profile-entry{width:58rpx;height:58rpx;border:1rpx solid #dedede;border-radius:50%;background:#fff;color:#333;font-size:24rpx}.page-scroll{height:calc(100vh - 118rpx - env(safe-area-inset-top))}.content{padding:10rpx 32rpx calc(160rpx + env(safe-area-inset-bottom))}.hero{height:250rpx;border-radius:23rpx;background:linear-gradient(110deg,#eef7ff,#f4f7fb 58%,#fff0e4)}.hero::after{position:absolute;right:24rpx;top:25rpx;width:220rpx;height:190rpx;border-radius:52% 48% 44% 55%;background:radial-gradient(circle at 40% 30%,#ffe4a5 0 10%,transparent 11%),linear-gradient(145deg,#ffb1ad,#ff746f 42%,#fff0d0 44% 52%,#ffae8e 54% 73%,#ff6b72);box-shadow:0 28rpx 35rpx rgba(210,121,107,.22);transform:rotate(14deg);content:'';opacity:.82}.hero-copy{padding:35rpx 0 0 27rpx}.hero-kicker{color:#172c43;font-size:19rpx}.hero-title{font-size:49rpx;color:#143259}.hero-description{color:#506278;font-size:22rpx}.hero-link{margin-top:17rpx;border:0;color:#1e6bd6;font-size:20rpx}.hero-caption{display:none}.path-heading{margin-top:39rpx}.section-head>view text:first-child{font-family:"PingFang SC",sans-serif;color:#1f2523;font-size:31rpx}.history-link{color:#888;font-size:19rpx}.primary-entry{min-height:250rpx;padding:28rpx 28rpx;border:0;border-radius:24rpx;background:#fff;box-shadow:0 9rpx 25rpx rgba(66,94,87,.08)}.primary-entry .entry-copy>text:first-child{color:#252525;font-size:30rpx;font-weight:800}.primary-entry .entry-copy>text:first-child span{color:#256ee3}.prompt-input{display:flex;align-items:center;justify-content:space-between;margin-top:25rpx;padding:12rpx 13rpx 12rpx 27rpx;border-radius:50rpx;background:#f1f4f8;color:#a0a5aa;font-size:23rpx}.prompt-input text:last-child{display:grid;place-items:center;width:58rpx;height:58rpx;border-radius:50%;background:#2b65d5;color:#fff;font-size:38rpx;line-height:1}.chips{width:calc(100% + 12rpx);margin-top:20rpx;white-space:nowrap}.chips text{display:inline-block;margin-right:12rpx;padding:9rpx 15rpx;border:2rpx solid #7ca8ff;border-radius:30rpx;color:#376dd7;font-size:18rpx}.secondary-entry-grid{gap:17rpx;margin-top:18rpx}.secondary-entry{height:188rpx;border:0;border-radius:23rpx;padding:23rpx;background:#f7f7f7;box-shadow:none}.product-entry{background:linear-gradient(180deg,#fff0dd,#f4f4f4)}.works-entry{background:linear-gradient(180deg,#dffaf4,#f4f4f4)}.secondary-entry .entry-copy{margin-top:auto}.secondary-entry .entry-copy text:first-child{color:#efa441;font-size:27rpx}.works-entry .entry-copy text:first-child{color:#05aa96}.secondary-entry .entry-copy text:last-child{color:#555;font-size:18rpx}.secondary-entry .entry-copy text:nth-child(3){margin-top:5rpx;color:#888;font-size:17rpx}.secondary-arrow{display:none}.campaign-heading{margin-top:39rpx}.campaign-heading>text{color:#888;font-size:19rpx}.home-campaign{display:flex;align-items:center;gap:17rpx;margin-bottom:15rpx;padding:12rpx;border-left:8rpx solid #07bfa0;border-radius:21rpx;background:#fff;box-shadow:0 8rpx 22rpx rgba(14,160,129,.1)}.home-campaign-art{display:grid;place-items:center;width:135rpx;height:117rpx;border-radius:17rpx;background:#def4ec;color:#138a6f;font-family:"Songti SC","STSong",serif;font-size:55rpx}.home-campaign-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:8rpx}.home-campaign-copy text:first-child{overflow:hidden;color:#2a332f;font-size:23rpx;font-weight:800;text-overflow:ellipsis;white-space:nowrap}.home-campaign-copy text:nth-child(2),.home-campaign-copy text:nth-child(3){color:#999;font-size:17rpx}.home-campaign-points{padding:8rpx 12rpx;border-radius:30rpx;background:#07bea0;color:#fff;font-size:19rpx;font-weight:800}.inspiration-head{display:flex;align-items:center;justify-content:space-between;margin:31rpx 0 16rpx;color:#222;font-size:29rpx;font-weight:800}.inspiration-head text:last-child{color:#888;font-size:19rpx;font-weight:400}.inspiration-scroll{width:calc(100% + 12rpx);margin-left:-6rpx;white-space:nowrap}.inspiration-card{display:inline-flex;overflow:hidden;width:185rpx;height:225rpx;margin:0 7rpx;border-radius:17rpx;background:#f6f6f6;vertical-align:top;flex-direction:column}.inspiration-card image,.inspiration-placeholder{display:block;width:100%;height:190rpx;background:#e9ecea}.inspiration-placeholder{display:grid;place-items:center;color:#9aac9f;font-size:25rpx}.inspiration-card>text{padding:9rpx 10rpx;color:#fff;font-size:18rpx;background:rgba(28,28,28,.55);transform:translateY(-38rpx)}.bottom-nav{right:28rpx;bottom:20rpx;left:28rpx;grid-template-columns:repeat(3,1fr);height:84rpx;padding:10rpx 12rpx;border:0;border-radius:40rpx;background:linear-gradient(90deg,#12d8bd,#00b9a6);box-shadow:0 12rpx 28rpx rgba(0,161,141,.24)}.nav-item{color:#dffff8;font-size:18rpx}.nav-icon{font-size:30rpx}.nav-item.active{color:#fff;background:none}.create-nav{display:none}
+.page{background:#fff;color:#202d29}.topbar{height:calc(118rpx + env(safe-area-inset-top));padding:calc(57rpx + env(safe-area-inset-top)) 32rpx 12rpx;background:#fff}.brand-seal{width:56rpx;height:56rpx;border-radius:16rpx}.brand-copy{display:none}.top-actions{gap:17rpx}.credit-chip{padding:10rpx 16rpx;border:0;border-radius:30rpx;background:#101615;color:#fff;font-size:20rpx}.credit-chip text:last-child{color:#fff;font-size:23rpx}.notice-entry{position:relative;display:grid;place-items:center;width:58rpx;height:58rpx;border:2rpx solid #0bc6a5;border-radius:50%;color:#08b99a;font-size:27rpx}.notice-count{position:absolute;right:-7rpx;top:-9rpx;display:grid;place-items:center;width:30rpx;height:30rpx;border-radius:50%;background:#ff5861;color:#fff;font-size:17rpx}.profile-entry{width:58rpx;height:58rpx;border:1rpx solid #dedede;border-radius:50%;background:#fff;color:#333;font-size:24rpx}.page-scroll{height:calc(100vh - 118rpx - env(safe-area-inset-top))}.content{padding:10rpx 32rpx calc(160rpx + env(safe-area-inset-bottom))}.hero{height:284rpx;border-radius:23rpx;background:linear-gradient(110deg,#eef7ff,#f4f7fb 58%,#fff0e4)}.hero-gift{position:absolute;z-index:1;right:0;top:0;width:53%;height:100%}.hero-copy{padding:52rpx 0 0 27rpx}.hero-kicker{order:2;margin-top:24rpx;color:#172c43;font-size:19rpx}.hero-title{order:1;font-size:49rpx;color:#143259}.hero-description{order:3;color:#506278;font-size:22rpx}.hero-link{order:4;margin-top:17rpx;border:0;color:#1e6bd6;font-size:20rpx}.path-heading{margin-top:39rpx}.section-head>view text:first-child{font-family:"PingFang SC",sans-serif;color:#1f2523;font-size:31rpx}.history-link{color:#888;font-size:19rpx}.primary-entry{min-height:250rpx;padding:28rpx 28rpx;border:0;border-radius:24rpx;background:#fff;box-shadow:0 9rpx 25rpx rgba(66,94,87,.08)}.primary-entry .entry-copy>text:first-child{color:#252525;font-size:30rpx;font-weight:800}.primary-entry .entry-copy>text:first-child span{color:#256ee3}.prompt-input{display:flex;align-items:center;justify-content:space-between;margin-top:25rpx;padding:12rpx 13rpx 12rpx 27rpx;border-radius:50rpx;background:#f1f4f8;color:#a0a5aa;font-size:23rpx}.prompt-input text:last-child{display:grid;place-items:center;width:58rpx;height:58rpx;border-radius:50%;background:#2b65d5;color:#fff;font-size:38rpx;line-height:1}.chips{width:calc(100% + 12rpx);margin-top:20rpx;white-space:nowrap}.chips text{display:inline-block;margin-right:12rpx;padding:9rpx 15rpx;border:2rpx solid #7ca8ff;border-radius:30rpx;color:#376dd7;font-size:18rpx}.secondary-entry-grid{gap:17rpx;margin-top:18rpx}.secondary-entry{position:relative;overflow:hidden;height:188rpx;border:0;border-radius:23rpx;padding:23rpx;background:#f7f7f7;box-shadow:none}.secondary-art{position:absolute;right:0;top:0;width:54%;height:48%;border-radius:0 23rpx 0 0}.product-entry{background:linear-gradient(180deg,#fff0dd,#f4f4f4)}.works-entry{background:linear-gradient(180deg,#dffaf4,#f4f4f4)}.secondary-entry .entry-copy{position:relative;z-index:2;margin-top:auto}.secondary-entry .entry-copy text:first-child{color:#efa441;font-size:27rpx}.works-entry .entry-copy text:first-child{color:#05aa96}.secondary-entry .entry-copy text:last-child{color:#555;font-size:18rpx}.secondary-entry .entry-copy text:nth-child(3){margin-top:5rpx;color:#888;font-size:17rpx}.secondary-arrow{display:none}.campaign-heading{margin-top:39rpx}.campaign-heading>text{color:#888;font-size:19rpx}.home-campaign{display:flex;align-items:center;gap:17rpx;margin-bottom:15rpx;padding:0;border-left:8rpx solid #07bfa0;border-radius:21rpx;background:#fff;box-shadow:0 8rpx 22rpx rgba(14,160,129,.1);overflow:hidden}.home-campaign-art{width:135rpx;height:135rpx;flex:none;border-radius:17rpx}.home-campaign-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:8rpx}.home-campaign-copy text:first-child{overflow:hidden;color:#2a332f;font-size:23rpx;font-weight:800;text-overflow:ellipsis;white-space:nowrap}.home-campaign-copy text:nth-child(2),.home-campaign-copy text:nth-child(3){color:#999;font-size:17rpx}.home-campaign-points{margin-right:12rpx;padding:8rpx 12rpx;border-radius:30rpx;background:#07bea0;color:#fff;font-size:19rpx;font-weight:800}.inspiration-head{display:flex;align-items:center;justify-content:space-between;margin:31rpx 0 16rpx;color:#222;font-size:29rpx;font-weight:800}.inspiration-head text:last-child{color:#888;font-size:19rpx;font-weight:400}.inspiration-scroll{width:calc(100% + 12rpx);margin-left:-6rpx;white-space:nowrap}.inspiration-card{display:inline-flex;overflow:hidden;width:185rpx;height:225rpx;margin:0 7rpx;border-radius:17rpx;background:#f6f6f6;vertical-align:top;flex-direction:column}.inspiration-card image,.inspiration-placeholder{display:block;width:100%;height:225rpx;background:#e9ecea}.inspiration-placeholder{display:grid;place-items:center;color:#9aac9f;font-size:25rpx}.inspiration-card>text{padding:9rpx 10rpx;color:#fff;font-size:18rpx;background:rgba(28,28,28,.55);transform:translateY(-38rpx)}.bottom-nav{right:28rpx;bottom:20rpx;left:28rpx;grid-template-columns:repeat(3,1fr);height:84rpx;padding:10rpx 12rpx;border:0;border-radius:40rpx;background:linear-gradient(90deg,#12d8bd,#00b9a6);box-shadow:0 12rpx 28rpx rgba(0,161,141,.24)}.nav-item{color:#dffff8;font-size:18rpx}.nav-icon{font-size:30rpx}.nav-item.active{color:#fff;background:none}.create-nav{display:none}
 </style>

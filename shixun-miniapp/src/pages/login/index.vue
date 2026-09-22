@@ -1,7 +1,7 @@
 <template>
   <view class="page">
     <view class="mini-top"><text class="back" @tap="leaveLogin">‹</text><text class="mini-dots">•••</text><text class="mini-circle">○</text></view>
-    <view class="brand-lockup"><view class="brand-seal">间</view><text class="brand-name">之间智造</text><text class="brand-en">AND SMART MFG</text><text class="brand-slogan">把创意变成好产品</text></view>
+    <view class="brand-lockup"><image class="brand-seal" src="/static/ui-design/brand-logo.png" mode="aspectFit" /><text class="brand-name">之间智造</text><text class="brand-en">AND SMART MFG</text><text class="brand-slogan">把创意变成好产品</text></view>
     <view class="card">
       <button class="wechat-button" :loading="wechatLoading" :disabled="wechatLoading || wechatPhoneRequired" @tap="wechatLogin"><text class="wechat-mark">●</text> 微信登录</button>
       <button class="phone-button" :loading="wechatLoading" @tap="wechatLogin"><text class="phone-mark">▯</text> 手机号登录</button>
@@ -19,12 +19,12 @@
       <view class="register-row"><text>还没有账号？</text><text @tap="goRegister">创建创作账号 ›</text></view>
       <text class="skip-login" @tap="leaveLogin">暂不登录，继续浏览首页</text>
     </view>
-    <view v-if="campaigns.length || campaignLoading" class="campaign-board">
+    <view v-if="displayedCampaigns.length || campaignLoading" class="campaign-board">
       <view class="campaign-board-head"><view><text class="campaign-kicker">馆方征集 · 投稿通道</text><text class="campaign-title">馆方征集 · 投稿通道</text></view><text>更多 ›</text></view>
       <scroll-view scroll-x class="campaign-scroll" :show-scrollbar="false">
         <view class="campaign-row">
-          <view v-for="campaign in campaigns" :key="campaign.key" class="campaign-card" :class="{ selected: selectedCampaignKey === campaign.key }" @tap="selectCampaign(campaign)">
-            <view class="campaign-art"><text>{{ campaign.targetName?.slice(0, 1) || '馆' }}</text></view><view class="campaign-info"><text class="campaign-target">{{ campaign.targetName }}｜{{ campaign.title }}</text><text class="campaign-style">{{ campaign.collectionStyle }} · 文创转化</text><text class="campaign-products">作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="campaign-points">+{{ campaign.rewardAmount }}</text>
+          <view v-for="(campaign, index) in displayedCampaigns" :key="campaign.key" class="campaign-card" :class="{ selected: selectedCampaignKey === campaign.key }" @tap="selectCampaign(campaign)">
+            <image class="campaign-art" :src="campaignImage(index)" mode="aspectFill" /><view class="campaign-info"><text class="campaign-target">{{ campaign.targetName }}｜{{ campaign.title }}</text><text class="campaign-style">{{ campaign.collectionStyle }} · 文创转化</text><text class="campaign-products">作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="campaign-points">+{{ campaign.rewardAmount }}</text>
           </view>
           <view v-if="campaignLoading && !campaigns.length" class="campaign-loading"><text>正在加载征集任务…</text></view>
         </view>
@@ -36,7 +36,7 @@
 
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ApiError, request } from '../../api/client'
 import { getPublicCreatorCampaigns, type CreatorCampaign } from '../../api/creative'
 import { saveSession } from '../../utils/session'
@@ -53,6 +53,12 @@ const showPasswordLogin = ref(false)
 const campaigns = ref<CreatorCampaign[]>([])
 const campaignLoading = ref(false)
 const selectedCampaignKey = ref('')
+const campaignFallbacks: CreatorCampaign[] = [
+  { key: 'design-bronze', title: '青铜器主题', targetName: '国家博物馆', channelCode: 'design-bronze', collectionStyle: '青铜纹样 · 器物元素', recommendedProducts: [], brief: '', promptHint: '', rewardAmount: 80 },
+  { key: 'design-lacquer', title: '漆器纹样主题', targetName: '湖北省博物馆', channelCode: 'design-lacquer', collectionStyle: '漆器纹样 · 色彩元素', recommendedProducts: [], brief: '', promptHint: '', rewardAmount: 60 },
+]
+const displayedCampaigns = computed(() => campaigns.value.length ? campaigns.value : campaignFallbacks)
+const campaignImage = (index: number) => index % 2 ? '/static/ui-design/campaign-drum.jpg' : '/static/ui-design/campaign-bronze.jpg'
 
 function handleOfficialPrivacyAuthorization() {
   // The coupled WeChat button has already synchronized the official privacy
@@ -189,6 +195,10 @@ function readPendingCampaign() {
 }
 
 function selectCampaign(campaign: CreatorCampaign) {
+  if (campaign.key.startsWith('design-')) {
+    uni.showToast({ title: '征集活动数据加载中', icon: 'none' })
+    return
+  }
   selectedCampaignKey.value = campaign.key
   uni.setStorageSync('pending_creator_campaign', { ...campaign, selectedAt: Date.now() })
   uni.showToast({ title: '任务已选，登录后自动带入创作', icon: 'none' })
