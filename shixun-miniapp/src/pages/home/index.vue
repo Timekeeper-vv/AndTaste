@@ -18,7 +18,7 @@
         <view class="creation-entry primary-entry" @tap="startConversation"><view class="entry-copy"><text>说出你的想法，让<span>创意</span>从这里开始…</text><view class="prompt-input"><text>说说你想做什么...</text><text>→</text></view><scroll-view scroll-x class="chips"><text v-for="chip in ['食品饮品','文房器物','日用生活','创意工坊']" :key="chip">● {{ chip }}</text></scroll-view></view></view>
 
         <view class="secondary-entry-grid">
-          <view class="creation-entry secondary-entry product-entry" @tap="openCommercial">
+          <view class="creation-entry secondary-entry product-entry" @tap="openProductMaking">
             <image class="secondary-art" src="/static/ui-design/product-making.jpg" mode="aspectFill" />
             <view class="entry-copy"><text>产品智造</text><text>快速打样 · 小批量起订</text><text>成熟工艺 · 产品落地</text></view>
             <text class="secondary-arrow">›</text>
@@ -192,6 +192,11 @@ function openWorks() {
 function openCommercial() {
   if (!requireSession()) return
   go('/pages/commercial/index')
+}
+
+function openProductMaking() {
+  if (!requireSession()) return
+  go('/pages/product-making/index')
 }
 
 function openProfessional() {

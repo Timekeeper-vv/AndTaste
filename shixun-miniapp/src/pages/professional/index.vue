@@ -59,7 +59,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import { getMuseums, getMyProfessionalSubmissions, uploadProfessionalSubmission, type ProfessionalSubmission } from '../../api/creative'
 import { getSession, requireSession } from '../../utils/session'
 
@@ -79,6 +79,7 @@ const museum = ref<any>(null)
 const provinceIndex = ref(0)
 const museumIndex = ref(0)
 const PROFESSIONAL_SUBMISSION_CONTEXT_KEY = 'professional_submission_context'
+const PENDING_PRODUCT_PACKAGE_KEY = 'pending_product_package'
 const linkedContext = ref<Record<string, any> | null>(null)
 const provinces = computed(() => [...new Set(museums.value.map(item => item.province).filter(Boolean))])
 const filteredMuseums = computed(() => museums.value.filter(item => item.province === province.value))
@@ -103,6 +104,38 @@ function restoreLinkedContext() {
   linkedContext.value = { ...raw, assetId: Number(raw.assetId) }
 }
 
+function rememberPendingPackage() {
+  if (!filePath.value) return
+  uni.setStorageSync(PENDING_PRODUCT_PACKAGE_KEY, {
+    path: filePath.value,
+    name: fileName.value,
+    size: fileSize.value,
+    userName: String(getSession()?.user?.username || '').trim(),
+    selectedAt: Date.now(),
+  })
+}
+
+function restorePendingPackage() {
+  if (filePath.value) return
+  const raw = uni.getStorageSync(PENDING_PRODUCT_PACKAGE_KEY)
+  const currentUser = String(getSession()?.user?.username || '').trim()
+  const selectedAt = Number(raw?.selectedAt || 0)
+  const valid = raw && typeof raw === 'object'
+    && String(raw.userName || '').trim() === currentUser
+    && /\.zip$/i.test(String(raw.name || ''))
+    && String(raw.path || '').trim()
+    && Number(raw.size || 0) <= 100 * 1024 * 1024
+    && Date.now() - selectedAt < 30 * 60 * 1000
+  if (!valid) {
+    if (raw) uni.removeStorageSync(PENDING_PRODUCT_PACKAGE_KEY)
+    return
+  }
+  filePath.value = String(raw.path)
+  fileName.value = String(raw.name)
+  fileSize.value = Number(raw.size || 0)
+  if (!title.value) title.value = fileName.value.replace(/\.zip$/i, '')
+}
+
 function chooseZip() {
   fileError.value = ''
   const chooser = (uni as any).chooseMessageFile
@@ -119,6 +152,7 @@ function chooseZip() {
     filePath.value = file.path
     fileName.value = name
     fileSize.value = Number(file.size || 0)
+    rememberPendingPackage()
   }, fail: (error: any) => {
     if (!/cancel/i.test(String(error?.errMsg || ''))) fileError.value = '文件选择失败，请重新点击选择 ZIP 作品包'
   } })
@@ -149,6 +183,7 @@ async function submit() {
     // A successful package starts its own review record. Do not accidentally
     // attach a later, unrelated ZIP to the previous conversation's product.
     uni.removeStorageSync(PROFESSIONAL_SUBMISSION_CONTEXT_KEY)
+    uni.removeStorageSync(PENDING_PRODUCT_PACKAGE_KEY)
     linkedContext.value = null
     uni.showModal({ title: '提交成功', content: `${result?.submissionNo || '作品包'}已进入专业审核，审核结果会显示在本页。`, showCancel: false })
   } catch (error: any) { uni.showToast({ title: error?.message || '提交失败，请稍后重试', icon: 'none' }) } finally { loading.value = false }
@@ -165,11 +200,15 @@ function payQuote(record: ProfessionalSubmission) {
 onMounted(async () => {
   if (!requireSession()) return
   restoreLinkedContext()
+  restorePendingPackage()
   await Promise.all([loadRecords(), getMuseums().then(data => { museums.value = data }).catch(() => {})])
 })
 onShow(() => {
-  if (getSession()) restoreLinkedContext()
+  if (getSession()) { restoreLinkedContext(); restorePendingPackage() }
   else linkedContext.value = null
+})
+onLoad(query => {
+  if (String(query?.entry || '') === 'production') uni.setNavigationBarTitle({ title: '提交产品作品包' })
 })
 </script>
 
