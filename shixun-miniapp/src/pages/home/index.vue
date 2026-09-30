@@ -111,7 +111,7 @@ function go(url: string) {
 
 function startConversation() {
   if (!requireSession()) return
-  go('/pages/conversation-create/index')
+  go('/pages/conversation-create/index?new=1')
 }
 
 function startNewConversation() {
@@ -126,8 +126,7 @@ function openConversation(session: ConversationSession) {
 
 function openConversationHistory() {
   if (!requireSession()) return
-  if (conversations.value[0]) openConversation(conversations.value[0])
-  else startNewConversation()
+  go('/pages/conversation-create/index?history=1')
 }
 
 function selectHomeCampaign(campaign: CreatorCampaign) {

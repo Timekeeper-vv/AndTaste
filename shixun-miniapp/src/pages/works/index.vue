@@ -451,7 +451,7 @@ function copy(asset: any) {
 }
 
 function goCreate() {
-  uni.navigateTo({ url: '/pages/conversation-create/index' })
+  uni.navigateTo({ url: '/pages/conversation-create/index?new=1' })
 }
 
 function goLogin() {
