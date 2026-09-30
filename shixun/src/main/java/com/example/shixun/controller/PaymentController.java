@@ -453,14 +453,19 @@ public class PaymentController {
         try {
             creation = Objects.requireNonNull(transactions.execute(status -> {
                 List<Map<String, Object>> rows = jdbc.queryForList(
-                        "SELECT id,title,status,quoted_sample_fee_yuan,quoted_sample_lead_time,sample_payment_status,sample_payment_order_no," +
+                        "SELECT id,title,status,quoted_sample_fee_yuan,quoted_sample_lead_time,sample_quantity,recipient_name,recipient_phone,recipient_address,sample_payment_status,sample_payment_order_no," +
                                 "product_no productNo,product_id productId "
                                 + "FROM consumer_professional_submission WHERE id=? AND user_id=? FOR UPDATE", submissionId, userId);
                 if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品报价不存在");
                 Map<String, Object> submission = rows.get(0);
                 if (!"approved".equals(String.valueOf(submission.get("status")))) throw new IllegalStateException("专业作品尚未审核通过");
-                BigDecimal feeYuan = decimal(submission.get("quoted_sample_fee_yuan"));
-                if (feeYuan.signum() <= 0 || blank(nullableText(submission.get("quoted_sample_lead_time")))) throw new IllegalStateException("报价单尚未完整配置，请联系管理员");
+                BigDecimal unitFeeYuan = decimal(submission.get("quoted_sample_fee_yuan"));
+                int quantity = Math.max(1, nullableLong(submission.get("sample_quantity")) == null ? 1 : nullableLong(submission.get("sample_quantity")).intValue());
+                BigDecimal feeYuan = unitFeeYuan.multiply(BigDecimal.valueOf(quantity));
+                if (unitFeeYuan.signum() <= 0 || blank(nullableText(submission.get("quoted_sample_lead_time")))) throw new IllegalStateException("报价单尚未完整配置，请联系管理员");
+                if (blank(nullableText(submission.get("recipient_name"))) || blank(nullableText(submission.get("recipient_phone"))) || blank(nullableText(submission.get("recipient_address")))) {
+                    throw new IllegalStateException("请先填写完整的打样收件信息");
+                }
                 String productNo = nullableText(submission.get("productNo"));
                 Long productId = nullableLong(submission.get("productId"));
                 String existingOrderNo = nullableText(submission.get("sample_payment_order_no"));
@@ -472,7 +477,7 @@ public class PaymentController {
                     }
                 }
                 CreditPackage pkg = new CreditPackage("professional_submission_sample_" + submissionId,
-                        "打样费 · " + nullableText(submission.get("title")), "专业作品包审核通过后的打样费用",
+                        "打样费 · " + nullableText(submission.get("title")), "专业作品包审核通过后的打样费用 · " + quantity + "件",
                         feeYuan.movePointRight(2).longValueExact(), BigDecimal.ZERO);
                 OrderCreation order = createOrReusePendingOrder(userId, pkg, channel, productNo, productId);
                 jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='pending',sample_payment_order_no=? WHERE id=? AND user_id=?",

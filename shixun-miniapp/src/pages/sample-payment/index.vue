@@ -74,7 +74,7 @@ async function load() {
       const item = (Array.isArray(rows) ? rows : []).find((row: any) => String(row.id) === professionalSubmissionId.value)
       const paymentStatus = String(item?.samplePaymentStatus || 'unpaid')
       requests.value = item && item.status === 'approved' && ['unpaid', 'pending', 'manual_review', 'paid'].includes(paymentStatus)
-        ? [{ ...item, professionalPayment: true, sampleProductName: item.title, sampleFeeYuan: item.quotedSampleFeeYuan }]
+        ? [{ ...item, professionalPayment: true, sampleProductName: item.title, sampleFeeYuan: Number(item.quotedSampleFeeYuan || 0) * Math.max(1, Number(item.sampleQuantity || 1)) }]
         : []
       selectedRequestId.value = requests.value[0]?.id ? requestKey(requests.value[0]) : ''
       return
@@ -103,7 +103,7 @@ async function load() {
       .map((item: any) => ({ ...item, sampleProductName: item.productName, sampleFeeYuan: item.quotedTotalPrice, quotePayment: true }))
     const professional = (Array.isArray(professionalRows) ? professionalRows : [])
       .filter((item: any) => item.status === 'approved' && ['unpaid', 'pending', 'manual_review', 'paid'].includes(String(item.samplePaymentStatus || 'unpaid')))
-      .map((item: any) => ({ ...item, professionalPayment: true, sampleProductName: item.title, sampleFeeYuan: item.quotedSampleFeeYuan }))
+      .map((item: any) => ({ ...item, professionalPayment: true, sampleProductName: item.title, sampleFeeYuan: Number(item.quotedSampleFeeYuan || 0) * Math.max(1, Number(item.sampleQuantity || 1)) }))
     requests.value = [...production, ...quotes, ...professional]
     const targetId = requestId.value || quoteId.value || professionalSubmissionId.value
     const target = targetId

@@ -257,6 +257,7 @@ let messageId = 0
 const forceNewSession = ref(false)
 const chatExperience = true
 const chatInput = ref('')
+const revisionPromptRequested = ref(false)
 const workshopSuggestions = ['食品饮品', '文房器物', '生活日用', '潮流玩具']
 const chatQuickReplies = ref<ConversationQuickReply[]>([])
 const chatInputLocked = computed(() => replacementImagePending.value || (phase.value === 'result' && chatQuickReplies.value.length > 0))
@@ -1707,6 +1708,7 @@ onLoad(options => {
   requestedSessionId.value = Number.isFinite(parsedSessionId) && parsedSessionId > 0 ? parsedSessionId : null
   const campaignNeedsSession = Boolean(campaignContext.value && !Number(campaignContext.value.sessionId))
   forceNewSession.value = String(options?.new || '') === '1' || campaignNeedsSession
+  revisionPromptRequested.value = String(options?.revision || '') === '1'
 })
 onMounted(async () => {
   if (!requireSession()) return
@@ -1714,6 +1716,12 @@ onMounted(async () => {
   await loadProductCatalog()
   if (!(await ensureSession())) return
   restoreChatDraft()
+  if (revisionPromptRequested.value) {
+    const revision = uni.getStorageSync('product_revision_prompt')
+    const createdAt = Number(revision?.createdAt || 0)
+    if (revision?.text && Date.now() - createdAt < 30 * 60 * 1000) chatInput.value = String(revision.text)
+    uni.removeStorageSync('product_revision_prompt')
+  }
   if (!messages.value.length) addMessage('assistant', '你好，我会像一位产品设计师一样，一步一步把你的想法整理成可生成、可建模、可打样的文创产品。')
   await attachCampaignToConversation()
   if (awaitingGenerationConfirmation.value && !chatQuickReplies.value.length) setGenerationConfirmationReplies()

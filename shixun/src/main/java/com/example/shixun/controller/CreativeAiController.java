@@ -2911,13 +2911,62 @@ public class CreativeAiController {
     @GetMapping("/consumer-professional-submissions/my")
     public List<Map<String,Object>> myProfessionalSubmissions() {
         Long userId = requireCurrentConsumerUser();
-        return jdbc.queryForList("SELECT id,submission_no submissionNo,product_no productNo,title,original_name originalName,file_size fileSize,purpose,museum_name museumName,note,status,review_comment reviewComment,quoted_sample_fee_yuan quotedSampleFeeYuan,quoted_sample_lead_time quotedSampleLeadTime,quoted_sample_note quotedSampleNote,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt,reviewed_by reviewedBy,reviewed_at reviewedAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
+        return jdbc.queryForList("SELECT id,submission_no submissionNo,product_no productNo,title,original_name originalName,file_size fileSize,purpose,museum_name museumName,note,status,review_comment reviewComment,resubmission_count resubmissionCount,quoted_sample_fee_yuan quotedSampleFeeYuan,quoted_sample_lead_time quotedSampleLeadTime,quoted_sample_note quotedSampleNote,sample_quantity sampleQuantity,recipient_name recipientName,recipient_phone recipientPhone,recipient_address recipientAddress,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt,reviewed_by reviewedBy,reviewed_at reviewedAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
     }
 
     @GetMapping("/consumer-professional-submissions/review")
     public List<Map<String,Object>> professionalSubmissionsForReview() {
         requireCreativeAdmin();
-        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.product_no productNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_name museumName,s.note,s.status,s.review_comment reviewComment,s.quoted_sample_fee_yuan quotedSampleFeeYuan,s.quoted_sample_lead_time quotedSampleLeadTime,s.quoted_sample_note quotedSampleNote,s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo,s.sample_paid_at samplePaidAt,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
+        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.product_no productNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_name museumName,s.note,s.status,s.review_comment reviewComment,s.resubmission_count resubmissionCount,s.quoted_sample_fee_yuan quotedSampleFeeYuan,s.quoted_sample_lead_time quotedSampleLeadTime,s.quoted_sample_note quotedSampleNote,s.sample_quantity sampleQuantity,s.recipient_name recipientName,s.recipient_phone recipientPhone,s.recipient_address recipientAddress,s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo,s.sample_paid_at samplePaidAt,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
+    }
+
+    @PostMapping(value = "/consumer-professional-submissions/{id}/resubmit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Transactional
+    public Map<String,Object> resubmitProfessionalSubmission(@PathVariable Long id,
+                                                             @RequestParam("file") MultipartFile file) throws Exception {
+        Long userId = requireCurrentConsumerUser();
+        List<Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT status FROM consumer_professional_submission WHERE id=? AND user_id=? FOR UPDATE", id, userId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品提交不存在");
+        if (!"rejected".equals(nullToEmpty(rows.get(0).get("status")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "只有审核未通过的作品包可以重新提交");
+        }
+        if (file == null || file.isEmpty()) throw new IllegalArgumentException("请选择修改后的 ZIP 作品包");
+        if (file.getSize() > 100L * 1024 * 1024) throw new IllegalArgumentException("ZIP 作品包不能超过 100MB");
+        String original = nullToEmpty(file.getOriginalFilename()).replaceAll("[\\r\\n]", "").trim();
+        if (!original.toLowerCase(Locale.ROOT).endsWith(".zip")) throw new IllegalArgumentException("重新提交仅支持 ZIP 作品包");
+        if (!hasZipSignature(file)) throw new IllegalArgumentException("上传文件不是有效的 ZIP 作品包");
+
+        Path directory = creativeAssetRoot().resolve("professional-submissions").normalize();
+        Files.createDirectories(directory);
+        String stored = "professional-" + System.currentTimeMillis() + "-" + UUID.randomUUID() + ".zip";
+        Files.copy(file.getInputStream(), directory.resolve(stored), StandardCopyOption.REPLACE_EXISTING);
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET original_name=?,storage_name=?,file_size=?,status='review',review_comment=NULL,resubmission_count=resubmission_count+1,quoted_sample_fee_yuan=NULL,quoted_sample_lead_time=NULL,quoted_sample_note=NULL,sample_quantity=1,recipient_name=NULL,recipient_phone=NULL,recipient_address=NULL,sample_payment_status='not_required',sample_payment_order_no=NULL,sample_paid_at=NULL,reviewed_by=NULL,reviewed_at=NULL WHERE id=? AND user_id=? AND status='rejected'",
+                original, stored, file.getSize(), id, userId);
+        if (updated != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "作品状态已经变化，请刷新后重试");
+        return Map.of("success", true, "id", id, "status", "review", "message", "修改后的作品包已重新提交审核");
+    }
+
+    @PutMapping("/consumer-professional-submissions/{id}/sample-application")
+    @Transactional
+    public Map<String,Object> saveProfessionalSampleApplication(@PathVariable Long id,
+                                                                @RequestBody(required = false) Map<String,Object> body) {
+        Long userId = requireCurrentConsumerUser();
+        if (body == null) throw new IllegalArgumentException("请填写打样收件信息");
+        int quantity;
+        try { quantity = Integer.parseInt(nullToEmpty(body.get("quantity"))); }
+        catch (Exception invalid) { throw new IllegalArgumentException("打样数量无效"); }
+        if (quantity < 1 || quantity > 10) throw new IllegalArgumentException("打样数量须为 1-10 件");
+        String recipientName = truncate(nullToEmpty(body.get("recipientName")).trim(), 120);
+        String recipientPhone = truncate(nullToEmpty(body.get("recipientPhone")).trim(), 40);
+        String recipientAddress = truncate(nullToEmpty(body.get("recipientAddress")).trim(), 500);
+        if (blank(recipientName)) throw new IllegalArgumentException("请填写收件人");
+        if (!recipientPhone.matches("^[0-9+()\\- ]{6,40}$")) throw new IllegalArgumentException("请填写正确的收件电话");
+        if (blank(recipientAddress)) throw new IllegalArgumentException("请填写收件地址");
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET sample_quantity=CASE WHEN sample_payment_status='unpaid' THEN ? ELSE sample_quantity END,recipient_name=?,recipient_phone=?,recipient_address=? WHERE id=? AND user_id=? AND status='approved' AND (sample_payment_status='unpaid' OR (sample_payment_status='pending' AND recipient_name IS NULL))",
+                quantity, recipientName, recipientPhone, recipientAddress, id, userId);
+        if (updated != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "当前作品不能修改打样申请，请刷新状态后重试");
+        return Map.of("success", true, "id", id, "quantity", quantity, "message", "打样申请信息已保存");
     }
 
     @GetMapping("/consumer-professional-submissions/{id}/download")

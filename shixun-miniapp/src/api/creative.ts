@@ -323,9 +323,14 @@ export interface ProfessionalSubmission {
   note?: string
   status?: 'review' | 'approved' | 'processing' | 'rejected' | string
   reviewComment?: string
+  resubmissionCount?: number
   quotedSampleFeeYuan?: number | string | null
   quotedSampleLeadTime?: string
   quotedSampleNote?: string
+  sampleQuantity?: number
+  recipientName?: string
+  recipientPhone?: string
+  recipientAddress?: string
   samplePaymentStatus?: 'not_required' | 'unpaid' | 'pending' | 'manual_review' | 'paid' | string
   samplePaymentOrderNo?: string
   samplePaidAt?: string
@@ -336,6 +341,17 @@ export const uploadProfessionalSubmission = (filePath: string, formData: Record<
   '/api/creative/ai/consumer-professional-submissions', filePath, 'file', formData,
 )
 export const getMyProfessionalSubmissions = () => request<ProfessionalSubmission[]>('/api/creative/ai/consumer-professional-submissions/my')
+export const resubmitProfessionalSubmission = (submissionId: number | string, filePath: string) => uploadFile<any>(
+  `/api/creative/ai/consumer-professional-submissions/${encodeURIComponent(String(submissionId))}/resubmit`, filePath, 'file', {},
+)
+export const saveProfessionalSampleApplication = (submissionId: number | string, body: {
+  quantity: number
+  recipientName: string
+  recipientPhone: string
+  recipientAddress: string
+}) => request<any>(`/api/creative/ai/consumer-professional-submissions/${encodeURIComponent(String(submissionId))}/sample-application`, {
+  method: 'PUT', data: body, header: { 'content-type': 'application/json' },
+})
 export const createProfessionalSubmissionSamplePaymentOrder = (submissionId: number | string, channel: PaymentChannel = 'wechat_jsapi') => request<PaymentOrder>('/api/payments/professional-submission-sample-orders', {
   method: 'POST', data: { submissionId: String(submissionId), channel }, header: { 'content-type': 'application/json' },
 })
