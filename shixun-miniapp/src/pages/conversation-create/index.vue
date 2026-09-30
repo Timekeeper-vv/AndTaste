@@ -1,5 +1,13 @@
 <template>
   <view class="page chat-experience">
+    <view class="workshop-nav">
+      <view class="workshop-nav-button back-button" aria-label="返回" @tap="leaveWorkshop">‹</view>
+      <text class="workshop-nav-title">创意工坊</text>
+      <view class="workshop-nav-actions">
+        <view class="workshop-nav-button history-button" aria-label="作品库" @tap="goWorks">☷</view>
+        <view class="workshop-menu-button" aria-label="更多操作" @tap="openWorkspaceMenu"><text>•••</text><text>◎</text></view>
+      </view>
+    </view>
     <scroll-view class="chat" :class="{ 'chat-with-quick-replies': chatQuickReplies.length > 0 }" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
       <view class="workspace-intro">
         <view class="workspace-intro-top"><view class="online-mark"><view class="online-dot" /><text>AI 工作台</text></view><text class="workspace-ref">{{ projectId ? `项目 ${projectId}` : '新项目' }}</text></view>
@@ -20,9 +28,9 @@
       <AiGeneratedNotice class="ai-disclosure" compact description="对话建议、提示词和后续生成的图片、生产模拟图、3D 原型均可能由人工智能生成，仅供创作参考，商业使用前请人工复核。" />
 
       <view v-for="item in messages" :id="`message-${item.id}`" :key="item.id" class="message-row" :class="item.role">
-        <view v-if="item.role === 'assistant'" class="message-avatar assistant-avatar">之</view>
+        <image v-if="item.role === 'assistant'" class="message-avatar assistant-avatar" src="/static/ui-design/brand-logo.png" mode="scaleToFill" />
         <view class="message-content">
-          <view class="message-meta"><text>{{ item.role === 'assistant' ? '之间智造' : '我' }}</text><text v-if="item.role === 'assistant'">AI 助手</text></view>
+          <view class="message-meta"><text>{{ item.role === 'assistant' ? '之间智造' : userDisplayName }}</text><text v-if="item.role === 'assistant'">AI 助手</text></view>
           <view class="bubble" :class="{ 'image-bubble': item.imageUrl || item.imageAssetId }">
             <image
               v-if="item.imageUrl"
@@ -47,11 +55,11 @@
             </view>
           </view>
         </view>
-        <view v-if="item.role === 'user'" class="message-avatar user-avatar">我</view>
+        <image v-if="item.role === 'user'" class="message-avatar user-avatar" src="/static/ui-design/brand-logo.png" mode="scaleToFill" />
       </view>
 
       <view v-if="chatThinking" id="chat-thinking" class="thinking-row" aria-label="之间正在思考">
-        <view class="message-avatar assistant-avatar thinking-avatar">之</view>
+        <image class="message-avatar assistant-avatar thinking-avatar" src="/static/ui-design/brand-logo.png" mode="scaleToFill" />
         <view class="thinking-content">
           <view class="thinking-bubble">
             <view class="thinking-title-row"><text class="thinking-title">之间正在思考</text><view class="thinking-dots" aria-hidden="true"><view class="thinking-dot" /><view class="thinking-dot" /><view class="thinking-dot" /></view></view>
@@ -61,12 +69,18 @@
       </view>
 
       <view v-if="phase === 'result'" id="result-output" class="output-surface">
-        <view class="output-header"><view><text class="surface-kicker">IMAGE OUTPUT</text><text class="surface-title">产品视觉已完成</text></view><view class="output-status"><view class="status-check">✓</view><text>已保存</text></view></view>
+        <view class="output-header"><view><text class="surface-kicker">生成结果</text><text class="surface-title">已为你创作完成一张产品图</text></view><view class="output-status"><view class="status-check">✓</view><text>已保存</text></view></view>
         <view class="visual-frame"><image v-if="previewUrl" class="result-image" :src="previewUrl" mode="aspectFit" @tap="previewImage" /><view v-else class="result-placeholder"><text>{{ selectedProduct?.mark || '作' }}</text><text>作品已保存到作品库</text></view><view class="visual-badge">AI 生成</view></view>
         <view class="output-info"><view><text>{{ selectedProduct?.name || '文创产品' }}</text><text>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }} · {{ mode === 'image' ? '参考图改造' : '文字生图' }}</text></view><text class="output-open" @tap="previewImage">查看大图 ›</text></view>
         <view v-if="replacementImagePending" class="refinement-panel replacement-panel"><view class="refinement-heading"><view><text class="surface-kicker">NEW REFERENCE IMAGE</text><text>补充这次生成要求</text></view><text class="refinement-close" @tap="cancelReplacementImage">×</text></view><text class="replacement-help">新参考图已上传，产品方向保持不变。请补充你希望这次生成重点保留、调整或避免的内容。</text><textarea v-model="replacementPrompt" maxlength="800" auto-height class="text-input refinement-input" placeholder="例如：保留新图主体和配色，转成当前产品的量产外观，背景简洁，不要文字。" /><view class="input-foot"><text>{{ replacementPrompt.length }}/800</text><button class="dark-button" :disabled="!replacementPrompt.trim() || busy" :loading="busy" @tap="generateReplacementImage">根据新参考图生成</button></view></view>
         <view v-else-if="refiningImage" class="refinement-panel"><view class="refinement-heading"><view><text class="surface-kicker">REFINE THIS IMAGE</text><text>告诉我哪里不满意</text></view><text class="refinement-close" @tap="cancelRefinement">×</text></view><textarea v-model="refinementNote" maxlength="500" auto-height class="text-input refinement-input" placeholder="例如：保留主体和构图，把边缘改得更简洁，去掉文字。" /><view class="input-foot"><text>{{ refinementNote.length }}/500</text><button class="dark-button" :disabled="!refinementNote.trim() || busy" :loading="busy" @tap="regenerateWithRefinement">基于当前图重新生成</button></view></view>
-        <view v-else class="output-actions"><view class="output-action primary" @tap="generateMultiView"><view class="action-icon">观</view><view><text>生成生产模拟图</text><text>一张图包含三个标准视角</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="startRefinement"><view class="action-icon warm">改</view><view><text>不满意，继续修改</text><text>基于当前图再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="pickReplacementImage"><view class="action-icon warm">换</view><view><text>重新上传图片生成</text><text>上传后补充提示词再生成</text></view><text class="action-arrow">›</text></view><view class="output-action" @tap="generateModel"><view class="action-icon dark">3D</view><view><text>单图生成 3D</text><text>直接创建产品原型</text></view><text class="action-arrow">›</text></view><view class="output-action disabled"><view class="action-icon gold">样</view><view><text>完成生产模拟图或 3D 原型后打样</text><text>当前产品图仅用于继续创作</text></view></view></view>
+        <view v-else class="result-tool-row">
+          <view class="result-tool" @tap="startRefinement"><view class="result-tool-icon">↻</view><text>重新生成</text></view>
+          <view class="result-tool" @tap="goPreviousStep"><view class="result-tool-icon">□</view><text>重新编辑</text></view>
+          <view class="result-tool primary" @tap="generateMultiView"><view class="result-tool-icon">▥</view><text>三视图</text></view>
+          <view class="result-tool" @tap="generateModel"><view class="result-tool-icon tool-3d">3D</view><text>3D</text></view>
+          <view class="result-tool" @tap="submitCurrentForReview"><view class="result-tool-icon">✓</view><text>提交审核</text></view>
+        </view>
       </view>
 
       <view v-if="phase === 'multiview'" id="multiview-output" class="output-surface">
@@ -116,11 +130,10 @@
     <view class="composer-dock">
       <view class="composer-context"><view class="context-live" /><text>{{ chatStageLabel }}</text><text v-if="selectedProduct" class="context-product">· {{ selectedProduct.name }}</text><text v-if="chatSending" class="context-working">处理中</text></view>
       <scroll-view v-if="chatQuickReplies.length" scroll-x class="quick-reply-list" :show-scrollbar="false"><view class="quick-reply-track"><view v-for="item in chatQuickReplies" :key="`${item.type}-${item.value}-${item.label}`" class="quick-reply" :class="{ confirm: item.type === 'confirm_generate', secondary: item.type === 'add_detail' || item.type === 'replace_image', disabled: busy || chatSending || quickReplySubmitting }" :aria-label="item.label" @tap="handleQuickReply(item)"><text class="quick-reply-mark">{{ quickReplyMark(item.type) }}</text><text>{{ item.label }}</text></view></view></scroll-view>
+      <scroll-view v-else scroll-x class="quick-reply-list category-suggestion-list" :show-scrollbar="false"><view class="quick-reply-track"><view v-for="item in workshopSuggestions" :key="item" class="quick-reply category-suggestion" :class="{ disabled: chatInputLocked || busy || chatSending }" @tap="sendWorkshopSuggestion(item)"><view class="suggestion-dot" /><text>{{ item }}</text></view></view></scroll-view>
       <view class="chat-input-row"><button class="chat-upload-button" :disabled="chatInputLocked || busy || chatSending || quickReplySubmitting" aria-label="上传灵感图片" @tap="pickInspirationImage">＋</button><textarea v-model="chatInput" class="chat-input" :class="{ 'input-locked': chatInputLocked }" :disabled="chatInputLocked" maxlength="1200" confirm-type="send" :auto-height="false" :show-confirm-bar="false" :placeholder="chatInputPlaceholder" @confirm="submitChatInput" /><button class="chat-send-button" :class="{ ready: chatInput.trim() && !chatInputLocked }" :disabled="chatInputLocked || !chatInput.trim() || busy || chatSending || quickReplySubmitting" aria-label="发送" @tap="submitChatInput">↑</button></view>
       <view class="composer-footer"><text>AI 生成内容 · 请在商业使用前人工复核</text><text>{{ chatInput.length }}/1200</text></view>
     </view>
-
-    <view class="bottom-actions"><button v-if="canGoPrevious" :disabled="busy || saving || chatSending" @tap="goPreviousStep"><text>‹</text>{{ previousActionLabel }}</button><button @tap="goWorks"><text>▣</text>作品库</button><button class="restart-action" @tap="restart"><text>＋</text>重新开始</button></view>
 
     <view v-if="policyDialog" class="policy-mask" @tap="resolvePolicyDialog(false)">
       <view class="policy-dialog" @tap.stop>
@@ -244,6 +257,7 @@ let messageId = 0
 const forceNewSession = ref(false)
 const chatExperience = true
 const chatInput = ref('')
+const workshopSuggestions = ['食品饮品', '文房器物', '生活日用', '潮流玩具']
 const chatQuickReplies = ref<ConversationQuickReply[]>([])
 const chatInputLocked = computed(() => replacementImagePending.value || (phase.value === 'result' && chatQuickReplies.value.length > 0))
 const chatInputPlaceholder = computed(() => chatInputLocked.value
@@ -330,6 +344,7 @@ const previousActionLabel = computed(() => {
 })
 const canGoPrevious = computed(() => !busy.value && !saving.value && !chatSending.value
   && (phase.value === 'multiview' || phase.value === 'model' || Boolean(previousEditTarget.value)))
+const userDisplayName = computed(() => String(getSession()?.user?.username || '我').trim() || '我')
 
 const currentMaterials = computed(() => selectedProduct.value?.materials || [])
 const isFoodProduct = computed(() => selectedProduct.value?.categoryKey === 'food'
@@ -628,6 +643,42 @@ function previousPhase(current: Phase): Phase | null {
   return transitions[current] || null
 }
 function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
+function leaveWorkshop() {
+  if (getCurrentPages().length > 1) {
+    uni.navigateBack()
+    return
+  }
+  uni.reLaunch({ url: '/pages/home/index' })
+}
+function openWorkspaceMenu() {
+  const actions = ['打开作品库', ...(canGoPrevious.value ? [previousActionLabel.value] : []), '重新开始创作']
+  uni.showActionSheet({
+    itemList: actions,
+    success: result => {
+      const action = actions[result.tapIndex]
+      if (action === '打开作品库') goWorks()
+      else if (action === '重新开始创作') restart()
+      else if (action === previousActionLabel.value) void goPreviousStep()
+    },
+  })
+}
+function submitCurrentForReview() {
+  if (phase.value === 'multiview' && canSubmitMultiViewReview.value) {
+    void submitMultiViewReview()
+    return
+  }
+  uni.showModal({
+    title: '先生成三视图',
+    content: '平台审核需要完整的正面、侧面和背面。生成三视图后即可整包提交审核，当前产品图会继续保留。',
+    confirmText: '生成三视图',
+    success: result => { if (result.confirm) void generateMultiView() },
+  })
+}
+function sendWorkshopSuggestion(label: string) {
+  if (chatInputLocked.value || busy.value || chatSending.value || quickReplySubmitting.value) return
+  chatInput.value = label
+  void submitChatInput()
+}
 function openCommercial() {
   if (phase.value === 'result') {
     uni.showToast({ title: '请先生成生产模拟图或 3D 原型', icon: 'none' })
@@ -1699,6 +1750,233 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 </style>
 
 <style scoped lang="scss">
+/* Mobile workshop skin based on the supplied WeChat design. */
+.page.chat-experience {
+  --workshop-green: #35bda5;
+  --workshop-green-deep: #299f8c;
+  --workshop-mint: #eefaf8;
+  min-height: 100vh;
+  padding: 0;
+  background: linear-gradient(155deg, #fff 0%, #f7fcfb 42%, #eaf8f5 100%);
+  color: #202522;
+}
+
+.workshop-nav {
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: 150rpx minmax(0, 1fr) 210rpx;
+  align-items: end;
+  height: calc(118rpx + env(safe-area-inset-top));
+  box-sizing: border-box;
+  padding: calc(34rpx + env(safe-area-inset-top)) 24rpx 17rpx;
+  border-bottom: 1rpx solid rgba(25, 126, 108, .08);
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 7rpx 24rpx rgba(35, 113, 98, .045);
+  backdrop-filter: blur(18rpx);
+}
+.workshop-nav-title {
+  overflow: hidden;
+  color: #151918;
+  font-size: 34rpx;
+  font-weight: 800;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workshop-nav-actions { display: flex; align-items: center; justify-content: flex-end; gap: 13rpx; }
+.workshop-nav-button { display: grid; place-items: center; width: 58rpx; height: 58rpx; color: #222927; line-height: 1; }
+.back-button { justify-self: start; font-size: 58rpx; font-weight: 300; }
+.history-button { font-size: 35rpx; color: #6e7d78; }
+.workshop-menu-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  width: 128rpx;
+  height: 58rpx;
+  padding: 0 14rpx;
+  box-sizing: border-box;
+  border: 1rpx solid #e4e7e6;
+  border-radius: 32rpx;
+  background: rgba(255, 255, 255, .86);
+  color: #171b1a;
+  font-size: 25rpx;
+}
+.workshop-menu-button text:last-child { font-size: 33rpx; }
+
+.chat {
+  height: 100vh;
+  box-sizing: border-box;
+  padding: calc(142rpx + env(safe-area-inset-top)) 38rpx 20rpx;
+  background: transparent;
+}
+.workspace-intro, .ai-disclosure { display: none; }
+.message-row { gap: 16rpx; margin: 29rpx 0; }
+.message-row.user { justify-content: flex-end; }
+.message-avatar {
+  display: block;
+  flex: 0 0 54rpx;
+  width: 54rpx;
+  height: 54rpx;
+  border: 0;
+  border-radius: 16rpx;
+  background: transparent;
+  box-shadow: none;
+}
+.message-content { max-width: 82%; }
+.message-meta {
+  gap: 9rpx;
+  min-height: 42rpx;
+  margin: 2rpx 4rpx 8rpx;
+  color: #171c1a;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+.message-meta text:last-child { color: #9aa39f; font-size: 19rpx; font-weight: 400; }
+.user .message-meta { justify-content: flex-end; font-size: 27rpx; }
+.bubble {
+  padding: 22rpx 28rpx;
+  border: 1rpx solid #d8f1ed;
+  border-radius: 32rpx;
+  background: #fff;
+  box-shadow: 0 0 14rpx rgba(30, 211, 186, .1);
+}
+.bubble text { color: rgba(22, 27, 25, .82); font-size: 24rpx; line-height: 1.6; }
+.user .bubble { border-color: #d8f1ed; border-radius: 32rpx; background: #fff; }
+.user .bubble text { color: rgba(22, 27, 25, .82); }
+.message-actions { display: none; }
+.image-bubble { width: 100%; max-width: 560rpx; padding: 10rpx; }
+.message-image, .message-image-loading { height: 360rpx; border-radius: 24rpx; background: #edf7f5; }
+.thinking-row { gap: 16rpx; margin: 29rpx 0; }
+.thinking-content { max-width: 82%; }
+.thinking-bubble {
+  padding: 21rpx 27rpx;
+  border: 1rpx solid #d8f1ed;
+  border-radius: 32rpx;
+  background: #fff;
+  box-shadow: 0 0 14rpx rgba(30, 211, 186, .1);
+}
+.thinking-title { color: #397a6d; font-size: 23rpx; }
+.thinking-detail { color: #788782; font-size: 20rpx; }
+
+.output-surface {
+  margin: 30rpx 36rpx 30rpx 70rpx;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.output-header { align-items: flex-start; margin-bottom: 13rpx; }
+.surface-kicker { color: #8a9692; font-size: 18rpx; letter-spacing: 0; }
+.surface-title { margin-top: 6rpx; color: #303936; font-size: 24rpx; font-weight: 600; }
+.output-status { padding-top: 4rpx; color: #5e8e81; font-size: 17rpx; }
+.status-check { width: 29rpx; height: 29rpx; background: #dff5ef; color: var(--workshop-green-deep); font-size: 18rpx; }
+.visual-frame {
+  margin-top: 15rpx;
+  overflow: hidden;
+  border: 1rpx solid #dcf0ec;
+  border-radius: 32rpx;
+  background: #fff;
+  box-shadow: 0 0 15rpx rgba(22, 203, 178, .08);
+}
+.result-image { height: 420rpx; background: #fff; }
+.result-placeholder { height: 310rpx; background: #fff; }
+.visual-badge { top: 17rpx; left: 17rpx; border: 0; border-radius: 18rpx; background: rgba(37, 168, 145, .88); font-size: 17rpx; }
+.output-info { padding: 15rpx 4rpx 4rpx; }
+.output-info view text:first-child { font-size: 23rpx; }
+.output-info view text:last-child { margin-top: 5rpx; color: #66736e; font-size: 19rpx; }
+.output-open { color: var(--workshop-green-deep); font-size: 18rpx; }
+.result-tool-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6rpx; margin-top: 24rpx; }
+.result-tool { display: flex; align-items: center; min-width: 0; flex-direction: column; gap: 9rpx; color: #596762; font-size: 17rpx; }
+.result-tool-icon {
+  display: grid;
+  place-items: center;
+  width: 49rpx;
+  height: 49rpx;
+  border: 2rpx solid #7eb7a9;
+  border-radius: 12rpx;
+  background: #f8fffd;
+  color: #4d9e8b;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+.result-tool.primary .result-tool-icon { background: #e5f8f3; color: #268d78; }
+.result-tool .tool-3d { font-size: 17rpx; }
+.result-tool text { overflow: hidden; width: 100%; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+
+.simulation-frame, .view-card, .model-summary, .bundle-review-state { border-color: #d8eeea; background: #fff; }
+.simulation-frame { border-radius: 28rpx; }
+.view-card { border-radius: 20rpx; }
+.dark-button { background: linear-gradient(135deg, #45cdb4, #2aa991); }
+.outline-button { border-color: #8fcbbc; background: #f6fffc; color: #328d7b; }
+
+.composer-dock {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 9rpx 38rpx calc(22rpx + env(safe-area-inset-bottom));
+  border-top: 0;
+  background: linear-gradient(180deg, rgba(244, 252, 250, 0), rgba(244, 252, 250, .96) 17%, #f4fcfa 42%);
+  box-shadow: none;
+  backdrop-filter: blur(15rpx);
+}
+.composer-context { min-height: 30rpx; color: #75847f; font-size: 18rpx; }
+.context-live { background: #54cdb5; }
+.quick-reply-list { height: 69rpx; min-height: 69rpx; margin-top: 8rpx; }
+.quick-reply-track { height: 69rpx; gap: 12rpx; padding: 0 2rpx; }
+.quick-reply {
+  min-height: 55rpx;
+  padding: 0 20rpx;
+  border: 1rpx solid #e8f0ee;
+  border-radius: 28rpx;
+  background: rgba(255, 255, 255, .92);
+  color: #596662;
+  font-size: 20rpx;
+  box-shadow: 0 4rpx 12rpx rgba(42, 113, 98, .035);
+}
+.quick-reply-mark { border-radius: 50%; background: #dff5ef; color: #299c88; }
+.quick-reply.confirm { border-color: #9edbcd; background: #ecfbf7; color: #257f6d; }
+.quick-reply.secondary { border-color: #d5e7e2; background: #fff; color: #55736b; }
+.category-suggestion { gap: 11rpx; padding: 0 18rpx; }
+.suggestion-dot { width: 14rpx; height: 14rpx; flex: none; border-radius: 50%; background: #56d3ba; }
+.chat-input-row { gap: 13rpx; margin-top: 6rpx; }
+.chat-upload-button, .chat-send-button { width: 72rpx; height: 72rpx; border-radius: 20rpx; line-height: 72rpx; }
+.chat-upload-button { border: 0; background: linear-gradient(145deg, #54d9c0, #35b69f); color: #fff; font-size: 49rpx; }
+.chat-input {
+  height: 78rpx;
+  min-height: 78rpx;
+  max-height: 78rpx;
+  padding: 13rpx 83rpx 9rpx 26rpx;
+  border: 2rpx solid #70d8c3;
+  border-radius: 40rpx;
+  background: #fff;
+  color: #25302d;
+  font-size: 23rpx;
+  line-height: 34rpx;
+  box-shadow: 0 4rpx 17rpx rgba(25, 178, 151, .12);
+}
+.chat-send-button { margin-left: -85rpx; border: 0; background: transparent; color: #69cbb7; font-size: 35rpx; }
+.chat-send-button.ready { background: transparent; color: #24ad91; }
+.composer-footer { display: none; }
+.loading-bar { right: 38rpx; bottom: calc(194rpx + env(safe-area-inset-bottom)); left: 38rpx; border-color: #c9e9e1; border-radius: 25rpx; background: #f8fffd; color: #4d756b; }
+.chat-bottom-spacer { height: calc(275rpx + env(safe-area-inset-bottom)); }
+.chat-bottom-spacer.has-quick-replies { height: calc(320rpx + env(safe-area-inset-bottom)); }
+.chat-bottom-spacer.has-replacement-panel { height: calc(320rpx + env(safe-area-inset-bottom)); }
+
+@media (max-width: 360px) {
+  .workshop-nav { grid-template-columns: 105rpx minmax(0, 1fr) 180rpx; padding-right: 15rpx; padding-left: 15rpx; }
+  .workshop-menu-button { width: 112rpx; }
+  .chat { padding-right: 25rpx; padding-left: 25rpx; }
+  .output-surface { margin-left: 58rpx; }
+  .composer-dock { padding-right: 25rpx; padding-left: 25rpx; }
+}
+</style>
+
+<style scoped lang="scss">
 /* The conversation page is a focused workspace: the transcript stays clear,
  * while the composer and project state remain available at the edges. */
 .page.chat-experience {
@@ -1957,4 +2235,26 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 @keyframes thinking-enter { from { opacity: 0; transform: translateY(8rpx); } to { opacity: 1; transform: translateY(0); } }
 @keyframes thinking-dot-bounce { 0%, 60%, 100% { opacity: .35; transform: translateY(0) scale(.85); } 30% { opacity: 1; transform: translateY(-4rpx) scale(1); } }
 @keyframes loading-spin { to { transform: rotate(360deg); } }
+</style>
+
+<style scoped lang="scss">
+/* Final cascade: keep the supplied workshop visual over the legacy skin. */
+.page.chat-experience{min-height:100vh;padding:0;background:linear-gradient(155deg,#fff 0%,#f7fcfb 42%,#eaf8f5 100%);color:#202522}
+.chat{height:100vh;box-sizing:border-box;padding:calc(142rpx + env(safe-area-inset-top)) 38rpx 20rpx;background:transparent}
+.workspace-intro,.ai-disclosure{display:none}
+.message-row{gap:16rpx;margin:29rpx 0}.message-row.user{justify-content:flex-end}
+.message-avatar{display:block;flex:0 0 54rpx;width:54rpx;height:54rpx;border:0;border-radius:16rpx;background:transparent;box-shadow:none}
+.message-content,.thinking-content{max-width:82%}
+.message-meta{gap:9rpx;min-height:42rpx;margin:2rpx 4rpx 8rpx;color:#171c1a;font-size:28rpx;font-weight:700}.message-meta text:last-child{color:#9aa39f;font-size:19rpx;font-weight:400}.user .message-meta{justify-content:flex-end;font-size:27rpx}
+.bubble{padding:22rpx 28rpx;border:1rpx solid #d8f1ed;border-radius:32rpx;background:#fff;box-shadow:0 0 14rpx rgba(30,211,186,.1)}.bubble text,.user .bubble text{color:rgba(22,27,25,.82);font-size:24rpx;line-height:1.6}.user .bubble{border-color:#d8f1ed;border-radius:32rpx;background:#fff}.message-actions{display:none}
+.image-bubble{width:100%;max-width:560rpx;padding:10rpx}.message-image,.message-image-loading{height:360rpx;border-radius:24rpx;background:#edf7f5}
+.thinking-row{gap:16rpx;margin:29rpx 0}.thinking-bubble{padding:21rpx 27rpx;border:1rpx solid #d8f1ed;border-radius:32rpx;background:#fff;box-shadow:0 0 14rpx rgba(30,211,186,.1)}.thinking-title{color:#397a6d;font-size:23rpx}.thinking-detail{color:#788782;font-size:20rpx}
+.output-surface{margin:30rpx 36rpx 30rpx 70rpx;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}.output-header{align-items:flex-start;margin-bottom:13rpx}.surface-kicker{color:#8a9692;font-size:18rpx;letter-spacing:0}.surface-title{margin-top:6rpx;color:#303936;font-size:24rpx;font-weight:600}.output-status{padding-top:4rpx;color:#5e8e81;font-size:17rpx}.status-check{width:29rpx;height:29rpx;background:#dff5ef;color:#299f8c;font-size:18rpx}
+.visual-frame{margin-top:15rpx;overflow:hidden;border:1rpx solid #dcf0ec;border-radius:32rpx;background:#fff;box-shadow:0 0 15rpx rgba(22,203,178,.08)}.result-image{height:420rpx;background:#fff}.result-placeholder{height:310rpx;background:#fff}.visual-badge{top:17rpx;left:17rpx;border:0;border-radius:18rpx;background:rgba(37,168,145,.88);font-size:17rpx}.output-info{padding:15rpx 4rpx 4rpx}.output-info view text:first-child{font-size:23rpx}.output-info view text:last-child{margin-top:5rpx;color:#66736e;font-size:19rpx}.output-open{color:#299f8c;font-size:18rpx}
+.simulation-frame,.view-card,.model-summary,.bundle-review-state{border-color:#d8eeea;background:#fff}.simulation-frame{border-radius:28rpx}.view-card{border-radius:20rpx}.dark-button{background:linear-gradient(135deg,#45cdb4,#2aa991)}.outline-button{border-color:#8fcbbc;background:#f6fffc;color:#328d7b}
+.composer-dock{right:0;bottom:0;left:0;padding:9rpx 38rpx calc(22rpx + env(safe-area-inset-bottom));border-top:0;background:linear-gradient(180deg,rgba(244,252,250,0),rgba(244,252,250,.96) 17%,#f4fcfa 42%);box-shadow:none;backdrop-filter:blur(15rpx)}
+.composer-context{min-height:30rpx;color:#75847f;font-size:18rpx}.context-live{background:#54cdb5}.quick-reply-list{height:69rpx;min-height:69rpx;margin-top:8rpx}.quick-reply-track{height:69rpx;gap:12rpx;padding:0 2rpx}.quick-reply{min-height:55rpx;padding:0 20rpx;border:1rpx solid #e8f0ee;border-radius:28rpx;background:rgba(255,255,255,.92);color:#596662;font-size:20rpx;box-shadow:0 4rpx 12rpx rgba(42,113,98,.035)}.quick-reply-mark{border-radius:50%;background:#dff5ef;color:#299c88}.quick-reply.confirm{border-color:#9edbcd;background:#ecfbf7;color:#257f6d}.quick-reply.secondary{border-color:#d5e7e2;background:#fff;color:#55736b}
+.chat-input-row{gap:13rpx;margin-top:6rpx}.chat-upload-button,.chat-send-button{width:72rpx;height:72rpx;border-radius:20rpx;line-height:72rpx}.chat-upload-button{border:0;background:linear-gradient(145deg,#54d9c0,#35b69f);color:#fff;font-size:49rpx}.chat-input{height:78rpx;min-height:78rpx;max-height:78rpx;padding:13rpx 83rpx 9rpx 26rpx;border:2rpx solid #70d8c3;border-radius:40rpx;background:#fff;color:#25302d;font-size:23rpx;line-height:34rpx;box-shadow:0 4rpx 17rpx rgba(25,178,151,.12)}.chat-send-button{margin-left:-85rpx;border:0;background:transparent;color:#69cbb7;font-size:35rpx}.chat-send-button.ready{background:transparent;color:#24ad91}.composer-footer{display:none}
+.loading-bar{right:38rpx;bottom:calc(194rpx + env(safe-area-inset-bottom));left:38rpx;border-color:#c9e9e1;border-radius:25rpx;background:#f8fffd;color:#4d756b}.chat-bottom-spacer{height:calc(275rpx + env(safe-area-inset-bottom))}.chat-bottom-spacer.has-quick-replies,.chat-bottom-spacer.has-replacement-panel{height:calc(320rpx + env(safe-area-inset-bottom))}
+@media(max-width:360px){.chat{padding-right:25rpx;padding-left:25rpx}.output-surface{margin-left:58rpx}.composer-dock{padding-right:25rpx;padding-left:25rpx}}
 </style>
