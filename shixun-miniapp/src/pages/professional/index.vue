@@ -1,57 +1,74 @@
 <template>
   <view class="page">
-    <view class="hero">
-      <text class="eyebrow">PROFESSIONAL CREATOR</text>
-      <text class="title">专业创作工作台</text>
-      <text class="sub">提交完整作品包，让设计、工艺、版权和渠道信息进入同一条审核流程。</text>
+    <view class="nav-bar">
+      <view class="nav-back" aria-label="返回" @tap="goBack">‹</view>
+      <text class="nav-title">产品智造</text>
+      <view class="nav-menu" aria-label="更多操作" @tap="openPageMenu"><text>•••</text><view /><text>◎</text></view>
     </view>
 
-    <view class="notice"><text>专业作品审核</text><text>仅接受 ZIP 作品包，最大 100MB。建议包含效果图、尺寸、材质、工艺说明和版权材料。</text><text class="web-hint">专业作品包建议用电脑端访问 https://zhijiansk.com/，体验更佳哦。</text></view>
-    <view v-if="linkedContext" class="linked-context"><text>当前对话作品</text><text>产品号：{{ linkedContext.productNo || '未关联产品号' }}</text><text>{{ linkedContext.productName || '已生成文创产品' }} · 作品 #{{ linkedContext.assetId }}</text><text>提交后会自动关联当前产品，后台审核与打样流程使用同一个产品号。</text></view>
-
-    <view class="card">
-      <text class="section-title">1 · 上传作品包</text>
-      <view class="file-picker" :class="{ selected: filePath }" @tap="chooseZip">
-        <text class="file-mark">{{ filePath ? 'ZIP' : '+' }}</text>
-        <view><text>{{ fileName || '选择专业作品 ZIP' }}</text><text>{{ filePath ? formatSize(fileSize) : '点击选择文件，不能直接上传文件夹' }}</text></view>
-        <text class="arrow">›</text>
+    <view class="content">
+      <view class="intro">
+        <text class="intro-title">上传作品</text>
+        <text class="intro-copy">提交已有作品，审核通过后即可打样、生产或进入渠道合作。</text>
       </view>
-      <text v-if="fileError" class="error">{{ fileError }}</text>
 
-      <text class="section-title">2 · 填写作品信息</text>
-      <input v-model.trim="title" class="input" maxlength="100" placeholder="作品名称，例如：青铜纹样系列冰箱贴" />
-      <textarea v-model.trim="note" class="textarea" maxlength="1200" placeholder="补充尺寸、材质、工艺、预计数量、版权来源等信息（可选）" />
-
-      <text class="section-title">3 · 选择创作去向</text>
-      <view class="purpose-row">
-        <view class="purpose" :class="{ active: purpose === 'personal' }" @tap="purpose = 'personal'"><text>个人创作</text><text>自用、收藏或后续自行对接生产</text></view>
-        <view class="purpose" :class="{ active: purpose === 'museum_sale' }" @tap="purpose = 'museum_sale'"><text>渠道售卖</text><text>提交景区或博物馆审核</text></view>
-      </view>
-      <template v-if="purpose === 'museum_sale'">
-        <picker :range="provinces" :value="provinceIndex" @change="chooseProvince"><view class="picker">{{ province || '选择省 / 直辖市' }}<text>›</text></view></picker>
-        <picker :range="museumNames" :value="museumIndex" :disabled="!province || !museumNames.length" @change="chooseMuseum"><view class="picker">{{ museum?.name || '选择博物馆或景区' }}<text>›</text></view></picker>
-        <text v-if="!museum" class="field-tip">渠道售卖作品必须选择一个目标博物馆或景区。</text>
-      </template>
-
-      <view class="check-row" @tap="copyrightConfirmed = !copyrightConfirmed"><text class="checkbox">{{ copyrightConfirmed ? '✓' : '' }}</text><text>我确认已获得作品中图片、字体、肖像、商标、文物或景区元素的使用授权，并愿意配合平台审核。</text></view>
-      <button class="submit" :loading="loading" :disabled="loading || !canSubmit" @tap="submit">提交专业作品包</button>
-      <text class="footer">平台仅提供创作与审核流转服务；专业作品的版权、真实性、尺寸和生产可行性仍需提交者负责并接受人工复核。</text>
-    </view>
-
-    <view class="card records-card">
-      <view class="records-head"><text class="section-title">我的专业提交</text><text @tap="loadRecords">刷新</text></view>
-      <view v-if="!records.length" class="empty">还没有专业作品提交记录</view>
-      <view v-for="record in records" :key="record.id || record.submissionNo" class="record">
-        <view class="record-top"><view><text class="product-no">产品号：{{ record.productNo || '未关联产品号' }}</text><text class="record-title">{{ record.title || record.originalName }}</text><text class="record-no">{{ record.submissionNo }} · {{ formatDate(record.createdAt) }}</text></view><text class="status" :class="`status-${record.status}`">{{ statusLabel(record.status) }}</text></view>
-        <text class="record-meta">{{ record.purpose === 'museum_sale' ? `渠道：${record.museumName || '待选择'}` : '个人创作' }}</text>
-        <view v-if="['approved', 'processing'].includes(String(record.status)) && record.quotedSampleFeeYuan" class="quote-box">
-          <text class="quote-title">打样报价单</text>
-          <text class="quote-line">费用：¥{{ fee(record.quotedSampleFeeYuan) }} · 预计交期：{{ record.quotedSampleLeadTime || '待确认' }}</text>
-          <text v-if="record.quotedSampleNote" class="quote-line">说明：{{ record.quotedSampleNote }}</text>
-          <text class="quote-status">{{ paymentStatusLabel(record.samplePaymentStatus) }}</text>
-          <button v-if="record.samplePaymentStatus === 'unpaid'" class="quote-pay" size="mini" @tap.stop="payQuote(record)">支付打样费</button>
+      <view class="section-heading"><text><b>01</b> 上传作品包</text><text>必填</text></view>
+      <view class="upload-card">
+        <view class="file-picker" :class="{ selected: filePath }" @tap="chooseZip">
+          <view class="upload-icon">↥</view>
+          <text class="file-title">{{ fileName || '选择作品包文件' }}</text>
+          <text class="file-subtitle">{{ filePath ? `${formatSize(fileSize)} · 点击可重新选择` : 'ZIP格式 · 不超过100MB' }}</text>
         </view>
-        <text v-if="record.reviewComment" class="record-comment">审核意见：{{ record.reviewComment }}</text>
+        <view class="package-checklist"><text>✓ 效果图(三视角)</text><text>✓ 尺寸规格</text><text>✓ 材质与工艺说明</text><text>✓ 版权材料</text></view>
+        <text v-if="fileError" class="error">{{ fileError }}</text>
+      </view>
+
+      <view v-if="linkedContext" class="linked-context"><text>已关联产品号：{{ linkedContext.productNo || '待生成' }}</text><text>{{ linkedContext.productName || '对话式创作作品' }} · 作品 #{{ linkedContext.assetId }}</text></view>
+
+      <view class="section-heading"><text><b>02</b> 作品信息</text><text>名称必填</text></view>
+      <view class="form-card">
+        <label class="field-label">作品名称<text>*</text></label>
+        <input v-model.trim="title" class="input" maxlength="100" placeholder="请输入作品名称，如：青铜纹样冰箱贴" />
+        <label class="field-label">作品介绍<text>*</text></label>
+        <textarea v-model.trim="note" class="textarea" maxlength="1200" placeholder="创作理念、文化来源、设计思路……" />
+        <label class="field-label">产品信息<text>*</text></label>
+        <input v-model.trim="productInfo" class="input" maxlength="300" placeholder="如：60×60×3mm · 锌合金 · 珐琅工艺 · 首批500个" />
+      </view>
+
+      <view class="section-heading"><text><b>03</b> 合作方向</text><text>单选</text></view>
+      <view class="direction-card">
+        <view class="direction-option" :class="{ active: purpose === 'personal' }" @tap="purpose = 'personal'">
+          <view class="radio"><view /></view><view><text>产品打样</text><text>先把作品做成实物样品</text></view>
+        </view>
+        <view class="direction-option" :class="{ active: purpose === 'museum_sale' }" @tap="purpose = 'museum_sale'">
+          <view class="radio"><view /></view><view><text>渠道合作</text><text>提交馆方或景区进行合作审核</text></view>
+        </view>
+        <view v-if="purpose === 'museum_sale'" class="channel-fields">
+          <picker :range="provinces" :value="provinceIndex" @change="chooseProvince"><view class="picker">{{ province || '选择省 / 直辖市' }}<text>›</text></view></picker>
+          <picker :range="museumNames" :value="museumIndex" :disabled="!province || !museumNames.length" @change="chooseMuseum"><view class="picker">{{ museum?.name || '选择合作博物馆或景区' }}<text>›</text></view></picker>
+          <text v-if="!museum" class="field-tip">渠道合作必须选择一个目标博物馆或景区。</text>
+        </view>
+      </view>
+
+      <view class="check-row" @tap="copyrightConfirmed = !copyrightConfirmed"><text class="checkbox">{{ copyrightConfirmed ? '✓' : '' }}</text><text>我确认已合法取得作品及素材的使用授权，并同意配合平台与馆方审核。</text></view>
+      <button class="submit" :loading="loading" :disabled="loading" @tap="submit">提交审核</button>
+      <text class="footer">平台将在1-2个工作日内审核作品的完整性、版权信息与生产可行性，结果可在“消息通知”和“我的作品”里进行查询。</text>
+
+      <view class="record-toggle" @tap="showRecords = !showRecords"><text>{{ showRecords ? '收起提交记录' : '查看我的提交记录' }}</text><text>{{ showRecords ? '⌃' : '⌄' }}</text></view>
+
+      <view v-if="showRecords" class="records-card">
+        <view class="records-head"><text>我的提交</text><text @tap="loadRecords">刷新</text></view>
+        <view v-if="!records.length" class="empty">还没有作品包提交记录</view>
+        <view v-for="record in records" :key="record.id || record.submissionNo" class="record">
+          <view class="record-top"><view><text class="product-no">产品号：{{ record.productNo || '未关联产品号' }}</text><text class="record-title">{{ record.title || record.originalName }}</text><text class="record-no">{{ record.submissionNo }} · {{ formatDate(record.createdAt) }}</text></view><text class="status" :class="`status-${record.status}`">{{ statusLabel(record.status) }}</text></view>
+          <text class="record-meta">{{ record.purpose === 'museum_sale' ? `渠道合作：${record.museumName || '待选择'}` : '产品打样' }}</text>
+          <view v-if="['approved', 'processing'].includes(String(record.status)) && record.quotedSampleFeeYuan" class="quote-box">
+            <text class="quote-title">打样报价单</text><text class="quote-line">费用：¥{{ fee(record.quotedSampleFeeYuan) }} · 预计交期：{{ record.quotedSampleLeadTime || '待确认' }}</text>
+            <text v-if="record.quotedSampleNote" class="quote-line">说明：{{ record.quotedSampleNote }}</text><text class="quote-status">{{ paymentStatusLabel(record.samplePaymentStatus) }}</text>
+            <button v-if="record.samplePaymentStatus === 'unpaid'" class="quote-pay" size="mini" @tap.stop="payQuote(record)">支付打样费</button>
+          </view>
+          <text v-if="record.reviewComment" class="record-comment">审核意见：{{ record.reviewComment }}</text>
+        </view>
       </view>
     </view>
   </view>
@@ -69,6 +86,7 @@ const fileSize = ref(0)
 const fileError = ref('')
 const title = ref('')
 const note = ref('')
+const productInfo = ref('')
 const purpose = ref<'personal' | 'museum_sale'>('personal')
 const copyrightConfirmed = ref(false)
 const loading = ref(false)
@@ -81,10 +99,27 @@ const museumIndex = ref(0)
 const PROFESSIONAL_SUBMISSION_CONTEXT_KEY = 'professional_submission_context'
 const PENDING_PRODUCT_PACKAGE_KEY = 'pending_product_package'
 const linkedContext = ref<Record<string, any> | null>(null)
+const showRecords = ref(false)
 const provinces = computed(() => [...new Set(museums.value.map(item => item.province).filter(Boolean))])
 const filteredMuseums = computed(() => museums.value.filter(item => item.province === province.value))
 const museumNames = computed(() => filteredMuseums.value.map(item => `${item.name} · ${item.channelType === 'scenic_spot' ? '景区' : '博物馆'}`))
-const canSubmit = computed(() => Boolean(filePath.value && copyrightConfirmed.value && (purpose.value === 'personal' || museum.value)))
+
+function goBack() {
+  if (getCurrentPages().length > 1) { uni.navigateBack(); return }
+  uni.reLaunch({ url: '/pages/home/index' })
+}
+
+function showRequirements() {
+  uni.showModal({ title: '作品包要求', content: '请上传不超过100MB的ZIP文件，并包含效果图（三视角）、尺寸规格、材质与工艺说明以及版权材料。', showCancel: false, confirmText: '我知道了' })
+}
+
+function openPageMenu() {
+  uni.showActionSheet({ itemList: ['更换ZIP作品包', '查看提交记录', '查看作品包要求'], success: result => {
+    if (result.tapIndex === 0) chooseZip()
+    else if (result.tapIndex === 1) showRecords.value = true
+    else if (result.tapIndex === 2) showRequirements()
+  } })
+}
 
 function restoreLinkedContext() {
   const raw = uni.getStorageSync(PROFESSIONAL_SUBMISSION_CONTEXT_KEY)
@@ -161,12 +196,18 @@ function chooseProvince(event: any) { provinceIndex.value = Number(event.detail.
 function chooseMuseum(event: any) { museumIndex.value = Number(event.detail.value); museum.value = filteredMuseums.value[museumIndex.value] || null }
 async function loadRecords() { try { records.value = await getMyProfessionalSubmissions() } catch (error: any) { uni.showToast({ title: error?.message || '提交记录加载失败', icon: 'none' }) } }
 async function submit() {
-  if (!canSubmit.value || loading.value) return
+  if (loading.value) return
+  if (!filePath.value) return uni.showToast({ title: '请先选择ZIP作品包', icon: 'none' })
+  if (!title.value.trim()) return uni.showToast({ title: '请填写作品名称', icon: 'none' })
+  if (!note.value.trim()) return uni.showToast({ title: '请填写作品介绍', icon: 'none' })
+  if (!productInfo.value.trim()) return uni.showToast({ title: '请填写产品信息', icon: 'none' })
+  if (purpose.value === 'museum_sale' && !museum.value) return uni.showToast({ title: '请选择合作博物馆或景区', icon: 'none' })
+  if (!copyrightConfirmed.value) return uni.showToast({ title: '请先确认作品及素材授权', icon: 'none' })
   loading.value = true
   try {
     const formData: Record<string, string> = {
       title: title.value,
-      note: note.value,
+      note: `${note.value.trim()}\n\n产品信息：${productInfo.value.trim()}`,
       purpose: purpose.value,
       museumId: museum.value?.id == null ? '' : String(museum.value.id),
       museumName: museum.value?.name || '',
@@ -179,13 +220,14 @@ async function submit() {
     if (productId) formData.productId = productId
     const result = await uploadProfessionalSubmission(filePath.value, formData)
     await loadRecords()
-    filePath.value = ''; fileName.value = ''; fileSize.value = 0; title.value = ''; note.value = ''; copyrightConfirmed.value = false
+    filePath.value = ''; fileName.value = ''; fileSize.value = 0; title.value = ''; note.value = ''; productInfo.value = ''; copyrightConfirmed.value = false
     // A successful package starts its own review record. Do not accidentally
     // attach a later, unrelated ZIP to the previous conversation's product.
     uni.removeStorageSync(PROFESSIONAL_SUBMISSION_CONTEXT_KEY)
     uni.removeStorageSync(PENDING_PRODUCT_PACKAGE_KEY)
     linkedContext.value = null
-    uni.showModal({ title: '提交成功', content: `${result?.submissionNo || '作品包'}已进入专业审核，审核结果会显示在本页。`, showCancel: false })
+    showRecords.value = true
+    uni.showModal({ title: '提交成功', content: `${result?.submissionNo || '作品包'}已进入审核，结果会显示在本页和“我的作品”中。`, showCancel: false })
   } catch (error: any) { uni.showToast({ title: error?.message || '提交失败，请稍后重试', icon: 'none' }) } finally { loading.value = false }
 }
 function formatSize(size: number) { return size ? `${(size / 1024 / 1024).toFixed(2)} MB` : '文件已选择' }
@@ -208,14 +250,10 @@ onShow(() => {
   else linkedContext.value = null
 })
 onLoad(query => {
-  if (String(query?.entry || '') === 'production') uni.setNavigationBarTitle({ title: '提交产品作品包' })
+  showRecords.value = String(query?.entry || '') !== 'production'
 })
 </script>
 
 <style scoped lang="scss">
-.page{min-height:100vh;padding:34rpx 28rpx 70rpx;box-sizing:border-box;background:linear-gradient(150deg,#faf8f3,#eee7dc);color:#332e29}.hero{display:flex;flex-direction:column;padding:20rpx 6rpx 24rpx}.eyebrow{color:#638174;font-size:17rpx;font-weight:800;letter-spacing:2.5rpx}.title{margin-top:12rpx;font-family:"Songti SC","STSong",serif;font-size:49rpx;font-weight:800}.sub{margin-top:12rpx;color:#7e756b;font-size:23rpx;line-height:1.65}.notice{display:flex;flex-direction:column;gap:8rpx;padding:21rpx;border:1rpx solid #d9e7dc;border-radius:17rpx;background:#eff6f0;color:#567565;font-size:21rpx;line-height:1.55}.notice text:first-child{font-size:25rpx;font-weight:800}.card{margin-top:20rpx;padding:25rpx;border:1rpx solid rgba(115,98,78,.14);border-radius:22rpx;background:rgba(255,253,249,.9);box-shadow:0 10rpx 25rpx rgba(72,57,41,.06)}.section-title{display:block;margin-bottom:15rpx;color:#3c3832;font-size:27rpx;font-weight:800}.file-picker{display:flex;align-items:center;gap:15rpx;padding:20rpx;border:1rpx dashed #cdbfb0;border-radius:16rpx;background:#fbf7f0}.file-picker.selected{border-style:solid;border-color:#8fa99a;background:#eff5ef}.file-mark{display:grid;place-items:center;flex:none;width:64rpx;height:64rpx;border-radius:15rpx;background:#e9f0e9;color:#5a806e;font-size:20rpx;font-weight:800}.file-picker view{display:flex;min-width:0;flex:1;flex-direction:column}.file-picker view text:first-child{overflow:hidden;color:#3d3933;font-size:23rpx;text-overflow:ellipsis;white-space:nowrap}.file-picker view text:last-child{margin-top:6rpx;color:#958a7e;font-size:18rpx}.arrow{color:#9a6a53;font-size:37rpx}.error{display:block;margin-top:9rpx;color:#b34f3d;font-size:19rpx}.input,.textarea,.picker{width:100%;box-sizing:border-box;margin-bottom:14rpx;border:1rpx solid #e4dbcf;border-radius:13rpx;background:#fbf8f2;color:#403a34;font-size:23rpx}.input{height:80rpx;padding:0 18rpx}.textarea{height:160rpx;padding:17rpx;line-height:1.55}.purpose-row{display:flex;gap:12rpx;margin-bottom:15rpx}.purpose{flex:1;padding:17rpx 14rpx;border:1rpx solid #e4dbcf;border-radius:14rpx;background:#fbf8f2}.purpose.active{border-color:#8fa99a;background:#eef5ef}.purpose text{display:block}.purpose text:first-child{font-size:23rpx;font-weight:800}.purpose text:last-child{margin-top:6rpx;color:#8a8075;font-size:18rpx;line-height:1.45}.picker{display:flex;justify-content:space-between;align-items:center;height:78rpx;padding:0 18rpx}.picker text{color:#a56b52;font-size:32rpx}.field-tip{display:block;margin:-5rpx 0 13rpx;color:#ae7058;font-size:18rpx}.check-row{display:flex;gap:10rpx;align-items:flex-start;margin-top:7rpx;color:#766c61;font-size:19rpx;line-height:1.55}.checkbox{display:grid;place-items:center;flex:none;width:33rpx;height:33rpx;border:1rpx solid #9caf9f;border-radius:7rpx;color:#fff;background:#fff}.check-row .checkbox:not(:empty){background:#638174}.submit{height:88rpx;line-height:88rpx;margin-top:22rpx;border-radius:16rpx;background:linear-gradient(135deg,#3c3934,#648173);color:#fff;font-size:27rpx;font-weight:800}.submit[disabled]{opacity:.45}.footer{display:block;margin-top:17rpx;color:#978d82;font-size:17rpx;line-height:1.55;text-align:center}.records-card{padding-bottom:12rpx}.records-head{display:flex;justify-content:space-between;align-items:center}.records-head .section-title{margin-bottom:4rpx}.records-head>text:last-child{color:#638174;font-size:20rpx}.empty{padding:25rpx 0;color:#978d82;font-size:20rpx;text-align:center}.record{padding:17rpx 0;border-top:1rpx solid #eee6dc}.record-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10rpx}.record-title,.record-no,.record-meta,.record-comment{display:block}.record-title{color:#403a34;font-size:23rpx;font-weight:800}.record-no{margin-top:6rpx;color:#9a8e82;font-size:17rpx}.status{padding:5rpx 10rpx;border-radius:99rpx;font-size:17rpx}.status-review{color:#8a6a43;background:#f7ecd9}.status-approved{color:#4d7a65;background:#e5f2e8}.status-rejected{color:#a25243;background:#fae8e1}.record-meta{margin-top:10rpx;color:#756b61;font-size:19rpx}.record-comment{margin-top:8rpx;color:#a25243;font-size:19rpx;line-height:1.5}
-.quote-box{margin-top:14rpx;padding:15rpx;border:1rpx solid #d5e5d8;border-radius:13rpx;background:#eff7f0}.quote-title,.quote-line,.quote-status{display:block}.quote-title{color:#47735b;font-size:21rpx;font-weight:850}.quote-line{margin-top:6rpx;color:#607b6a;font-size:19rpx;line-height:1.45}.quote-status{margin-top:8rpx;color:#7e6e5e;font-size:18rpx}.quote-pay{height:58rpx;line-height:58rpx;margin-top:11rpx;padding:0 20rpx;border:0;border-radius:10rpx;background:#557a66;color:#fff;font-size:20rpx}
-.status-processing{color:#4d7a65;background:#e5f2e8}
-.notice .web-hint{color:#9a6a53;font-weight:700}
-.linked-context{display:flex;flex-direction:column;gap:6rpx;margin-top:14rpx;padding:17rpx 20rpx;border:1rpx solid #d8e5da;border-radius:15rpx;background:#f1f7f1;color:#5f7968;font-size:19rpx;line-height:1.45}.linked-context text:first-child{color:#4c705a;font-size:21rpx;font-weight:800}.linked-context text:nth-child(2){color:#3f5f4d;font-size:23rpx;font-weight:800}.linked-context text:last-child{color:#7c9182;font-size:17rpx}
+.page{min-height:100vh;box-sizing:border-box;background:linear-gradient(150deg,#fff 0%,#f5fcfa 42%,#eaf8f5 100%);color:#252a28}.nav-bar{position:fixed;z-index:10;top:0;right:0;left:0;display:grid;grid-template-columns:150rpx minmax(0,1fr) 190rpx;align-items:end;height:calc(126rpx + env(safe-area-inset-top));box-sizing:border-box;padding:calc(36rpx + env(safe-area-inset-top)) 26rpx 18rpx;background:rgba(255,255,255,.97)}.nav-title{color:#080a09;font-size:40rpx;font-weight:700;line-height:58rpx;text-align:center}.nav-back{justify-self:start;width:64rpx;height:58rpx;color:#202624;font-size:64rpx;font-weight:300;line-height:48rpx}.nav-menu{display:flex;align-items:center;justify-content:space-around;justify-self:end;width:172rpx;height:62rpx;box-sizing:border-box;padding:0 20rpx;border:1rpx solid rgba(151,151,151,.28);border-radius:34rpx;background:#fff;color:#050706;font-size:28rpx}.nav-menu view{width:1rpx;height:37rpx;background:rgba(151,151,151,.35)}.nav-menu text:last-child{font-size:39rpx}.content{padding:calc(155rpx + env(safe-area-inset-top)) 34rpx calc(70rpx + env(safe-area-inset-bottom))}.intro{display:flex;flex-direction:column}.intro-title{color:#111513;font-size:40rpx;font-weight:700;line-height:58rpx}.intro-copy{margin-top:5rpx;color:#555f5b;font-size:22rpx;line-height:42rpx}.section-heading{display:flex;align-items:center;justify-content:space-between;margin:18rpx 0 24rpx;color:#141816}.section-heading>text:first-child{font-size:32rpx;font-weight:700}.section-heading b{margin-right:16rpx;font-size:32rpx}.section-heading>text:last-child{color:#777f7c;font-size:24rpx}.upload-card,.form-card,.direction-card,.records-card{padding:22rpx 24rpx;border:1rpx solid #dbf3ee;border-radius:32rpx;background:#fff;box-shadow:0 0 12rpx rgba(18,237,222,.12)}.file-picker{display:flex;align-items:center;justify-content:center;min-height:250rpx;box-sizing:border-box;flex-direction:column;padding:28rpx;border:1rpx dashed #aeb6b3;border-radius:32rpx;background:#f6f7f7}.file-picker.selected{border-color:#55c8b2;background:#f2fcf9}.upload-icon{display:grid;place-items:center;width:60rpx;height:60rpx;border:3rpx solid #69b6a8;border-radius:12rpx;color:#52b7a3;font-size:48rpx;font-weight:700;line-height:1}.file-title{overflow:hidden;max-width:100%;margin-top:22rpx;color:#323735;font-size:30rpx;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.file-subtitle{margin-top:2rpx;color:#6e7774;font-size:22rpx}.package-checklist{display:flex;flex-wrap:wrap;gap:12rpx 26rpx;padding:30rpx 35rpx 2rpx;color:#555e5b;font-size:21rpx;line-height:38rpx}.error{display:block;margin:12rpx 12rpx 0;color:#b34f3d;font-size:20rpx}.linked-context{display:flex;flex-direction:column;gap:6rpx;margin-top:15rpx;padding:16rpx 20rpx;border:1rpx solid #cce9e2;border-radius:15rpx;background:#f1fbf8;color:#55776d;font-size:19rpx}.linked-context text:first-child{font-size:22rpx;font-weight:700}.form-card{padding-bottom:28rpx}.field-label{display:block;margin:4rpx 14rpx 12rpx;color:#333936;font-size:28rpx;font-weight:600}.field-label text{color:#ef2929}.input,.textarea,.picker{width:100%;box-sizing:border-box;border:1rpx dashed #bfc5c3;border-radius:30rpx;background:#f7f8f8;color:#333936;font-size:22rpx}.input{height:60rpx;margin-bottom:20rpx;padding:0 32rpx}.textarea{height:145rpx;margin-bottom:20rpx;padding:20rpx 32rpx;line-height:1.55}.direction-card{display:flex;gap:28rpx;flex-direction:column;padding:30rpx 24rpx}.direction-option{display:flex;align-items:center;gap:18rpx;min-height:110rpx;box-sizing:border-box;padding:20rpx;border:1rpx solid transparent;border-radius:32rpx;background:#f5f5f5}.direction-option.active{border-color:#63d5bf;background:#eafaf6}.direction-option>view:last-child{display:flex;min-width:0;flex:1;flex-wrap:wrap;align-items:baseline;gap:6rpx 12rpx}.direction-option>view:last-child text:first-child{color:#303633;font-size:28rpx;font-weight:700}.direction-option>view:last-child text:last-child{color:#a0a7a4;font-size:21rpx}.radio{display:grid;place-items:center;flex:none;width:34rpx;height:34rpx;border:2rpx solid #fff;border-radius:50%;background:#fff}.direction-option.active .radio{border-color:#62d5bf}.direction-option.active .radio view{width:18rpx;height:18rpx;border-radius:50%;background:#62d5bf}.channel-fields{display:flex;gap:14rpx;flex-direction:column}.picker{display:flex;align-items:center;justify-content:space-between;height:72rpx;padding:0 25rpx;background:#fff}.picker text{color:#52aa9b;font-size:30rpx}.field-tip{color:#a46755;font-size:19rpx}.check-row{display:flex;align-items:flex-start;gap:16rpx;margin:30rpx 28rpx 0;color:#303735;font-size:21rpx;line-height:1.55}.checkbox{display:grid;place-items:center;flex:none;width:34rpx;height:34rpx;border:2rpx solid #9ba4a0;border-radius:8rpx;background:#fff;color:#fff}.check-row .checkbox:not(:empty){border-color:#53b8a4;background:#53b8a4}.submit{height:88rpx;margin:54rpx 52rpx 0;border-radius:44rpx;background:linear-gradient(148deg,#69ebc7,#49a59c);color:#fff;font-size:34rpx;font-weight:600;line-height:88rpx}.submit::after,.quote-pay::after{border:0}.submit[disabled]{opacity:.6}.footer{display:block;margin:76rpx 50rpx 0;color:#666f6b;font-size:20rpx;line-height:1.6;text-align:center}.record-toggle{display:flex;align-items:center;justify-content:center;gap:10rpx;margin-top:35rpx;color:#3d9d8c;font-size:22rpx}.records-card{margin-top:20rpx}.records-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8rpx}.records-head text:first-child{font-size:28rpx;font-weight:700}.records-head text:last-child{color:#3d9d8c;font-size:20rpx}.empty{padding:28rpx 0;color:#89928e;font-size:20rpx;text-align:center}.record{padding:20rpx 0;border-top:1rpx solid #e5efec}.record-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10rpx}.record-title,.record-no,.record-meta,.record-comment,.product-no{display:block}.product-no{color:#53776b;font-size:18rpx}.record-title{margin-top:4rpx;font-size:23rpx;font-weight:700}.record-no{margin-top:5rpx;color:#8d9692;font-size:17rpx}.record-meta{margin-top:9rpx;color:#65716c;font-size:19rpx}.record-comment{margin-top:8rpx;color:#a25243;font-size:19rpx}.status{padding:5rpx 10rpx;border-radius:99rpx;font-size:17rpx}.status-review{color:#8a6a43;background:#f7ecd9}.status-approved,.status-processing{color:#4d7a65;background:#e5f2e8}.status-rejected{color:#a25243;background:#fae8e1}.quote-box{margin-top:14rpx;padding:15rpx;border:1rpx solid #d5e5d8;border-radius:13rpx;background:#eff7f0}.quote-title,.quote-line,.quote-status{display:block}.quote-title{color:#47735b;font-size:21rpx;font-weight:700}.quote-line{margin-top:6rpx;color:#607b6a;font-size:19rpx}.quote-status{margin-top:8rpx;color:#7e6e5e;font-size:18rpx}.quote-pay{height:58rpx;margin-top:11rpx;padding:0 20rpx;border:0;border-radius:10rpx;background:#557a66;color:#fff;font-size:20rpx;line-height:58rpx}@media(max-width:360px){.nav-bar{grid-template-columns:110rpx minmax(0,1fr) 165rpx;padding-right:18rpx;padding-left:18rpx}.nav-menu{width:152rpx}.content{padding-right:24rpx;padding-left:24rpx}.submit{margin-right:30rpx;margin-left:30rpx}}
 </style>
