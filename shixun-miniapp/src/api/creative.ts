@@ -320,6 +320,8 @@ export interface ProfessionalSubmission {
   fileSize?: number
   purpose?: 'personal' | 'museum_sale' | string
   museumName?: string
+  channelRequestStatus?: 'not_requested' | 'requested' | string
+  channelRequestedAt?: string
   note?: string
   status?: 'review' | 'approved' | 'processing' | 'rejected' | string
   reviewComment?: string
@@ -341,6 +343,10 @@ export const uploadProfessionalSubmission = (filePath: string, formData: Record<
   '/api/creative/ai/consumer-professional-submissions', filePath, 'file', formData,
 )
 export const getMyProfessionalSubmissions = () => request<ProfessionalSubmission[]>('/api/creative/ai/consumer-professional-submissions/my')
+export const requestProfessionalChannelReview = (submissionId: number | string) => request<any>(
+  `/api/creative/ai/consumer-professional-submissions/${encodeURIComponent(String(submissionId))}/channel-request`,
+  { method: 'POST' },
+)
 export const resubmitProfessionalSubmission = (submissionId: number | string, filePath: string) => uploadFile<any>(
   `/api/creative/ai/consumer-professional-submissions/${encodeURIComponent(String(submissionId))}/resubmit`, filePath, 'file', {},
 )

@@ -26,6 +26,7 @@
       <view class="action-area">
         <button class="primary-action" @tap="chooseZip">确认上传</button>
         <button class="secondary-action" @tap="goBack">再逛逛</button>
+        <text class="history-link" @tap="openHistory">查看我的渠道作品进度</text>
         <view class="upload-note"><text>仅支持ZIP格式 · 不超过100MB</text><text @tap="showRequirements">查看作品包要求</text></view>
       </view>
     </view>
@@ -48,6 +49,11 @@ const steps = [
 function goBack() {
   if (getCurrentPages().length > 1) { uni.navigateBack(); return }
   uni.reLaunch({ url: '/pages/home/index' })
+}
+
+function openHistory() {
+  if (!requireSession()) return
+  uni.navigateTo({ url: '/pages/channel-upload/index?view=progress' })
 }
 
 function showRequirements() {
@@ -106,5 +112,6 @@ function chooseZip() {
 .steps { display: flex; align-items: flex-start; justify-content: center; margin: 74rpx 0 0; }.step-wrap { display: flex; align-items: center; flex: 1; }.step { display: flex; min-width: 82rpx; align-items: center; flex-direction: column; color: #55cbb1; }.step-icon { display: grid; place-items: center; width: 70rpx; height: 70rpx; border-radius: 50%; background: #5bd1b6; color: #fff; font-size: 40rpx; font-weight: 700; line-height: 1; }.step text { margin-top: 8rpx; font-size: 18rpx; white-space: nowrap; }.step-line { height: 3rpx; flex: 1; margin: 0 5rpx 32rpx; background: #9caaa7; }
 .action-area { display: flex; margin-top: auto; padding: 148rpx 44rpx 0; flex-direction: column; }.primary-action,.secondary-action { width: 100%; height: 92rpx; margin: 0; border-radius: 46rpx; font-size: 36rpx; font-weight: 500; line-height: 92rpx; }.primary-action { background: linear-gradient(148deg,#69ebc7,#49a59c); color: #fff; }.secondary-action { margin-top: 28rpx; border: 2rpx solid #43aca1; background: #fff; color: #43aca1; }.primary-action::after,.secondary-action::after { border: 0; }
 .upload-note { display: flex; align-items: center; margin-top: 88rpx; flex-direction: column; color: #333; font-size: 24rpx; }.upload-note text:last-child { margin-top: 17rpx; color: #555; text-decoration: underline; }
+.history-link { align-self: center; margin-top: 24rpx; color: #348d7d; font-size: 23rpx; }
 @media (max-width: 360px) { .nav-bar { grid-template-columns: 110rpx minmax(0,1fr) 165rpx; padding-right: 18rpx; padding-left: 18rpx; }.nav-menu { width: 152rpx; }.content { padding-right: 28rpx; padding-left: 28rpx; }.steps { margin-right: -10rpx; margin-left: -10rpx; }.step-icon { width: 62rpx; height: 62rpx; }.step text { font-size: 16rpx; } }
 </style>
