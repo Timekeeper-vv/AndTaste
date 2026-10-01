@@ -60,7 +60,7 @@ const professionalSubmissions = ref<any[]>([])
 const reviewingSubmissionId = ref<number | null>(null)
 const downloadingProfessionalId = ref<number | null>(null)
 const professionalQuoteDrafts = ref<Record<number, { fee: string; leadTime: string; note: string }>>({})
-const rejectionTarget = ref<{ kind: 'work' | 'bundle' | 'professional'; item: any } | null>(null)
+const rejectionTarget = ref<{ kind: 'work' | 'bundle' | 'professional' | 'museum'; item: any } | null>(null)
 const rejectionReason = ref('')
 const activeBundleImage = ref<{ url: string; label: string } | null>(null)
 
@@ -292,6 +292,20 @@ async function reviewProfessionalSubmission(item: any, nextStatus: ReviewStatus,
   }
 }
 
+async function reviewMuseumSubmission(item: any, nextStatus: 'review' | 'approved' | 'rejected', reviewComment = '') {
+  reviewingSubmissionId.value = item.id
+  try {
+    const r = await fetch(`/api/creative/ai/consumer-professional-submissions/${item.id}/museum-review`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: nextStatus, comment: reviewComment.trim() }),
+    })
+    if (!r.ok) { const err = await r.json().catch(() => null); throw new Error(err?.message || `HTTP ${r.status}`) }
+    emit('alert', nextStatus === 'approved' ? '馆方审核已通过' : nextStatus === 'rejected' ? '馆方审核已标记不通过' : '馆方审核已恢复待审', 'success')
+    await loadProfessionalSubmissions()
+  } catch (e: any) { emit('alert', '馆方审核失败：' + (e?.message || e), 'error') }
+  finally { reviewingSubmissionId.value = null }
+}
+
 async function downloadProfessionalSubmission(item: any) {
   const id = Number(item?.id)
   if (!Number.isInteger(id) || id <= 0 || downloadingProfessionalId.value === id) return
@@ -370,7 +384,7 @@ function closePreview() {
   document.body.style.overflow = ''
 }
 
-function openRejectForm(kind: 'work' | 'bundle' | 'professional', item: any) {
+function openRejectForm(kind: 'work' | 'bundle' | 'professional' | 'museum', item: any) {
   rejectionTarget.value = { kind, item }
   rejectionReason.value = ''
   document.body.style.overflow = 'hidden'
@@ -393,6 +407,7 @@ async function confirmReject() {
   closeRejectForm()
   if (target.kind === 'work') await reviewWork(target.item, 'rejected', reason)
   else if (target.kind === 'bundle') await reviewBundle(target.item, 'rejected', reason)
+  else if (target.kind === 'museum') await reviewMuseumSubmission(target.item, 'rejected', reason)
   else await reviewProfessionalSubmission(target.item, 'rejected', reason)
 }
 
@@ -503,7 +518,7 @@ onMounted(load)
       </header>
       <div v-if="visibleProfessionalSubmissions.length" class="submission-table-wrap">
         <table>
-          <thead><tr><th class="product-no-col">产品号</th><th>作品包</th><th>提交人 / 用途</th><th>文件与时间</th><th>审核状态</th><th>打样报价单</th><th>操作</th></tr></thead>
+          <thead><tr><th class="product-no-col">产品号</th><th>作品包</th><th>提交人 / 用途</th><th>文件与时间</th><th>平台审核</th><th>馆方审核</th><th>打样报价单</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="item in visibleProfessionalSubmissions" :key="item.id">
               <td class="product-no-cell"><strong :class="{ missing: !item.productNo }">{{ item.productNo || '未关联产品号' }}</strong></td>
@@ -511,6 +526,7 @@ onMounted(load)
               <td><strong>{{ item.createdByName || `用户 #${item.userId}` }}</strong><small>{{ item.purpose === 'museum_sale' ? `博物馆售卖${item.museumName ? ` · ${item.museumName}` : ''}` : '个人创作' }}</small></td>
               <td><strong>{{ item.originalName }}</strong><small>{{ item.fileSize ? `${(item.fileSize / 1024 / 1024).toFixed(1)} MB` : '-' }} · {{ formatTime(item.createdAt) }}</small></td>
               <td><span class="submission-status" :class="statusClass(item.status)">{{ statusText[item.status || 'review'] || item.status }}</span><small v-if="item.reviewComment" class="review-note">{{ item.reviewComment }}</small></td>
+              <td><template v-if="item.purpose === 'museum_sale'"><span class="submission-status" :class="statusClass(item.museumReviewStatus)">{{ item.channelRequestStatus !== 'requested' ? '未提报' : item.museumReviewStatus === 'approved' ? '已通过' : item.museumReviewStatus === 'rejected' ? '未通过' : '审核中' }}</span><small>{{ item.museumName || '未选择渠道' }}</small><small v-if="item.museumReviewComment" class="review-note">{{ item.museumReviewComment }}</small><div v-if="item.channelRequestStatus === 'requested' && !professionalPaymentLocked(item)" class="museum-actions"><button type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewMuseumSubmission(item, 'approved')">馆方通过</button><button type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="openRejectForm('museum', item)">馆方不通过</button><button v-if="item.museumReviewStatus !== 'review'" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewMuseumSubmission(item, 'review')">恢复待审</button></div></template><small v-else>不涉及馆方审核</small></td>
               <td><div class="professional-quote-form"><label><span>单件打样费</span><input v-model="professionalQuoteDraft(item).fee" :disabled="professionalPaymentLocked(item)" inputmode="decimal" placeholder="例如 69" /></label><label><span>预计交期</span><input v-model="professionalQuoteDraft(item).leadTime" :disabled="professionalPaymentLocked(item)" placeholder="例如 10-15 个工作日" /></label><label><span>报价说明</span><textarea v-model="professionalQuoteDraft(item).note" :disabled="professionalPaymentLocked(item)" rows="2" placeholder="包含范围、运费、修改次数等" /></label><small v-if="['approved', 'processing'].includes(String(item.status))">支付：{{ item.samplePaymentStatus === 'paid' ? '已支付，生产中' : item.samplePaymentStatus === 'pending' ? '支付处理中' : item.samplePaymentStatus === 'manual_review' ? '人工核验中' : '待用户支付' }}</small><small v-if="item.recipientName">打样：{{ item.sampleQuantity || 1 }}件 · {{ item.recipientName }} · {{ item.recipientPhone }} · {{ item.recipientAddress }}</small></div></td>
               <td><div class="submission-actions"><button type="button" class="outline" :disabled="downloadingProfessionalId === item.id" @click="downloadProfessionalSubmission(item)">{{ downloadingProfessionalId === item.id ? '准备下载…' : '下载 ZIP' }}</button><button v-if="!professionalPaymentLocked(item)" type="button" class="approve" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'approved')">通过</button><button v-if="!professionalPaymentLocked(item)" type="button" class="reject" :disabled="reviewingSubmissionId === item.id" @click="openRejectForm('professional', item)">不通过</button><button v-if="item.status !== 'review' && !professionalPaymentLocked(item)" type="button" class="outline" :disabled="reviewingSubmissionId === item.id" @click="reviewProfessionalSubmission(item, 'review')">退回待审</button></div></td>
             </tr>
@@ -559,7 +575,7 @@ onMounted(load)
     <Teleport to="body">
       <div v-if="rejectionTarget" class="reject-modal" @click.self="closeRejectForm">
         <form class="reject-dialog" @submit.prevent="confirmReject">
-          <header><div><span class="eyebrow">REVIEW FEEDBACK</span><h2>填写不通过原因</h2><p>{{ rejectionTarget.kind === 'professional' ? rejectionTarget.item.title : rejectionTarget.kind === 'bundle' ? rejectionTarget.item.productName || '三视图作品包' : rejectionTarget.item.title || '3D作品' }}</p></div><button type="button" @click="closeRejectForm">×</button></header>
+          <header><div><span class="eyebrow">REVIEW FEEDBACK</span><h2>{{ rejectionTarget.kind === 'museum' ? '填写馆方不通过原因' : '填写不通过原因' }}</h2><p>{{ rejectionTarget.kind === 'museum' ? `${rejectionTarget.item.museumName || '馆方'} · ${rejectionTarget.item.title || '专业作品'}` : rejectionTarget.kind === 'professional' ? rejectionTarget.item.title : rejectionTarget.kind === 'bundle' ? rejectionTarget.item.productName || '三视图作品包' : rejectionTarget.item.title || '3D作品' }}</p></div><button type="button" @click="closeRejectForm">×</button></header>
           <label><span>原因说明 <b>必填</b></span><textarea v-model.trim="rejectionReason" maxlength="500" autofocus placeholder="请写清楚需要修改的内容，例如：背面结构缺少闭合细节，请补充完整后重新提交。" /></label>
           <div class="reject-dialog-foot"><span>{{ rejectionReason.length }}/500</span><div><button type="button" class="outline" @click="closeRejectForm">取消</button><button type="submit" class="reject" :disabled="rejectionReason.trim().length < 2">确认不通过</button></div></div>
         </form>
@@ -577,7 +593,7 @@ onMounted(load)
 </style>
 
 <style scoped>
-.professional-quote-form{display:grid;min-width:245px;gap:7px}.professional-quote-form label{display:grid;gap:4px;color:#6b796e;font-size:10px;font-weight:850}.professional-quote-form input,.professional-quote-form textarea{box-sizing:border-box;width:100%;border:1px solid #d7e1d7;border-radius:8px;background:#fffefa;color:#3f4d43;font:inherit;outline:0}.professional-quote-form input{height:33px;padding:0 8px}.professional-quote-form textarea{padding:7px 8px;resize:vertical}.professional-quote-form small{color:#5f7b69!important;font-weight:850}.submission-table-wrap table{min-width:1240px}
+.professional-quote-form{display:grid;min-width:245px;gap:7px}.professional-quote-form label{display:grid;gap:4px;color:#6b796e;font-size:10px;font-weight:850}.professional-quote-form input,.professional-quote-form textarea{box-sizing:border-box;width:100%;border:1px solid #d7e1d7;border-radius:8px;background:#fffefa;color:#3f4d43;font:inherit;outline:0}.professional-quote-form input{height:33px;padding:0 8px}.professional-quote-form textarea{padding:7px 8px;resize:vertical}.professional-quote-form small{color:#5f7b69!important;font-weight:850}.submission-table-wrap table{min-width:1420px}.museum-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.museum-actions button{height:30px;padding:0 8px;border:0;border-radius:8px;font-size:10px;font-weight:850;cursor:pointer}
 </style>
 
 <style scoped>

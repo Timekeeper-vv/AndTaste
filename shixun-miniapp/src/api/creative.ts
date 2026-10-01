@@ -319,9 +319,13 @@ export interface ProfessionalSubmission {
   originalName?: string
   fileSize?: number
   purpose?: 'personal' | 'museum_sale' | string
+  museumId?: number | string
   museumName?: string
   channelRequestStatus?: 'not_requested' | 'requested' | string
   channelRequestedAt?: string
+  museumReviewStatus?: 'not_started' | 'review' | 'approved' | 'rejected' | string
+  museumReviewComment?: string
+  museumReviewedAt?: string
   note?: string
   status?: 'review' | 'approved' | 'processing' | 'rejected' | string
   reviewComment?: string
@@ -349,6 +353,17 @@ export const requestProfessionalChannelReview = (submissionId: number | string) 
 )
 export const resubmitProfessionalSubmission = (submissionId: number | string, filePath: string) => uploadFile<any>(
   `/api/creative/ai/consumer-professional-submissions/${encodeURIComponent(String(submissionId))}/resubmit`, filePath, 'file', {},
+)
+export const resubmitProfessionalSubmissionForMuseum = (submissionId: number | string, filePath: string) => uploadFile<any>(
+  `/api/creative/ai/consumer-professional-submissions/${encodeURIComponent(String(submissionId))}/museum-resubmit`, filePath, 'file', {},
+)
+export const changeProfessionalSubmissionChannel = (submissionId: number | string, body: { museumId?: string; museumName: string }) => request<any>(
+  `/api/creative/ai/consumer-professional-submissions/${encodeURIComponent(String(submissionId))}/channel`,
+  { method: 'PUT', data: body, header: { 'content-type': 'application/json' } },
+)
+export const transferProfessionalSubmissionToProductMaking = (submissionId: number | string) => request<any>(
+  `/api/creative/ai/consumer-professional-submissions/${encodeURIComponent(String(submissionId))}/transfer-product-making`,
+  { method: 'POST' },
 )
 export const saveProfessionalSampleApplication = (submissionId: number | string, body: {
   quantity: number

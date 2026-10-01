@@ -453,12 +453,15 @@ public class PaymentController {
         try {
             creation = Objects.requireNonNull(transactions.execute(status -> {
                 List<Map<String, Object>> rows = jdbc.queryForList(
-                        "SELECT id,title,status,quoted_sample_fee_yuan,quoted_sample_lead_time,sample_quantity,recipient_name,recipient_phone,recipient_address,sample_payment_status,sample_payment_order_no," +
+                        "SELECT id,title,status,purpose,museum_review_status,quoted_sample_fee_yuan,quoted_sample_lead_time,sample_quantity,recipient_name,recipient_phone,recipient_address,sample_payment_status,sample_payment_order_no," +
                                 "product_no productNo,product_id productId "
                                 + "FROM consumer_professional_submission WHERE id=? AND user_id=? FOR UPDATE", submissionId, userId);
                 if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品报价不存在");
                 Map<String, Object> submission = rows.get(0);
                 if (!"approved".equals(String.valueOf(submission.get("status")))) throw new IllegalStateException("专业作品尚未审核通过");
+                if ("museum_sale".equals(String.valueOf(submission.get("purpose"))) && !"approved".equals(String.valueOf(submission.get("museum_review_status")))) {
+                    throw new IllegalStateException("馆方尚未审核通过，暂不能申请打样");
+                }
                 BigDecimal unitFeeYuan = decimal(submission.get("quoted_sample_fee_yuan"));
                 int quantity = Math.max(1, nullableLong(submission.get("sample_quantity")) == null ? 1 : nullableLong(submission.get("sample_quantity")).intValue());
                 BigDecimal feeYuan = unitFeeYuan.multiply(BigDecimal.valueOf(quantity));
@@ -2630,7 +2633,7 @@ public class PaymentController {
                 // is no longer waiting for payment and must enter production.
                 // Keep the status transition in the payment transaction so
                 // manual confirmation and WeChat callbacks behave identically.
-                int linked = jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='paid',sample_paid_at=NOW(),status='processing' WHERE id=? AND sample_payment_order_no=? AND sample_payment_status IN ('pending','manual_review') AND status='approved'", submissionId, orderNo);
+                int linked = jdbc.update("UPDATE consumer_professional_submission SET sample_payment_status='paid',sample_paid_at=NOW(),status='processing' WHERE id=? AND sample_payment_order_no=? AND sample_payment_status IN ('pending','manual_review') AND status='approved' AND (purpose<>'museum_sale' OR museum_review_status='approved')", submissionId, orderNo);
                 if (linked != 1) throw new IllegalStateException("专业作品打样支付订单未关联到可支付报价");
             } catch (NumberFormatException ignored) {
                 throw new IllegalStateException("专业作品打样支付订单关联申请无效");

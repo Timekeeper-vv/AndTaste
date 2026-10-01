@@ -2911,7 +2911,7 @@ public class CreativeAiController {
     @GetMapping("/consumer-professional-submissions/my")
     public List<Map<String,Object>> myProfessionalSubmissions() {
         Long userId = requireCurrentConsumerUser();
-        return jdbc.queryForList("SELECT id,submission_no submissionNo,product_no productNo,title,original_name originalName,file_size fileSize,purpose,museum_name museumName,channel_request_status channelRequestStatus,channel_requested_at channelRequestedAt,note,status,review_comment reviewComment,resubmission_count resubmissionCount,quoted_sample_fee_yuan quotedSampleFeeYuan,quoted_sample_lead_time quotedSampleLeadTime,quoted_sample_note quotedSampleNote,sample_quantity sampleQuantity,recipient_name recipientName,recipient_phone recipientPhone,recipient_address recipientAddress,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
+        return jdbc.queryForList("SELECT id,submission_no submissionNo,product_no productNo,title,original_name originalName,file_size fileSize,purpose,museum_id museumId,museum_name museumName,channel_request_status channelRequestStatus,channel_requested_at channelRequestedAt,museum_review_status museumReviewStatus,museum_review_comment museumReviewComment,museum_reviewed_at museumReviewedAt,note,status,review_comment reviewComment,resubmission_count resubmissionCount,quoted_sample_fee_yuan quotedSampleFeeYuan,quoted_sample_lead_time quotedSampleLeadTime,quoted_sample_note quotedSampleNote,sample_quantity sampleQuantity,recipient_name recipientName,recipient_phone recipientPhone,recipient_address recipientAddress,sample_payment_status samplePaymentStatus,sample_payment_order_no samplePaymentOrderNo,sample_paid_at samplePaidAt,created_at createdAt FROM consumer_professional_submission WHERE user_id=? ORDER BY id DESC", userId);
     }
 
     @PostMapping("/consumer-professional-submissions/{id}/channel-request")
@@ -2919,7 +2919,7 @@ public class CreativeAiController {
     public Map<String,Object> requestProfessionalChannelReview(@PathVariable Long id) {
         Long userId = requireCurrentConsumerUser();
         List<Map<String,Object>> rows = jdbc.queryForList(
-                "SELECT status,purpose,museum_name museumName,channel_request_status channelRequestStatus FROM consumer_professional_submission WHERE id=? AND user_id=? FOR UPDATE",
+                "SELECT status,purpose,museum_name museumName,channel_request_status channelRequestStatus,museum_review_status museumReviewStatus FROM consumer_professional_submission WHERE id=? AND user_id=? FOR UPDATE",
                 id, userId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "作品提交不存在");
         Map<String,Object> row = rows.get(0);
@@ -2930,17 +2930,98 @@ public class CreativeAiController {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "平台审核通过后才能申请提报渠道");
         }
         if ("requested".equals(nullToEmpty(row.get("channelRequestStatus")))) {
-            return Map.of("success", true, "status", "requested", "message", "渠道提报申请已提交，请等待平台处理");
+            if ("not_started".equals(nullToEmpty(row.get("museumReviewStatus")))) {
+                jdbc.update("UPDATE consumer_professional_submission SET museum_review_status='review',museum_review_comment=NULL,museum_reviewed_at=NULL WHERE id=? AND user_id=?", id, userId);
+            }
+            return Map.of("success", true, "status", "requested", "museumReviewStatus", "review", "message", "作品已提交馆方审核");
         }
-        jdbc.update("UPDATE consumer_professional_submission SET channel_request_status='requested',channel_requested_at=NOW() WHERE id=? AND user_id=?",
+        jdbc.update("UPDATE consumer_professional_submission SET channel_request_status='requested',channel_requested_at=NOW(),museum_review_status='review',museum_review_comment=NULL,museum_reviewed_at=NULL WHERE id=? AND user_id=?",
                 id, userId);
-        return Map.of("success", true, "status", "requested", "message", "渠道提报申请已提交，请等待平台处理");
+        return Map.of("success", true, "status", "requested", "museumReviewStatus", "review", "message", "作品已提交馆方审核");
+    }
+
+    @PutMapping("/consumer-professional-submissions/{id}/museum-review")
+    @Transactional
+    public Map<String,Object> reviewProfessionalSubmissionForMuseum(@PathVariable Long id,
+                                                                    @RequestBody(required = false) Map<String,Object> body) {
+        requireCreativeAdmin();
+        String status = body == null ? "" : nullToEmpty(body.get("status")).trim();
+        if (!Set.of("review", "approved", "rejected").contains(status)) {
+            throw new IllegalArgumentException("馆方审核状态只能是 review / approved / rejected");
+        }
+        String comment = body == null ? "" : truncate(nullToEmpty(body.get("comment")).trim(), 1000);
+        if ("rejected".equals(status) && blank(comment)) throw new IllegalArgumentException("馆方审核不通过时必须填写原因");
+        List<Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT purpose,channel_request_status channelRequestStatus,sample_payment_status samplePaymentStatus FROM consumer_professional_submission WHERE id=? FOR UPDATE", id);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品包不存在");
+        Map<String,Object> row = rows.get(0);
+        if (!"museum_sale".equals(nullToEmpty(row.get("purpose"))) || !"requested".equals(nullToEmpty(row.get("channelRequestStatus")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "作品尚未提交馆方审核");
+        }
+        if (Set.of("pending", "manual_review", "paid").contains(nullToEmpty(row.get("samplePaymentStatus")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "打样已进入支付流程，不能修改馆方审核结果");
+        }
+        jdbc.update("UPDATE consumer_professional_submission SET museum_review_status=?,museum_review_comment=?,museum_reviewed_at=CASE WHEN ?='review' THEN NULL ELSE NOW() END WHERE id=?",
+                status, blank(comment) ? null : comment, status, id);
+        return Map.of("success", true, "status", status, "message",
+                "approved".equals(status) ? "馆方审核已通过，用户可申请打样" : "rejected".equals(status) ? "馆方审核已标记不通过" : "已恢复为馆方审核中");
+    }
+
+    @PutMapping("/consumer-professional-submissions/{id}/channel")
+    @Transactional
+    public Map<String,Object> changeProfessionalSubmissionChannel(@PathVariable Long id,
+                                                                  @RequestBody(required = false) Map<String,Object> body) {
+        Long userId = requireCurrentConsumerUser();
+        String museumId = body == null ? "" : truncate(nullToEmpty(body.get("museumId")).trim(), 80);
+        String museumName = body == null ? "" : truncate(nullToEmpty(body.get("museumName")).trim(), 180);
+        if (blank(museumName)) throw new IllegalArgumentException("请选择新的合作渠道");
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET museum_id=?,museum_name=?,channel_request_status='not_requested',channel_requested_at=NULL,museum_review_status='not_started',museum_review_comment=NULL,museum_reviewed_at=NULL WHERE id=? AND user_id=? AND purpose='museum_sale' AND museum_review_status='rejected'",
+                museumId, museumName, id, userId);
+        if (updated != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "只有馆方审核未通过的作品可以改报其他渠道");
+        return Map.of("success", true, "museumName", museumName, "message", "合作渠道已更换，请重新提交馆方审核");
+    }
+
+    @PostMapping(value = "/consumer-professional-submissions/{id}/museum-resubmit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Transactional
+    public Map<String,Object> resubmitProfessionalSubmissionForMuseum(@PathVariable Long id,
+                                                                      @RequestParam("file") MultipartFile file) throws Exception {
+        Long userId = requireCurrentConsumerUser();
+        List<Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT museum_review_status museumReviewStatus FROM consumer_professional_submission WHERE id=? AND user_id=? FOR UPDATE", id, userId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "专业作品提交不存在");
+        if (!"rejected".equals(nullToEmpty(rows.get(0).get("museumReviewStatus")))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "只有馆方审核未通过的作品可以重新提交");
+        }
+        if (file == null || file.isEmpty()) throw new IllegalArgumentException("请选择修改后的 ZIP 作品包");
+        if (file.getSize() > 100L * 1024 * 1024) throw new IllegalArgumentException("ZIP 作品包不能超过 100MB");
+        String original = nullToEmpty(file.getOriginalFilename()).replaceAll("[\\r\\n]", "").trim();
+        if (!original.toLowerCase(Locale.ROOT).endsWith(".zip") || !hasZipSignature(file)) {
+            throw new IllegalArgumentException("请选择有效的 ZIP 作品包");
+        }
+        Path directory = creativeAssetRoot().resolve("professional-submissions").normalize();
+        Files.createDirectories(directory);
+        String stored = "professional-" + System.currentTimeMillis() + "-" + UUID.randomUUID() + ".zip";
+        Files.copy(file.getInputStream(), directory.resolve(stored), StandardCopyOption.REPLACE_EXISTING);
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET original_name=?,storage_name=?,file_size=?,resubmission_count=resubmission_count+1,channel_request_status='requested',channel_requested_at=NOW(),museum_review_status='review',museum_review_comment=NULL,museum_reviewed_at=NULL WHERE id=? AND user_id=? AND museum_review_status='rejected'",
+                original, stored, file.getSize(), id, userId);
+        if (updated != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "作品状态已经变化，请刷新后重试");
+        return Map.of("success", true, "status", "review", "message", "修改后的作品包已重新提交馆方审核");
+    }
+
+    @PostMapping("/consumer-professional-submissions/{id}/transfer-product-making")
+    @Transactional
+    public Map<String,Object> transferProfessionalSubmissionToProductMaking(@PathVariable Long id) {
+        Long userId = requireCurrentConsumerUser();
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET purpose='personal',museum_id=NULL,museum_name=NULL,channel_request_status='not_requested',channel_requested_at=NULL,museum_review_status='not_started',museum_review_comment=NULL,museum_reviewed_at=NULL WHERE id=? AND user_id=? AND purpose='museum_sale' AND museum_review_status='rejected'",
+                id, userId);
+        if (updated != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "当前作品不能转入产品智造");
+        return Map.of("success", true, "message", "作品已转入产品智造");
     }
 
     @GetMapping("/consumer-professional-submissions/review")
     public List<Map<String,Object>> professionalSubmissionsForReview() {
         requireCreativeAdmin();
-        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.product_no productNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_name museumName,s.note,s.status,s.review_comment reviewComment,s.resubmission_count resubmissionCount,s.quoted_sample_fee_yuan quotedSampleFeeYuan,s.quoted_sample_lead_time quotedSampleLeadTime,s.quoted_sample_note quotedSampleNote,s.sample_quantity sampleQuantity,s.recipient_name recipientName,s.recipient_phone recipientPhone,s.recipient_address recipientAddress,s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo,s.sample_paid_at samplePaidAt,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
+        return jdbc.queryForList("SELECT s.id,s.submission_no submissionNo,s.product_no productNo,s.title,s.original_name originalName,s.file_size fileSize,s.purpose,s.museum_id museumId,s.museum_name museumName,s.channel_request_status channelRequestStatus,s.channel_requested_at channelRequestedAt,s.museum_review_status museumReviewStatus,s.museum_review_comment museumReviewComment,s.museum_reviewed_at museumReviewedAt,s.note,s.status,s.review_comment reviewComment,s.resubmission_count resubmissionCount,s.quoted_sample_fee_yuan quotedSampleFeeYuan,s.quoted_sample_lead_time quotedSampleLeadTime,s.quoted_sample_note quotedSampleNote,s.sample_quantity sampleQuantity,s.recipient_name recipientName,s.recipient_phone recipientPhone,s.recipient_address recipientAddress,s.sample_payment_status samplePaymentStatus,s.sample_payment_order_no samplePaymentOrderNo,s.sample_paid_at samplePaidAt,s.reviewed_by reviewedBy,s.reviewed_at reviewedAt,s.created_at createdAt,u.username createdByName,s.user_id userId FROM consumer_professional_submission s JOIN user u ON u.id=s.user_id ORDER BY s.id DESC");
     }
 
     @PostMapping(value = "/consumer-professional-submissions/{id}/resubmit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -2964,7 +3045,7 @@ public class CreativeAiController {
         Files.createDirectories(directory);
         String stored = "professional-" + System.currentTimeMillis() + "-" + UUID.randomUUID() + ".zip";
         Files.copy(file.getInputStream(), directory.resolve(stored), StandardCopyOption.REPLACE_EXISTING);
-        int updated = jdbc.update("UPDATE consumer_professional_submission SET original_name=?,storage_name=?,file_size=?,status='review',review_comment=NULL,resubmission_count=resubmission_count+1,channel_request_status='not_requested',channel_requested_at=NULL,quoted_sample_fee_yuan=NULL,quoted_sample_lead_time=NULL,quoted_sample_note=NULL,sample_quantity=1,recipient_name=NULL,recipient_phone=NULL,recipient_address=NULL,sample_payment_status='not_required',sample_payment_order_no=NULL,sample_paid_at=NULL,reviewed_by=NULL,reviewed_at=NULL WHERE id=? AND user_id=? AND status='rejected'",
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET original_name=?,storage_name=?,file_size=?,status='review',review_comment=NULL,resubmission_count=resubmission_count+1,channel_request_status='not_requested',channel_requested_at=NULL,museum_review_status='not_started',museum_review_comment=NULL,museum_reviewed_at=NULL,quoted_sample_fee_yuan=NULL,quoted_sample_lead_time=NULL,quoted_sample_note=NULL,sample_quantity=1,recipient_name=NULL,recipient_phone=NULL,recipient_address=NULL,sample_payment_status='not_required',sample_payment_order_no=NULL,sample_paid_at=NULL,reviewed_by=NULL,reviewed_at=NULL WHERE id=? AND user_id=? AND status='rejected'",
                 original, stored, file.getSize(), id, userId);
         if (updated != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "作品状态已经变化，请刷新后重试");
         return Map.of("success", true, "id", id, "status", "review", "message", "修改后的作品包已重新提交审核");
@@ -2986,7 +3067,7 @@ public class CreativeAiController {
         if (blank(recipientName)) throw new IllegalArgumentException("请填写收件人");
         if (!recipientPhone.matches("^[0-9+()\\- ]{6,40}$")) throw new IllegalArgumentException("请填写正确的收件电话");
         if (blank(recipientAddress)) throw new IllegalArgumentException("请填写收件地址");
-        int updated = jdbc.update("UPDATE consumer_professional_submission SET sample_quantity=CASE WHEN sample_payment_status='unpaid' THEN ? ELSE sample_quantity END,recipient_name=?,recipient_phone=?,recipient_address=? WHERE id=? AND user_id=? AND status='approved' AND (sample_payment_status='unpaid' OR (sample_payment_status='pending' AND recipient_name IS NULL))",
+        int updated = jdbc.update("UPDATE consumer_professional_submission SET sample_quantity=CASE WHEN sample_payment_status='unpaid' THEN ? ELSE sample_quantity END,recipient_name=?,recipient_phone=?,recipient_address=? WHERE id=? AND user_id=? AND status='approved' AND (purpose<>'museum_sale' OR museum_review_status='approved') AND (sample_payment_status='unpaid' OR (sample_payment_status='pending' AND recipient_name IS NULL))",
                 quantity, recipientName, recipientPhone, recipientAddress, id, userId);
         if (updated != 1) throw new ResponseStatusException(HttpStatus.CONFLICT, "当前作品不能修改打样申请，请刷新状态后重试");
         return Map.of("success", true, "id", id, "quantity", quantity, "message", "打样申请信息已保存");

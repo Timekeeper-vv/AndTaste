@@ -18,8 +18,8 @@
       </template>
 
       <template v-else-if="record.status === 'approved'">
-        <view class="result-title"><view class="result-icon approved">✓</view><text>平台审核通过</text></view>
-        <text class="result-copy">你的作品已通过审核，现在可以申请打样了。</text>
+        <view class="result-title"><view class="result-icon approved">✓</view><text>{{ record.purpose === 'museum_sale' ? '博物馆审核通过' : '平台审核通过' }}</text></view>
+        <text class="result-copy">{{ record.purpose === 'museum_sale' ? '你的作品已通过馆方审核，现在可进入打样，样品确认后即可上架售卖。' : '你的作品已通过审核，现在可以申请打样了。' }}</text>
         <product-card :record="record" :label="record.samplePaymentStatus === 'pending' ? '待支付' : '待打样'" tone="approved" />
         <view class="sample-card">
           <text class="card-title">打样申请</text>
