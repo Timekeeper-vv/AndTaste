@@ -9,6 +9,7 @@
     { "path": "pages/product-making/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "产品智造", "navigationBarBackgroundColor": "#ffffff" } },
     { "path": "pages/product-making-detail/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "产品智造", "navigationBarBackgroundColor": "#ffffff" } },
     { "path": "pages/channel-cooperation/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "渠道合作", "navigationBarBackgroundColor": "#ffffff" } },
+    { "path": "pages/channel-upload/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "渠道合作", "navigationBarBackgroundColor": "#ffffff" } },
     { "path": "pages/selection/index", "style": { "navigationBarTitleText": "灵感选品", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/commercial/index", "style": { "navigationBarTitleText": "商品化申请", "navigationBarBackgroundColor": "#f7f3ed" } },
     { "path": "pages/purpose/index", "style": { "navigationStyle": "custom" } },

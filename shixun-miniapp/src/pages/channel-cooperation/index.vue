@@ -33,7 +33,7 @@
 </template>
 
 <script setup lang="ts">
-import { requireSession } from '../../utils/session'
+import { getSession, requireSession } from '../../utils/session'
 
 const PENDING_PRODUCT_PACKAGE_KEY = 'pending_product_package'
 const MAX_ZIP_BYTES = 100 * 1024 * 1024
@@ -83,10 +83,10 @@ function chooseZip() {
       path,
       name,
       size,
-      userName: String((uni.getStorageSync('smart_pig_auth') || {}).user?.username || '').trim(),
+      userName: String(getSession()?.user?.username || '').trim(),
       selectedAt: Date.now(),
     })
-    uni.navigateTo({ url: '/pages/professional/index?entry=channel' })
+    uni.navigateTo({ url: '/pages/channel-upload/index' })
   }, fail: (error: any) => {
     if (!/cancel/i.test(String(error?.errMsg || ''))) uni.showToast({ title: '文件选择失败，请重新选择', icon: 'none' })
   } })
