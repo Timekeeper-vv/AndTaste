@@ -2,14 +2,14 @@
   <view class="page">
     <view class="nav-bar">
       <view class="nav-back" aria-label="返回" @tap="goBack">‹</view>
-      <text class="nav-title">产品智造</text>
+      <text class="nav-title">{{ channelEntry ? '渠道合作' : '产品智造' }}</text>
       <view class="nav-menu" aria-label="更多操作" @tap="openPageMenu"><text>•••</text><view /><text>◎</text></view>
     </view>
 
     <view class="content">
       <view class="intro">
         <text class="intro-title">上传作品</text>
-        <text class="intro-copy">提交已有作品，审核通过后即可打样、生产或进入渠道合作。</text>
+        <text class="intro-copy">{{ channelEntry ? '上传已有作品，平台审核确认可落地后，将提报博物馆审核；通过后打样、上架渠道售卖。' : '提交已有作品，审核通过后即可打样、生产或进入渠道合作。' }}</text>
       </view>
 
       <view class="section-heading"><text><b>01</b> 上传作品包</text><text>必填</text></view>
@@ -37,7 +37,7 @@
 
       <view class="section-heading"><text><b>03</b> 合作方向</text><text>单选</text></view>
       <view class="direction-card">
-        <view class="direction-option" :class="{ active: purpose === 'personal' }" @tap="purpose = 'personal'">
+        <view v-if="!channelEntry" class="direction-option" :class="{ active: purpose === 'personal' }" @tap="purpose = 'personal'">
           <view class="radio"><view /></view><view><text>产品打样</text><text>先把作品做成实物样品</text></view>
         </view>
         <view class="direction-option" :class="{ active: purpose === 'museum_sale' }" @tap="purpose = 'museum_sale'">
@@ -88,6 +88,7 @@ const title = ref('')
 const note = ref('')
 const productInfo = ref('')
 const purpose = ref<'personal' | 'museum_sale'>('personal')
+const channelEntry = ref(false)
 const copyrightConfirmed = ref(false)
 const loading = ref(false)
 const records = ref<ProfessionalSubmission[]>([])
@@ -250,6 +251,8 @@ onShow(() => {
   else linkedContext.value = null
 })
 onLoad(query => {
+  channelEntry.value = String(query?.entry || '') === 'channel'
+  if (channelEntry.value) purpose.value = 'museum_sale'
   showRecords.value = String(query?.entry || '') !== 'production'
 })
 </script>

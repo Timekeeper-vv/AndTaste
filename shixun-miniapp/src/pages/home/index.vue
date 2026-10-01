@@ -190,7 +190,7 @@ function openWorks() {
 
 function openCommercial() {
   if (!requireSession()) return
-  go('/pages/commercial/index')
+  go('/pages/channel-cooperation/index')
 }
 
 function openProductMaking() {
