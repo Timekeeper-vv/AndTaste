@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { User } from '../types'
-import andTasteLogo from '../assets/and_taste.png'
 import QRCode from 'qrcode'
 import { buildCreativeGenerationPayload } from '../utils/creativeGeneration'
 import { requestAssetPreviewAccess } from '../utils/assetAccess'
+import ConsumerSubmissionWorkspace from './ConsumerSubmissionWorkspace.vue'
+import ConsumerSampleProgress from './ConsumerSampleProgress.vue'
+import ConsumerAccountCenter from './ConsumerAccountCenter.vue'
+import ConsumerWorksLibrary from './ConsumerWorksLibrary.vue'
+import ConsumerMarketplace from './ConsumerMarketplace.vue'
+import ConsumerCommercialWorkspace from './ConsumerCommercialWorkspace.vue'
+import CustomerSupportWidget from './CustomerSupportWidget.vue'
+import brandLogo from '../../../shixun-miniapp/src/static/ui-design/brand-logo.png'
 
 const props = defineProps<{ currentUser: User }>()
 const emit = defineEmits<{ alert: [message: string, type?: 'success' | 'error']; logout: [] }>()
 
-type CreatorProfile = 'amateur' | 'professional'
 type ChatRole = 'assistant' | 'user'
 type QuickReply = { label: string; type: string; value?: string }
 type ProductIdentity = { productNo?: string; productId?: number }
@@ -39,6 +45,7 @@ type Conversation = {
   projectId?: number
   versionId?: number
   sessionNo?: string
+  title?: string
   productType?: string
   material?: string
   productSize?: string
@@ -60,27 +67,23 @@ const api = async <T = any>(url: string, init: RequestInit = {}): Promise<T> => 
   return data as T
 }
 
-const creatorProfile = ref<CreatorProfile>((localStorage.getItem('smart_pig_creator_profile') as CreatorProfile) || 'amateur')
-const roleChanged = (profile: CreatorProfile) => {
-  creatorProfile.value = profile
-  localStorage.setItem('smart_pig_creator_profile', profile)
-  if (profile === 'professional') void loadProfessionalSubmissions()
-}
-
 const conversations = ref<Conversation[]>([])
 const activeConversationId = ref<number | null>(null)
 const projectId = ref<number | null>(null)
 const versionId = ref<number | null>(null)
 const activeConversation = computed(() => conversations.value.find(item => item.id === activeConversationId.value) || null)
 const historyLoading = ref(false)
-const historyPanelOpen = ref(true)
+const historyPanelOpen = ref(false)
+const historySearch = ref('')
+const conversationLoading = ref(false)
+const filteredConversations = computed(() => conversations.value.filter(item => conversationTitle(item).toLocaleLowerCase().includes(historySearch.value.trim().toLocaleLowerCase())))
 const HISTORY_PAGE_SIZE = 5
 const historyPage = ref(1)
-const historyTotalPages = computed(() => Math.max(1, Math.ceil(conversations.value.length / HISTORY_PAGE_SIZE)))
+const historyTotalPages = computed(() => Math.max(1, Math.ceil(filteredConversations.value.length / HISTORY_PAGE_SIZE)))
 const visibleConversations = computed(() => {
   const page = Math.min(Math.max(1, historyPage.value), historyTotalPages.value)
   const start = (page - 1) * HISTORY_PAGE_SIZE
-  return conversations.value.slice(start, start + HISTORY_PAGE_SIZE)
+  return filteredConversations.value.slice(start, start + HISTORY_PAGE_SIZE)
 })
 const messages = ref<ChatMessage[]>([])
 const messageCounter = ref(0)
@@ -96,6 +99,13 @@ const busyText = ref('之间正在处理…')
 const thinking = ref(false)
 const chatContent = ref<HTMLElement | null>(null)
 const activeView = ref<'chat' | 'result' | 'orders'>('chat')
+type Workspace = 'chat' | 'personal' | 'museum_sale' | 'works' | 'market' | 'account' | 'commercial'
+const workspace = ref<Workspace>('chat')
+const submissionWorkspace = ref<InstanceType<typeof ConsumerSubmissionWorkspace> | null>(null)
+const sampleProgressRequest = ref<any | null>(null)
+const selectedCommercialAsset = ref<any | null>(null)
+const commercialWorkspace = ref<InstanceType<typeof ConsumerCommercialWorkspace> | null>(null)
+const accountCenter = ref<InstanceType<typeof ConsumerAccountCenter> | null>(null)
 const selectedReferenceFile = ref<File | null>(null)
 const selectedReferenceUrl = ref('')
 const replacementPrompt = ref('')
@@ -132,12 +142,6 @@ const paymentHint = ref('请使用微信扫码支付。支付回调确认后，�
 const paymentError = ref('')
 const paymentClosing = ref(false)
 const paymentReturnView = ref<'chat' | 'result' | 'orders'>('orders')
-const professionalSubmissions = ref<any[]>([])
-const professionalSubmissionFile = ref<File | null>(null)
-const professionalSubmissionTitle = ref('')
-const professionalSubmissionNote = ref('')
-const professionalSubmissionBusy = ref(false)
-const submissionInput = ref<HTMLInputElement | null>(null)
 const referenceInput = ref<HTMLInputElement | null>(null)
 const inputLocked = computed(() => Boolean(replacementOpen.value || (activeView.value === 'result' && quickReplies.value.length)))
 const inputPlaceholder = computed(() => inputLocked.value ? '请先选择上方选项，切勿直接对话' : '描述你的想法，或回答我上面的问题')
@@ -171,11 +175,46 @@ const museumOptions = computed(() => museums.value.filter(item => item.id && ite
 function changeHistoryPage(page: number) {
   historyPage.value = Math.min(Math.max(1, page), historyTotalPages.value)
 }
+watch(historySearch, () => { historyPage.value = 1 })
 watch(historyTotalPages, total => {
   if (historyPage.value > total) historyPage.value = total
 })
 
 function notify(message: string, type: 'success' | 'error' = 'success') { emit('alert', message, type) }
+function conversationTitle(item: Conversation) { return String(item.title || item.productType || '').trim() || `新对话 · ${item.id}` }
+function draftKey() { return activeConversationId.value ? `web-conversation-draft:${props.currentUser.id}:${activeConversationId.value}` : '' }
+function persistDraft() { const key = draftKey(); if (!key) return; try { if (chatInput.value) localStorage.setItem(key, chatInput.value); else localStorage.removeItem(key) } catch { /* best effort */ } }
+function restoreDraft() { try { chatInput.value = localStorage.getItem(draftKey()) || '' } catch { chatInput.value = '' } }
+watch(chatInput, persistDraft)
+function switchingBlocked() {
+  if (!sending.value && !busy.value && !conversationLoading.value && !productionSubmitting.value && !paymentLocked.value) return false
+  notify('当前创作正在处理中，请完成后再切换', 'error'); return true
+}
+function openWorkspace(next: Workspace) {
+  if (switchingBlocked()) return
+  persistDraft(); sampleProgressRequest.value = null; workspace.value = next
+  if (next === 'chat') activeView.value = 'chat'
+}
+async function openHistory() {
+  if (switchingBlocked()) return
+  persistDraft(); workspace.value = 'chat'; activeView.value = 'chat'
+  historyPanelOpen.value = !historyPanelOpen.value
+  if (historyPanelOpen.value) await loadHistory()
+}
+function openChatView(view: 'chat' | 'result' | 'orders') {
+  if (switchingBlocked()) return
+  persistDraft(); workspace.value = 'chat'; activeView.value = view
+  if (view === 'orders') void loadProductionRequests()
+}
+function openCommercial(asset?: any) {
+  if (switchingBlocked()) return
+  selectedCommercialAsset.value = asset || null; openWorkspace('commercial')
+}
+function requestBulk(request: any) {
+  sampleProgressRequest.value = null
+  openProductionDialog({ ...request, id: null, requestType: 'bulk' })
+}
+async function reviseInWorkshop(text: string) { if (await createConversation()) { workspace.value = 'chat'; chatInput.value = text } }
 function messageId() { messageCounter.value += 1; return `message-${messageCounter.value}` }
 function addMessage(role: ChatRole, text: string, imageUrl = '', imageAssetId?: number) {
   const value = String(text || '').trim()
@@ -244,6 +283,7 @@ async function loadHistory() {
   } catch (error: any) { notify(error.message || '读取历史对话失败', 'error') } finally { historyLoading.value = false }
 }
 function resetConversationView() {
+  stopModelPolling()
   clearReferencePreview()
   messages.value = []
   messageCounter.value = 0
@@ -451,19 +491,27 @@ async function restoreDetail(detail: any) {
   }
   if (modelTask.value && ['running', 'queued'].includes(modelTask.value.status)) scheduleModelPolling()
   if (modelTask.value?.assetId && modelTask.value.status === 'succeeded') void refreshModelReviewStatus(modelTask.value.assetId)
+  restoreDraft()
 }
 async function selectConversation(id: number) {
-  if (!id || sending.value || busy.value) return
-  try { await restoreDetail(await api(`/api/creative/ai/conversations/${id}`)) } catch (error: any) { notify(error.message || '打开历史对话失败', 'error') }
+  if (!id || switchingBlocked()) return
+  persistDraft(); conversationLoading.value = true
+  try { await restoreDetail(await api(`/api/creative/ai/conversations/${id}`)); workspace.value = 'chat'; historyPanelOpen.value = false; await resumePendingJobIfAny() }
+  catch (error: any) { notify(error.message || '打开历史对话失败', 'error') }
+  finally { conversationLoading.value = false }
 }
 async function createConversation() {
-  if (sending.value || busy.value) return
+  if (switchingBlocked()) return false
+  persistDraft(); conversationLoading.value = true
   try {
     const created = await api<Conversation>('/api/creative/ai/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
     conversations.value = [created, ...conversations.value.filter(item => item.id !== created.id)]
     historyPage.value = 1
-    await selectConversation(created.id)
-  } catch (error: any) { notify(error.message || '新建对话失败', 'error') }
+    await restoreDetail(created)
+    workspace.value = 'chat'; historyPanelOpen.value = false
+    return true
+  } catch (error: any) { notify(error.message || '新建对话失败', 'error'); return false }
+  finally { conversationLoading.value = false }
 }
 async function ensureActiveConversation() {
   if (activeConversationId.value) return true
@@ -472,6 +520,7 @@ async function ensureActiveConversation() {
 }
 async function removeConversation(item: Conversation, event?: Event) {
   event?.stopPropagation()
+  if (switchingBlocked()) return
   if (!window.confirm('只删除这条历史对话？生成的作品、模型和订单不会删除。')) return
   try {
     await api(`/api/creative/ai/conversations/${item.id}`, { method: 'DELETE' })
@@ -495,6 +544,7 @@ function thinkingLabel(action?: QuickReply, message = '') {
   return '正在理解你的想法'
 }
 async function sendChat(message = chatInput.value, action?: QuickReply, options: { skipUser?: boolean } = {}) {
+  if (conversationLoading.value) return
   const text = String(message || '').trim()
   if (sending.value || busy.value || inputLocked.value && !action) return
   if (!await ensureActiveConversation()) return
@@ -509,6 +559,12 @@ async function sendChat(message = chatInput.value, action?: QuickReply, options:
       versionId.value = Number(result.session.versionId) || versionId.value
     }
     applyBrief(result.brief)
+    const historyItem = conversations.value.find(item => item.id === activeConversationId.value)
+    if (historyItem) {
+      if (text && !historyItem.title) historyItem.title = text
+      historyItem.productType = result.brief?.productName || result.brief?.productType || historyItem.productType
+      historyItem.updatedAt = new Date().toISOString()
+    }
     chatStage.value = String(result.stage || 'understanding')
     quickReplies.value = Array.isArray(result.quickReplies) ? result.quickReplies : []
     if (result.assistantText) assistant(String(result.assistantText))
@@ -520,6 +576,7 @@ async function sendChat(message = chatInput.value, action?: QuickReply, options:
       assistant('生成前确认一下，还有需要补充的吗？没有的话点击“没有补充，开始生成”。')
     }
   } catch (error: any) {
+    if (text && !chatInput.value) chatInput.value = text
     notify(error.message || '对话服务暂时不可用，当前输入已保留', 'error')
   } finally { thinking.value = false; sending.value = false }
 }
@@ -530,8 +587,9 @@ async function handleReply(item: QuickReply) {
   if (item.type === 'model') { await generateModel(); return }
   if (item.type === 'model_review') { await submitModelReview(); return }
   if (item.type === 'bundle_review') { await submitBundleReview(); return }
-  if (item.type === 'bundle_production' || item.type === 'commercial') { openProductionDialog(); return }
-  if (item.type === 'works') { activeView.value = 'orders'; await loadProductionRequests(); return }
+  if (item.type === 'bundle_production') { openProductionDialog(); return }
+  if (item.type === 'commercial') { openCommercial({ id: generatedAssetId.value, title: productName.value, productName: productName.value, ...currentProductIdentity() }); return }
+  if (item.type === 'works') { openWorkspace('works'); return }
   if (item.type === 'refine') { replacementOpen.value = false; quickReplies.value = []; activeView.value = 'chat'; assistant('请告诉我想保留、加强或避免的内容。'); return }
   const message = item.type === 'text' ? String(item.label || item.value || '') : ''
   await sendChat(message, item)
@@ -582,15 +640,16 @@ async function generateReplacement() {
   await generateProductImage(true)
 }
 const PENDING_JOB_STORAGE_KEY = 'smartpig.pendingConversationImageJob'
+function pendingJobKey() { return `${PENDING_JOB_STORAGE_KEY}:${props.currentUser.id}:${activeConversationId.value}` }
 function rememberPendingJob(jobId: number | string, jobType: string) {
-  try { sessionStorage.setItem(PENDING_JOB_STORAGE_KEY, JSON.stringify({ jobId, jobType, startedAt: Date.now() })) } catch { /* storage unavailable */ }
+  try { sessionStorage.setItem(pendingJobKey(), JSON.stringify({ jobId, jobType, startedAt: Date.now() })) } catch { /* storage unavailable */ }
 }
 function forgetPendingJob() {
-  try { sessionStorage.removeItem(PENDING_JOB_STORAGE_KEY) } catch { /* storage unavailable */ }
+  try { sessionStorage.removeItem(pendingJobKey()) } catch { /* storage unavailable */ }
 }
 function readPendingJob(): { jobId: number; jobType: string } | null {
   try {
-    const raw = sessionStorage.getItem(PENDING_JOB_STORAGE_KEY)
+    const raw = sessionStorage.getItem(pendingJobKey())
     if (!raw) return null
     const parsed = JSON.parse(raw)
     const jobId = Number(parsed?.jobId)
@@ -767,8 +826,13 @@ function scheduleModelPolling() {
   void poll()
 }
 function openProductionDialog(request?: any) {
-  selectedRequest.value = request || { id: null, bundleId: bundleId.value, assetId: modelTask.value?.assetId || generatedAssetId.value, title: productName.value }
-  productionForm.value = { requestType: 'sample', purpose: 'personal', quantity: 1, recipientName: '', recipientPhone: '', recipientAddress: '', museumId: '', museumName: '', note: '' }
+  if (switchingBlocked()) return
+  selectedRequest.value = request ? { ...request } : {
+    id: null, bundleId: bundleId.value, assetId: modelTask.value?.assetId || generatedAssetId.value,
+    title: productName.value, sampleProductName: productName.value,
+    projectId: projectId.value, versionId: versionId.value, ...currentProductIdentity()
+  }
+  productionForm.value = { requestType: request?.requestType === 'bulk' ? 'bulk' : 'sample', purpose: 'personal', quantity: 1, recipientName: '', recipientPhone: '', recipientAddress: '', museumId: '', museumName: '', note: '' }
   productionDialogOpen.value = true
 }
 function selectMuseum() {
@@ -778,21 +842,38 @@ function selectMuseum() {
 async function submitProduction() {
   const target = selectedRequest.value
   if (!target || productionSubmitting.value) return
-  if (productionForm.value.purpose === 'museum_sale' && !productionForm.value.museumId) { notify('售卖路径请选择博物馆或景区', 'error'); return }
+  const form = productionForm.value
+  if (!Number.isInteger(form.quantity) || form.quantity < 1) { notify('请输入有效的整数数量', 'error'); return }
+  if (form.purpose === 'museum_sale' && !form.museumId) { notify('售卖路径请选择博物馆或景区', 'error'); return }
+  if (form.purpose === 'personal' && (!form.recipientName.trim() || !form.recipientAddress.trim() || !/^1[3-9]\d{9}$/.test(form.recipientPhone.trim()))) { notify('请填写收件人、完整地址和有效手机号', 'error'); return }
   productionSubmitting.value = true
   try {
-    const body: Record<string, any> = { ...currentProductIdentity(), assetId: target.assetId || undefined, bundleId: target.bundleId || bundleId.value || undefined, projectId: projectId.value || undefined, versionId: versionId.value || undefined, requestType: 'sample', title: target.title || productName.value, quantity: Math.max(1, Number(productionForm.value.quantity || 1)), purpose: productionForm.value.purpose, recipientName: productionForm.value.recipientName, recipientPhone: productionForm.value.recipientPhone, recipientAddress: productionForm.value.recipientAddress, note: productionForm.value.note, ...(productionForm.value.museumId ? { museumDistribution: [{ museumId: productionForm.value.museumId, museumName: productionForm.value.museumName, quantity: Math.max(1, Number(productionForm.value.quantity || 1)) }] } : {}) }
+    // Freeze the selected work's context. Library work must never inherit the active conversation.
+    const body = {
+      ...productIdentityFrom(target), assetId: target.assetId || undefined, bundleId: target.bundleId || undefined,
+      projectId: target.projectId || undefined, versionId: target.versionId || undefined,
+      requestType: form.requestType, title: target.title || target.sampleProductName,
+      sampleProductName: target.sampleProductName || target.productName || target.productType || target.title,
+      quantity: form.quantity, purpose: form.purpose, recipientName: form.recipientName.trim(),
+      recipientPhone: form.recipientPhone.trim(), recipientAddress: form.recipientAddress.trim(), note: form.note,
+      ...(form.museumId ? { museumDistribution: [{ museumId: Number(form.museumId), museumName: form.museumName, quantity: form.quantity }] } : {})
+    }
     const data = await api<any>('/api/creative/ai/consumer-production/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    productionDialogOpen.value = false; notify(data.message || '打样申请已提交，等待后台报价'); await loadProductionRequests(); activeView.value = 'orders'
-  } catch (error: any) { notify(error.message || '打样申请提交失败', 'error') } finally { productionSubmitting.value = false }
+    productionDialogOpen.value = false; notify(data.message || '申请已提交，等待后台报价')
+    await loadProductionRequests(); workspace.value = 'chat'; activeView.value = 'orders'
+  } catch (error: any) { notify(error.message || '申请提交失败', 'error') } finally { productionSubmitting.value = false }
 }
-async function loadProductionRequests() { try { productionRequests.value = await api<any[]>('/api/creative/ai/consumer-production/my') || [] } catch { productionRequests.value = [] } }
+async function loadProductionRequests() {
+  try { productionRequests.value = await api<any[]>('/api/creative/ai/consumer-production/my') || [] }
+  catch (error: any) { notify(error.message || '订单读取失败，请重试', 'error') }
+}
 async function loadMuseums() { try { museums.value = await api<any[]>('/api/creative/ai/consumer-production/museums') || [] } catch { museums.value = [] } }
 function stopPaymentPolling() { if (paymentTimer.value) window.clearInterval(paymentTimer.value); paymentTimer.value = null }
 function paymentTargetMatches(request: any) {
   return Boolean(paymentRequest.value && request?.id
     && String(paymentRequest.value.id) === String(request.id)
-    && Boolean(paymentRequest.value.professionalPayment) === Boolean(request.professionalPayment))
+    && Boolean(paymentRequest.value.professionalPayment) === Boolean(request.professionalPayment)
+    && String(paymentRequest.value.paymentKind || 'sample') === String(request.paymentKind || 'sample'))
 }
 function paymentIsTerminal(status?: string) {
   return ['paid', 'closed', 'cancelled', 'failed', 'expired', 'manual_review', 'payment_exception', 'refund_exception'].includes(String(status || ''))
@@ -820,7 +901,7 @@ async function closePaymentDialog() {
     return
   }
   const status = String(order.status || '')
-  if (status === 'pending') {
+  if (!paymentIsTerminal(status)) {
     if (order.canClose === false) {
       notify('当前支付结果正在核对，请稍后刷新订单状态', 'error')
       return
@@ -830,7 +911,9 @@ async function closePaymentDialog() {
     try {
       const closed = await api<any>(`/api/payments/orders/${encodeURIComponent(order.orderNo)}/close`, { method: 'POST' })
       paymentOrder.value = closed
-      notify('未支付订单已关闭，打样申请仍保留')
+      if (closed.status === 'paid') { await refreshPayment(); leavePaymentDialog(); return }
+      if (!['closed', 'cancelled', 'failed', 'expired'].includes(String(closed.status))) { await refreshPayment(); notify('支付结果仍在核对，请稍后刷新', 'error'); return }
+      notify('未支付订单已关闭，申请仍保留')
       leavePaymentDialog()
     } catch (error: any) {
       // A payment can complete while the close request is in flight. Query the
@@ -851,7 +934,7 @@ async function closePaymentDialog() {
     return
   }
   if (status === 'paid') {
-    await Promise.all([loadProductionRequests(), loadProfessionalSubmissions()])
+    await refreshPaidBusiness()
     leavePaymentDialog()
     return
   }
@@ -874,19 +957,27 @@ function handlePaymentBeforeUnload(event: BeforeUnloadEvent) {
   event.preventDefault()
   event.returnValue = ''
 }
+let paymentRefreshing = false
+async function refreshPaidBusiness() {
+  const results = await Promise.allSettled([loadProductionRequests(), submissionWorkspace.value?.refresh(), commercialWorkspace.value?.refresh(), accountCenter.value?.refresh()])
+  if (results.some(result => result.status === 'rejected')) notify('支付已确认，部分业务列表刷新失败，请稍后手动刷新', 'error')
+}
 async function refreshPayment() {
-  if (!paymentOrder.value?.orderNo) return
+  if (!paymentOrder.value?.orderNo || paymentRefreshing) return
+  const orderNo = paymentOrder.value.orderNo
+  paymentRefreshing = true
   try {
-    const latest = await api<any>(`/api/payments/orders/${encodeURIComponent(paymentOrder.value.orderNo)}`)
+    const latest = await api<any>(`/api/payments/orders/${encodeURIComponent(orderNo)}`)
+    if (paymentOrder.value?.orderNo !== orderNo) return
     const previousIntent = paymentIntent.value
     paymentOrder.value = latest
     if (latest.status === 'paid') {
       stopPaymentPolling()
       paymentIntent.value = 'paid'
-      paymentHint.value = '打样费已到账，申请已进入生产流程。现在可以返回订单查看进度。'
+      paymentHint.value = paymentRequest.value?.paymentKind === 'guidance' ? '协助费用已到账，可返回申请查看处理进度。' : '打样费已到账，可返回订单查看生产进度。'
+      await refreshPaidBusiness()
       if (previousIntent !== 'paid') {
-        await Promise.all([loadProductionRequests(), loadProfessionalSubmissions()])
-        notify('打样费已支付，订单进入生产中')
+        notify(paymentRequest.value?.paymentKind === 'guidance' ? '协助费用已支付' : '打样费已支付，订单状态已更新')
       }
     }
     if (['payment_exception', 'refund_exception', 'manual_review'].includes(String(latest.status))) {
@@ -899,10 +990,11 @@ async function refreshPayment() {
       paymentIntent.value = 'failed'
       paymentHint.value = latest.status === 'expired' ? '支付订单已过期，请重新发起支付。' : latest.status === 'cancelled' ? '支付订单已取消，请重新发起支付。' : '支付订单未完成，请重新发起支付。'
     }
-  } catch { /* polling is best effort */ }
+  } catch { paymentHint.value = '订单状态暂时无法读取，请点击刷新核实支付结果，勿重复支付。' }
+  finally { paymentRefreshing = false }
 }
 async function paySample(request: any) {
-  if (!request?.id || !['unpaid', 'pending'].includes(String(request.samplePaymentStatus || 'unpaid'))) return
+  if (!request?.id || !['unpaid', 'pending'].includes(String((request.paymentKind === 'guidance' ? request.paymentStatus : request.samplePaymentStatus) || 'unpaid'))) return
   if (paymentDialogOpen.value && paymentLocked.value) {
     if (paymentTargetMatches(request) && paymentIntent.value === 'awaiting') return
     notify('请先完成当前打样费支付，再选择其他订单', 'error')
@@ -922,15 +1014,16 @@ async function paySample(request: any) {
   paymentDialogOpen.value = true
   paymentLoading.value = true
   try {
-    const endpoint = request.professionalPayment ? '/api/payments/professional-submission-sample-orders' : '/api/payments/sample-orders'
+    const endpoint = request.professionalPayment ? '/api/payments/professional-submission-sample-orders' : request.paymentKind === 'guidance' ? '/api/payments/commercial-guidance-orders' : request.paymentKind === 'quote' ? '/api/payments/commercial-quote-sample-orders' : '/api/payments/sample-orders'
     // H5 displays a native WeChat QR code. JSAPI returns only paymentParams
     // for wx.requestPayment and therefore has no codeUrl to render here.
     const channel = 'wechat'
-    paymentOrder.value = await api<any>(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request.professionalPayment ? { submissionId: String(request.id), channel } : { requestId: String(request.id), channel }) })
+    paymentOrder.value = await api<any>(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request.professionalPayment ? { submissionId: String(request.id), channel } : request.paymentKind === 'guidance' ? { guidanceId: String(request.id), channel } : { requestId: String(request.id), channel }) })
+    if (paymentOrder.value?.status === 'paid') { await refreshPayment(); return }
     const codeUrl = String(paymentOrder.value?.codeUrl || '')
     if (!codeUrl) throw new Error('微信支付未返回二维码，请检查支付商户配置')
     paymentQrUrl.value = await QRCode.toDataURL(codeUrl, { width: 300, margin: 1 })
-    paymentIntent.value = paymentOrder.value.status === 'paid' ? 'paid' : 'awaiting'
+    paymentIntent.value = 'awaiting'
     paymentHint.value = paymentOrder.value.status === 'paid' ? '打样费已到账，申请已进入生产流程。' : '请使用微信扫码支付。支付回调确认后，申请会自动进入生产中。'
     stopPaymentPolling()
     if (!paymentIsTerminal(paymentOrder.value.status)) paymentTimer.value = window.setInterval(refreshPayment, 2200)
@@ -942,48 +1035,6 @@ async function paySample(request: any) {
     stopPaymentPolling()
     notify(paymentError.value, 'error')
   } finally { paymentLoading.value = false }
-}
-async function loadProfessionalSubmissions() { try { professionalSubmissions.value = await api<any[]>('/api/creative/ai/consumer-professional-submissions/my') || [] } catch { professionalSubmissions.value = [] } }
-function chooseProfessionalFile(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0] || null
-  if (file && !/\.zip$/i.test(file.name)) {
-    notify('专业审核仅支持 ZIP 作品包', 'error')
-    ;(event.target as HTMLInputElement).value = ''
-    professionalSubmissionFile.value = null
-    return
-  }
-  if (file && file.size > 100 * 1024 * 1024) {
-    notify('ZIP 作品包不能超过 100MB', 'error')
-    ;(event.target as HTMLInputElement).value = ''
-    professionalSubmissionFile.value = null
-    return
-  }
-  professionalSubmissionFile.value = file
-  if (file && !professionalSubmissionTitle.value) professionalSubmissionTitle.value = file.name.replace(/\.zip$/i, '')
-}
-async function submitProfessionalSubmission() {
-  const file = professionalSubmissionFile.value
-  if (!file) { notify('请先选择 ZIP 作品包', 'error'); return }
-  if (!/\.zip$/i.test(file.name)) { notify('专业审核仅支持 ZIP 作品包', 'error'); return }
-  if (file.size > 100 * 1024 * 1024) { notify('ZIP 作品包不能超过 100MB', 'error'); return }
-  professionalSubmissionBusy.value = true
-  try {
-    const form = new FormData()
-    form.append('file', file)
-    form.append('title', professionalSubmissionTitle.value.trim() || file.name.replace(/\.zip$/i, ''))
-    form.append('note', professionalSubmissionNote.value.trim())
-    form.append('purpose', 'personal')
-    // Keep a professional ZIP attached to the product created in this
-    // conversation. The server derives the canonical product number from
-    // assetId and validates ownership; never derive it from a file name.
-    const currentAssetId = Number(generatedAssetId.value || 0)
-    if (Number.isFinite(currentAssetId) && currentAssetId > 0) form.append('assetId', String(currentAssetId))
-    const currentProductNo = String(brief.value.productNo || '').trim()
-    if (currentProductNo) form.append('productNo', currentProductNo)
-    if (canonicalProductId.value) form.append('productId', String(canonicalProductId.value))
-    await api('/api/creative/ai/consumer-professional-submissions', { method: 'POST', body: form })
-    professionalSubmissionFile.value = null; professionalSubmissionTitle.value = ''; professionalSubmissionNote.value = ''; await loadProfessionalSubmissions(); notify('专业作品包已提交审核')
-  } catch (error: any) { notify(error.message || '提交专业作品包失败', 'error') } finally { professionalSubmissionBusy.value = false }
 }
 async function resumePendingJobIfAny() {
   const pending = readPendingJob()
@@ -1029,9 +1080,8 @@ async function resumePendingJobIfAny() {
   } catch { forgetPendingJob() } finally { busy.value = false; busyText.value = '之间正在处理…' }
 }
 async function loadInitial() {
-  await Promise.all([loadProducts(), loadHistory(), loadProductionRequests(), loadMuseums(), creatorProfile.value === 'professional' ? loadProfessionalSubmissions() : Promise.resolve()])
-  if (conversations.value.length) await selectConversation(conversations.value[0].id)
-  else {
+  await Promise.all([loadProducts(), loadHistory(), loadProductionRequests(), loadMuseums()])
+  {
     // Match the mini-program entry: the first visit is immediately usable,
     // while the sidebar still records a normal resumable session.
     await createConversation()
@@ -1048,6 +1098,7 @@ onMounted(() => {
   void loadInitial()
 })
 onBeforeUnmount(() => {
+  persistDraft()
   window.removeEventListener('beforeunload', handlePaymentBeforeUnload)
   stopPaymentPolling(); stopModelPolling(); clearReferencePreview()
 })
@@ -1056,48 +1107,61 @@ onBeforeUnmount(() => {
 <template>
   <main class="conversation-workspace">
     <header class="workspace-header">
-      <div class="brand"><img :src="andTasteLogo" alt="之间味道" /><div><strong>之间味道</strong><span>对话式创作</span></div></div>
+      <div class="brand"><img :src="brandLogo" alt="之间智造" /><div><strong>之间智造</strong><span>对话式创作</span></div></div>
       <div class="header-copy"><span>CONVERSATIONAL CREATIVE STUDIO</span><h1>把一句灵感，推进成一件可生产的作品。</h1><p>网站端与小程序使用同一套对话、作品、审核、打样和生产流程。</p></div>
-      <div class="header-actions"><div class="creator-switch" role="group" aria-label="创作者身份"><button :class="{ active: creatorProfile === 'amateur' }" @click="roleChanged('amateur')">业余创作者</button><button :class="{ active: creatorProfile === 'professional' }" @click="roleChanged('professional')">专业创作者</button></div><button class="icon-action" title="退出登录" @click="emit('logout')">退出</button></div>
+      <div class="header-actions"><button class="icon-action" :disabled="busy || sending || conversationLoading" @click="createConversation">＋ 新对话</button><button class="icon-action" @click="openHistory">历史对话</button><button class="icon-action" title="退出登录" @click="emit('logout')">退出</button></div>
     </header>
 
-    <section v-if="creatorProfile === 'professional'" class="professional-top-panel">
-      <div class="professional-top-copy"><span>PROFESSIONAL CREATOR · ZIP REVIEW</span><h2>先提交专业作品包</h2><p>上传包含效果图、3D 文件、尺寸、材质、工艺说明和版权材料的 ZIP，后台审核通过后会返回报价单。</p></div>
-      <div class="professional-form"><label class="zip-picker"><input ref="submissionInput" type="file" accept=".zip,application/zip" @change="chooseProfessionalFile" /><strong>{{ professionalSubmissionFile?.name || '选择 ZIP 作品包' }}</strong><small>{{ professionalSubmissionFile ? `${(professionalSubmissionFile.size / 1024 / 1024).toFixed(1)} MB` : '最大 100MB' }}</small></label><input v-model="professionalSubmissionTitle" maxlength="200" placeholder="作品包名称" /><textarea v-model="professionalSubmissionNote" rows="2" maxlength="1000" placeholder="给审核员的说明（亮点、材质、工艺和审核重点）" /><button :disabled="professionalSubmissionBusy || !professionalSubmissionFile" @click="submitProfessionalSubmission">{{ professionalSubmissionBusy ? '正在提交…' : '提交专业作品包审核' }}</button></div>
-      <div v-if="professionalSubmissions.length" class="professional-history"><strong>最近提交</strong><article v-for="item in professionalSubmissions" :key="item.id"><div><b>{{ item.title }}</b><span>{{ statusText(item.status) }} · {{ formatTime(item.createdAt) }}</span><small v-if="item.quotedSampleFeeYuan">报价：¥{{ item.quotedSampleFeeYuan }} · {{ item.quotedSampleLeadTime || '交期待确认' }}</small></div><button v-if="item.status === 'approved' && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))" :disabled="paymentLoading" @click="paySample({ ...item, professionalPayment: true })">{{ paymentTargetMatches({ ...item, professionalPayment: true }) && paymentOrder && !paymentIsTerminal(paymentOrder.status) ? '继续支付' : '支付打样费' }}</button></article></div>
-    </section>
+    <nav class="workspace-nav" aria-label="创作工作台">
+      <button :class="{ active: workspace === 'chat' && activeView === 'chat' }" @click="openWorkspace('chat')">创意工坊</button>
+      <button :class="{ active: workspace === 'personal' }" @click="openWorkspace('personal')">产品智造</button>
+      <button :class="{ active: workspace === 'museum_sale' }" @click="openWorkspace('museum_sale')">渠道合作</button>
+      <button :class="{ active: workspace === 'works' }" @click="openWorkspace('works')">我的作品</button>
+      <button :class="{ active: workspace === 'commercial' }" @click="openWorkspace('commercial')">询价与申请</button>
+      <button :class="{ active: workspace === 'market' }" @click="openWorkspace('market')">文创商城</button>
+      <button :class="{ active: workspace === 'account' }" @click="openWorkspace('account')">个人中心</button>
+      <button :class="{ active: workspace === 'chat' && activeView === 'result' }" @click="openChatView('result')">当前作品</button>
+      <button :class="{ active: workspace === 'chat' && activeView === 'orders' }" @click="openChatView('orders')">订单与进度</button>
+    </nav>
+    <ConsumerSubmissionWorkspace v-if="workspace === 'personal' || workspace === 'museum_sale'" :key="workspace" ref="submissionWorkspace" :mode="workspace" @alert="notify" @pay="paySample" @transfer="openWorkspace('personal')" @revise="reviseInWorkshop" />
+    <ConsumerWorksLibrary v-if="workspace === 'works'" @alert="notify" @sample="item => openProductionDialog({ ...item, id: null, assetId: item.id })" @commercial="openCommercial" />
+    <ConsumerCommercialWorkspace v-if="workspace === 'commercial'" ref="commercialWorkspace" :asset="selectedCommercialAsset" @alert="notify" @pay="paySample" />
+    <ConsumerMarketplace v-if="workspace === 'market'" @alert="notify" />
+    <ConsumerAccountCenter v-if="workspace === 'account'" ref="accountCenter" :current-user="currentUser" @alert="notify" @logout="emit('logout')" />
+    <CustomerSupportWidget :current-user="currentUser" @alert="notify" />
+    <div v-if="sampleProgressRequest" class="dialog-mask"><section class="sample-dialog"><button class="sample-close" @click="sampleProgressRequest = null">关闭</button><ConsumerSampleProgress :key="sampleProgressRequest.id" :request="sampleProgressRequest" @alert="notify" @updated="loadProductionRequests" @bulk="requestBulk" /></section></div>
 
-    <section class="workspace-grid">
-      <aside class="history-sidebar" :class="{ collapsed: !historyPanelOpen }">
+    <section v-show="workspace === 'chat'" class="workspace-grid" :class="{ 'has-history': historyPanelOpen }">
+      <aside v-if="historyPanelOpen" class="history-sidebar">
         <div class="sidebar-heading"><div><span>YOUR SESSIONS</span><h2>历史对话</h2></div><button title="收起历史对话" @click="historyPanelOpen = !historyPanelOpen">{{ historyPanelOpen ? '‹' : '›' }}</button></div>
-        <template v-if="historyPanelOpen"><button class="new-session" @click="createConversation">＋ 新建对话</button><div v-if="historyLoading" class="sidebar-empty">正在读取…</div><div v-else-if="!conversations.length" class="sidebar-empty">还没有历史对话<br /><small>新建一条对话开始创作</small></div><template v-else><div class="session-list"><button v-for="item in visibleConversations" :key="item.id" :class="['session-item', { active: item.id === activeConversationId }]" @click="selectConversation(item.id)"><span class="session-mark">对</span><span class="session-copy"><strong>{{ item.productType || '未命名创作' }}</strong><small>{{ item.material || '尚未确定材质' }} · {{ formatTime(item.updatedAt) }}</small></span><i title="删除历史对话" @click="removeConversation(item, $event)">×</i></button></div><nav v-if="historyTotalPages > 1" class="history-pagination" aria-label="历史对话分页"><button :disabled="historyPage <= 1" aria-label="上一页" @click="changeHistoryPage(historyPage - 1)">‹</button><span>{{ historyPage }} / {{ historyTotalPages }}</span><button :disabled="historyPage >= historyTotalPages" aria-label="下一页" @click="changeHistoryPage(historyPage + 1)">›</button></nav></template><div class="sidebar-note">删除历史对话不会删除已生成的作品、3D 模型、审核记录或订单。</div></template>
-        <div class="sidebar-links"><button :class="{ active: activeView === 'chat' }" @click="activeView = 'chat'">对话创作</button><button :class="{ active: activeView === 'result' }" @click="activeView = 'result'">当前作品</button><button :class="{ active: activeView === 'orders' }" @click="activeView = 'orders'; loadProductionRequests()">订单与进度 <em v-if="productionRequests.length">{{ productionRequests.length }}</em></button></div>
+        <template v-if="historyPanelOpen"><input v-model="historySearch" class="history-search" placeholder="按对话名称搜索" aria-label="搜索历史对话" /><button class="new-session" @click="createConversation">＋ 新建对话</button><div v-if="historyLoading" class="sidebar-empty">正在读取…</div><div v-else-if="!filteredConversations.length" class="sidebar-empty">{{ historySearch ? '没有找到匹配的对话' : '还没有历史对话' }}<br /><small>可按名称选择或新建对话</small></div><template v-else><div class="session-list"><button v-for="item in visibleConversations" :key="item.id" :class="['session-item', { active: item.id === activeConversationId }]" @click="selectConversation(item.id)"><span class="session-mark">对</span><span class="session-copy"><strong>{{ conversationTitle(item) }}</strong><small>{{ item.material || '尚未确定材质' }} · {{ formatTime(item.updatedAt) }}</small></span><i title="删除历史对话" @click="removeConversation(item, $event)">×</i></button></div><nav v-if="historyTotalPages > 1" class="history-pagination" aria-label="历史对话分页"><button :disabled="historyPage <= 1" aria-label="上一页" @click="changeHistoryPage(historyPage - 1)">‹</button><span>{{ historyPage }} / {{ historyTotalPages }}</span><button :disabled="historyPage >= historyTotalPages" aria-label="下一页" @click="changeHistoryPage(historyPage + 1)">›</button></nav></template><div class="sidebar-note">删除历史对话不会删除已生成的作品、3D 模型、审核记录或订单。</div></template>
+        <div class="sidebar-links"><button :class="{ active: activeView === 'chat' }" @click="openChatView('chat')">对话创作</button><button :class="{ active: activeView === 'result' }" @click="openChatView('result')">当前作品</button><button :class="{ active: activeView === 'orders' }" @click="openChatView('orders')">订单与进度 <em v-if="productionRequests.length">{{ productionRequests.length }}</em></button></div>
       </aside>
 
       <section class="chat-panel">
-        <header class="chat-header"><div class="assistant-avatar">之</div><div><span>BETWEEN TASTE AI · 在线</span><h2>你的创作顾问</h2><small>{{ activeConversation ? `会话 ${activeConversation.sessionNo || activeConversation.id}` : '先新建一条创作对话' }}</small></div><div class="brief-chip"><b>{{ productName }}</b><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></header>
+        <header class="chat-header"><div class="assistant-avatar">之</div><div><span>之间智造 AI · 在线</span><h2>你的创作顾问</h2><small>{{ activeConversation ? `会话 ${activeConversation.sessionNo || activeConversation.id}` : '先新建一条创作对话' }}</small></div><div class="brief-chip"><b>{{ productName }}</b><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></header>
         <div v-if="activeView === 'chat'" ref="chatContent" class="chat-content"><div class="conversation-intro">我会先听懂你想做什么，自动绑定产品方向，再逐步确认灵感、材质和成品尺寸。确认后才开始生成，不会把每句闲聊直接塞进提示词。</div><div class="message-stream"><article v-for="item in messages" :key="item.id" :class="['message', item.role]"><div v-if="item.role === 'assistant'" class="message-avatar">之</div><div class="message-body"><div v-if="item.imageUrl" class="message-image"><img :src="item.imageUrl" alt="用户上传的参考图" /></div><p v-if="item.text">{{ item.text }}</p><small>{{ item.role === 'assistant' ? '之间 AI' : '我' }}</small></div><div v-if="item.role === 'user'" class="message-avatar user">我</div></article><article v-if="thinking" class="message assistant"><div class="message-avatar">之</div><div class="message-body thinking"><span></span><span></span><span></span><small>正在理解你的想法</small></div></article></div></div>
-        <div v-else-if="activeView === 'result'" class="result-content"><div class="result-toolbar"><div><div class="result-product-identity"><span>产品号</span><strong :class="{ missing: !canonicalProductNo }">{{ canonicalProductNo || '未关联产品号' }}</strong><small v-if="canonicalProductId">内部产品 ID：{{ canonicalProductId }}</small></div><span>CREATIVE OUTPUT</span><h2>当前创作进度</h2></div><div class="result-toolbar-actions"><button v-if="bundleId" :disabled="bundleRefreshing" @click="refreshBundleReviewStatus()">{{ bundleRefreshing ? '刷新中…' : '刷新审核状态' }}</button><button @click="activeView = 'chat'">返回对话</button></div></div><section v-if="generatedPreviewUrl" class="output-card"><div class="output-image"><img :src="generatedPreviewUrl" alt="生成的产品图" /><b>产品视觉</b></div><div class="output-copy"><strong>{{ productName }}</strong><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></section><section v-if="replacementOpen" class="replacement-box"><strong>新参考图已上传，请补充改图要求</strong><textarea v-model="replacementPrompt" rows="3" placeholder="例如：保留新图主体和配色，转成当前产品的量产外观，背景简洁，不要文字。" /><button :disabled="busy || !replacementPrompt.trim()" @click="generateReplacement">根据新参考图生成</button></section><section v-if="simulationPreviewUrl || multiviewImages.length" class="output-card simulation-card"><div v-if="simulationPreviewUrl" class="output-image"><img :src="simulationPreviewUrl" alt="生产模拟图" /><b>生产模拟图</b></div><div class="view-strip"><div v-for="item in multiviewImages" :key="item.assetId"><img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.label" /><span>{{ item.label }}</span></div></div><div class="review-state" :class="statusClass(bundleStatus)"><strong>生产模拟图：{{ bundleStatus === 'approved' ? '审核已通过' : bundleStatus === 'review' ? '审核中' : bundleStatus === 'rejected' ? '审核未通过' : '待提交审核' }}</strong><small v-if="bundleComment">{{ bundleComment }}</small></div></section><section v-if="modelTask" class="model-status"><div><strong>3D 原型</strong><span>{{ modelTask.status === 'succeeded' ? '已完成' : modelTask.status === 'failed' ? '生成失败' : '生成中' }}</span></div><div class="progress"><i :style="{ width: `${Math.max(4, Math.min(100, Number(modelTask.progress || 0)))}%` }"></i></div><small v-if="modelTask.status === 'succeeded'">审核状态：{{ modelReviewLabel(modelReviewStatus) }}<template v-if="modelReviewComment"> · {{ modelReviewComment }}</template></small><small>{{ modelTask.errorMessage || (modelTask.status === 'succeeded' ? 'GLB 文件已保存到作品库，请先提交 3D 建模审核，审核通过后才能申请打样。' : `当前进度 ${Math.round(Number(modelTask.progress || 0))}%`) }}</small></section><div class="result-actions"><button v-for="item in generationActionReplies" :key="item.type" :class="{ primary: item.type === 'multiview' || item.type === 'bundle_production' }" :disabled="busy" @click="handleReply(item)">{{ item.label }}</button></div></div>
-        <div v-else class="orders-content"><div class="result-toolbar"><div><span>WORKFLOW ORDERS</span><h2>订单与生产进度</h2></div><button @click="loadProductionRequests">刷新</button></div><div v-if="!productionRequests.length" class="orders-empty">暂时没有打样订单<br /><small>作品审核通过后，可以在对话中申请打样。</small></div><article v-for="item in productionRequests" :key="item.id" class="order-card"><div><span>{{ item.productNo || item.requestNo || `订单 ${item.id}` }}</span><strong>{{ item.title || item.assetTitle || item.sampleProductName || '文创产品' }}</strong><small>{{ item.requestType === 'bulk' ? '批量生产' : '打样' }} · {{ item.quantity || 1 }} 件 · {{ formatTime(item.createdAt) }}</small></div><div class="order-status"><b :class="statusClass(item.status)">{{ statusText(item.status) }}</b><span v-if="item.samplePaymentStatus">{{ statusText(item.samplePaymentStatus) }}</span><button v-if="item.status === 'approved' && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))" :disabled="paymentLoading" @click="paySample(item)">{{ paymentTargetMatches(item) && paymentOrder && !paymentIsTerminal(paymentOrder.status) ? '继续支付' : '支付打样费' }}</button></div></article><div v-if="paymentOrder && !paymentDialogOpen" class="payment-card"><div><strong>打样费支付</strong><span>{{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功，已进入生产' : paymentIntent === 'exception' ? '支付结果核对中' : '待支付' }}</span></div><img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" /><small>{{ paymentHint }}</small><button v-if="!paymentIsTerminal(paymentOrder.status)" @click="reopenPaymentDialog">继续支付</button></div></div>
+        <div v-else-if="activeView === 'result'" class="result-content"><div class="result-toolbar"><div><div class="result-product-identity"><span>产品号</span><strong :class="{ missing: !canonicalProductNo }">{{ canonicalProductNo || '未关联产品号' }}</strong><small v-if="canonicalProductId">内部产品 ID：{{ canonicalProductId }}</small></div><span>CREATIVE OUTPUT</span><h2>当前创作进度</h2></div><div class="result-toolbar-actions"><button v-if="bundleId" :disabled="bundleRefreshing" @click="refreshBundleReviewStatus()">{{ bundleRefreshing ? '刷新中…' : '刷新审核状态' }}</button><button @click="openChatView('chat')">返回对话</button></div></div><section v-if="generatedPreviewUrl" class="output-card"><div class="output-image"><img :src="generatedPreviewUrl" alt="生成的产品图" /><b>产品视觉</b></div><div class="output-copy"><strong>{{ productName }}</strong><span>{{ material || '材质待定' }} · {{ productSize || '尺寸待定' }}</span></div></section><section v-if="replacementOpen" class="replacement-box"><strong>新参考图已上传，请补充改图要求</strong><textarea v-model="replacementPrompt" rows="3" placeholder="例如：保留新图主体和配色，转成当前产品的量产外观，背景简洁，不要文字。" /><button :disabled="busy || !replacementPrompt.trim()" @click="generateReplacement">根据新参考图生成</button></section><section v-if="simulationPreviewUrl || multiviewImages.length" class="output-card simulation-card"><div v-if="simulationPreviewUrl" class="output-image"><img :src="simulationPreviewUrl" alt="生产模拟图" /><b>生产模拟图</b></div><div class="view-strip"><div v-for="item in multiviewImages" :key="item.assetId"><img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.label" /><span>{{ item.label }}</span></div></div><div class="review-state" :class="statusClass(bundleStatus)"><strong>生产模拟图：{{ bundleStatus === 'approved' ? '审核已通过' : bundleStatus === 'review' ? '审核中' : bundleStatus === 'rejected' ? '审核未通过' : '待提交审核' }}</strong><small v-if="bundleComment">{{ bundleComment }}</small></div></section><section v-if="modelTask" class="model-status"><div><strong>3D 原型</strong><span>{{ modelTask.status === 'succeeded' ? '已完成' : modelTask.status === 'failed' ? '生成失败' : '生成中' }}</span></div><div class="progress"><i :style="{ width: `${Math.max(4, Math.min(100, Number(modelTask.progress || 0)))}%` }"></i></div><small v-if="modelTask.status === 'succeeded'">审核状态：{{ modelReviewLabel(modelReviewStatus) }}<template v-if="modelReviewComment"> · {{ modelReviewComment }}</template></small><small>{{ modelTask.errorMessage || (modelTask.status === 'succeeded' ? 'GLB 文件已保存到作品库，请先提交 3D 建模审核，审核通过后才能申请打样。' : `当前进度 ${Math.round(Number(modelTask.progress || 0))}%`) }}</small></section><div class="result-actions"><button v-for="item in generationActionReplies" :key="item.type" :class="{ primary: item.type === 'multiview' || item.type === 'bundle_production' }" :disabled="busy" @click="handleReply(item)">{{ item.label }}</button></div></div>
+        <div v-else class="orders-content"><div class="result-toolbar"><div><span>WORKFLOW ORDERS</span><h2>订单与生产进度</h2></div><button @click="loadProductionRequests">刷新</button></div><div v-if="!productionRequests.length" class="orders-empty">暂时没有打样订单<br /><small>作品审核通过后，可以在对话中申请打样。</small></div><article v-for="item in productionRequests" :key="item.id" class="order-card"><div><span>{{ item.productNo || item.requestNo || `订单 ${item.id}` }}</span><strong>{{ item.title || item.assetTitle || item.sampleProductName || '文创产品' }}</strong><small>{{ item.requestType === 'bulk' ? '批量生产' : '打样' }} · {{ item.quantity || 1 }} 件 · {{ formatTime(item.createdAt) }}</small></div><div class="order-status"><b :class="statusClass(item.status)">{{ statusText(item.status) }}</b><span v-if="item.samplePaymentStatus">{{ statusText(item.samplePaymentStatus) }}</span><button v-if="item.requestType !== 'bulk'" @click="sampleProgressRequest = item">查看进度与反馈</button><button v-if="item.status === 'approved' && ['unpaid', 'pending'].includes(String(item.samplePaymentStatus || 'unpaid'))" :disabled="paymentLoading" @click="paySample(item)">{{ paymentTargetMatches(item) && paymentOrder && !paymentIsTerminal(paymentOrder.status) ? '继续支付' : '支付打样费' }}</button></div></article><div v-if="paymentOrder && !paymentDialogOpen" class="payment-card"><div><strong>打样费支付</strong><span>{{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '支付成功，已进入生产' : paymentIntent === 'exception' ? '支付结果核对中' : '待支付' }}</span></div><img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" /><small>{{ paymentHint }}</small><button v-if="!paymentIsTerminal(paymentOrder.status)" @click="reopenPaymentDialog">继续支付</button></div></div>
 
         <footer v-if="activeView === 'chat'" class="chat-composer"><div class="quick-replies"><button v-for="item in quickReplies" :key="`${item.type}-${item.label}`" :class="{ confirm: item.type === 'confirm_generate', secondary: ['replace_image', 'add_detail'].includes(item.type) }" :disabled="busy || sending" @click="handleReply(item)">{{ item.label }}</button></div><div v-if="busy" class="busy-line"><i></i>{{ busyText }}</div><div class="composer-row"><button class="upload-button" title="上传参考图片" :disabled="busy || sending || inputLocked" @click="referenceInput?.click()">＋</button><textarea v-model="chatInput" :disabled="busy || sending || inputLocked" :placeholder="inputPlaceholder" rows="2" maxlength="1200" @keydown.enter.exact.prevent="sendChat()" /><button class="send-button" :disabled="busy || sending || inputLocked || !chatInput.trim()" @click="sendChat()">发送</button></div><div class="composer-foot"><span>AI 生成内容 · 请在商业使用前人工复核</span><span>{{ chatInput.length }}/1200</span></div></footer>
       </section>
     </section>
 
     <input ref="referenceInput" class="visually-hidden" type="file" accept="image/*" @change="onReferenceChange" />
-    <div v-if="productionDialogOpen" class="dialog-mask" @click.self="productionDialogOpen = false"><section class="production-dialog"><header><div><span>PRODUCTION REQUEST</span><h2>申请打样</h2><small>{{ selectedRequest?.title || productName }}</small></div><button @click="productionDialogOpen = false">×</button></header><main><label><span>创作去向</span><select v-model="productionForm.purpose"><option value="personal">个人收藏 / 送礼</option><option value="museum_sale">售卖（景区、博物馆）</option></select></label><label v-if="productionForm.purpose === 'museum_sale'"><span>合作渠道</span><select v-model="productionForm.museumId" @change="selectMuseum"><option value="">请选择博物馆或景区</option><option v-for="museum in museumOptions" :key="museum.id" :value="museum.id">{{ museum.name }}</option></select></label><label><span>数量</span><input v-model.number="productionForm.quantity" type="number" min="1" /></label><label v-if="productionForm.purpose === 'personal'"><span>收件人</span><input v-model="productionForm.recipientName" placeholder="姓名" /></label><label v-if="productionForm.purpose === 'personal'"><span>手机号</span><input v-model="productionForm.recipientPhone" placeholder="用于寄送联系" /></label><label v-if="productionForm.purpose === 'personal'"><span>收货地址</span><textarea v-model="productionForm.recipientAddress" rows="2" placeholder="收货地址" /></label><label><span>申请说明</span><textarea v-model="productionForm.note" rows="3" placeholder="补充打样要求" /></label></main><footer><button @click="productionDialogOpen = false">取消</button><button class="primary" :disabled="productionSubmitting" @click="submitProduction">{{ productionSubmitting ? '提交中…' : '提交打样申请' }}</button></footer></section></div>
+    <div v-if="productionDialogOpen" class="dialog-mask" @click.self="!productionSubmitting && (productionDialogOpen = false)"><section class="production-dialog"><header><div><span>PRODUCTION REQUEST</span><h2>{{ productionForm.requestType === 'bulk' ? '申请批量生产' : '申请打样' }}</h2><small>{{ selectedRequest?.title || productName }}</small></div><button @click="!productionSubmitting && (productionDialogOpen = false)">×</button></header><main><label><span>创作去向</span><select v-model="productionForm.purpose"><option value="personal">个人收藏 / 送礼</option><option value="museum_sale">售卖（景区、博物馆）</option></select></label><label v-if="productionForm.purpose === 'museum_sale'"><span>合作渠道</span><select v-model="productionForm.museumId" @change="selectMuseum"><option value="">请选择博物馆或景区</option><option v-for="museum in museumOptions" :key="museum.id" :value="museum.id">{{ museum.name }}</option></select></label><label><span>数量</span><input v-model.number="productionForm.quantity" type="number" min="1" /></label><label v-if="productionForm.purpose === 'personal'"><span>收件人</span><input v-model="productionForm.recipientName" placeholder="姓名" /></label><label v-if="productionForm.purpose === 'personal'"><span>手机号</span><input v-model="productionForm.recipientPhone" placeholder="用于寄送联系" /></label><label v-if="productionForm.purpose === 'personal'"><span>收货地址</span><textarea v-model="productionForm.recipientAddress" rows="2" placeholder="收货地址" /></label><label><span>申请说明</span><textarea v-model="productionForm.note" rows="3" placeholder="补充打样要求" /></label></main><footer><button @click="!productionSubmitting && (productionDialogOpen = false)">取消</button><button class="primary" :disabled="productionSubmitting" @click="submitProduction">{{ productionSubmitting ? '提交中…' : productionForm.requestType === 'bulk' ? '提交批量生产申请' : '提交打样申请' }}</button></footer></section></div>
 
     <div v-if="paymentDialogOpen" class="payment-dialog-mask" role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title">
       <section class="payment-dialog" @click.stop>
         <header>
-          <div><span>SAMPLE PAYMENT</span><h2 id="payment-dialog-title">支付打样费</h2><small>{{ paymentRequest?.title || paymentRequest?.sampleProductName || productName }}</small></div>
+          <div><span>SAMPLE PAYMENT</span><h2 id="payment-dialog-title">{{ paymentRequest?.paymentKind === 'guidance' ? '支付协助费用' : '支付打样费' }}</h2><small>{{ paymentRequest?.title || paymentRequest?.sampleProductName || productName }}</small></div>
           <button type="button" :disabled="paymentLoading || paymentClosing" title="关闭支付窗口" @click="closePaymentDialog">×</button>
         </header>
         <main>
           <div v-if="paymentLoading" class="payment-loading"><i></i><strong>正在创建微信支付订单</strong><small>请稍候，正在准备二维码…</small></div>
           <template v-else>
-            <div class="payment-summary"><span>本次打样费用</span><strong>¥{{ paymentOrder?.amountYuan || paymentRequest?.sampleFeeYuan || paymentRequest?.quotedSampleFeeYuan || '-' }}</strong></div>
-            <img v-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" class="payment-qr-large" />
+            <div class="payment-summary"><span>本次费用</span><strong>¥{{ paymentOrder?.amountYuan || paymentRequest?.sampleFeeYuan || paymentRequest?.quotedSampleFeeYuan || '-' }}</strong></div>
+            <div v-if="paymentIntent === 'paid'" class="payment-qr-missing">✓ 已支付</div><img v-else-if="paymentQrUrl" :src="paymentQrUrl" alt="微信支付二维码" class="payment-qr-large" />
             <div v-else class="payment-qr-missing">{{ paymentError || '暂未生成二维码，请重试。' }}</div>
             <p class="payment-hint" :class="{ error: paymentIntent === 'failed' }">{{ paymentHint }}</p>
             <small v-if="paymentOrder?.orderNo" class="payment-order-no">订单号：{{ paymentOrder.orderNo }} · {{ paymentOrder.status === 'paid' ? '已支付' : paymentOrder.status === 'manual_review' ? '待人工核验' : paymentOrder.status === 'payment_exception' ? '结果核对中' : paymentOrder.status === 'expired' ? '已过期' : '待支付' }}</small>
@@ -1105,8 +1169,8 @@ onBeforeUnmount(() => {
         </main>
         <footer>
           <span v-if="paymentLocked">支付完成前请勿离开；如需稍后处理，请取消并关闭这笔未支付订单。</span>
-          <span v-else-if="paymentIntent === 'paid'">支付成功后订单已进入生产中。</span>
-          <button v-if="paymentIntent === 'failed'" type="button" class="primary" :disabled="paymentLoading" @click="paymentRequest && paySample(paymentRequest)">重新发起支付</button>
+          <span v-else-if="paymentIntent === 'paid'">支付成功，申请状态已更新。</span>
+          <button v-if="paymentOrder?.orderNo" type="button" :disabled="paymentLoading || paymentClosing" @click="refreshPayment">刷新支付状态</button><button v-if="paymentIntent === 'failed'" type="button" class="primary" :disabled="paymentLoading" @click="paymentRequest && paySample(paymentRequest)">重新发起支付</button>
           <button type="button" :class="{ primary: !paymentLocked }" :disabled="paymentClosing" @click="closePaymentDialog">{{ paymentClosing ? '正在关闭…' : paymentLocked ? '取消支付并关闭订单' : '返回订单' }}</button>
         </footer>
       </section>
@@ -1260,4 +1324,6 @@ onBeforeUnmount(() => {
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; clip-path: inset(50%); }
 @media (max-width: 1050px) { .workspace-header { grid-template-columns: 1fr auto; }.brand { grid-column: 1 / -1; }.professional-top-panel { grid-template-columns: 1fr 1.2fr; }.professional-history { grid-column: 1 / -1; }.workspace-grid { grid-template-columns: 220px minmax(0, 1fr); } }
 @media (max-width: 760px) { .conversation-workspace { padding: 17px 12px 28px; }.workspace-header { display: flex; flex-wrap: wrap; gap: 12px; }.header-copy { order: 3; width: 100%; }.header-copy h1 { font-size: 25px; }.header-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }.professional-top-panel { grid-template-columns: 1fr; padding: 15px; }.professional-history { grid-column: auto; }.workspace-grid { display: block; height: auto; min-height: 0; }.history-sidebar { height: auto; min-height: auto; margin-bottom: 12px; }.history-sidebar.collapsed { width: auto; }.history-sidebar.collapsed .sidebar-heading h2, .history-sidebar.collapsed .sidebar-heading span, .history-sidebar.collapsed .sidebar-links button:not(.active), .history-sidebar.collapsed .new-session, .history-sidebar.collapsed .session-list, .history-sidebar.collapsed .sidebar-note { display: block; }.history-sidebar.collapsed .sidebar-heading button { transform: rotate(-90deg); }.session-list { max-height: 180px; }.chat-panel { height: clamp(500px, calc(100vh - 200px), 680px); height: clamp(500px, calc(100dvh - 200px), 680px); min-height: 0; }.chat-header { padding: 12px; }.brief-chip { display: none; }.message-stream { padding: 10px 13px 18px; }.message-body { max-width: 84%; }.result-content, .orders-content { padding: 15px; }.composer-row { grid-template-columns: 34px minmax(0, 1fr) 56px; }.composer-foot { font-size: 8px; }.professional-form { grid-template-columns: 1fr; }.professional-form input { grid-column: 1 / -1; } }
+.workspace-nav{max-width:1480px;margin:0 auto 22px;display:flex;gap:8px;flex-wrap:wrap}.workspace-nav button,.history-search{font:inherit;padding:11px 16px;border:1px solid #d8e8df;border-radius:12px;background:#fff;color:#47745b}.workspace-nav button{cursor:pointer}.workspace-nav button.active{background:#477a61;color:white}.workspace-grid:not(.has-history){grid-template-columns:minmax(0,1fr)}.history-search{width:100%;box-sizing:border-box;margin-bottom:10px}.sample-dialog{position:relative;max-height:90vh;overflow:auto;width:min(950px,96vw);background:white;border-radius:24px;padding:25px}.sample-close{display:block;margin-left:auto;padding:8px 18px;cursor:pointer}.production-dialog{max-height:90vh;overflow:auto}.history-sidebar{min-height:0;overflow:auto}
+@media(max-width:760px){.workspace-nav{gap:6px}.workspace-nav button{padding:8px 11px;font-size:13px}.sample-dialog{padding:12px}}
 </style>

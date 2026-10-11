@@ -163,7 +163,7 @@ function removeConversation(session: ConversationSession) {
 }
 
 function conversationTitle(session: ConversationSession) {
-  return String(session.productType || '').trim() || '未命名创作'
+  return String(session.title || session.productType || '').trim() || `新对话 · ${session.id}`
 }
 
 function conversationStage(session: ConversationSession) {

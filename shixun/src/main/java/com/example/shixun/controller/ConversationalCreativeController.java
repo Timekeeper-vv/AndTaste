@@ -106,7 +106,25 @@ public class ConversationalCreativeController {
     public List<Map<String, Object>> mine(
             @RequestAttribute(name = JwtAuthenticationFilter.AUTHENTICATED_CLAIMS_ATTRIBUTE, required = false) JwtService.Claims principal) {
         long userId = requireConsumer(principal);
-        return jdbc.queryForList("SELECT id,session_no sessionNo,mode,product_type productType,material,product_size productSize,status,project_id projectId,version_id versionId,created_at createdAt,updated_at updatedAt FROM creative_conversation_session WHERE user_id=? ORDER BY updated_at DESC,id DESC LIMIT 30", userId);
+        // Read only the first description for each conversation; the history
+        // list must not download every transcript or truncate older sessions.
+        String sql = "SELECT s.id,s.session_no sessionNo,s.mode,s.product_type productType,s.material,s.product_size productSize,s.status,s.project_id projectId,s.version_id versionId,s.created_at createdAt,s.updated_at updatedAt,e.payload_json titlePayload "
+                + "FROM creative_conversation_session s LEFT JOIN creative_conversation_event e ON e.id=("
+                + "SELECT MIN(first_event.id) FROM creative_conversation_event first_event WHERE first_event.session_id=s.id AND first_event.user_id=s.user_id AND ("
+                + "first_event.event_type='text_inspiration_submitted' OR (first_event.event_type='chat_user_message' AND first_event.payload_json NOT LIKE '%\"message\":\"\"%'))) "
+                + "WHERE s.user_id=? ORDER BY s.updated_at DESC,s.id DESC";
+        return jdbc.query(sql, (rs, rowNumber) -> {
+            Map<String, Object> session = new org.springframework.jdbc.core.ColumnMapRowMapper().mapRow(rs, rowNumber);
+            Map<String, Object> description = parseObject(rs.getString("titlePayload"));
+            String title = description == null ? null : firstText(description, "inspirationText", "inspiration", "message");
+            if (blank(title)) title = text(session.get("productType"));
+            if (blank(title)) title = "新对话 · " + session.get("id");
+            title = title.replaceAll("\\s+", " ").trim();
+            if (title.codePointCount(0, title.length()) > 60) title = title.substring(0, title.offsetByCodePoints(0, 60)) + "…";
+            session.remove("titlePayload");
+            session.put("title", title);
+            return session;
+        }, userId);
     }
 
     @GetMapping("/{id}")

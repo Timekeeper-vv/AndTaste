@@ -4,7 +4,7 @@
       <view class="workshop-nav-button back-button" aria-label="返回" @tap="leaveWorkshop">‹</view>
       <text class="workshop-nav-title">创意工坊</text>
       <view class="workshop-nav-actions">
-        <view class="workshop-nav-button history-button" aria-label="历史对话" @tap="openConversationHistory">◷</view>
+        <view class="history-button" aria-label="历史对话" @tap="openConversationHistory"><text>◷</text><text>历史对话</text></view>
         <view class="workshop-menu-button" aria-label="更多操作" @tap="openWorkspaceMenu"><text>•••</text><text>◎</text></view>
       </view>
     </view>
@@ -146,17 +146,19 @@
 
     <view v-if="historyVisible" class="history-mask" @tap="closeConversationHistory">
       <view class="history-sheet" @tap.stop>
-        <view class="history-sheet-head"><view><text>历史对话</text><text>选择一段对话继续创作</text></view><view class="history-close" aria-label="关闭" @tap="closeConversationHistory">×</view></view>
-        <button class="history-new" @tap="startNewFromHistory"><text>＋</text><text>开始新对话</text></button>
+        <view class="history-sheet-head"><view><text>历史对话</text><text>共 {{ conversationHistory.length }} 段，按名称选择继续创作</text></view><view class="history-close" aria-label="关闭" @tap="closeConversationHistory">×</view></view>
+        <button class="history-new" :disabled="conversationSwitchLocked" @tap="startNewFromHistory"><text>＋</text><text>开始新对话</text></button>
+        <input v-model="historySearch" class="history-search" placeholder="搜索对话名称" confirm-type="search" />
         <view v-if="historyLoading" class="history-loading">正在加载历史对话…</view>
-        <scroll-view v-else-if="conversationHistory.length" scroll-y class="history-list">
-          <view v-for="session in conversationHistory" :key="session.id" class="history-item" :class="{ current: Number(session.id) === Number(sessionId) }" @tap="selectConversation(session)">
+        <view v-else-if="historyError" class="history-empty"><text>{{ historyError }}</text><button class="history-retry" @tap="openConversationHistory">重新加载</button></view>
+        <scroll-view v-else-if="filteredConversationHistory.length" scroll-y class="history-list">
+          <view v-for="session in filteredConversationHistory" :key="session.id" class="history-item" :class="{ current: Number(session.id) === Number(sessionId) }" @tap="selectConversation(session)">
             <view class="history-mark">{{ conversationMark(session) }}</view>
             <view class="history-copy"><view><text>{{ conversationTitle(session) }}</text><text>{{ conversationTime(session.updatedAt || session.createdAt) }}</text></view><text>{{ conversationSummary(session) }}</text></view>
             <text v-if="Number(session.id) === Number(sessionId)" class="history-current">当前</text><text v-else class="history-arrow">›</text>
           </view>
         </scroll-view>
-        <view v-else class="history-empty"><text>暂无历史对话</text><text>完成第一次交流后，对话会保存在这里。</text></view>
+        <view v-else class="history-empty"><text>{{ historySearch.trim() ? '未找到匹配的对话' : '暂无历史对话' }}</text><text>{{ historySearch.trim() ? '试试其他名称关键词' : '开始交流后，每段对话会独立保存在这里。' }}</text></view>
       </view>
     </view>
   </view>
@@ -279,7 +281,13 @@ const revisionPromptRequested = ref(false)
 const historyRequested = ref(false)
 const historyVisible = ref(false)
 const historyLoading = ref(false)
+const historyError = ref('')
+const historySearch = ref('')
 const conversationHistory = ref<ConversationSession[]>([])
+const filteredConversationHistory = computed(() => {
+  const keyword = historySearch.value.trim().toLocaleLowerCase()
+  return conversationHistory.value.filter(session => !keyword || conversationTitle(session).toLocaleLowerCase().includes(keyword))
+})
 const workshopSuggestions = ['食品饮品', '文房器物', '生活日用', '潮流玩具']
 const chatQuickReplies = ref<ConversationQuickReply[]>([])
 const chatInputLocked = computed(() => replacementImagePending.value || (phase.value === 'result' && chatQuickReplies.value.length > 0))
@@ -288,6 +296,7 @@ const chatInputPlaceholder = computed(() => chatInputLocked.value
   : '描述你的灵感，或直接回答上面的问题')
 const chatSending = ref(false)
 const quickReplySubmitting = ref(false)
+const conversationSwitchLocked = computed(() => busy.value || saving.value || chatSending.value || quickReplySubmitting.value)
 const chatThinking = ref(false)
 const imageGenerationStage = ref<'adapting_product' | ''>('')
 const thinkingLabel = ref('正在理解你的想法')
@@ -667,10 +676,10 @@ function previousPhase(current: Phase): Phase | null {
 }
 function goWorks() { uni.navigateTo({ url: '/pages/works/index' }) }
 function conversationTitle(session: ConversationSession) {
-  return String(session.productType || '').trim() || (Number(session.id) === Number(sessionId.value) ? '当前新对话' : '未命名创意')
+  return String(session.title || session.productType || '').trim() || `新对话 · ${session.id}`
 }
 function conversationSummary(session: ConversationSession) {
-  const details = [session.material, session.productSize].map(value => String(value || '').trim()).filter(Boolean)
+  const details = [session.productType, session.material, session.productSize].map(value => String(value || '').trim()).filter(Boolean)
   if (details.length) return details.join(' · ')
   if (session.mode === 'image') return '图片灵感创作'
   if (session.mode === 'text') return '文字灵感创作'
@@ -678,7 +687,7 @@ function conversationSummary(session: ConversationSession) {
   return String(session.status || '') === 'completed' ? '创作已完成' : '创作进行中'
 }
 function conversationMark(session: ConversationSession) {
-  return String(session.productType || '创').trim().slice(0, 1)
+  return String(session.productType || '聊').trim().slice(0, 1)
 }
 function conversationTime(value?: string) {
   if (!value) return ''
@@ -686,34 +695,48 @@ function conversationTime(value?: string) {
   if (Number.isNaN(date.getTime())) return ''
   const diff = Math.max(0, Date.now() - date.getTime())
   if (diff < 60 * 1000) return '刚刚'
-  if (diff < 24 * 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / (60 * 60 * 1000)))}小时前`
-  return `${date.getMonth() + 1}月${date.getDate()}日`
+  if (diff < 60 * 60 * 1000) return `${Math.floor(diff / (60 * 1000))}分钟前`
+  if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / (60 * 60 * 1000))}小时前`
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`
 }
 async function openConversationHistory() {
   if (!requireSession()) return
+  if (historyLoading.value) return
+  if (!historyVisible.value) historySearch.value = ''
   historyVisible.value = true
   historyLoading.value = true
+  historyError.value = ''
   try {
     const rows = await getConversations()
     conversationHistory.value = Array.isArray(rows) ? rows.filter(item => item?.id) : []
   } catch (error: any) {
-    uni.showToast({ title: error?.message || '历史对话加载失败', icon: 'none' })
+    historyError.value = error?.message || '历史对话加载失败'
   } finally {
     historyLoading.value = false
   }
 }
 function closeConversationHistory() { historyVisible.value = false }
+function canSwitchConversation() {
+  if (!conversationSwitchLocked.value) return true
+  uni.showToast({ title: '当前创作正在处理中，请完成后再切换对话', icon: 'none' })
+  return false
+}
 function selectConversation(session: ConversationSession) {
   if (!session?.id) return
   if (Number(session.id) === Number(sessionId.value)) { closeConversationHistory(); return }
+  if (!canSwitchConversation()) return
   persistChatDraft()
-  historyVisible.value = false
-  uni.redirectTo({ url: `/pages/conversation-create/index?sessionId=${encodeURIComponent(String(session.id))}` })
+  uni.redirectTo({
+    url: `/pages/conversation-create/index?sessionId=${encodeURIComponent(String(session.id))}`,
+    success: closeConversationHistory,
+    fail: () => uni.showToast({ title: '打开对话失败，请重试', icon: 'none' }),
+  })
 }
 function startNewFromHistory() {
+  if (!canSwitchConversation()) return
   persistChatDraft()
-  historyVisible.value = false
-  uni.redirectTo({ url: '/pages/conversation-create/index?new=1' })
+  uni.redirectTo({ url: '/pages/conversation-create/index?new=1', success: closeConversationHistory,
+    fail: () => uni.showToast({ title: '打开新对话失败，请重试', icon: 'none' }) })
 }
 function leaveWorkshop() {
   if (getCurrentPages().length > 1) {
@@ -1852,7 +1875,7 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
   right: 0;
   left: 0;
   display: grid;
-  grid-template-columns: 150rpx minmax(0, 1fr) 210rpx;
+  grid-template-columns: 100rpx minmax(0, 1fr) 260rpx;
   align-items: end;
   height: calc(118rpx + env(safe-area-inset-top));
   box-sizing: border-box;
@@ -1874,7 +1897,8 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .workshop-nav-actions { display: flex; align-items: center; justify-content: flex-end; gap: 13rpx; }
 .workshop-nav-button { display: grid; place-items: center; width: 58rpx; height: 58rpx; color: #222927; line-height: 1; }
 .back-button { justify-self: start; font-size: 58rpx; font-weight: 300; }
-.history-button { color: #56736a; font-size: 38rpx; }
+.history-button { display: flex; flex: 0 0 auto; align-items: center; gap: 6rpx; height: 58rpx; color: #56736a; font-size: 21rpx; }
+.history-button text:first-child { font-size: 32rpx; }
 .workshop-menu-button {
   display: flex;
   align-items: center;
@@ -1892,24 +1916,26 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .workshop-menu-button text:last-child { font-size: 33rpx; }
 
 .history-mask { position: fixed; z-index: 90; inset: 0; display: flex; align-items: flex-end; background: rgba(13,28,24,.4); }
-.history-sheet { width: 100%; max-height: 78vh; box-sizing: border-box; padding: 30rpx 28rpx calc(34rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #f8fbfa; box-shadow: 0 -12rpx 40rpx rgba(17,55,46,.14); }
-.history-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
+.history-sheet { display: flex; flex-direction: column; width: 100%; height: 78vh; box-sizing: border-box; padding: 30rpx 28rpx calc(34rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #f8fbfa; box-shadow: 0 -12rpx 40rpx rgba(17,55,46,.14); }
+.history-sheet-head { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 20rpx; }
 .history-sheet-head>view:first-child { display: flex; min-width: 0; flex-direction: column; }
 .history-sheet-head>view:first-child text:first-child { color: #17231f; font-size: 34rpx; font-weight: 800; }
 .history-sheet-head>view:first-child text:last-child { margin-top: 8rpx; color: #84928d; font-size: 20rpx; }
-.history-close { display: grid; place-items: center; width: 58rpx; height: 58rpx; flex: 0 0 auto; color: #60706a; font-size: 45rpx; line-height: 1; }
-.history-new { display: flex; align-items: center; justify-content: center; gap: 10rpx; width: 100%; height: 82rpx; margin: 26rpx 0 22rpx; border: 0; border-radius: 16rpx; background: #176f61; color: #fff; font-size: 25rpx; font-weight: 700; line-height: 82rpx; }
+.history-close { display: flex; align-items: center; justify-content: center; width: 58rpx; height: 58rpx; flex: 0 0 auto; color: #60706a; font-size: 45rpx; line-height: 1; }
+.history-new { display: flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 10rpx; width: 100%; height: 82rpx; margin: 26rpx 0 22rpx; border: 0; border-radius: 16rpx; background: #176f61; color: #fff; font-size: 25rpx; font-weight: 700; line-height: 82rpx; }
 .history-new::after { border: 0; }.history-new text:first-child { font-size: 34rpx; font-weight: 400; }
-.history-list { height: min(820rpx, 56vh); }
-.history-item { display: grid; grid-template-columns: 68rpx minmax(0,1fr) 64rpx; align-items: center; gap: 18rpx; min-height: 116rpx; box-sizing: border-box; margin-bottom: 14rpx; padding: 18rpx 20rpx; border: 2rpx solid #e1ebe7; border-radius: 18rpx; background: #fff; }
+.history-search { flex-shrink: 0; box-sizing: border-box; width: 100%; height: 72rpx; margin-bottom: 20rpx; padding: 0 22rpx; border: 1rpx solid #dce9e3; border-radius: 14rpx; background: #fff; color: #24312d; font-size: 25rpx; }
+.history-retry { margin-top: 16rpx; background: #e0f1ec; color: #287666; font-size: 24rpx; }
+.history-list { flex: 1; min-height: 0; height: 0; }
+.history-item { display: flex; align-items: center; gap: 18rpx; min-height: 116rpx; box-sizing: border-box; margin-bottom: 14rpx; padding: 18rpx 20rpx; border: 2rpx solid #e1ebe7; border-radius: 18rpx; background: #fff; }
 .history-item.current { border-color: #78c9b9; background: #eef9f6; }
-.history-mark { display: grid; place-items: center; width: 68rpx; height: 68rpx; border-radius: 18rpx; background: #e0f1ec; color: #287666; font-size: 29rpx; font-weight: 800; }
-.history-copy { display: flex; min-width: 0; flex-direction: column; gap: 10rpx; }
+.history-mark { display: flex; flex: 0 0 68rpx; align-items: center; justify-content: center; width: 68rpx; height: 68rpx; border-radius: 18rpx; background: #e0f1ec; color: #287666; font-size: 29rpx; font-weight: 800; }
+.history-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 10rpx; }
 .history-copy>view { display: flex; align-items: center; justify-content: space-between; gap: 14rpx; min-width: 0; }
-.history-copy>view text:first-child { overflow: hidden; color: #24312d; font-size: 25rpx; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.history-copy>view text:first-child { display: -webkit-box; flex: 1; min-width: 0; overflow: hidden; color: #24312d; font-size: 25rpx; font-weight: 750; line-height: 36rpx; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .history-copy>view text:last-child { flex: 0 0 auto; color: #9aa5a1; font-size: 18rpx; }
 .history-copy>text { overflow: hidden; color: #7d8985; font-size: 20rpx; text-overflow: ellipsis; white-space: nowrap; }
-.history-current { justify-self: end; padding: 7rpx 10rpx; border-radius: 9rpx; background: #d7eee8; color: #337c6d; font-size: 17rpx; }.history-arrow { justify-self: end; color: #8a9893; font-size: 39rpx; }
+.history-current { flex: 0 0 auto; padding: 7rpx 10rpx; border-radius: 9rpx; background: #d7eee8; color: #337c6d; font-size: 17rpx; }.history-arrow { flex: 0 0 auto; color: #8a9893; font-size: 39rpx; }
 .history-loading,.history-empty { display: flex; height: 300rpx; align-items: center; justify-content: center; color: #82908b; font-size: 22rpx; }
 .history-empty { flex-direction: column; gap: 12rpx; }.history-empty text:first-child { color: #52615c; font-size: 27rpx; font-weight: 700; }.history-empty text:last-child { color: #929d99; font-size: 20rpx; }
 

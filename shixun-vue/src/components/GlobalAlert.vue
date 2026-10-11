@@ -13,7 +13,7 @@ defineProps<{
     <div v-if="visible" :class="['toast', `toast-${type}`]">
       <svg v-if="type === 'success'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
       <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      {{ msg }}
+      <span>{{ msg }}</span>
     </div>
   </transition>
 </template>
@@ -25,7 +25,7 @@ defineProps<{
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 10px 16px;
   border-radius: var(--r-md);
@@ -33,9 +33,16 @@ defineProps<{
   font-weight: 500;
   font-family: var(--font);
   z-index: 9999;
-  white-space: nowrap;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  white-space: normal;
+  overflow-wrap: anywhere;
   box-shadow: var(--shadow-lg);
 }
+
+.toast svg { flex: 0 0 16px; margin-top: 2px; }
+.toast span { min-width: 0; line-height: 1.5; }
 
 .toast-success {
   background: #fff;

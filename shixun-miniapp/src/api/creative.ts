@@ -5,6 +5,7 @@ export interface ConversationSession {
   projectId?: number
   versionId?: number
   sessionNo?: string
+  title?: string
   mode?: 'template' | 'text' | 'image' | string
   productType?: string
   material?: string

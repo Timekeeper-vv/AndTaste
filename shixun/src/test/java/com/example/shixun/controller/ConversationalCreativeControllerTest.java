@@ -33,7 +33,7 @@ class ConversationalCreativeControllerTest {
     @BeforeEach
     void setUp() throws Exception {
         DriverManagerDataSource dataSource = new DriverManagerDataSource(
-                "jdbc:h2:mem:conversation_" + System.nanoTime() + ";MODE=MySQL;NON_KEYWORDS=USER;DB_CLOSE_DELAY=-1",
+                "jdbc:h2:mem:conversation_" + System.nanoTime() + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;NON_KEYWORDS=USER;DB_CLOSE_DELAY=-1",
                 "sa", "");
         jdbc = new JdbcTemplate(dataSource);
         createSchema();
@@ -45,6 +45,56 @@ class ConversationalCreativeControllerTest {
                 .thenReturn("{\"reply\":\"我已记下\",\"productKey\":\"\",\"productName\":\"\",\"categoryKey\":\"\",\"material\":\"\",\"inspiration\":\"\",\"mode\":\"\",\"ready\":false}");
         controller = new ConversationalCreativeController(jdbc, new ObjectMapper(), siliconFlow);
         claims = new JwtService.Claims(1L, "consumer", "user", Instant.now().getEpochSecond() + 900);
+    }
+
+    @Test
+    void historyIncludesAllOwnedConversationsNewestFirst() {
+        for (long id = 2; id <= 36; id++) {
+            jdbc.update("INSERT INTO creative_conversation_session(id,session_no,user_id,status,updated_at) VALUES (?,?,1,'draft',TIMESTAMP '2026-10-08 12:00:00')", id, "CCS-" + id);
+        }
+        jdbc.update("UPDATE creative_conversation_session SET updated_at=TIMESTAMP '2026-10-07 12:00:00' WHERE id=1");
+        jdbc.update("INSERT INTO creative_conversation_session(id,session_no,user_id,status) VALUES (100,'CCS-other',2,'draft')");
+
+        List<Map<String, Object>> history = controller.mine(claims);
+
+        assertThat(history).hasSize(36);
+        assertThat(history.get(0).get("id")).isEqualTo(36L);
+        assertThat(history.get(35).get("id")).isEqualTo(1L);
+        assertThat(history).noneMatch(session -> Long.valueOf(100).equals(session.get("id")));
+        assertThat(history.get(0).get("title")).isEqualTo("新对话 · 36");
+        assertThat(history.get(0)).doesNotContainKeys("titlePayload", "events");
+    }
+
+    @Test
+    void historyNamesAndRestoresSeparateConversationsUsingTheirFirstDescription() {
+        Map<String, Object> other = controller.create(Map.of(), claims);
+        long otherId = ((Number) other.get("id")).longValue();
+        controller.chat(1L, Map.of("action", Map.of("type", "text")), claims);
+        controller.chat(1L, Map.of("message", "兵马俑冰箱贴，秦军和城墙主题"), claims);
+        controller.chat(1L, Map.of("message", "图案再加一朵云"), claims);
+        controller.chat(otherId, Map.of("message", "猫猫头开瓶器"), claims);
+
+        List<Map<String, Object>> history = controller.mine(claims);
+
+        assertThat(history).hasSize(2);
+        assertThat(history.stream().filter(session -> Long.valueOf(1).equals(session.get("id")))).singleElement()
+                .satisfies(session -> assertThat(session.get("title")).isEqualTo("兵马俑冰箱贴，秦军和城墙主题"));
+        assertThat(history.stream().filter(session -> Long.valueOf(otherId).equals(session.get("id")))).singleElement()
+                .satisfies(session -> assertThat(session.get("title")).isEqualTo("猫猫头开瓶器"));
+        assertThat(controller.detail(1L, claims).get("events").toString()).contains("兵马俑").doesNotContain("猫猫头");
+        assertThat(controller.detail(otherId, claims).get("events").toString()).contains("猫猫头").doesNotContain("兵马俑");
+        jdbc.update("INSERT INTO user(id,username,role,status) VALUES (2,'other','user','active')");
+        assertThatThrownBy(() -> controller.detail(otherId, new JwtService.Claims(2L, "other", "user", Instant.now().getEpochSecond() + 900)))
+                .isInstanceOfSatisfying(ResponseStatusException.class, error -> assertThat(error.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void legacyHistoryUsesInspirationAndFallsBackForInvalidDescriptions() {
+        jdbc.update("INSERT INTO creative_conversation_event(session_id,user_id,step,event_type,payload_json) VALUES (1,1,'inspiration','text_inspiration_submitted',?)", "{\"inspirationText\":\"青铜纹样\\n冰箱贴\"}");
+        assertThat(controller.mine(claims).get(0).get("title")).isEqualTo("青铜纹样 冰箱贴");
+        jdbc.update("UPDATE creative_conversation_event SET payload_json='invalid json'");
+        jdbc.update("UPDATE creative_conversation_session SET product_type='合金冰箱贴' WHERE id=1");
+        assertThat(controller.mine(claims).get(0).get("title")).isEqualTo("合金冰箱贴");
     }
 
     @Test
