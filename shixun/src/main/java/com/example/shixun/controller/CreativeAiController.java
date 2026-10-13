@@ -6457,7 +6457,7 @@ public class CreativeAiController {
             // Every successful 2D product image generation has the same
             // consumer price, regardless of whether it is text-to-image or
             // image-to-image (including conversational creation).
-            case "image2d" -> BigDecimal.valueOf(20);
+            case "image2d" -> BigDecimal.valueOf(120);
             case "image_to_3d" -> BigDecimal.valueOf(70);
             case "text_to_3d" -> BigDecimal.valueOf(60);
             case "model_convert" -> BigDecimal.valueOf(1);

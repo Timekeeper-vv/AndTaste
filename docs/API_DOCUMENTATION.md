@@ -194,6 +194,8 @@ Base：`/api/creative/ai`
 
 ### 9.1 风格与 C 端额度
 
+当前扣费：平面图生成 120 点/次、文生 3D 60 点/次、图生 3D 70 点/次、模型转换 1 点/次。
+
 | 方法 | 路径 | 功能 | 请求/参数 | 返回要点 | 权限 |
 |---|---|---|---|---|---|
 | `GET` | `/styles` | 创作风格档案 | - | `id,name,basePrompt,negativePrompt,palette,culturalGuardrails` | 登录 |
@@ -320,7 +322,7 @@ Base：`/api/payments`
 
 | 方法 | 路径 | 功能 | 请求/参数 | 返回要点 | 权限 |
 |---|---|---|---|---|---|
-| `GET` | `/packages` | 充值套餐与可用渠道 | - | `items,channels` | 登录 |
+| `GET` | `/packages` | 充值套餐与可用渠道 | - | `items,channels`；套餐含 `baseCredits,bonusCredits,credits,estimatedFlatImages` | 登录 |
 | `POST` | `/wechat/bind` | 小程序 code 绑定 OpenID | `{code}` | `{bound:true,openIdBound:true}` | `user`，需微信 JSAPI 配置 |
 | `POST` | `/orders` | 创建充值订单 | `{packageCode,channel}` | 订单视图；JSAPI 含 `paymentParams` | `user` |
 | `GET` | `/orders/{orderNo}` | 查询我的充值订单 | Path：`orderNo` | 订单视图 | `user` |
@@ -338,7 +340,7 @@ Base：`/api/payments`
 | `GET` | `/admin/reconciliation/daily` | 日账单对账历史 | Query：`billDate?` | 历史记录 | `admin` |
 | `GET` | `/admin/exceptions` | 支付异常列表 | - | 异常订单/退款 | `admin` |
 
-套餐：`credit_100(¥9.90/100点)`、`credit_500(¥39.90/500点)`、`credit_1000(¥69.90/1000点)`。  
+套餐：`credit_1000(¥9.90/1000点)`、`credit_4000(¥39/4000点)`、`credit_10200(¥99/10200点)`、`credit_20700(¥199/20700点)`、`credit_52400(¥499/52400点)`；套餐响应另含基础积分、赠送积分及约可生成平面图数。
 渠道：`manual_wechat_qr`、`wechat`、`wechat_jsapi`。  
 订单常见状态：`pending, manual_review, paid, expired, closed, failed, payment_exception, refund_requested, refund_processing, refund_unknown, refund_exception, refunded, refund_failed`。
 

@@ -8,17 +8,21 @@
       <button class="refresh" size="mini" :loading="loading" @tap="loadData(true)">刷新</button>
     </view>
 
-    <view class="card"><text class="balance">当前积分 <text>{{ balance }}</text></text><text class="rules">图片生成 20 积分 · 文生3D 60 积分 · 图生3D 70 积分</text></view>
+    <view class="card"><text class="balance">当前积分 <text>{{ balance }}</text></text><text class="rules">平面图生成 120 积分 · 文生3D 60 积分 · 图生3D 70 积分</text></view>
 
     <view class="section">
       <text class="label">选择充值套餐</text>
       <view v-for="pkg in packages" :key="pkg.code" class="pkg" :class="{ selected: selected?.code === pkg.code }" @tap="selectPackage(pkg)">
-        <view><text class="pkg-name">{{ pkg.name }}</text><text class="pkg-credit">{{ pkg.credits }} 积分</text></view>
+        <view class="pkg-details"><text class="pkg-name">{{ pkg.name }}</text><text class="pkg-breakdown">{{ pkg.baseCredits }} 基础积分 + {{ pkg.bonusCredits }} 赠送积分</text><text class="pkg-credit">到账 {{ pkg.credits }} 积分 · 约可生成 {{ pkg.estimatedFlatImages }} 张平面图</text></view>
         <text class="price">¥{{ packageAmount(pkg) }}</text>
+      </view>
+      <view v-if="!catalogReady" class="catalog-warning">
+        <text class="catalog-warning-title">充值套餐正在同步</text>
+        <text class="catalog-warning-copy">当前服务器仍返回旧套餐。为避免显示金额与实际扣款不一致，暂不能支付；请先更新服务器后刷新。</text>
       </view>
     </view>
 
-    <button class="pay" :disabled="creatingOrder || requestingPayment || loading" :loading="creatingOrder || requestingPayment" @tap="startPayment">{{ paymentButtonText }}</button>
+    <button class="pay" :disabled="creatingOrder || requestingPayment || loading || !catalogReady" :loading="creatingOrder || requestingPayment" @tap="startPayment">{{ paymentButtonText }}</button>
     <text v-if="!paymentEnabled" class="payment-unavailable">微信虚拟支付正在配置中，请稍后再试。</text>
     <text v-else class="payment-note">支付由微信小程序虚拟支付完成，积分到账以微信官方代币余额核验结果为准。</text>
     <view v-if="paymentError" class="payment-error">
@@ -83,7 +87,15 @@ type PaymentIntent = 'idle' | 'launching' | 'awaiting_confirmation' | 'cancelled
 const MAX_PAYMENT_POLL_ATTEMPTS = 45
 const PAYMENT_POLL_INTERVAL = 2000
 
-const packages = ref<any[]>([])
+const PACKAGE_CATALOG = [
+  { code: 'credit_1000', name: '体验档', amountFen: 990, credits: 1000, baseCredits: 990, bonusCredits: 10, estimatedFlatImages: 8 },
+  { code: 'credit_4000', name: '首充档', amountFen: 3900, credits: 4000, baseCredits: 3900, bonusCredits: 100, estimatedFlatImages: 33 },
+  { code: 'credit_10200', name: '标准档', amountFen: 9900, credits: 10200, baseCredits: 9900, bonusCredits: 300, estimatedFlatImages: 85 },
+  { code: 'credit_20700', name: '高频档', amountFen: 19900, credits: 20700, baseCredits: 19900, bonusCredits: 800, estimatedFlatImages: 172 },
+  { code: 'credit_52400', name: '专业档', amountFen: 49900, credits: 52400, baseCredits: 49900, bonusCredits: 2500, estimatedFlatImages: 436 },
+]
+
+const packages = ref<any[]>(PACKAGE_CATALOG)
 const selected = ref<any>(null)
 const balance = ref(0)
 const orders = ref<any[]>([])
@@ -94,6 +106,7 @@ const paymentPolling = ref(false)
 const paymentOrder = ref<PaymentOrder | null>(null)
 const paymentSheetVisible = ref(false)
 const virtualPaymentEnabled = ref(false)
+const catalogReady = ref(false)
 const paymentIntent = ref<PaymentIntent>('idle')
 const paymentHint = ref('')
 const paymentError = ref('')
@@ -103,10 +116,11 @@ let paymentTimer: ReturnType<typeof setInterval> | null = null
 let paymentPollInFlight = false
 let paidNoticeShown = false
 
-const paymentEnabled = computed(() => virtualPaymentEnabled.value)
+const paymentEnabled = computed(() => catalogReady.value && virtualPaymentEnabled.value)
 const paymentButtonText = computed(() => {
   if (loading.value) return '正在加载充值套餐'
   if (!selected.value) return packages.value.length ? '选择充值套餐' : '暂无法加载套餐'
+  if (!catalogReady.value) return '等待服务器更新套餐'
   return paymentEnabled.value ? `微信虚拟支付 ¥${packageAmount(selected.value)}` : '检查微信虚拟支付'
 })
 const canRestartPendingPayment = computed(() => paymentOrder.value?.status === 'pending' && ['idle', 'cancelled', 'failed'].includes(paymentIntent.value))
@@ -117,6 +131,16 @@ const paymentStateTitle = computed(() => ({ idle: '等待支付结果', launchin
 const rows = (payload: any) => Array.isArray(payload) ? payload : (Array.isArray(payload?.items) ? payload.items : [])
 const packageAmount = (pkg: any) => moneyText(pkg?.amountYuan, pkg?.amountFen)
 const orderAmount = (order: any) => moneyText(order?.amountYuan, order?.amountFen)
+function matchesCurrentCatalog(serverPackages: any[]) {
+  return serverPackages.length === PACKAGE_CATALOG.length && PACKAGE_CATALOG.every((expected, index) => {
+    const actual = serverPackages[index]
+    return actual?.code === expected.code
+      && Number(actual?.amountFen) === expected.amountFen
+      && Number(actual?.credits) === expected.credits
+      && Number(actual?.baseCredits) === expected.baseCredits
+      && Number(actual?.bonusCredits) === expected.bonusCredits
+  })
+}
 const paymentStatusText = (status?: string) => ({ pending: '待确认', paid: '已到账', failed: '支付失败', closed: '已关闭', expired: '已过期', payment_exception: '核验异常', refunded: '已退款' }[status || ''] || statusText(status))
 
 function formatTime(value: any) {
@@ -179,16 +203,18 @@ async function loadData(notify = false) {
   try {
     if (packageResult.status === 'fulfilled') {
       const packageData = packageResult.value
-      const availablePackages = rows(packageData)
-      packages.value = availablePackages
-      if (!selected.value || !availablePackages.some((item: any) => item.code === selected.value.code)) {
-        selected.value = availablePackages[0] || null
+      const serverPackages = rows(packageData)
+      catalogReady.value = matchesCurrentCatalog(serverPackages)
+      packages.value = PACKAGE_CATALOG
+      if (!selected.value || !PACKAGE_CATALOG.some((item: any) => item.code === selected.value.code)) {
+        selected.value = PACKAGE_CATALOG[0] || null
       }
       virtualPaymentEnabled.value = (packageData?.channels || []).some((channel: any) => channel.code === 'wechat_virtual_payment' && channel.enabled)
       packageLoaded = true
     } else {
-      packages.value = []
-      selected.value = null
+      packages.value = PACKAGE_CATALOG
+      catalogReady.value = false
+      selected.value = selected.value || PACKAGE_CATALOG[0] || null
       virtualPaymentEnabled.value = false
     }
     if (creditResult.status === 'fulfilled') balance.value = Number(creditResult.value?.balance) || 0
@@ -380,7 +406,9 @@ async function startPayment() {
     }
   }
   if (!paymentEnabled.value) {
-    const message = '微信虚拟支付尚未完成服务器配置，暂时不能发起付款。请联系平台管理员检查支付开关、OfferId、现网 AppKey 和会话加密密钥。'
+    const message = !catalogReady.value
+      ? '服务器上的充值套餐还是旧版本。为避免金额不一致，暂不能支付；请先更新服务器后刷新。'
+      : '微信虚拟支付尚未完成服务器配置，暂时不能发起付款。请联系平台管理员检查支付开关、OfferId、现网 AppKey 和会话加密密钥。'
     openPaymentSheet('failed', message)
     paymentError.value = message
     showPaymentFailure(message)
@@ -489,5 +517,6 @@ onUnload(stopPaymentPolling)
 </script>
 
 <style scoped lang="scss">
-.page{min-height:100vh;padding:34rpx;box-sizing:border-box;background:linear-gradient(180deg,#faf8f3,#f0e9df)}.head{display:flex;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 30rpx}.title{display:block;font-size:48rpx;font-weight:800;color:#302b26}.sub{display:block;font-size:23rpx;color:#82786d;margin-top:12rpx;line-height:1.6}.refresh{flex-shrink:0;margin:4rpx 0 0;background:#edf3ed;color:#607b6e;font-size:21rpx}.card{border:1rpx solid rgba(114,96,78,.12);background:linear-gradient(145deg,#eaf2eb,#d8e5dc);border-radius:25rpx;color:#385043;padding:34rpx;box-shadow:0 10rpx 23rpx rgba(63,82,69,.08)}.balance{font-size:24rpx;display:block}.balance text{font-size:62rpx;font-weight:800;margin-left:16rpx}.rules{font-size:21rpx;color:#668075;margin-top:20rpx;display:block}.section{margin-top:36rpx}.label{font-size:30rpx;font-weight:700}.pkg{display:flex;justify-content:space-between;align-items:center;margin-top:18rpx;background:#fff;border:1rpx solid rgba(129,112,93,.12);border-radius:18rpx;padding:26rpx;box-shadow:0 8rpx 18rpx rgba(67,53,37,.045)}.pkg.selected{border-color:#9caf9f;background:#eff5ef}.pkg-name,.pkg-credit{display:block}.pkg-name{font-size:29rpx;font-weight:700}.pkg-credit{font-size:22rpx;color:#8d8277;margin-top:8rpx}.price{font-size:38rpx;font-weight:800;color:#9f624b}.pay,.query{height:94rpx;line-height:94rpx;border-radius:17rpx;font-size:29rpx;margin-top:40rpx}.pay{background:linear-gradient(135deg,#3e3933,#617e71);box-shadow:0 12rpx 22rpx rgba(52,58,52,.16);color:#fff}.pay[disabled]{opacity:.4}.payment-unavailable,.payment-note{display:block;margin:18rpx 12rpx 0;color:#ad442c;font-size:22rpx;line-height:1.6;text-align:center}.payment-note{color:#8d7469}.payment-error{margin:18rpx 0 0;padding:22rpx 24rpx;border:1rpx solid #f0b7a7;border-radius:14rpx;background:#fff1ed;color:#963d28}.payment-error-title,.payment-error-detail,.payment-error-code{display:block}.payment-error-title{font-size:25rpx;font-weight:700}.payment-error-detail{margin-top:8rpx;font-size:22rpx;line-height:1.55}.payment-error-code{margin-top:8rpx;font-size:20rpx;color:#af624c}.history{padding-bottom:42rpx}.history-head,.row,.order-bottom{display:flex;align-items:center;justify-content:space-between}.history-head text:last-child,.order-meta{font-size:21rpx;color:#9b8175}.no-order{padding:50rpx;text-align:center;color:#a48c80;font-size:24rpx}.order-item{margin-top:16rpx;background:#fff;border:1rpx solid rgba(129,112,93,.12);border-radius:18rpx;padding:24rpx;box-shadow:0 8rpx 18rpx rgba(67,53,37,.045)}.row{gap:16rpx}.order-name{font-size:27rpx;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.paid{background:#e4f5e9;color:#248653}.status.payment_exception{background:#ffe5e1;color:#ba3d2e}.order-meta{display:block;margin-top:10rpx}.order-bottom{margin-top:15rpx;color:#765b4e;font-size:22rpx}.order-price{font-size:29rpx;font-weight:800;color:#9f624b}.order-action{margin:18rpx 0 0;background:#eff5ef;color:#45695b;border:1rpx solid #9caf9f;font-size:21rpx}.modal{position:fixed;inset:0;background:rgba(0,0,0,.48);display:flex;align-items:flex-end;z-index:10}.sheet{width:100%;background:#fffdfa;border-radius:34rpx 34rpx 0 0;padding:44rpx;box-sizing:border-box;text-align:center}.sheet-title{font-size:34rpx;font-weight:700}.payment-state{margin:30rpx 0 24rpx;padding:34rpx 28rpx;border-radius:22rpx;background:#fff8f2}.payment-state.awaiting_confirmation,.payment-state.launching{background:#fff7de}.payment-state.paid{background:#e9f8ec}.payment-state.cancelled,.payment-state.failed{background:#fff0ec}.state-icon{display:block;font-size:54rpx;font-weight:800;color:#9e4325;line-height:1}.paid .state-icon{color:#248653}.state-title{display:block;margin-top:16rpx;font-size:29rpx;font-weight:700}.state-hint,.order{display:block;margin-top:12rpx;font-size:22rpx;line-height:1.65;color:#8f7062}.order{font-size:21rpx;margin-top:4rpx}.query{margin-top:25rpx;background:#fff;border:2rpx solid #698477;color:#5c796c}.close{display:block;padding:25rpx;color:#8e7469;font-size:26rpx}
+.page{min-height:100vh;padding:34rpx;box-sizing:border-box;background:linear-gradient(180deg,#faf8f3,#f0e9df)}.head{display:flex;justify-content:space-between;gap:20rpx;padding:20rpx 4rpx 30rpx}.title{display:block;font-size:48rpx;font-weight:800;color:#302b26}.sub{display:block;font-size:23rpx;color:#82786d;margin-top:12rpx;line-height:1.6}.refresh{flex-shrink:0;margin:4rpx 0 0;background:#edf3ed;color:#607b6e;font-size:21rpx}.card{border:1rpx solid rgba(114,96,78,.12);background:linear-gradient(145deg,#eaf2eb,#d8e5dc);border-radius:25rpx;color:#385043;padding:34rpx;box-shadow:0 10rpx 23rpx rgba(63,82,69,.08)}.balance{font-size:24rpx;display:block}.balance text{font-size:62rpx;font-weight:800;margin-left:16rpx}.rules{font-size:21rpx;color:#668075;margin-top:20rpx;display:block}.section{margin-top:36rpx}.label{font-size:30rpx;font-weight:700}.pkg{display:flex;justify-content:space-between;align-items:center;gap:16rpx;margin-top:18rpx;background:#fff;border:1rpx solid rgba(129,112,93,.12);border-radius:18rpx;padding:26rpx;box-shadow:0 8rpx 18rpx rgba(67,53,37,.045)}.pkg.selected{border-color:#9caf9f;background:#eff5ef}.pkg-details{min-width:0;flex:1}.pkg-name,.pkg-breakdown,.pkg-credit{display:block}.pkg-name{font-size:29rpx;font-weight:700}.pkg-breakdown{font-size:20rpx;color:#8d8277;margin-top:7rpx}.pkg-credit{font-size:21rpx;color:#668075;margin-top:7rpx}.price{flex:none;font-size:34rpx;font-weight:800;color:#9f624b}.pay,.query{height:94rpx;line-height:94rpx;border-radius:17rpx;font-size:29rpx;margin-top:40rpx}.pay{background:linear-gradient(135deg,#3e3933,#617e71);box-shadow:0 12rpx 22rpx rgba(52,58,52,.16);color:#fff}.pay[disabled]{opacity:.4}.payment-unavailable,.payment-note{display:block;margin:18rpx 12rpx 0;color:#ad442c;font-size:22rpx;line-height:1.6;text-align:center}.payment-note{color:#8d7469}.payment-error{margin:18rpx 0 0;padding:22rpx 24rpx;border:1rpx solid #f0b7a7;border-radius:14rpx;background:#fff1ed;color:#963d28}.payment-error-title,.payment-error-detail,.payment-error-code{display:block}.payment-error-title{font-size:25rpx;font-weight:700}.payment-error-detail{margin-top:8rpx;font-size:22rpx;line-height:1.55}.payment-error-code{margin-top:8rpx;font-size:20rpx;color:#af624c}.history{padding-bottom:42rpx}.history-head,.row,.order-bottom{display:flex;align-items:center;justify-content:space-between}.history-head text:last-child,.order-meta{font-size:21rpx;color:#9b8175}.no-order{padding:50rpx;text-align:center;color:#a48c80;font-size:24rpx}.order-item{margin-top:16rpx;background:#fff;border:1rpx solid rgba(129,112,93,.12);border-radius:18rpx;padding:24rpx;box-shadow:0 8rpx 18rpx rgba(67,53,37,.045)}.row{gap:16rpx}.order-name{font-size:27rpx;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{font-size:20rpx;border-radius:20rpx;padding:6rpx 12rpx;background:#f9e6d5;color:#a2492b;white-space:nowrap}.status.paid{background:#e4f5e9;color:#248653}.status.payment_exception{background:#ffe5e1;color:#ba3d2e}.order-meta{display:block;margin-top:10rpx}.order-bottom{margin-top:15rpx;color:#765b4e;font-size:22rpx}.order-price{font-size:29rpx;font-weight:800;color:#9f624b}.order-action{margin:18rpx 0 0;background:#eff5ef;color:#45695b;border:1rpx solid #9caf9f;font-size:21rpx}.modal{position:fixed;inset:0;background:rgba(0,0,0,.48);display:flex;align-items:flex-end;z-index:10}.sheet{width:100%;background:#fffdfa;border-radius:34rpx 34rpx 0 0;padding:44rpx;box-sizing:border-box;text-align:center}.sheet-title{font-size:34rpx;font-weight:700}.payment-state{margin:30rpx 0 24rpx;padding:34rpx 28rpx;border-radius:22rpx;background:#fff8f2}.payment-state.awaiting_confirmation,.payment-state.launching{background:#fff7de}.payment-state.paid{background:#e9f8ec}.payment-state.cancelled,.payment-state.failed{background:#fff0ec}.state-icon{display:block;font-size:54rpx;font-weight:800;color:#9e4325;line-height:1}.paid .state-icon{color:#248653}.state-title{display:block;margin-top:16rpx;font-size:29rpx;font-weight:700}.state-hint,.order{display:block;margin-top:12rpx;font-size:22rpx;line-height:1.65;color:#8f7062}.order{font-size:21rpx;margin-top:4rpx}.query{margin-top:25rpx;background:#fff;border:2rpx solid #698477;color:#5c796c}.close{display:block;padding:25rpx;color:#8e7469;font-size:26rpx}
+.catalog-warning{margin-top:22rpx;padding:20rpx 22rpx;border:1rpx solid #edc9a9;border-radius:14rpx;background:#fff7ef}.catalog-warning-title,.catalog-warning-copy{display:block}.catalog-warning-title{font-size:23rpx;font-weight:700;color:#9b5436}.catalog-warning-copy{margin-top:8rpx;font-size:20rpx;line-height:1.55;color:#805f50}
 </style>

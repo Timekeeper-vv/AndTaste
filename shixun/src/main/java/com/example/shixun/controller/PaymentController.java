@@ -116,9 +116,11 @@ public class PaymentController {
     private volatile VirtualAccessToken virtualAccessToken;
 
     private static final List<CreditPackage> PACKAGES = List.of(
-            new CreditPackage("credit_100", "体验包", "适合少量图片生成和一次3D尝试", 1000, new BigDecimal("100")),
-            new CreditPackage("credit_500", "创作包", "适合连续做系列文创方案", 5000, new BigDecimal("500")),
-            new CreditPackage("credit_1000", "生产预备包", "适合博物馆售卖方向的批量创作", 10000, new BigDecimal("1000"))
+            new CreditPackage("credit_1000", "体验档", "约可生成 8 张平面图", 990, new BigDecimal("1000"), new BigDecimal("990"), new BigDecimal("10"), 8),
+            new CreditPackage("credit_4000", "首充档", "约可生成 33 张平面图", 3900, new BigDecimal("4000"), new BigDecimal("3900"), new BigDecimal("100"), 33),
+            new CreditPackage("credit_10200", "标准档", "约可生成 85 张平面图", 9900, new BigDecimal("10200"), new BigDecimal("9900"), new BigDecimal("300"), 85),
+            new CreditPackage("credit_20700", "高频档", "约可生成 172 张平面图", 19900, new BigDecimal("20700"), new BigDecimal("19900"), new BigDecimal("800"), 172),
+            new CreditPackage("credit_52400", "专业档", "约可生成 436 张平面图", 49900, new BigDecimal("52400"), new BigDecimal("49900"), new BigDecimal("2500"), 436)
     );
 
     public PaymentController(JdbcTemplate jdbc, ObjectMapper mapper, PlatformTransactionManager transactionManager,
@@ -134,7 +136,9 @@ public class PaymentController {
         List<Map<String, Object>> items = new ArrayList<>();
         for (CreditPackage pkg : PACKAGES) {
             items.add(Map.of("code", pkg.code, "name", pkg.name, "description", pkg.description,
-                    "amountFen", pkg.amountFen, "amountYuan", fenToYuan(pkg.amountFen), "credits", pkg.credits));
+                    "amountFen", pkg.amountFen, "amountYuan", fenToYuan(pkg.amountFen), "credits", pkg.credits,
+                    "baseCredits", pkg.baseCredits, "bonusCredits", pkg.bonusCredits,
+                    "estimatedFlatImages", pkg.estimatedFlatImages));
         }
         // Credits are virtual goods. Never expose ordinary JSAPI/QR payment as
         // a fallback here, otherwise the client would have a review-bypassing
@@ -2925,7 +2929,12 @@ public class PaymentController {
         return true;
     }
 
-    private record CreditPackage(String code, String name, String description, long amountFen, BigDecimal credits) { }
+    private record CreditPackage(String code, String name, String description, long amountFen, BigDecimal credits,
+                                 BigDecimal baseCredits, BigDecimal bonusCredits, Integer estimatedFlatImages) {
+        private CreditPackage(String code, String name, String description, long amountFen, BigDecimal credits) {
+            this(code, name, description, amountFen, credits, credits, BigDecimal.ZERO, null);
+        }
+    }
     private record ProductLink(String productNo, Long productId) { }
     private record SampleOrderCreation(String orderNo, boolean reused, BigDecimal feeYuan, String productName, String channel) { }
     private record GuidanceOrderCreation(String orderNo, boolean reused, BigDecimal feeYuan, String productName, String channel) { }

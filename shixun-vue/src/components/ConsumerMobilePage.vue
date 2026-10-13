@@ -2363,9 +2363,9 @@ function closeModelPreview() {
             </div>
             <div v-else class="packages">
               <button v-for="pkg in rechargePackages" :key="pkg.code" type="button" :disabled="paymentLoading || !paymentChannelEnabled" @click="createPaymentOrder(pkg)">
-                <strong>{{ pkg.credits }} 点</strong>
+                <strong>到账 {{ pkg.credits }} 点</strong>
                 <span>{{ pkg.name }} · ¥{{ pkg.amountYuan }}</span>
-                <em>{{ pkg.description }}</em>
+                <em>{{ pkg.baseCredits }} 基础 + {{ pkg.bonusCredits }} 赠送 · 约可生成 {{ pkg.estimatedFlatImages }} 张平面图</em>
               </button>
               <p v-if="!rechargePackages.length" class="recharge-note">充值套餐加载中，请稍后重试。</p><p v-else-if="!paymentChannelEnabled" class="recharge-note">积分充值仅支持微信小程序虚拟支付，请在「之间智造」微信小程序内完成。</p>
             </div>

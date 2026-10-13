@@ -19,19 +19,15 @@
 
         <view class="secondary-entry-grid">
           <view class="creation-entry secondary-entry product-entry" @tap="openProductMaking">
-            <image class="secondary-art" src="/static/ui-design/product-making.jpg" mode="aspectFill" />
-            <view class="entry-copy"><text>产品智造</text><text>快速打样 · 小批量起订</text><text>成熟工艺 · 产品落地</text></view>
-            <text class="secondary-arrow">›</text>
+            <image class="secondary-entry-art" src="/static/ui-design/product-making-entry.png" mode="widthFix" />
           </view>
           <view class="creation-entry secondary-entry works-entry" @tap="openCommercial">
-            <image class="secondary-art" src="/static/ui-design/channel-cooperation.jpg" mode="aspectFill" />
-            <view class="entry-copy"><text>渠道合作</text><text>博物馆 · 景区 · 商业空间</text><text>征集合​​作 · 产品上架</text></view>
-            <text class="secondary-arrow">›</text>
+            <image class="secondary-entry-art" src="/static/ui-design/channel-cooperation-entry.png" mode="widthFix" />
           </view>
         </view>
 
         <view class="section-head campaign-heading"><view><text>馆方征集 · 投稿通道</text></view><text>全部征集 ›</text></view>
-        <view class="home-campaign" v-for="(campaign,index) in campaignsPreview" :key="campaign.key" @tap="selectHomeCampaign(campaign)"><image class="home-campaign-art" :src="campaignImage(index)" mode="aspectFill" /><view class="home-campaign-copy"><text>{{ campaign.targetName }}｜{{ campaign.title }}</text><text>{{ campaign.collectionStyle }} · 文创转化</text><text>作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="home-campaign-points">+{{ campaign.rewardAmount }}</text></view>
+        <view class="home-campaign" v-for="(campaign,index) in campaignsPreview" :key="campaign.key" @tap="selectHomeCampaign(campaign)"><view class="home-campaign-art-frame"><image class="home-campaign-art" :src="campaignImage(index)" mode="scaleToFill" /></view><view class="home-campaign-copy"><text>{{ campaign.targetName }}｜{{ campaign.title }}</text><text>{{ campaign.collectionStyle }} · 文创转化</text><text>作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="home-campaign-points">+{{ campaign.rewardAmount }}</text></view>
         <view class="inspiration-head"><text>灵感库</text><text @tap="openWorks">寻找灵感 ›</text></view><scroll-view scroll-x class="inspiration-scroll"><view v-for="(asset,index) in inspirationAssets" :key="asset.id || index" class="inspiration-card" @tap="openWorks"><image v-if="inspirationSrc(asset)" :src="inspirationSrc(asset)" mode="aspectFill"/><view v-else class="inspiration-placeholder">灵感</view><text>{{ asset.title || ['藏戏面具摆件','猫猫公交吊坠','双尾虎擦手巾'][index % 3] }}</text></view></scroll-view>
         <view v-if="isProfessional" class="management-workspace">
           <view class="section-head management-heading"><view><text>管理工作台</text><text>集中处理</text></view></view>
@@ -317,4 +313,94 @@ onShow(() => {
 
 <style scoped lang="scss">
 .brand-seal{display:block;border-radius:0;background:transparent}
+</style>
+
+<style scoped lang="scss">
+.secondary-entry {
+  display: block;
+  height: auto;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 23rpx;
+  background: transparent;
+}
+
+.secondary-entry-art {
+  display: block;
+  width: 100%;
+}
+
+@media screen and (max-width: 360px) {
+  .secondary-entry-grid {
+    gap: 12rpx;
+  }
+}
+
+.home-campaign {
+  min-height: 150rpx;
+  align-items: center;
+  gap: 12rpx;
+  padding: 10rpx;
+  box-sizing: border-box;
+}
+
+.home-campaign-art-frame {
+  position: relative;
+  display: flex;
+  flex: 0 0 130rpx;
+  width: 130rpx;
+  height: 130rpx;
+  overflow: hidden;
+  border-radius: 15rpx;
+  background: #e7f4ef;
+}
+
+.home-campaign-art {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.home-campaign-copy {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.home-campaign-copy text {
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-campaign-points {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+@media screen and (max-width: 360px) {
+  .home-campaign-art-frame {
+    flex-basis: 108rpx;
+    width: 108rpx;
+    height: 108rpx;
+  }
+
+  .home-campaign-copy text:first-child {
+    font-size: 20rpx;
+  }
+
+  .home-campaign-points {
+    padding: 6rpx 8rpx;
+    font-size: 16rpx;
+  }
+}
 </style>
