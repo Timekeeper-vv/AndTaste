@@ -155,7 +155,7 @@ public class CreativeAiController {
     @Value("${tripo.model.version:v3.1-20260211}")
     private String tripoModelVersion;
 
-    @Value("${consumer.credit.initial-balance:100}")
+    @Value("${consumer.credit.initial-balance:600}")
     private BigDecimal consumerCreditInitialBalance;
 
     @Value("${replicate.api.key:}")
@@ -664,6 +664,7 @@ public class CreativeAiController {
     public Map<String,Object> consumerCreditRules() {
         return Map.of(
                 "image2d", consumerCreditCost("image2d"),
+                "multiView", consumerCreditCost("multi_view"),
                 "imageTo3d", consumerCreditCost("image_to_3d"),
                 "textTo3d", consumerCreditCost("text_to_3d"),
                 "modelConvert", consumerCreditCost("model_convert"),
@@ -1910,7 +1911,13 @@ public class CreativeAiController {
         ArkImageQueueService.QueueSubmission submission = arkImageQueueService.enqueue(
                 no("MVQ"), volcengineArkSeedreamImageModel, "multi_view", null,
                 req.inputAssetId, command.compiledPrompt(), command.negativePrompt(), size,
-                command.productKey(), command.category(), command.material(), ownerUserId, req);
+                command.productKey(), command.category(), command.material(), ownerUserId, req,
+                () -> {
+                    Long consumerUserId = currentConsumerUserIdOrNull();
+                    return consumerUserId == null ? null : reserveConsumerCredit(
+                            consumerUserId, "multi_view", consumerCreditCost("multi_view"), "C端三视图生成预扣");
+                },
+                txId -> refundConsumerCredit(txId, "三视图任务创建失败"));
         creativeProjects.bindJob(submission.jobId(), req.projectId, req.versionId, req.inputAssetId);
         Map<String, Object> response = imageGenerationJobResponse(submission.jobId());
         if (submission.reused()) response.put("reused", true);
@@ -6458,8 +6465,9 @@ public class CreativeAiController {
             // consumer price, regardless of whether it is text-to-image or
             // image-to-image (including conversational creation).
             case "image2d" -> BigDecimal.valueOf(120);
-            case "image_to_3d" -> BigDecimal.valueOf(70);
-            case "text_to_3d" -> BigDecimal.valueOf(60);
+            case "multi_view" -> BigDecimal.valueOf(450);
+            case "image_to_3d" -> BigDecimal.valueOf(1680);
+            case "text_to_3d" -> BigDecimal.valueOf(1680);
             case "model_convert" -> BigDecimal.valueOf(1);
             default -> BigDecimal.ZERO;
         };

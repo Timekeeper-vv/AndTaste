@@ -8,7 +8,7 @@
       <button class="refresh" size="mini" :loading="loading" @tap="loadData(true)">刷新</button>
     </view>
 
-    <view class="card"><text class="balance">当前积分 <text>{{ balance }}</text></text><text class="rules">平面图生成 120 积分 · 文生3D 60 积分 · 图生3D 70 积分</text></view>
+    <view class="card"><text class="balance">当前积分 <text>{{ balance }}</text></text><text class="rules">{{ creditRulesText }}</text></view>
 
     <view class="section">
       <text class="label">选择充值套餐</text>
@@ -73,6 +73,7 @@ import {
   cancelVirtualPaymentOrder,
   createPaymentOrder,
   getCredits,
+  getCreditRules,
   getPackages,
   getPaymentOrder,
   getPaymentOrders,
@@ -98,6 +99,7 @@ const PACKAGE_CATALOG = [
 const packages = ref<any[]>(PACKAGE_CATALOG)
 const selected = ref<any>(null)
 const balance = ref(0)
+const creditRules = ref({ image2d: 120, multiView: 450, textTo3d: 1680, imageTo3d: 1680, modelConvert: 1 })
 const orders = ref<any[]>([])
 const loading = ref(false)
 const creatingOrder = ref(false)
@@ -127,6 +129,7 @@ const canRestartPendingPayment = computed(() => paymentOrder.value?.status === '
 const canRetryPayment = computed(() => paymentIntent.value === 'failed' && !paymentOrder.value)
 const paymentStateIcon = computed(() => ({ idle: '⌛', launching: '…', awaiting_confirmation: '⌛', cancelled: '×', failed: '!', paid: '✓', exception: '!' }[paymentIntent.value] || '⌛'))
 const paymentStateTitle = computed(() => ({ idle: '等待支付结果', launching: '正在唤起微信虚拟支付', awaiting_confirmation: '正在确认积分到账', cancelled: '你已取消本次支付', failed: '未能完成微信虚拟支付', paid: '积分已到账', exception: '支付结果核验中' }[paymentIntent.value] || '等待支付结果'))
+const creditRulesText = computed(() => `平面图 ${creditRules.value.image2d} · 三视图 ${creditRules.value.multiView} · 文生3D ${creditRules.value.textTo3d} · 图生3D ${creditRules.value.imageTo3d} · 模型格式转换 ${creditRules.value.modelConvert} 积分`)
 
 const rows = (payload: any) => Array.isArray(payload) ? payload : (Array.isArray(payload?.items) ? payload.items : [])
 const packageAmount = (pkg: any) => moneyText(pkg?.amountYuan, pkg?.amountFen)
@@ -198,7 +201,7 @@ function recordPaymentError(error: any, fallback: string) {
 
 async function loadData(notify = false) {
   loading.value = true
-  const [packageResult, creditResult, orderResult] = await Promise.allSettled([getPackages(), getCredits(), getPaymentOrders()])
+  const [packageResult, creditResult, orderResult, rulesResult] = await Promise.allSettled([getPackages(), getCredits(), getPaymentOrders(), getCreditRules()])
   let packageLoaded = false
   try {
     if (packageResult.status === 'fulfilled') {
@@ -219,6 +222,12 @@ async function loadData(notify = false) {
     }
     if (creditResult.status === 'fulfilled') balance.value = Number(creditResult.value?.balance) || 0
     if (orderResult.status === 'fulfilled') orders.value = rows(orderResult.value)
+    if (rulesResult.status === 'fulfilled') {
+      for (const key of Object.keys(creditRules.value) as Array<keyof typeof creditRules.value>) {
+        const amount = Number(rulesResult.value?.[key])
+        if (Number.isFinite(amount) && amount >= 0) creditRules.value[key] = amount
+      }
+    }
     const errors = [packageResult, creditResult, orderResult]
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map(result => result.reason?.message || '部分充值信息加载失败')

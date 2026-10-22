@@ -84,7 +84,7 @@
               </view>
             </view>
             <view class="multiview-delivery"><view><text>生产模拟图已保存</text><text>{{ multiViewMessage || '三张视角切片可直接提交给 Tripo 创建 3D 原型。' }}</text></view><text>✓</text></view>
-            <view class="multiview-credit-note"><text>积分说明</text><text>生成生产模拟图阶段不预扣平台积分；提交 3D 时后端会按当前规则预扣 {{ imageTo3dCreditLabel }}，若提交失败会自动退回。</text></view>
+            <view class="multiview-credit-note"><text>积分说明</text><text>生成三视图预扣 {{ formatCredit(multiViewCredit) }} 积分；提交 3D 时另按当前规则预扣 {{ imageTo3dCreditLabel }}，失败任务会自动退回。</text></view>
             <button class="model-submit" :loading="loading && loadingAction === 'model'" :disabled="loading || !hasCompleteMultiView" @tap="submitMultiViewModel"><text>3D</text>{{ multiViewModelButtonLabel }}</button>
           </view>
           <view v-else class="multiview-empty"><view class="turntable-orb"><text>3D</text></view><view><text>先生成生产模拟图</text><text>选择一张主体清晰的参考图，系统会基于原图生成正面、侧面和背面。</text></view></view>
@@ -99,7 +99,7 @@
               <view class="manual-view-meta"><text>{{ slot.label }}</text><text>{{ manualMultiViewUploading === slot.key ? '上传中…' : manualMultiViewAssets[slot.key].assetId ? '已存入作品库' : '点击上传' }}</text></view>
             </view>
           </view>
-          <view class="multiview-credit-note"><text>积分说明</text><text>上传图片不会扣积分；提交三视角 3D 时才会按当前规则预扣 {{ imageTo3dCreditLabel }}，若提交失败会自动退回。</text></view>
+          <view class="multiview-credit-note"><text>积分说明</text><text>手动上传三视图不扣积分；提交三视角 3D 时按当前规则预扣 {{ imageTo3dCreditLabel }}，失败任务会自动退回。</text></view>
           <button class="model-submit" :loading="loading && loadingAction === 'model'" :disabled="loading || !canSubmitMultiView" @tap="submitMultiViewModel"><text>3D</text>{{ manualMultiViewModelButtonLabel }}</button>
         </template>
       </view>
@@ -192,7 +192,9 @@ const manualMultiViewAssets = reactive<Record<MultiViewKey, ManualMultiViewAsset
 const manualMultiViewUploading = ref<MultiViewKey | ''>('')
 const multiViewMessage = ref('')
 const multiViewError = ref('')
-const imageTo3dCredit = ref(70)
+const imageTo3dCredit = ref(1680)
+const textTo3dCredit = ref(1680)
+const multiViewCredit = ref(450)
 const productionAssessment = ref<ProductionFeasibilityResult | null>(null)
 const assessmentLoading = ref(false)
 const optimized3dTip = ref('')
@@ -215,9 +217,9 @@ const modeOptions: Array<{ key: CreateMode; mark: string; short: string; title: 
   { key: 'text', mark: '字', short: '文字生图', title: '让灵感，先成为一张产品图。', description: '把文化、材质、纹样和使用场景交给 AI，生成后会自动进入作品库。', notice: '文字生成图片会把你的纹样、材质和表面效果方向一并交给 AI。', cost: 120 },
   { key: 'image', mark: '图', short: '上传图生图', title: '让参考图，成为一件真实产品。', description: '上传草图、照片或灵感图，保留主体识别点并重构为目标文创产品。', notice: '上传图片会作为 Seedream 的参考图，材质、尺寸和补充描述会一并写入改造提示词。', cost: 120 },
   { key: 'reference', mark: '鉴', short: '参考图改造', title: '保留原有特征，重构文化语言。', description: '上传草图、普通产品图或灵感图，用文创设计重新组织它的材质与场景。', notice: '请使用你拥有版权或已获得授权的参考图片；生成结果会保留在你的作品库。', cost: 120 },
-  { key: 'text3d', mark: '形', short: '文字 3D', title: '把一段描述，推向立体原型。', description: '清楚描述主体、材质和结构，生成后可在作品库发起 3D 安全预览。', notice: '3D 生成完成后，请先提交审核；审核通过的模型才能申请打样或生产。', cost: 60 },
-  { key: 'image3d', mark: '立', short: '图片 3D', title: '从参考图，生成可预览的原型。', description: '上传主体清晰的图像，系统会生成可进入作品库继续推进的三维模型。', notice: '请尽量使用主体完整、背景干净的图片，以便获得更准确的 3D 结构；材质偏好会随本次作品工艺方向一并记录。', cost: 70 },
-  { key: 'multiview', mark: '观', short: '生产模拟图', title: '从一张图，生成一张生产模拟图。', description: '一次调用 Seedream，输出包含正面、侧面、背面的横向生产模拟图，再一键交给 Tripo 创建 3D 原型。', notice: '生产模拟图会以原图为唯一依据生成并保存；平台积分只会在下一步提交 Tripo 3D 任务时按当前规则预扣。材质偏好会同步为本次工艺方向记录。', cost: 0 },
+  { key: 'text3d', mark: '形', short: '文字 3D', title: '把一段描述，推向立体原型。', description: '清楚描述主体、材质和结构，生成后可在作品库发起 3D 安全预览。', notice: '3D 生成完成后，请先提交审核；审核通过的模型才能申请打样或生产。', cost: 1680 },
+  { key: 'image3d', mark: '立', short: '图片 3D', title: '从参考图，生成可预览的原型。', description: '上传主体清晰的图像，系统会生成可进入作品库继续推进的三维模型。', notice: '请尽量使用主体完整、背景干净的图片，以便获得更准确的 3D 结构；材质偏好会随本次作品工艺方向一并记录。', cost: 1680 },
+  { key: 'multiview', mark: '观', short: '三视图', title: '从一张图，生成正面、侧面和背面。', description: '一次调用 Seedream，生成并保存三张视角图，再一键交给 Tripo 创建 3D 原型。', notice: '生成三视图预扣 450 积分；提交 Tripo 3D 原型会另行扣除 1680 积分。', cost: 450 },
 ]
 const patterns = [
   { id: 'taotie', name: '饕餮回纹', category: '青铜纹样', prompt: '简化饕餮回纹，适合文创产品边缘与局部浮雕装饰', tone: '#6d8476', mark: '饕' },
@@ -235,7 +237,13 @@ const modelTemplateLabels: Record<Tripo3dPromptTemplate, string> = {
   ppc_precision: 'PPC 精密硬塑建模',
 }
 
-const activeMode = computed(() => modeOptions.find(item => item.key === mode.value) || modeOptions[0])
+const activeMode = computed(() => {
+  const selected = modeOptions.find(item => item.key === mode.value) || modeOptions[0]
+  if (selected.key === 'multiview') return { ...selected, cost: multiViewCredit.value }
+  if (selected.key === 'text3d') return { ...selected, cost: textTo3dCredit.value }
+  if (selected.key === 'image3d') return { ...selected, cost: imageTo3dCredit.value }
+  return selected
+})
 const selectedPattern = computed(() => patterns.find(item => item.id === selectedPatternId.value) || patterns[0])
 const selectedProductCategory = computed(() => productCategories.find(item => item.key === selectedProductKey.value) || productCategories[0])
 const recommendedMaterials = computed<MaterialDefinition[]>(() => selectedProductCategory.value.materialKeys.map(key => materialCatalog[key]))
@@ -536,8 +544,12 @@ async function loadCreditRules() {
     const rules = await getCreditRules()
     const nextCost = Number(rules?.imageTo3d)
     if (Number.isFinite(nextCost) && nextCost >= 0) imageTo3dCredit.value = nextCost
+    const nextTextCost = Number(rules?.textTo3d)
+    if (Number.isFinite(nextTextCost) && nextTextCost >= 0) textTo3dCredit.value = nextTextCost
+    const nextMultiViewCost = Number(rules?.multiView)
+    if (Number.isFinite(nextMultiViewCost) && nextMultiViewCost >= 0) multiViewCredit.value = nextMultiViewCost
   } catch {
-    // 价格接口暂不可用时保留服务端默认的 70 积分文案；最终仍由提交接口校验并扣减。
+    // 规则接口不可用时保留服务端默认价格文案；最终仍由提交接口校验并扣减。
   }
 }
 
