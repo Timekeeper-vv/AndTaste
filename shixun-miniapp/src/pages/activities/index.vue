@@ -49,6 +49,8 @@
         <textarea v-model="form.productFeatures" class="field area" placeholder="特色功能（必填）" />
         <input v-model="form.artifactPrototype" class="field" placeholder="文物原型 / 灵感来源（必填）" />
         <textarea v-model="form.productDescription" class="field area" placeholder="产品介绍（必填）" />
+        <input v-model.trim="form.idCard" class="field" maxlength="18" placeholder="身份证号（必填，18 位，用于奖励发放实名核验）" />
+        <input v-model.trim="form.contactPhone" class="field" maxlength="11" type="number" placeholder="手机号（必填，11 位，用于打样快递联络）" />
         <view class="upload-guide">全色三视图必交：正面、侧面、背面。每张仅支持 JPG，1–3 MB。</view>
         <view v-for="(label, index) in viewLabels" :key="label" class="upload" @tap="pickArtwork(index)"><text>{{ label }} · {{ uploadedAssets[index]?.title || '选择 JPG 图片' }}</text><text>{{ uploadedAssets[index] ? '已添加' : '选择文件' }}</text></view>
         <button class="primary" :disabled="busy || uploadedAssets.length !== 3 || uploadedAssets.some(item => !item) || taskSubmissionCount(selectedTask.id) >= 5" @tap="sendSubmission">提交投稿</button>
@@ -89,7 +91,7 @@ const vouchers = ref<any[]>([])
 const selectedTask = ref<any>(null)
 const uploadedAssets = ref<any[]>([])
 const viewLabels = ['正面', '侧面', '背面']
-const form = ref({ productName: '', productCategory: '', productFeatures: '', artifactPrototype: '', productDescription: '' })
+const form = ref({ productName: '', productCategory: '', productFeatures: '', artifactPrototype: '', productDescription: '', idCard: '', contactPhone: '' })
 const selected = ref('')
 const busy = ref(false)
 const locked = ref(false)
@@ -181,13 +183,15 @@ async function sendSubmission() {
   if (!selectedTask.value || uploadedAssets.value.length !== 3 || uploadedAssets.value.some(item => !item?.assetId)) return toast('请先上传正面、侧面和背面三张图片')
   const required = Object.values(form.value).every(value => String(value).trim())
   if (!required) return toast('请填写全部作品信息')
+  if (!/^\d{17}[\dXx]$/.test(form.value.idCard)) return toast('身份证号必须为 18 位，请核对后再提交')
+  if (!/^1\d{10}$/.test(form.value.contactPhone)) return toast('手机号必须为 11 位，请核对后再提交')
   await run(async () => {
     const ids = uploadedAssets.value.map(item => Number(item.assetId))
     const bundle = await createMultiViewBundle({ inputAssetId: ids[0], viewCount: 3, productName: form.value.productName, material: '树脂', images: [{ view: 'front', assetId: ids[0] }, { view: 'left', assetId: ids[1] }, { view: 'back', assetId: ids[2] }] })
     await submitBountyTask(Number(selectedTask.value.id), { ...form.value, assetId: ids[0], bundleId: Number(bundle.id || bundle.bundleId), viewAssetIds: ids })
     toast('投稿已提交')
     selectedTask.value = null; uploadedAssets.value = []
-    form.value = { productName: '', productCategory: '', productFeatures: '', artifactPrototype: '', productDescription: '' }
+    form.value = { productName: '', productCategory: '', productFeatures: '', artifactPrototype: '', productDescription: '', idCard: '', contactPhone: '' }
   })
 }
 

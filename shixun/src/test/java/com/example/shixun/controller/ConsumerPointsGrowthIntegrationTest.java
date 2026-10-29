@@ -20,8 +20,10 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -165,6 +167,49 @@ class ConsumerPointsGrowthIntegrationTest {
                         .contentType("application/json")
                         .content("{}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void bountySubmissionRejectsInvalidIdCardAndPhone() throws Exception {
+        TestUser user = createUser("bounty-identity");
+        TestUser other = createUser("bounty-other");
+        jdbc.update("INSERT INTO consumer_bounty_task (campaign_key,title,brief,reward_amount,status) VALUES ('bounty-id','身份校验测试','说明',2000,'active')");
+        Long taskId = jdbc.queryForObject("SELECT id FROM consumer_bounty_task WHERE campaign_key='bounty-id'", Long.class);
+        jdbc.update("INSERT INTO creative_multiview_bundle (bundle_no,user_id,product_name,view_count,status) VALUES ('B-ID',?,'他人作品包',3,'ready')", other.id());
+        Long bundleId = jdbc.queryForObject("SELECT id FROM creative_multiview_bundle WHERE bundle_no='B-ID'", Long.class);
+        String base = "{\"bundleId\":" + bundleId + ",\"viewAssetIds\":[1,2,3],"
+                + "\"productName\":\"产品\",\"productCategory\":\"品类\",\"productFeatures\":\"特色\",\"artifactPrototype\":\"原型\",\"productDescription\":\"介绍\",";
+
+        // 身份证号只有 17 位：直接拦截并提示
+        expectSubmissionRejected(taskId, base + "\"idCard\":\"11010119900101123\",\"contactPhone\":\"13800138000\"}", user, "身份证号必须为18位");
+        // 身份证号 19 位：超出长度上限，同样拦截
+        expectSubmissionRejected(taskId, base + "\"idCard\":\"1101011990010112345\",\"contactPhone\":\"13800138000\"}", user, "idCard内容过长");
+        // 身份证号中间含字母（仅末位允许 X）：拦截
+        expectSubmissionRejected(taskId, base + "\"idCard\":\"11010119900101X234\",\"contactPhone\":\"13800138000\"}", user, "身份证号必须为18位");
+        // 手机号只有 10 位：拦截
+        expectSubmissionRejected(taskId, base + "\"idCard\":\"11010119900101123X\",\"contactPhone\":\"1380013800\"}", user, "手机号必须为11位");
+        // 手机号 12 位：拦截
+        expectSubmissionRejected(taskId, base + "\"idCard\":\"11010119900101123X\",\"contactPhone\":\"138001380000\"}", user, "手机号必须为11位");
+
+        // 身份证末位 X、手机号 11 位：通过位数校验，继续进入后续业务校验（此处因作品包非本人而被拦截）
+        mvc.perform(post(BASE + "/tasks/" + taskId + "/submissions")
+                        .header("Authorization", "Bearer " + user.token())
+                        .contentType("application/json")
+                        .content(base + "\"idCard\":\"11010119900101123X\",\"contactPhone\":\"13800138000\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("请选择本人完整的三视图作品包"));
+
+        // 所有被拒绝的请求都不应落库
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM consumer_bounty_submission", Integer.class)).isZero();
+    }
+
+    private void expectSubmissionRejected(long taskId, String body, TestUser user, String message) throws Exception {
+        mvc.perform(post(BASE + "/tasks/" + taskId + "/submissions")
+                        .header("Authorization", "Bearer " + user.token())
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(containsString(message)));
     }
 
     private JsonNode getJson(String path, String token) throws Exception {

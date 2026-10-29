@@ -110,6 +110,10 @@ public class ConsumerPointsActivityController {
         if (!(rawIds instanceof List<?> ids) || ids.size() != 3) throw new IllegalArgumentException("必须提交正面、侧面、背面三张视图");
         List<Long> viewAssetIds = new ArrayList<>();
         for (Object id : ids) viewAssetIds.add(Long.parseLong(String.valueOf(id)));
+        String idCard = requiredText(body, "idCard", 18);
+        if (!idCard.matches("\\d{17}[\\dXx]")) throw new IllegalArgumentException("身份证号必须为18位，请核对后再提交");
+        String contactPhone = requiredText(body, "contactPhone", 20);
+        if (!contactPhone.matches("1\\d{10}")) throw new IllegalArgumentException("手机号必须为11位，请核对后再提交");
         long assetId = viewAssetIds.get(0);
         Map<String, Object> bundle = jdbc.queryForMap("SELECT id,user_id userId,view_count viewCount FROM creative_multiview_bundle WHERE id=?", bundleId);
         if (((Number) bundle.get("userId")).longValue() != userId || ((Number) bundle.get("viewCount")).intValue() != 3) throw new IllegalArgumentException("请选择本人完整的三视图作品包");
@@ -136,8 +140,8 @@ public class ConsumerPointsActivityController {
             Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM consumer_bounty_submission WHERE task_id=? AND user_id=?", Integer.class, taskId, userId);
             if (count != null && count >= 5) throw new IllegalStateException("每个账号最多可提交5件作品");
             String viewIdsJson = "[" + String.join(",", viewAssetIds.stream().map(String::valueOf).toList()) + "]";
-            jdbc.update("INSERT INTO consumer_bounty_submission (task_id,user_id,asset_id,bundle_id,view_asset_ids_json,product_name,product_category,product_features,artifact_prototype,product_description) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    taskId, userId, assetId, bundleId, viewIdsJson, name, category, features, prototype, description);
+            jdbc.update("INSERT INTO consumer_bounty_submission (task_id,user_id,asset_id,bundle_id,view_asset_ids_json,product_name,product_category,product_features,artifact_prototype,product_description,id_card,contact_phone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    taskId, userId, assetId, bundleId, viewIdsJson, name, category, features, prototype, description, idCard, contactPhone);
             Long id = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
             Map<String, Object> result = new LinkedHashMap<>(); result.put("id", id); result.put("status", "pending_review"); result.put("message", "投稿已提交，审核通过后发放积分");
             return result;

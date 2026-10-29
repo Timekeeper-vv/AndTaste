@@ -310,6 +310,8 @@ CREATE TABLE consumer_bounty_submission (
     product_features VARCHAR(1000) NOT NULL,
     artifact_prototype VARCHAR(500) NOT NULL,
     product_description TEXT NOT NULL,
+    id_card VARCHAR(18) NULL,
+    contact_phone VARCHAR(20) NULL,
     status VARCHAR(24) NOT NULL DEFAULT 'pending_review',
     credit_transaction_id BIGINT NULL,
     selected_for_sample TINYINT(1) NOT NULL DEFAULT 0,
