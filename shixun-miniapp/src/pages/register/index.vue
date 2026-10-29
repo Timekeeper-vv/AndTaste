@@ -84,6 +84,10 @@ const consents: Array<{ key: ConsentKey; title: string; summary: string; content
 function toggleConsent(key: ConsentKey) { form[key] = !form[key] }
 
 function showAgreement(title: string, content: string) {
+  if (title === '用户服务与隐私说明') {
+    uni.navigateTo({ url: '/pages/legal/index?type=privacy' })
+    return
+  }
   uni.showModal({ title, content, showCancel: false, confirmText: '我已了解' })
 }
 

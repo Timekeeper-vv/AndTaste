@@ -32,6 +32,7 @@ import ConsumerConversationPage from './components/ConsumerConversationPage.vue'
 import ConsumerWorksReview from './components/ConsumerWorksReview.vue'
 import ConsumerAssetInventory from './components/ConsumerAssetInventory.vue'
 import ConsumerCreditManagement from './components/ConsumerCreditManagement.vue'
+import ConsumerPointsActivities from './components/ConsumerPointsActivities.vue'
 import PaymentOperations from './components/PaymentOperations.vue'
 import HistoricalSalesManagement from './components/HistoricalSalesManagement.vue'
 import ConsumerProductionReview from './components/ConsumerProductionReview.vue'
@@ -63,6 +64,7 @@ const PAGE_ROLES: Record<string, Role[]> = {
   multiviewReview:SUPER_ADMIN_ROLES,
   consumerAssetInventory:SUPER_ADMIN_ROLES,
   consumerCreditManagement:SUPER_ADMIN_ROLES,
+  consumerPointsActivities:SUPER_ADMIN_ROLES,
   paymentOperations:SUPER_ADMIN_ROLES,
   historicalSales:SUPER_ADMIN_ROLES,
   consumerProductionReview:SUPER_ADMIN_ROLES,
@@ -309,6 +311,7 @@ const pageLabels: Record<string, string> = {
   multiviewReview:'多视图审核',
   consumerAssetInventory:'C端用户端库存',
   consumerCreditManagement:'C端额度管理',
+  consumerPointsActivities:'积分活动运营',
   paymentOperations:'支付运营',
   historicalSales:'历史销售数据',
   consumerProductionReview:'3D建模审核',
@@ -468,6 +471,7 @@ const pageLabels: Record<string, string> = {
         <ConsumerWorksReview v-if="currentPage === 'multiviewReview'" :current-user="currentUser" mode="multiview" @alert="showAlert" />
         <ConsumerAssetInventory v-if="currentPage === 'consumerAssetInventory'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerCreditManagement v-if="currentPage === 'consumerCreditManagement'" :current-user="currentUser" @alert="showAlert" />
+        <ConsumerPointsActivities v-if="currentPage === 'consumerPointsActivities'" @alert="showAlert" />
         <PaymentOperations v-if="currentPage === 'paymentOperations'" :current-user="currentUser" @alert="showAlert" />
         <HistoricalSalesManagement v-if="currentPage === 'historicalSales'" :current-user="currentUser" @alert="showAlert" />
         <ConsumerWorksReview v-if="currentPage === 'consumerProductionReview'" :current-user="currentUser" mode="standard" @alert="showAlert" />

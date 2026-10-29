@@ -84,8 +84,13 @@ class ArkImageQueueIntegrationTest {
 
     @BeforeEach
     void resetQueue() throws Exception {
+        jdbc.execute("CREATE TABLE IF NOT EXISTS consumer_points_creation_reward (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id BIGINT NOT NULL,asset_id BIGINT NOT NULL UNIQUE," +
+                "reward_kind VARCHAR(24) NOT NULL,points INT NOT NULL,credit_transaction_id BIGINT NOT NULL," +
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
         waitUntil(() -> count("SELECT COUNT(*) FROM ai_generation_job WHERE status IN ('queued','running')") == 0,
                 Duration.ofSeconds(8));
+        jdbc.update("DELETE FROM consumer_points_creation_reward");
         jdbc.update("DELETE FROM consumer_credit_transaction");
         jdbc.update("DELETE FROM consumer_credit_account");
         jdbc.update("DELETE FROM ai_generation_job");
@@ -160,7 +165,7 @@ class ArkImageQueueIntegrationTest {
                 Duration.ofSeconds(8));
         var failedAccount = jdbc.queryForMap("SELECT balance,frozen_balance frozenBalance,total_consumed totalConsumed " +
                 "FROM consumer_credit_account WHERE user_id=?", failedUser.id());
-        assertThat(failedAccount.get("balance").toString()).isEqualTo("100.00");
+        assertThat(failedAccount.get("balance").toString()).isEqualTo("600.00");
         assertThat(failedAccount.get("frozenBalance").toString()).isEqualTo("0.00");
         assertThat(failedAccount.get("totalConsumed").toString()).isEqualTo("0.00");
         assertThat(jdbc.queryForObject("SELECT status FROM consumer_credit_transaction WHERE user_id=? AND biz_type='image2d'",
@@ -206,13 +211,15 @@ class ArkImageQueueIntegrationTest {
                 completedEdit.path("assetId").asLong())).isEqualTo("之间智造效果图");
         var editorAccount = jdbc.queryForMap("SELECT balance,frozen_balance frozenBalance,total_consumed totalConsumed " +
                 "FROM consumer_credit_account WHERE user_id=?", editor.id());
-        assertThat(editorAccount.get("balance").toString()).isEqualTo("80.00");
+        assertThat(editorAccount.get("balance").toString()).isEqualTo("530.00");
         assertThat(editorAccount.get("frozenBalance").toString()).isEqualTo("0.00");
-        assertThat(editorAccount.get("totalConsumed").toString()).isEqualTo("20.00");
+        assertThat(editorAccount.get("totalConsumed").toString()).isEqualTo("120.00");
         assertThat(count("SELECT COUNT(*) FROM consumer_credit_transaction WHERE biz_type='image2d' AND user_id=" + editor.id())).isEqualTo(1);
         assertThat(completedViews.path("status").asText()).isEqualTo("succeeded");
         assertThat(completedViews.path("images")).hasSize(3);
         assertThat(completedViews.path("simulationAssetId").asLong()).isPositive();
+        assertThat(jdbc.queryForObject("SELECT points FROM consumer_points_creation_reward WHERE asset_id=?", Integer.class,
+                completedViews.path("simulationAssetId").asLong())).isEqualTo(100);
         assertThat(completedViews.path("simulationImage").path("previewUrl").asText()).contains("access_token=");
         assertThat(completedViews.path("compiledPrompt").asText()).isNotBlank();
         assertThat(completedViews.path("policyVersion").asText()).isEqualTo(ProductPromptPolicy.VERSION);
@@ -318,9 +325,9 @@ class ArkImageQueueIntegrationTest {
     private void assertCreditSettled(long userId) {
         var account = jdbc.queryForMap("SELECT balance,frozen_balance frozenBalance,total_consumed totalConsumed " +
                 "FROM consumer_credit_account WHERE user_id=?", userId);
-        assertThat(account.get("balance").toString()).isEqualTo("80.00");
+        assertThat(account.get("balance").toString()).isEqualTo("530.00");
         assertThat(account.get("frozenBalance").toString()).isEqualTo("0.00");
-        assertThat(account.get("totalConsumed").toString()).isEqualTo("20.00");
+        assertThat(account.get("totalConsumed").toString()).isEqualTo("120.00");
         assertThat(jdbc.queryForObject("SELECT status FROM consumer_credit_transaction WHERE user_id=? AND biz_type='image2d'", String.class, userId))
                 .isEqualTo("completed");
     }

@@ -3,7 +3,7 @@
     <view class="nav-bar">
       <view class="nav-back" aria-label="返回" @tap="goBack">‹</view>
       <text class="nav-title">渠道合作</text>
-      <view class="nav-menu" aria-label="更多操作"><text>•••</text><view /><text>◎</text></view>
+      <view class="nav-spacer" />
     </view>
 
     <view class="content">
@@ -67,6 +67,25 @@ function showRequirements() {
 
 function chooseZip() {
   if (!requireSession()) return
+  uni.showActionSheet({
+    itemList: ['从微信聊天选择ZIP', '从手机本地文件夹选择'],
+    success: result => {
+      if (result.tapIndex === 0) chooseZipFromChat()
+      else showLocalFileGuidance()
+    },
+  })
+}
+
+function showLocalFileGuidance() {
+  uni.showModal({
+    title: '微信小程序文件权限说明',
+    content: '小程序不能直接浏览手机任意文件夹。请先把ZIP作品包发送到任意微信聊天，再选择“从微信聊天选择ZIP”。',
+    showCancel: false,
+    confirmText: '知道了',
+  })
+}
+
+function chooseZipFromChat() {
   const chooser = (uni as any).chooseMessageFile
   if (typeof chooser !== 'function') {
     uni.showToast({ title: '当前版本暂不支持选择ZIP文件，请更新微信后重试', icon: 'none' })
@@ -114,4 +133,8 @@ function chooseZip() {
 .upload-note { display: flex; align-items: center; margin-top: 88rpx; flex-direction: column; color: #333; font-size: 24rpx; }.upload-note text:last-child { margin-top: 17rpx; color: #555; text-decoration: underline; }
 .history-link { align-self: center; margin-top: 24rpx; color: #348d7d; font-size: 23rpx; }
 @media (max-width: 360px) { .nav-bar { grid-template-columns: 110rpx minmax(0,1fr) 165rpx; padding-right: 18rpx; padding-left: 18rpx; }.nav-menu { width: 152rpx; }.content { padding-right: 28rpx; padding-left: 28rpx; }.steps { margin-right: -10rpx; margin-left: -10rpx; }.step-icon { width: 62rpx; height: 62rpx; }.step text { font-size: 16rpx; } }
+/* Keep the custom title centered after removing the duplicate capsule. */
+.nav-bar { grid-template-columns: 64rpx minmax(0, 1fr) 64rpx; }
+.nav-spacer { width: 64rpx; }
+@media (max-width: 360px) { .nav-bar { grid-template-columns: 64rpx minmax(0, 1fr) 64rpx; } }
 </style>

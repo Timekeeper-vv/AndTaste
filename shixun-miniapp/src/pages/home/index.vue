@@ -5,7 +5,7 @@
     <scroll-view scroll-y class="page-scroll" :show-scrollbar="false">
       <view class="content">
         <view class="hero">
-          <image src="/static/ui-design/home-gift.jpg" mode="aspectFit" class="hero-gift" />
+          <image src="/static/ui-design/home-gift.jpg" mode="aspectFill" class="hero-gift" />
           <view class="hero-copy">
             <text class="hero-kicker">完成首次 AI 创作</text>
             <text class="hero-title">创作有礼</text>
@@ -15,14 +15,14 @@
         </view>
 
         <view class="section-head path-heading"><view><text>创意工坊</text></view><text class="history-link" @tap="openConversationHistory">历史对话 ›</text></view>
-        <view class="creation-entry primary-entry" @tap="startConversation"><view class="entry-copy"><text>说出你的想法，让<span>创意</span>从这里开始…</text><view class="prompt-input"><text>说说你想做什么...</text><text>→</text></view><scroll-view scroll-x class="chips"><text v-for="chip in ['食品饮品','文房器物','日用生活','创意工坊']" :key="chip">● {{ chip }}</text></scroll-view></view></view>
+        <view class="creation-entry primary-entry" @tap="startConversation"><view class="entry-copy"><view class="creation-title"><text>说出你的想法，让</text><text>创意</text><text>从这里开始…</text></view><view class="prompt-input"><text class="prompt-placeholder">说说你想做什么...</text><text>→</text></view><scroll-view scroll-x class="chips"><text v-for="chip in ['食品饮品','文房器物','日用生活','创意工坊']" :key="chip">● {{ chip }}</text></scroll-view></view></view>
 
         <view class="secondary-entry-grid">
           <view class="creation-entry secondary-entry product-entry" @tap="openProductMaking">
-            <image class="secondary-entry-art" src="/static/ui-design/product-making-entry.png" mode="widthFix" />
+            <image class="secondary-entry-art" src="/static/ui-design/product-making-entry-hd.jpg" mode="widthFix" />
           </view>
           <view class="creation-entry secondary-entry works-entry" @tap="openCommercial">
-            <image class="secondary-entry-art" src="/static/ui-design/channel-cooperation-entry.png" mode="widthFix" />
+            <image class="secondary-entry-art" src="/static/ui-design/channel-cooperation-entry-hd.jpg" mode="widthFix" />
           </view>
         </view>
 
@@ -50,6 +50,7 @@ import { onShow } from '@dcloudio/uni-app'
 import { deleteConversation, getAssetPreviewAccess, getAssets, getConversations, getCredits, getProductionRequests, getPublicCreatorCampaigns, type ConversationSession, type CreatorCampaign } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { getCommercialRequests } from '../../api/commercial'
+import { getActivityOverview } from '../../api/activities'
 import { getSession, requireSession } from '../../utils/session'
 
 const user = ref(getSession()?.user)
@@ -61,6 +62,7 @@ const deletingConversationId = ref<number | null>(null)
 const productionRequests = ref<any[]>([])
 const commercialRequests = ref({ quoteRequests: [] as any[], consignmentApplications: [] as any[], selectionDemands: [] as any[] })
 const refreshing = ref(false)
+let quizPromptRequested = false
 const heroVisualUrl = ref('')
 const inspirationPreviewUrls = ref<Record<string, string>>({})
 const creatorMode = ref<'amateur' | 'professional'>(readCreatorMode())
@@ -278,10 +280,32 @@ async function refreshHome() {
   refreshing.value = false
 }
 
+async function promptDailyQuiz() {
+  if (quizPromptRequested || !getSession()) return
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
+  const marker = `smart_pig_quiz_prompt_${today}`
+  if (uni.getStorageSync(marker)) return
+  quizPromptRequested = true
+  try {
+    const overview = await getActivityOverview()
+    const quiz = overview?.quiz
+    if (Number(quiz?.sessionsUsed || 0) === 0 && !quiz?.session) {
+      uni.showModal({
+        title: '今日答题赚积分',
+        content: '完成 7 道选择题可获得 100 积分，现在开始吗？',
+        confirmText: '开始答题',
+        cancelText: '稍后再说',
+        success: result => { if (result.confirm) uni.navigateTo({ url: '/pages/activities/index?tab=quiz' }) },
+      })
+    }
+  } catch { /* A missing activity endpoint should not block the home page. */ }
+  finally { uni.setStorageSync(marker, 1) }
+}
+
 onShow(() => {
   user.value = getSession()?.user
   creatorMode.value = readCreatorMode()
-  if (user.value) void refreshHome()
+  if (user.value) { void refreshHome(); void promptDailyQuiz() }
   else {
     heroVisualUrl.value = ''
     inspirationPreviewUrls.value = {}
@@ -343,6 +367,7 @@ onShow(() => {
   gap: 12rpx;
   padding: 10rpx;
   box-sizing: border-box;
+  border-left: 0;
 }
 
 .home-campaign-art-frame {
@@ -366,6 +391,8 @@ onShow(() => {
   width: 100%;
   height: 100%;
   border-radius: 0;
+  left: -16%;
+  width: 116%;
 }
 
 .home-campaign-copy {
@@ -402,5 +429,37 @@ onShow(() => {
     padding: 6rpx 8rpx;
     font-size: 16rpx;
   }
+}
+</style>
+
+<style scoped lang="scss">
+.hero-gift {
+  right: 0;
+  width: 53%;
+  height: 100%;
+}
+
+.creation-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  color: #252525;
+  font-size: 29rpx;
+  font-weight: 800;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.creation-title text:nth-child(2) {
+  color: #256ee3;
+}
+
+.prompt-input .prompt-placeholder {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #9299a1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

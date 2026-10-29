@@ -1815,6 +1815,9 @@ public class CreativeAiController {
         Long simulationAssetId = createAsset("生产模拟图", "image", "ai_generated", localUrl, localUrl,
                 simulationPrompt, negative, null, inputAssetId, format,
                 "AI生成,火山方舟,Seedream,生产模拟图,三视图", fullMetadata);
+        if (ownerUserId != null && hasPersistedRole(ownerUserId, "user")) {
+            grantCreationReward(ownerUserId, simulationAssetId, "multiview", 100);
+        }
         creativeProjects.bindAsset(simulationAssetId, projectId, versionId, inputAssetId);
 
         Map<String, String> labels = Map.of("front", "正面", "left", "侧面", "back", "背面");
@@ -4486,6 +4489,12 @@ public class CreativeAiController {
         if (!duplicate.isEmpty()) throw new IllegalStateException("该产品已提交过一次" + ("sample".equals(requestType) ? "打样" : "批量生产") + "申请，不能重复提交");
         int quantity=parsePositiveInt(body==null?null:body.get("quantity"), "sample".equals(requestType)?1:0);
         if(quantity<=0) throw new IllegalArgumentException("申请数量必须大于0");
+        Long sampleVoucherId = numberAsLong(body.get("sampleVoucherId"));
+        if (sampleVoucherId != null) {
+            if (!"sample".equals(requestType) || quantity != 1 || bundleId == null) throw new IllegalArgumentException("免费打样权益仅适用于一件三视图树脂打样");
+            Map<String,Object> voucher = jdbc.queryForMap("SELECT id,bundle_id bundleId,material,sample_quantity sampleQuantity,status,expires_at expiresAt FROM consumer_bounty_sample_voucher WHERE id=? AND user_id=? FOR UPDATE", sampleVoucherId, userId);
+            if (!"available".equals(String.valueOf(voucher.get("status"))) || ((Number) voucher.get("bundleId")).longValue() != bundleId || ((Number) voucher.get("sampleQuantity")).intValue() != 1 || !"树脂".equals(String.valueOf(voucher.get("material"))) || !jdbc.queryForObject("SELECT expires_at>NOW() FROM consumer_bounty_sample_voucher WHERE id=?", Boolean.class, sampleVoucherId)) throw new IllegalStateException("免费打样权益已使用、过期或不适用于该作品");
+        }
         String requestedSampleProductName = body==null || body.get("sampleProductName")==null ? "" : String.valueOf(body.get("sampleProductName")).trim();
         String boundProductName = bundleId == null ? productNameFromAssetMetadata(asset.get("metadataJson")) : str(bundle.get("productName"));
         // Current mini-program creation binds product identity to every generated
@@ -4504,9 +4513,11 @@ public class CreativeAiController {
                 throw new IllegalArgumentException("打样产品不存在或已下架，请刷新后重试");
             }
         }
+        if (sampleVoucherId != null) sampleFeeYuan = BigDecimal.ZERO;
         String purpose=body==null||body.get("purpose")==null?"personal":String.valueOf(body.get("purpose")).trim();
         if(blank(purpose)) purpose="personal";
         if(!Set.of("personal","museum_sale").contains(purpose)) throw new IllegalArgumentException("创作目的只能是个人收藏/送礼或博物馆售卖");
+        if (sampleVoucherId != null && !"personal".equals(purpose)) throw new IllegalArgumentException("含快递的免费打样权益仅支持个人收货");
         int selfQty=parseNonNegativeInt(body==null?null:body.get("selfShipQuantity"));
         Object museumObj=body==null?null:body.get("museumDistribution");
         List<Map<String,Object>> museumDistribution=normalizeMuseumDistribution(museumObj);
@@ -4558,7 +4569,7 @@ public class CreativeAiController {
         if(blank(title)) title=("sample".equals(requestType)?"C端打样申请-":"C端批量生产申请-")+(bundleId == null ? asset.get("title") : firstNonBlank(str(bundle.get("productName")), "三视图作品"));
         String requestNo=no("sample".equals(requestType)?"CYP":"CPR");
         Long finalUserId=userId; Long finalAssetId=assetId; Long finalBundleId=bundleId; String finalRequestType=requestType; int finalQuantity=quantity;
-        int finalSelfQty=selfQty; String finalTitle=title; String distributionJson=mapper.writeValueAsString(museumDistribution); BigDecimal finalSampleFeeYuan=sampleFeeYuan;
+        int finalSelfQty=selfQty; String finalTitle=title; String distributionJson=mapper.writeValueAsString(museumDistribution); BigDecimal finalSampleFeeYuan=sampleFeeYuan; Long finalSampleVoucherId=sampleVoucherId;
         String recipientName=body.get("recipientName")==null?"":String.valueOf(body.get("recipientName"));
         String recipientPhone=body.get("recipientPhone")==null?"":String.valueOf(body.get("recipientPhone"));
         String recipientAddress=body.get("recipientAddress")==null?"":String.valueOf(body.get("recipientAddress"));
@@ -4568,18 +4579,22 @@ public class CreativeAiController {
             // Keep legacy/manual test schemas and old rolling nodes usable;
             // only keyed requests require the additive migration column.
             jdbc.update(con -> {
-                PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,multiview_bundle_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status,sample_product_name,sample_fee_yuan,sample_payment_status) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,?,'review',?,?,?)",Statement.NO_GENERATED_KEYS);
-                ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);if(finalBundleId==null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4,finalBundleId);ps.setString(5,finalRequestType);ps.setString(6,finalTitle);ps.setInt(7,finalQuantity);ps.setInt(8,finalSelfQty);ps.setString(9,distributionJson);ps.setString(10,recipientName);ps.setString(11,recipientPhone);ps.setString(12,recipientAddress);ps.setString(13,note);ps.setString(14,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(15, java.sql.Types.DECIMAL); else ps.setBigDecimal(15, finalSampleFeeYuan); ps.setString(16, "not_required");
+                PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,multiview_bundle_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,status,sample_product_name,sample_fee_yuan,sample_payment_status,sample_voucher_id) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,?,'review',?,?,?,?)",Statement.NO_GENERATED_KEYS);
+                ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);if(finalBundleId==null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4,finalBundleId);ps.setString(5,finalRequestType);ps.setString(6,finalTitle);ps.setInt(7,finalQuantity);ps.setInt(8,finalSelfQty);ps.setString(9,distributionJson);ps.setString(10,recipientName);ps.setString(11,recipientPhone);ps.setString(12,recipientAddress);ps.setString(13,note);ps.setString(14,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(15, java.sql.Types.DECIMAL); else ps.setBigDecimal(15, finalSampleFeeYuan); ps.setString(16, finalSampleVoucherId == null ? "not_required" : "not_required"); if(finalSampleVoucherId==null) ps.setNull(17, java.sql.Types.BIGINT); else ps.setLong(17, finalSampleVoucherId);
                 return ps;
             });
         } else {
             jdbc.update(con -> {
-                PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,multiview_bundle_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,client_request_key,status,sample_product_name,sample_fee_yuan,sample_payment_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'review',?,?,?)",Statement.NO_GENERATED_KEYS);
-                ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);if(finalBundleId==null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4,finalBundleId);ps.setString(5,finalRequestType);ps.setString(6,finalTitle);ps.setInt(7,finalQuantity);ps.setInt(8,finalSelfQty);ps.setString(9,distributionJson);ps.setString(10,recipientName);ps.setString(11,recipientPhone);ps.setString(12,recipientAddress);ps.setString(13,note);ps.setString(14,finalClientRequestKey);ps.setString(15,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(16, java.sql.Types.DECIMAL); else ps.setBigDecimal(16, finalSampleFeeYuan); ps.setString(17, "not_required");
+                PreparedStatement ps=con.prepareStatement("INSERT INTO consumer_production_request (request_no,user_id,asset_id,multiview_bundle_id,request_type,title,quantity,self_ship_quantity,museum_distribution_json,recipient_name,recipient_phone,recipient_address,note,client_request_key,status,sample_product_name,sample_fee_yuan,sample_payment_status,sample_voucher_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'review',?,?,?,?)",Statement.NO_GENERATED_KEYS);
+                ps.setString(1,requestNo);ps.setLong(2,finalUserId);ps.setLong(3,finalAssetId);if(finalBundleId==null) ps.setNull(4, java.sql.Types.BIGINT); else ps.setLong(4,finalBundleId);ps.setString(5,finalRequestType);ps.setString(6,finalTitle);ps.setInt(7,finalQuantity);ps.setInt(8,finalSelfQty);ps.setString(9,distributionJson);ps.setString(10,recipientName);ps.setString(11,recipientPhone);ps.setString(12,recipientAddress);ps.setString(13,note);ps.setString(14,finalClientRequestKey);ps.setString(15,sampleProductName); if(finalSampleFeeYuan==null) ps.setNull(16, java.sql.Types.DECIMAL); else ps.setBigDecimal(16, finalSampleFeeYuan); ps.setString(17, "not_required"); if(finalSampleVoucherId==null) ps.setNull(18, java.sql.Types.BIGINT); else ps.setLong(18, finalSampleVoucherId);
                 return ps;
             });
         }
         Long id=jdbc.queryForObject("SELECT id FROM consumer_production_request WHERE request_no=?", Long.class, requestNo);
+        if (sampleVoucherId != null) {
+            int reserved = jdbc.update("UPDATE consumer_bounty_sample_voucher SET status='reserved',production_request_id=? WHERE id=? AND user_id=? AND status='available' AND expires_at>NOW()", id, sampleVoucherId, userId);
+            if (reserved != 1) throw new IllegalStateException("免费打样权益已被使用或已过期");
+        }
         try {
             jdbc.update("UPDATE consumer_production_request SET product_no=? WHERE id=?", productNo, id);
             syncCanonicalProduct(productNo, userId, Map.of("productName", sampleProductName, "productMaterial", ""));
@@ -4904,19 +4919,25 @@ public class CreativeAiController {
     @Transactional
     public Map<String,Object> quoteConsumerProduction(@PathVariable Long id, @RequestBody Map<String,String> body) {
         requireCreativeAdmin();
+        List<Long> voucherRows = jdbc.query("SELECT sample_voucher_id FROM consumer_production_request WHERE id=? AND request_type='sample'", (rs, rowNum) -> { long value = rs.getLong(1); return rs.wasNull() ? null : value; }, id);
+        if (voucherRows.isEmpty()) throw new IllegalArgumentException("打样申请不存在");
+        Long voucherId = voucherRows.get(0);
+        boolean voucherApplied = voucherId != null;
         String feeText = body == null ? "" : nullToEmpty(body.get("sampleFeeYuan")).trim();
         BigDecimal fee;
-        try { fee = new BigDecimal(feeText); } catch (Exception e) { throw new IllegalArgumentException("请填写有效的打样价格"); }
-        if (fee.signum() <= 0) throw new IllegalArgumentException("打样价格必须大于0");
+        try { fee = voucherApplied ? BigDecimal.ZERO : new BigDecimal(feeText); } catch (Exception e) { throw new IllegalArgumentException("请填写有效的打样价格"); }
+        if (!voucherApplied && fee.signum() <= 0) throw new IllegalArgumentException("打样价格必须大于0");
         String lead = body == null ? "" : nullToEmpty(body.get("sampleLeadTime")).trim();
-        String material = body == null ? "" : nullToEmpty(body.get("sampleMaterial")).trim();
+        String material = voucherApplied ? "树脂" : body == null ? "" : nullToEmpty(body.get("sampleMaterial")).trim();
         String note = body == null ? "" : nullToEmpty(body.get("sampleQuoteNote")).trim();
         String reviewComment = body == null ? "" : nullToEmpty(body.get("reviewComment")).trim();
-        int updated = jdbc.update("UPDATE consumer_production_request SET sample_fee_yuan=?,sample_lead_time=?,sample_material=?,sample_quote_note=?,status='approved',sample_payment_status='unpaid',review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND request_type='sample' AND status IN ('review','approved') AND COALESCE(sample_payment_status,'not_required') NOT IN ('pending','manual_review','paid')",
-                fee, blank(lead) ? null : lead, blank(material) ? null : material, blank(note) ? null : note,
+        String effectiveNote = voucherApplied ? "悬赏权益：1件树脂打样，含1次快递运费。" + note : note;
+        int updated = jdbc.update("UPDATE consumer_production_request SET sample_fee_yuan=?,sample_lead_time=?,sample_material=?,sample_quote_note=?,status='approved',sample_payment_status=?,review_comment=?,reviewed_by=?,reviewed_at=NOW() WHERE id=? AND request_type='sample' AND status IN ('review','approved') AND COALESCE(sample_payment_status,'not_required') NOT IN ('pending','manual_review','paid')",
+                fee, blank(lead) ? null : lead, blank(material) ? null : material, blank(effectiveNote) ? null : effectiveNote, voucherApplied ? "not_required" : "unpaid",
                 blank(reviewComment) ? "后台报价：" + note : reviewComment, authenticatedPrincipal().username(), id);
         if (updated != 1) throw new IllegalStateException("打样申请不存在、当前状态不能报价，或已进入支付流程");
-        return Map.of("success", true, "id", id, "status", "approved", "samplePaymentStatus", "unpaid", "message", "报价单已保存，等待用户支付打样费");
+        if (voucherApplied) jdbc.update("UPDATE consumer_bounty_sample_voucher SET status='redeemed' WHERE id=? AND production_request_id=? AND status='reserved'", voucherId, id);
+        return Map.of("success", true, "id", id, "status", "approved", "samplePaymentStatus", voucherApplied ? "not_required" : "unpaid", "message", voucherApplied ? "免费打样权益已核销，申请已通过" : "报价单已保存，等待用户支付打样费");
     }
 
     @PutMapping("/consumer-production/admin/{id}/review")
@@ -4928,7 +4949,7 @@ public class CreativeAiController {
         if(!Set.of("approved","rejected","review").contains(status)) throw new IllegalArgumentException("审核状态只能是 approved / rejected / review");
         String comment=body==null?"":nullToEmpty(body.get("comment"));
         String operator = authenticatedPrincipal().username();
-        List<Map<String,Object>> rows = jdbc.queryForList("SELECT request_type,sample_payment_status,user_id userId,asset_id assetId FROM consumer_production_request WHERE id=? FOR UPDATE", id);
+        List<Map<String,Object>> rows = jdbc.queryForList("SELECT request_type,sample_payment_status,user_id userId,asset_id assetId,sample_voucher_id sampleVoucherId FROM consumer_production_request WHERE id=? FOR UPDATE", id);
         if (rows.isEmpty()) throw new IllegalArgumentException("生产申请不存在");
         Map<String,Object> current = rows.get(0);
         current.putAll(optionalProjectVersion("consumer_production_request", "id", id));
@@ -4940,7 +4961,9 @@ public class CreativeAiController {
         if ("sample".equals(requestType) && Set.of("pending", "manual_review").contains(paymentStatus) && !"approved".equals(status)) {
             throw new IllegalStateException("打样费支付流程进行中，请先处理支付订单后再变更审核状态");
         }
-        if ("sample".equals(requestType) && "approved".equals(status)) {
+        if ("sample".equals(requestType) && "approved".equals(status) && numberAsLong(current.get("sampleVoucherId")) != null) {
+            paymentStatus = "not_required";
+        } else if ("sample".equals(requestType) && "approved".equals(status)) {
             if ("paid".equals(paymentStatus)) status = "approved";
             else if (!Set.of("pending", "manual_review").contains(paymentStatus)) paymentStatus = "unpaid";
         } else if ("sample".equals(requestType) && !"paid".equals(paymentStatus)) {
@@ -4948,6 +4971,11 @@ public class CreativeAiController {
         }
         int n=jdbc.update("UPDATE consumer_production_request SET status=?,sample_payment_status=?,review_comment=?,reviewed_by=?,reviewed_at=? WHERE id=?",status,paymentStatus,comment,blank(operator)?"admin":operator,"review".equals(status)?null:LocalDateTime.now(),id);
         if(n==0) throw new IllegalArgumentException("生产申请不存在");
+        Long voucherId = numberAsLong(current.get("sampleVoucherId"));
+        if (voucherId != null && "sample".equals(requestType)) {
+            if ("rejected".equals(status)) jdbc.update("UPDATE consumer_bounty_sample_voucher SET status='available',production_request_id=NULL WHERE id=? AND production_request_id=? AND status='reserved'", voucherId, id);
+            else if ("approved".equals(status)) jdbc.update("UPDATE consumer_bounty_sample_voucher SET status='redeemed' WHERE id=? AND production_request_id=? AND status='reserved'", voucherId, id);
+        }
         Long requestOwner = numberAsLong(current.get("userId"));
         CreativeProjectService.ProjectRef workflowProject = requestOwner == null ? null
                 : resolveWorkflowProject(numberAsLong(current.get("projectId")), numberAsLong(current.get("versionId")),
@@ -6205,6 +6233,16 @@ public class CreativeAiController {
             // The additive migration may still be running during a rolling deploy.
         }
         if(owner instanceof Number) assignAssetOwner(assetId,((Number)owner).longValue());
+        if (owner instanceof Number ownerId && hasPersistedRole(ownerId.longValue(), "user")
+                && "ai_generated".equals(effectiveSourceType)) {
+            boolean isProductionTriptych = Boolean.TRUE.equals(meta == null ? null : meta.get("productionSimulation"));
+            boolean isTriptychSlice = Boolean.TRUE.equals(meta == null ? null : meta.get("productionSimulationView"));
+            boolean isOtherMultiView = Boolean.TRUE.equals(meta == null ? null : meta.get("multiView"));
+            if ("model".equals(type)) grantCreationReward(ownerId.longValue(), assetId, "model3d", 200);
+            else if ("image".equals(type) && !isProductionTriptych && !isTriptychSlice && !isOtherMultiView) {
+                grantCreationReward(ownerId.longValue(), assetId, "image2d", 50);
+            }
+        }
         Long projectId = meta == null ? null : numberAsLong(meta.get("projectId"));
         Long versionId = meta == null ? null : numberAsLong(meta.get("versionId"));
         creativeProjects.bindAsset(assetId, projectId, versionId, parentAssetId);
@@ -6658,6 +6696,17 @@ public class CreativeAiController {
             return ps;
         }, kh);
         return Objects.requireNonNull(kh.getKey()).longValue();
+    }
+
+    private void grantCreationReward(Long userId, Long assetId, String rewardKind, int points) {
+        creditTransactions.execute(status -> {
+            Integer existing = jdbc.queryForObject("SELECT COUNT(*) FROM consumer_points_creation_reward WHERE asset_id=?", Integer.class, assetId);
+            if (existing != null && existing > 0) return null;
+            Long transactionId = grantRewardCreditInTransaction(userId, assetId, BigDecimal.valueOf(points), "AI创作奖励：" + rewardKind);
+            jdbc.update("INSERT INTO consumer_points_creation_reward (user_id,asset_id,reward_kind,points,credit_transaction_id) VALUES (?,?,?,?,?)",
+                    userId, assetId, rewardKind, points, transactionId);
+            return null;
+        });
     }
 
     private synchronized void ensureConsumerCreditAccount(Long userId) {

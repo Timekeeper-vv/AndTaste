@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="nav-bar"><view class="nav-back" @tap="goBack">‹</view><text>产品智造</text><view class="nav-menu"><text>•••</text><view /><text>◎</text></view></view>
+    <view class="nav-bar"><view class="nav-back" @tap="goBack">‹</view><text>产品智造</text><view class="nav-spacer" /></view>
     <view v-if="loading" class="loading">正在读取审核结果…</view>
     <view v-else-if="!record" class="loading">没有找到这条提交记录</view>
     <view v-else class="content">
@@ -179,4 +179,8 @@ onShow(loadRecord)
 .state-center { display: flex; align-items: center; padding: 72rpx 30rpx 58rpx; flex-direction: column; text-align: center; }.state-center>text:nth-child(2) { margin-top: 24rpx; font-size: 38rpx; font-weight: 700; }.state-center>text:last-child { margin-top: 16rpx; color: #66706d; font-size: 23rpx; line-height: 40rpx; }
 .footer-note { display: block; margin: 76rpx 50rpx 0; color: #666; font-size: 22rpx; line-height: 38rpx; text-align: center; }
 @media (max-width:360px) { .nav-bar { grid-template-columns: 110rpx minmax(0,1fr) 165rpx; padding-right: 18rpx; padding-left: 18rpx; }.nav-menu { width: 152rpx; }.content { padding-right: 22rpx; padding-left: 22rpx; }.result-copy { margin-bottom: 48rpx; }.main-action { width: calc(100% - 40rpx); } }
+/* Keep the custom title centered after removing the duplicate capsule. */
+.nav-bar { grid-template-columns: 64rpx minmax(0, 1fr) 64rpx; }
+.nav-spacer { width: 64rpx; }
+@media (max-width: 360px) { .nav-bar { grid-template-columns: 64rpx minmax(0, 1fr) 64rpx; } }
 </style>

@@ -1,6 +1,6 @@
 <template>
   <view class="page">
-    <view class="mini-top"><text class="mini-title">我的</text><view class="mini-menu"><text>•••</text><text>◉</text></view></view>
+    <view class="mini-top"><text class="mini-title">我的</text></view>
     <view class="profile-hero">
       <image class="seal-avatar" src="/static/ui-design/brand-logo.png" mode="scaleToFill" />
       <view class="identity"><text class="eyebrow">MY ATELIER</text><text class="name">{{ displayName }}</text><text class="role">{{ loggedIn ? '灵感与作品都在这里沉淀' : '登录后管理作品与订单' }}</text></view>
@@ -10,7 +10,8 @@
 
     <template v-else>
       <view class="token-card"><view><text>Token　余额</text><text>{{ creditBalance }}</text><text>创作消耗 Token · 充值或任务获取</text></view><text class="token-button" @tap="go('/pages/recharge/index')">＋ 充值</text></view>
-      <view class="order-card"><view class="order-head"><text>我的订单</text><text @tap="go('/pages/orders/index')">全部订单 ›</text></view><view class="order-grid"><view @tap="go('/pages/orders/index')"><image class="order-icon" src="/static/ui-design/order-pay.png" mode="aspectFit" /><text>{{ orderCounts.pendingPay }}</text><text>待付款</text></view><view @tap="go('/pages/orders/index')"><image class="order-icon" src="/static/ui-design/order-ship.png" mode="aspectFit" /><text>{{ orderCounts.pendingShip }}</text><text>待发货</text></view><view @tap="go('/pages/orders/index')"><image class="order-icon" src="/static/ui-design/order-receive.png" mode="aspectFit" /><text>{{ orderCounts.pendingReceive }}</text><text>待收货</text></view></view></view>
+      <view class="activity-entry" @tap="go('/pages/activities/index')"><view class="activity-mark">＋</view><view><text>积分活动</text><text>签到、答题与悬赏任务</text></view><text class="activity-arrow">›</text></view>
+      <view class="order-card"><view class="order-head"><text>打样 / 生产进度</text><text @tap="go('/pages/production-requests/index')">全部申请 ›</text></view><view class="order-grid"><view @tap="go('/pages/production-requests/index')"><image class="order-icon" src="/static/ui-design/order-pay.png" mode="aspectFit" /><text>{{ orderCounts.review }}</text><text>审核中</text></view><view @tap="go('/pages/production-requests/index')"><image class="order-icon" src="/static/ui-design/order-ship.png" mode="aspectFit" /><text>{{ orderCounts.sampling }}</text><text>打样中</text></view><view @tap="go('/pages/production-requests/index')"><image class="order-icon" src="/static/ui-design/order-receive.png" mode="aspectFit" /><text>{{ orderCounts.sampleTransit }}</text><text>样品寄送中</text></view></view></view>
       <view class="section-heading"><text>ACCOUNT · 账户与服务</text><text @tap="go('/pages/conversation-create/index?history=1')">历史对话 ›</text></view>
       <view class="menu-card">
         <view class="menu-row" @tap="go('/pages/works/index')"><image class="menu-icon" src="/static/ui-design/service-works.png" mode="aspectFit" /><view class="menu-copy"><text>我的作品</text><text>查看创作成果与审核状态</text></view><text class="arrow">›</text></view>
@@ -27,8 +28,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { getCredits } from '../../api/creative'
-import { getMarketplaceOrders, type MarketplaceOrder } from '../../api/marketplace'
+import { getCredits, getProductionRequests } from '../../api/creative'
 import { clearSession, getSession } from '../../utils/session'
 
 const user = ref(getSession()?.user)
@@ -37,14 +37,15 @@ const creatorMode = ref<'amateur' | 'professional'>((uni.getStorageSync('creatio
 const displayName = computed(() => user.value?.username || '创作用户')
 const creatorModeLabel = computed(() => creatorMode.value === 'professional' ? '专业创作用户' : '业余创作用户')
 const creditBalance = ref(0)
-const orders = ref<MarketplaceOrder[]>([])
-const orderCounts = computed(() => orders.value.reduce((counts, order) => {
-  const status = String(order.orderStatus || '').toLowerCase()
-  if (['pending_pay', 'pending_payment', 'created'].includes(status)) counts.pendingPay += 1
-  if (['paid', 'pending_ship', 'pending_shipment', 'processing'].includes(status)) counts.pendingShip += 1
-  if (['shipped', 'in_transit', 'pending_receive', 'pending_receipt'].includes(status)) counts.pendingReceive += 1
+const requests = ref<any[]>([])
+const orderCounts = computed(() => requests.value.reduce((counts, item) => {
+  const status = String(item?.status || '')
+  const sampleStatus = String(item?.sampleWorkflowStatus || '')
+  if (status === 'review') counts.review += 1
+  if (['in_production', 'revision_in_progress', 'revision_completed'].includes(sampleStatus) || status === 'processing') counts.sampling += 1
+  if (['ready_to_ship', 'shipped'].includes(sampleStatus) || status === 'shipped') counts.sampleTransit += 1
   return counts
-}, { pendingPay: 0, pendingShip: 0, pendingReceive: 0 }))
+}, { review: 0, sampling: 0, sampleTransit: 0 }))
 const go = (url: string) => uni.navigateTo({ url })
 const goHome = () => uni.reLaunch({ url: '/pages/home/index' })
 const goLogin = () => uni.navigateTo({ url: '/pages/login/index?from=profile' })
@@ -56,9 +57,9 @@ function openAddress() {
 onShow(() => {
   user.value = getSession()?.user
   if (!user.value) return
-  void Promise.allSettled([getCredits(), getMarketplaceOrders()]).then(([creditResult, orderResult]) => {
+  void Promise.allSettled([getCredits(), getProductionRequests()]).then(([creditResult, requestResult]) => {
     if (creditResult.status === 'fulfilled') creditBalance.value = Number(creditResult.value?.balance) || 0
-    if (orderResult.status === 'fulfilled') orders.value = Array.isArray(orderResult.value) ? orderResult.value : []
+    if (requestResult.status === 'fulfilled') requests.value = Array.isArray(requestResult.value) ? requestResult.value : []
   })
 })
 
@@ -127,7 +128,7 @@ function logout() {
 </style>
 
 <style scoped lang="scss">
-.page{overflow:visible;padding:calc(28rpx + env(safe-area-inset-top)) 32rpx calc(150rpx + env(safe-area-inset-bottom));background:#fff;color:#222}.mini-top{position:relative;display:flex;align-items:center;justify-content:center;height:68rpx;margin-bottom:14rpx}.mini-title{font-size:30rpx;font-weight:800}.mini-menu{position:absolute;right:0;display:flex;align-items:center;gap:14rpx;padding:8rpx 17rpx;border:1rpx solid #e4e4e4;border-radius:30rpx;color:#333;font-size:24rpx}.profile-hero{padding:16rpx 0 28rpx}.seal-avatar{width:72rpx;height:72rpx;border:0;border-radius:18rpx;box-shadow:none;transform:none}.eyebrow{display:none}.name{margin-top:4rpx;font-family:"PingFang SC",sans-serif;font-size:38rpx}.role{margin-top:6rpx;color:#8d9591;font-size:20rpx}.welcome-card{display:none}.token-card{display:flex;align-items:center;justify-content:space-between;margin:8rpx 0 27rpx;padding:22rpx 26rpx;border-radius:28rpx;background:linear-gradient(110deg,#0ccbb0,#003e35);color:#fff}.token-card view{display:flex;flex-direction:column}.token-card view text:first-child{font-size:19rpx}.token-card view text:nth-child(2){margin-top:3rpx;font-size:49rpx;font-weight:700}.token-card view text:last-child{margin-top:1rpx;color:#b8f6e8;font-size:17rpx}.token-button{padding:10rpx 19rpx;border-radius:30rpx;background:#0ce4c0;font-size:21rpx;font-weight:800}.order-card{padding:25rpx 23rpx;border:1rpx solid #e1edf7;border-radius:24rpx;background:#fff;box-shadow:0 8rpx 22rpx rgba(81,117,157,.1)}.order-head{display:flex;align-items:center;justify-content:space-between}.order-head text:first-child{font-family:"PingFang SC",sans-serif;font-size:29rpx;font-weight:800}.order-head text:last-child{color:#888;font-size:19rpx}.order-grid{display:grid;grid-template-columns:repeat(3,1fr);margin-top:26rpx}.order-grid view{display:flex;align-items:center;flex-direction:column;gap:6rpx}.order-icon{width:58rpx;height:48rpx}.order-grid view text:nth-child(2){font-size:29rpx;font-weight:800}.order-grid view text:last-child{color:#888;font-size:18rpx}.section-heading{margin:31rpx 5rpx 15rpx}.section-heading text:first-child{font-family:"PingFang SC",sans-serif;font-size:25rpx}.section-heading text:last-child{font-size:18rpx}.menu-card{border:0;background:transparent;box-shadow:none;overflow:visible}.menu-row{min-height:107rpx;margin-bottom:15rpx;padding:0 22rpx;border:1rpx solid #e6eef4;border-radius:23rpx;background:#fff;box-shadow:0 7rpx 20rpx rgba(60,91,117,.08)}.menu-icon{width:72rpx;height:72rpx;margin-right:17rpx;border-radius:17rpx}.menu-copy text:first-child{font-size:27rpx}.menu-copy text:last-child{font-size:19rpx}.logout{height:82rpx;margin-top:34rpx;border:0;background:#f1f5f3;color:#719083;font-size:24rpx}.bottom-nav{right:28rpx;bottom:20rpx;left:28rpx;grid-template-columns:repeat(3,1fr);height:84rpx;padding:10rpx 12rpx;border:0;border-radius:40rpx;background:linear-gradient(90deg,#12d8bd,#00b9a6);box-shadow:0 12rpx 28rpx rgba(0,161,141,.24)}.bottom-nav view{color:#dffff8;font-size:18rpx}.bottom-nav .active{color:#fff;background:none}.service-badge{display:grid;place-items:center;width:32rpx;height:32rpx;padding:0;border-radius:50%;background:#ff5c61;color:#fff;font-size:17rpx}
+.page{overflow:visible;padding:calc(28rpx + env(safe-area-inset-top)) 32rpx calc(150rpx + env(safe-area-inset-bottom));background:#fff;color:#222}.mini-top{position:relative;display:flex;align-items:center;justify-content:center;height:68rpx;margin-bottom:14rpx}.mini-title{font-size:30rpx;font-weight:800}.mini-menu{position:absolute;right:0;display:flex;align-items:center;gap:14rpx;padding:8rpx 17rpx;border:1rpx solid #e4e4e4;border-radius:30rpx;color:#333;font-size:24rpx}.profile-hero{padding:16rpx 0 28rpx}.seal-avatar{width:72rpx;height:72rpx;border:0;border-radius:18rpx;box-shadow:none;transform:none}.eyebrow{display:none}.name{margin-top:4rpx;font-family:"PingFang SC",sans-serif;font-size:38rpx}.role{margin-top:6rpx;color:#8d9591;font-size:20rpx}.welcome-card{display:none}.token-card{display:flex;align-items:center;justify-content:space-between;margin:8rpx 0 27rpx;padding:22rpx 26rpx;border-radius:28rpx;background:linear-gradient(110deg,#0ccbb0,#003e35);color:#fff}.token-card view{display:flex;flex-direction:column}.token-card view text:first-child{font-size:19rpx}.token-card view text:nth-child(2){margin-top:3rpx;font-size:49rpx;font-weight:700}.token-card view text:last-child{margin-top:1rpx;color:#b8f6e8;font-size:17rpx}.token-button{padding:10rpx 19rpx;border-radius:30rpx;background:#0ce4c0;font-size:21rpx;font-weight:800}.activity-entry{display:flex;align-items:center;gap:16rpx;margin:-8rpx 0 20rpx;padding:18rpx 20rpx;border:1rpx solid #e6eee9;border-radius:16rpx;background:#fff}.activity-entry>view:nth-child(2){display:flex;flex:1;flex-direction:column;gap:5rpx}.activity-entry>view:nth-child(2) text:first-child{font-size:24rpx;font-weight:800}.activity-entry>view:nth-child(2) text:last-child{color:#89948d;font-size:18rpx}.activity-mark{display:grid;place-items:center;width:46rpx;height:46rpx;border-radius:14rpx;background:#e0f4ec;color:#167a66;font-size:29rpx}.activity-arrow{color:#82948a;font-size:30rpx}.order-card{padding:25rpx 23rpx;border:1rpx solid #e1edf7;border-radius:24rpx;background:#fff;box-shadow:0 8rpx 22rpx rgba(81,117,157,.1)}.order-head{display:flex;align-items:center;justify-content:space-between}.order-head text:first-child{font-family:"PingFang SC",sans-serif;font-size:29rpx;font-weight:800}.order-head text:last-child{color:#888;font-size:19rpx}.order-grid{display:grid;grid-template-columns:repeat(3,1fr);margin-top:26rpx}.order-grid view{display:flex;align-items:center;flex-direction:column;gap:6rpx}.order-icon{width:58rpx;height:48rpx}.order-grid view text:nth-child(2){font-size:29rpx;font-weight:800}.order-grid view text:last-child{color:#888;font-size:18rpx}.section-heading{margin:31rpx 5rpx 15rpx}.section-heading text:first-child{font-family:"PingFang SC",sans-serif;font-size:25rpx}.section-heading text:last-child{font-size:18rpx}.menu-card{border:0;background:transparent;box-shadow:none;overflow:visible}.menu-row{min-height:107rpx;margin-bottom:15rpx;padding:0 22rpx;border:1rpx solid #e6eef4;border-radius:23rpx;background:#fff;box-shadow:0 7rpx 20rpx rgba(60,91,117,.08)}.menu-icon{width:72rpx;height:72rpx;margin-right:17rpx;border-radius:17rpx}.menu-copy text:first-child{font-size:27rpx}.menu-copy text:last-child{font-size:19rpx}.logout{height:82rpx;margin-top:34rpx;border:0;background:#f1f5f3;color:#719083;font-size:24rpx}.bottom-nav{right:28rpx;bottom:20rpx;left:28rpx;grid-template-columns:repeat(3,1fr);height:84rpx;padding:10rpx 12rpx;border:0;border-radius:40rpx;background:linear-gradient(90deg,#12d8bd,#00b9a6);box-shadow:0 12rpx 28rpx rgba(0,161,141,.24)}.bottom-nav view{color:#dffff8;font-size:18rpx}.bottom-nav .active{color:#fff;background:none}.service-badge{display:grid;place-items:center;width:32rpx;height:32rpx;padding:0;border-radius:50%;background:#ff5c61;color:#fff;font-size:17rpx}
 </style>
 
 <style scoped lang="scss">

@@ -3,7 +3,7 @@
     <view class="nav-bar">
       <view class="nav-back" aria-label="返回" @tap="goBack">‹</view>
       <text class="nav-title">产品智造</text>
-      <view class="nav-menu" aria-label="更多操作" @tap="openMenu"><text>•••</text><view /><text>◎</text></view>
+      <view class="nav-action" @tap="openMenu">操作</view>
     </view>
     <view class="content">
       <view class="hero">
@@ -75,6 +75,25 @@ function openMenu() {
 }
 function chooseZip() {
   if (!requireSession()) return
+  uni.showActionSheet({
+    itemList: ['从微信聊天选择ZIP', '从手机本地文件夹选择'],
+    success: result => {
+      if (result.tapIndex === 0) chooseZipFromChat()
+      else showLocalFileGuidance()
+    },
+  })
+}
+
+function showLocalFileGuidance() {
+  uni.showModal({
+    title: '微信小程序文件权限说明',
+    content: '小程序不能直接浏览手机任意文件夹。请先把ZIP作品包发送到任意微信聊天，再选择“从微信聊天选择ZIP”。',
+    showCancel: false,
+    confirmText: '知道了',
+  })
+}
+
+function chooseZipFromChat() {
   const chooser = (uni as any).chooseMessageFile
   if (typeof chooser !== 'function') return uni.showToast({ title: '当前版本暂不支持选择ZIP文件，请更新微信后重试', icon: 'none' })
   chooser({ count: 1, type: 'file', extension: ['zip'], success: (result: any) => {
@@ -97,9 +116,7 @@ onShow(loadRecords)
 .nav-bar { position: fixed; z-index: 10; top: 0; right: 0; left: 0; display: grid; grid-template-columns: 150rpx minmax(0,1fr) 190rpx; align-items: end; height: calc(126rpx + env(safe-area-inset-top)); box-sizing: border-box; padding: calc(36rpx + env(safe-area-inset-top)) 26rpx 18rpx; background: rgba(255,255,255,.97); }
 .nav-title { overflow: hidden; font-size: 40rpx; font-weight: 700; line-height: 58rpx; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .nav-back { justify-self: start; width: 64rpx; height: 58rpx; color: #202624; font-size: 64rpx; font-weight: 300; line-height: 48rpx; }
-.nav-menu { display: flex; align-items: center; justify-content: space-around; justify-self: end; width: 172rpx; height: 62rpx; box-sizing: border-box; padding: 0 20rpx; border: 1rpx solid rgba(151,151,151,.28); border-radius: 34rpx; background: #fff; font-size: 28rpx; }
-.nav-menu view { width: 1rpx; height: 37rpx; background: rgba(151,151,151,.35); }
-.nav-menu text:last-child { font-size: 39rpx; line-height: 1; }
+.nav-action { justify-self: end; padding: 10rpx 0 10rpx 16rpx; color: #4f8c7b; font-size: 24rpx; }
 .content { display: flex; min-height: 100vh; box-sizing: border-box; flex-direction: column; padding: calc(176rpx + env(safe-area-inset-top)) 38rpx calc(64rpx + env(safe-area-inset-bottom)); }
 .hero { display: flex; align-items: center; flex-direction: column; text-align: center; }
 .hero-art { width: 166rpx; height: 182rpx; overflow: hidden; border-radius: 22rpx; background: #f7f8f8; }
@@ -131,4 +148,7 @@ onShow(loadRecords)
 .upload-note text:last-child { margin-top: 16rpx; color: #666; text-decoration: underline; }
 .footer-note { display: block; margin: 80rpx 50rpx 0; color: #666; font-size: 23rpx; line-height: 39rpx; text-align: center; }
 @media (max-width: 360px) { .nav-bar { grid-template-columns: 110rpx minmax(0,1fr) 165rpx; padding-right: 18rpx; padding-left: 18rpx; } .nav-menu { width: 152rpx; } .content { padding-right: 28rpx; padding-left: 28rpx; } }
+/* Keep the title centered independently of the text action width. */
+.nav-bar { grid-template-columns: 150rpx minmax(0, 1fr) 150rpx; }
+@media (max-width: 360px) { .nav-bar { grid-template-columns: 110rpx minmax(0, 1fr) 110rpx; } }
 </style>

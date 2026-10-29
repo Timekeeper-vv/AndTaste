@@ -13,6 +13,7 @@ export type PageName =
   | 'multiviewReview'
   | 'consumerAssetInventory'
   | 'consumerCreditManagement'
+  | 'consumerPointsActivities'
   | 'paymentOperations'
   | 'historicalSales'
   | 'consumerProductionReview'

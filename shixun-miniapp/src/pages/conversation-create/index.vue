@@ -5,7 +5,7 @@
       <text class="workshop-nav-title">创意工坊</text>
       <view class="workshop-nav-actions">
         <view class="history-button" aria-label="历史对话" @tap="openConversationHistory"><text>◷</text><text>历史对话</text></view>
-        <view class="workshop-menu-button" aria-label="更多操作" @tap="openWorkspaceMenu"><text>•••</text><text>◎</text></view>
+        <view class="workshop-action-button" aria-label="更多操作" @tap="openWorkspaceMenu">操作</view>
       </view>
     </view>
     <scroll-view class="chat" :class="{ 'chat-with-quick-replies': chatQuickReplies.length > 0 }" scroll-y :scroll-into-view="scrollIntoView" scroll-with-animation>
@@ -137,10 +137,9 @@
 
     <view v-if="policyDialog" class="policy-mask" @tap="resolvePolicyDialog(false)">
       <view class="policy-dialog" @tap.stop>
-        <view class="policy-dialog-head"><view><text class="surface-kicker">BEFORE YOU CREATE</text><text>AI生成提示</text></view><text>提交前确认</text></view>
-        <text class="policy-dialog-title">{{ activePolicy.title }}</text>
+        <text class="policy-dialog-title">{{ policyDialogTitle }}</text>
         <scroll-view class="policy-dialog-copy" scroll-y><text>{{ activePolicy.content }}</text></scroll-view>
-        <view class="policy-dialog-actions"><button class="policy-cancel" @tap="resolvePolicyDialog(false)">暂不继续</button><button class="policy-confirm" @tap="resolvePolicyDialog(true)">我已阅读并继续</button></view>
+        <view class="policy-dialog-actions"><button class="policy-cancel" @tap="resolvePolicyDialog(false)">{{ policyCancelText }}</button><button class="policy-confirm" @tap="resolvePolicyDialog(true)">{{ policyConfirmText }}</button></view>
       </view>
     </view>
 
@@ -1033,6 +1032,9 @@ const {
   ensureThreeDimensionalPolicy,
   reset: resetCreativePolicyState,
 } = creativePolicy
+const policyDialogTitle = computed(() => policyDialog.value?.key === 'three-dimensional' ? '3D生成提示' : policyDialog.value?.key === 'reference-materials' ? '素材使用提示' : 'AI生成提示')
+const policyCancelText = computed(() => policyDialog.value?.key === 'reference-materials' ? '暂不上传' : '暂不生成')
+const policyConfirmText = computed(() => policyDialog.value?.key === 'reference-materials' ? '继续上传' : '继续生成')
 resetCreativePolicy = resetCreativePolicyState
 
 async function chooseMode(value: Mode) {
@@ -1899,21 +1901,7 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .back-button { justify-self: start; font-size: 58rpx; font-weight: 300; }
 .history-button { display: flex; flex: 0 0 auto; align-items: center; gap: 6rpx; height: 58rpx; color: #56736a; font-size: 21rpx; }
 .history-button text:first-child { font-size: 32rpx; }
-.workshop-menu-button {
-  display: flex;
-  align-items: center;
-  justify-content: space-around;
-  width: 128rpx;
-  height: 58rpx;
-  padding: 0 14rpx;
-  box-sizing: border-box;
-  border: 1rpx solid #e4e7e6;
-  border-radius: 32rpx;
-  background: rgba(255, 255, 255, .86);
-  color: #171b1a;
-  font-size: 25rpx;
-}
-.workshop-menu-button text:last-child { font-size: 33rpx; }
+.workshop-action-button { padding: 10rpx 0 10rpx 12rpx; color: #56736a; font-size: 21rpx; }
 
 .history-mask { position: fixed; z-index: 90; inset: 0; display: flex; align-items: flex-end; background: rgba(13,28,24,.4); }
 .history-sheet { display: flex; flex-direction: column; width: 100%; height: 78vh; box-sizing: border-box; padding: 30rpx 28rpx calc(34rpx + env(safe-area-inset-bottom)); border-radius: 28rpx 28rpx 0 0; background: #f8fbfa; box-shadow: 0 -12rpx 40rpx rgba(17,55,46,.14); }
@@ -2101,7 +2089,7 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 
 @media (max-width: 360px) {
   .workshop-nav { grid-template-columns: 105rpx minmax(0, 1fr) 180rpx; padding-right: 15rpx; padding-left: 15rpx; }
-  .workshop-menu-button { width: 112rpx; }
+  .workshop-action-button { padding-left: 8rpx; }
   .chat { padding-right: 25rpx; padding-left: 25rpx; }
   .output-surface { margin-left: 58rpx; }
   .composer-dock { padding-right: 25rpx; padding-left: 25rpx; }
@@ -2389,4 +2377,18 @@ onUnmounted(() => { persistChatDraft(); resolvePolicyDialog(false); stopModelPol
 .chat-input-row{gap:13rpx;margin-top:6rpx}.chat-upload-button,.chat-send-button{width:72rpx;height:72rpx;border-radius:20rpx;line-height:72rpx}.chat-upload-button{border:0;background:linear-gradient(145deg,#54d9c0,#35b69f);color:#fff;font-size:49rpx}.chat-input{height:78rpx;min-height:78rpx;max-height:78rpx;padding:13rpx 83rpx 9rpx 26rpx;border:2rpx solid #70d8c3;border-radius:40rpx;background:#fff;color:#25302d;font-size:23rpx;line-height:34rpx;box-shadow:0 4rpx 17rpx rgba(25,178,151,.12)}.chat-send-button{margin-left:-85rpx;border:0;background:transparent;color:#69cbb7;font-size:35rpx}.chat-send-button.ready{background:transparent;color:#24ad91}.composer-footer{display:none}
 .loading-bar{right:38rpx;bottom:calc(194rpx + env(safe-area-inset-bottom));left:38rpx;border-color:#c9e9e1;border-radius:25rpx;background:#f8fffd;color:#4d756b}.chat-bottom-spacer{height:calc(275rpx + env(safe-area-inset-bottom))}.chat-bottom-spacer.has-quick-replies,.chat-bottom-spacer.has-replacement-panel{height:calc(320rpx + env(safe-area-inset-bottom))}
 @media(max-width:360px){.chat{padding-right:25rpx;padding-left:25rpx}.output-surface{margin-left:58rpx}.composer-dock{padding-right:25rpx;padding-left:25rpx}}
+</style>
+
+<style scoped lang="scss">
+.category-suggestion-list { width: calc(100% - 108rpx); margin-left: 108rpx; }
+@media (max-width: 360px) { .category-suggestion-list { width: calc(100% - 95rpx); margin-left: 95rpx; } }
+.policy-mask { padding: 48rpx; background: rgba(245, 247, 247, .9); }
+.policy-dialog { width: 100%; max-height: 72vh; border: 3rpx solid #17caaa; border-radius: 42rpx; background: #fff; box-shadow: 0 16rpx 42rpx rgba(19, 80, 70, .12); }
+.policy-dialog-title { display: block; padding: 52rpx 42rpx 28rpx; color: #111; font-size: 40rpx; font-weight: 700; line-height: 1.2; text-align: center; }
+.policy-dialog-copy { width: 100%; height: auto; max-height: 380rpx; box-sizing: border-box; padding: 0 40rpx 42rpx; }
+.policy-dialog-copy text { color: #3a3a3a; font-size: 28rpx; line-height: 1.8; }
+.policy-dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 0 20rpx 24rpx; border-top: 1rpx solid #e8efed; background: #fff; }
+.policy-dialog-actions button { width: 100%; height: 92rpx; margin: 0; padding: 0; border: 0; border-radius: 0; background: #fff; font-size: 31rpx; font-weight: 500; line-height: 92rpx; }
+.policy-cancel { color: #171717; }
+.policy-confirm { color: #13b99d; }
 </style>
