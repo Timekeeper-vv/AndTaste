@@ -439,6 +439,47 @@ modao.chrome.path=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 - 右下角 AI 助手支持实时查询打样工单明细，可回答“进行中的打样有几个”“李楷负责哪些打样”“北京天文馆打样进度怎么样”“冷冻食品打样有哪些”等问题
 - AI 查询采用 Text-to-API + LLM 总结：先由大模型参与自然语言理解，再由后端查询 `supply_chain_sample_work_order`，最后必须由大模型基于真实结果生成业务化回答；禁止绕过大模型直接输出纯数据，禁止编造项目、产品、负责人、数量和日期
 
+### 10. C 端小程序消费侧（shixun-miniapp）
+
+面向文创消费者的微信小程序端，基于 **uni-app + Vue 3 + TypeScript**。消费侧围绕"积分 → 创作 → 作品 → 生产"的闭环设计。
+
+#### 积分规则（与充值测算表对齐）
+
+| 项目 | 数值 | 说明 |
+|---|---|---|
+| 首次赠送 | 240 积分 | 新用户注册即送，成本约 1.20 元 |
+| 1 元 = | 100 积分 | 充值按整数元计费 |
+| 平面图生成 | 120 分 / 次 | 2 倍定价，引流款 |
+| 三视图生成 | 450 分 / 次 | 2.5 倍定价 |
+| 文生 3D / 图生 3D | 1680 分 / 次 | 3 倍定价，利润主力 |
+| 创作奖励 | 50 / 100 / 200 分 | 平面图 / 三视图 / 3D 完成时发放 |
+| 充值五档 | 9.9→1000 / 39→4000 / 99→10200 / 199→20700 / 499→52400 | 基础积分 + 赠送积分（最高档赠送 2500 分） |
+
+#### 积分活动与成长玩法
+
+| 玩法 | 规则 | 实现入口 |
+|---|---|---|
+| 每日签到 | +240 分，连续 7 天额外 +500 分 | `POST /consumer-activities/checkin` |
+| 红包雨 | 9 / 14 / 21 点开场，2–10 分 / 人 / 场，每场限量 100 份 | `POST /consumer-activities/red-packets/{slot}/claim` |
+| 答题赚积分 | 7 题四选一，全对 +100 分；答错可重选；每日 3 轮、每轮间隔 2 小时 | `POST /consumer-activities/quiz/start` |
+| 悬赏令 | 投稿审核通过 +2000 分 + 免费树脂打样 1 件（60 天有效，含 1 次快递） | `POST /consumer-activities/tasks/{id}/submissions` |
+| 使用时长（成长） | 每分钟 +5 分，每日上限 1000 分（200 分钟）；离开 3 分钟视为中断 | 客户端每 30 秒心跳 `POST /consumer-activities/usage/heartbeat` |
+| 分享朋友圈（成长） | +80 分 / 次，每日一次 | 分享后回端 `POST /consumer-activities/share/claim` 领取 |
+| 邀请拉新（成长） | 邀请人 +80、新用户 +200；注册 / 首次微信登录时随 `inviteCode` 绑定 | `GET /consumer-activities/invite/code` 获取邀请码 |
+
+邀请码绑定走 `PROPAGATION_REQUIRES_NEW` 独立事务，无效 / 冲突不影响注册主流程；时长心跳与分享奖励有单次 / 每日封顶，服务端做幂等。统一发放入口由 `ConsumerPointsRewardService` 负责，确保 FOR UPDATE 锁余额、写 `consumer_credit_transaction` 流水与发奖原子化。
+
+#### 小程序端核心能力
+
+- 原生端统一登录态：微信快捷登录 / 手机号授权登录 / 邮箱注册
+- 首页展示创作入口、积分余额、新人 240 分赠送文案
+- 对话式 AI 创作：文生图、图生图、三视图、文生 3D、图生 3D
+- 活动页五个标签：签到 / 成长（时长进度、分享领取、邀请码） / 红包雨 / 答题 / 悬赏令
+- 原生虚拟支付（`wx.requestVirtualPayment`）充值积分，服务端核验支付代币到账
+- 作品库、审核状态、打样 / 批量生产申请、订单历史
+- 网页扫码登录：网页生成小程序码，用户在小程序确认后自动登录网页端
+- `share` / `timeline` 两种分享落点，路径自动透传邀请码
+
 ---
 
 ## 订单与数据关联设计
@@ -515,12 +556,17 @@ flowchart TB
 smart_pig/
 ├── shixun/                    # Spring Boot 后端
 │   ├── src/main/java/         # 控制器、服务和业务代码
-│   ├── src/main/resources/    # 配置、数据库脚本、静态资源
+│   ├── src/main/resources/     # 配置、数据库脚本（Flyway 迁移）、静态资源
 │   └── pom.xml
-├── shixun-vue/                # Vue 3 前端
-│   ├── src/components/        # 业务组件
+├── shixun-vue/                # Vue 3 + TypeScript 网页管理端 / 网页 C 端
+│   ├── src/components/        # 业务组件（含 C 端移动端页面 ConsumerMobilePage）
 │   ├── src/api/               # 前端 API 封装
 │   └── package.json
+├── shixun-miniapp/            # uni-app Vue3 微信小程序 C 端
+│   ├── src/pages/             # 小程序页面（首页、注册登录、创作、活动、充值…）
+│   ├── src/api/               # 小程序 API 封装
+│   └── package.json
+├── docs/                      # API 文档与运营资料
 ├── deploy/
 │   └── env.example            # 生产环境变量模板
 ├── scripts/
@@ -620,7 +666,25 @@ npm run dev -- --host 0.0.0.0
 
 前端地址：`http://localhost:5173/`
 
-### 6. 首次管理员与账号安全
+### 6. 启动微信小程序消费端
+
+另开一个终端：
+
+```bash
+cd shixun-miniapp
+npm install
+npm run dev:mp-weixin
+```
+
+编译完成后，在微信开发者工具中打开 `shixun-miniapp/dist/dev/mp-weixin` 目录即可预览。本地开发时如需直连后端，请在 `shixun-miniapp/.env` 中填写：
+
+```dotenv
+VITE_API_BASE_URL=http://localhost:8080
+```
+
+正式环境改为线上 HTTPS 域名，且必须在微信公众平台后台加入 request / uploadFile / downloadFile 合法域名列表。
+
+### 7. 首次管理员与账号安全
 
 项目不再自动创建任何默认用户名或演示密码。首次部署时，如数据库中还没有管理员，可在服务器 `.env` 中临时填写 `BOOTSTRAP_ADMIN_*` 并将 `BOOTSTRAP_ADMIN_ENABLED=true`；服务启动成功、确认可以登录后，立即改回 `false` 并重启。管理员密码至少 12 个字符，且所有账号密码都应使用高强度随机值。
 

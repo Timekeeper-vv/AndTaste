@@ -194,12 +194,12 @@ Base：`/api/creative/ai`
 
 ### 9.1 风格与 C 端额度
 
-当前扣费：平面图生成 120 点/次、文生 3D 60 点/次、图生 3D 70 点/次、模型转换 1 点/次。
+当前扣费：平面图生成 120 点/次、三视图生成 450 点/次、文生 3D 1680 点/次、图生 3D 1680 点/次、模型转换 1 点/次；新用户注册赠送 240 点，1 元 = 100 点。
 
 | 方法 | 路径 | 功能 | 请求/参数 | 返回要点 | 权限 |
 |---|---|---|---|---|---|
 | `GET` | `/styles` | 创作风格档案 | - | `id,name,basePrompt,negativePrompt,palette,culturalGuardrails` | 登录 |
-| `GET` | `/consumer-credits/rules` | 额度消耗规则 | - | `image2d,imageTo3d,textTo3d,modelConvert,unit` | 登录 |
+| `GET` | `/consumer-credits/rules` | 额度消耗规则 | - | `image2d,multiView,imageTo3d,textTo3d,modelConvert,unit` | 登录 |
 | `GET` | `/consumer-credits/account` | 当前 C 端额度账户 | - | `balance,frozenBalance,totalRecharged,totalConsumed` | `user` |
 | `GET` | `/consumer-credits/admin/accounts` | C端额度账户列表 | Query：`search,size=200` | 账户列表 | 创作后台管理员 |
 | `GET` | `/consumer-credits/admin/transactions` | 额度流水 | Query：`userId,status,size=300` | 流水列表 | 创作后台管理员 |
@@ -274,6 +274,26 @@ Base：`/api/creative/ai`
 | `POST` | `/consumer/copyright-consultations` | 版权服务咨询 | `{service,note?,assetId?}` | `{message,status=pending}` | `user` |
 
 `consumer-production/submit` 请求体：`assetId, requestType(sample/bulk), title?, quantity, purpose(personal/museum_sale), selfShipQuantity?, museumDistribution?, recipientName?, recipientPhone?, recipientAddress?, note?`。个人用途必须全部寄送个人；博物馆售卖用途必须选择一个博物馆并全部投放。
+
+### 9.6 C 端积分活动
+
+Base：`/api/creative/ai/consumer-activities`
+
+| 方法 | 路径 | 功能 | 请求/参数 | 返回要点 | 权限 |
+|---|---|---|---|---|---|
+| `GET` | `/overview` | 活动总览 | - | `checkin,redPackets,quiz,usage,share,invite,creditAccount,tasks` | `user` |
+| `POST` | `/checkin` | 每日签到 | - | `streakDays,points,creditAccount`；每日 240 分，连签 7 天额外 500 分 | `user` |
+| `GET` | `/red-packets/current` | 今日红包雨场次 | - | 9/14/21 点场次与领取状态 | `user` |
+| `POST` | `/red-packets/{slot}/claim` | 领取红包 | `slot=09/14/21`，开场后 30 分钟内 | `points`（2–10 分，每人每场一次） | `user` |
+| `POST` | `/quiz/start` | 开始答题 | - | 7 题场次；每天 3 轮、每轮间隔 2 小时 | `user` |
+| `POST` | `/quiz/{sessionId}/answer` | 提交单题答案 | `{option:A/B/C/D}` | `correct`；全部答对奖励 100 分 | `user` |
+| `GET` | `/tasks` | 悬赏任务列表 | - | `id,title,brief,deadline,rewardAmount` | 登录 |
+| `POST` | `/tasks/{id}/submissions` | 提交悬赏作品 | 产品信息 + 三视图资产 | 审核通过可得 2000 分与免费树脂打样 1 件（60 天有效） | `user` |
+| `POST` | `/usage/heartbeat` | 有效使用时长心跳 | `{activeSeconds}`，单次最多按 60 秒结算 | `activeSeconds,minutes,points,granted,dailyPointCap,pointsPerMinute,creditAccount`；每分钟 5 分，每日上限 1000 分（200 分钟） | `user` |
+| `POST` | `/share/claim` | 分享朋友圈领取奖励 | `{channel?}`，默认 `timeline` | `points=80`；每日一次 | `user` |
+| `GET` | `/invite/code` | 我的邀请码与邀请战绩 | - | `code,invitedCount,pointsEarned,lastInvitedAt,inviterPoints=80,inviteePoints=200` | `user` |
+
+邀请码随注册/首次微信登录提交（`inviteCode`），邀请人得 80 分、新用户得 200 分，每个新账号只可绑定一次；无效邀请码不会阻断注册。使用时长由客户端每 30 秒上报一次，服务端按整分钟结算并做单次与每日封顶；分享奖励采用“分享后回端领取”，每日一次，用于无法核验朋友圈分享结果的场景。
 
 ---
 

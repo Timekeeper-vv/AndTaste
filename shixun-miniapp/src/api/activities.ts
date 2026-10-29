@@ -16,3 +16,12 @@ export const submitBountyTask = (taskId: number, body: Record<string, unknown>) 
   `/api/creative/ai/consumer-activities/tasks/${taskId}/submissions`,
   { method: 'POST', data: body, header: { 'content-type': 'application/json' } },
 )
+export const reportActiveUsage = (activeSeconds: number) => request<any>(
+  '/api/creative/ai/consumer-activities/usage/heartbeat',
+  { method: 'POST', data: { activeSeconds }, header: { 'content-type': 'application/json' }, timeout: 15000 },
+)
+export const claimShareReward = (channel = 'timeline') => request<any>(
+  '/api/creative/ai/consumer-activities/share/claim',
+  { method: 'POST', data: { channel }, header: { 'content-type': 'application/json' } },
+)
+export const getInviteCode = () => request<any>('/api/creative/ai/consumer-activities/invite/code')

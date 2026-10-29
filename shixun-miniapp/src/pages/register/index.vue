@@ -11,6 +11,7 @@
     <view class="form-card">
       <view class="form-head"><text>基础信息</text><text>邮箱验证码用于确认账号归属</text></view>
       <input v-model.trim="form.username" class="field" maxlength="40" placeholder="用户名" placeholder-class="placeholder" />
+      <input v-model.trim="form.inviteCode" class="field" maxlength="16" placeholder="邀请码（选填，注册双方各得积分）" placeholder-class="placeholder" />
       <view class="field-row"><input v-model.trim="form.phone" class="field" maxlength="30" type="number" placeholder="手机号（可选）" placeholder-class="placeholder" /><input v-model.trim="form.age" class="field age" maxlength="3" type="number" placeholder="年龄" placeholder-class="placeholder" /></view>
       <input v-model.trim="form.email" class="field" maxlength="100" type="text" placeholder="邮箱" placeholder-class="placeholder" />
       <view class="code-row"><input v-model.trim="emailCode" class="field" maxlength="6" type="number" placeholder="邮箱验证码" placeholder-class="placeholder" /><button class="code-button" :disabled="sendingCode || codeCountdown > 0" @tap="sendEmailCode">{{ sendingCode ? '发送中' : codeCountdown > 0 ? `${codeCountdown}s` : '获取验证码' }}</button></view>
@@ -42,6 +43,7 @@
 </template>
 
 <script setup lang="ts">
+import { onLoad } from '@dcloudio/uni-app'
 import { onUnmounted, reactive, ref } from 'vue'
 import { request } from '../../api/client'
 import { saveSession } from '../../utils/session'
@@ -50,6 +52,7 @@ type ConsentKey = 'agreeDisclaimer' | 'agreeConfidentiality' | 'agreeContentPoli
 
 const form = reactive({
   username: '',
+  inviteCode: '',
   phone: '',
   age: '',
   email: '',
@@ -138,6 +141,7 @@ async function register() {
       method: 'POST',
       data: {
         username: form.username, phone: form.phone || undefined, age, email: form.email, emailCode: emailCode.value, password: form.password,
+        inviteCode: form.inviteCode ? form.inviteCode.toUpperCase() : undefined,
         agreeDisclaimer: form.agreeDisclaimer, agreeConfidentiality: form.agreeConfidentiality,
         agreeContentPolicy: form.agreeContentPolicy, realNameAcknowledged: form.realNameAcknowledged,
         complianceSignature: form.signature,
@@ -147,6 +151,8 @@ async function register() {
     })
     if (!session?.token || !session?.user || session.user.role !== 'user') throw new Error('注册响应异常，请重新登录')
     saveSession(session)
+    // 邀请码只在本次注册时生效，成功后清掉，避免继续带到其他账号。
+    uni.removeStorageSync('pending_invite_code')
     uni.showModal({
       title: '账号创建成功', content: '邮箱已验证，合规确认已记录。', showCancel: false, confirmText: '开始创作',
       success: () => uni.reLaunch({ url: '/pages/purpose/index' }),
@@ -159,6 +165,13 @@ async function register() {
 }
 
 function goLogin() { uni.redirectTo({ url: '/pages/login/index' }) }
+
+onLoad((query: Record<string, string> = {}) => {
+  // 支持分享链接直落注册页，也支持先到登录页再跳转注册页。
+  const stored = uni.getStorageSync('pending_invite_code')
+  const code = String(query.inviteCode || (typeof stored === 'string' ? stored : '')).trim()
+  if (code) form.inviteCode = code.toUpperCase()
+})
 
 onUnmounted(() => { if (codeTimer) clearInterval(codeTimer) })
 </script>

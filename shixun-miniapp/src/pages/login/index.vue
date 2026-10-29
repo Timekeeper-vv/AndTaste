@@ -69,10 +69,30 @@ const campaignFallbacks: CreatorCampaign[] = [
 const displayedCampaigns = computed(() => campaigns.value.length ? campaigns.value : campaignFallbacks)
 const campaignImage = (index: number) => index % 2 ? '/static/ui-design/campaign-drum.jpg' : '/static/ui-design/campaign-bronze.jpg'
 
+// 邀请码从分享进入时记录一次，注册或首次微信登录时随请求提交。
+const INVITE_STORAGE_KEY = 'pending_invite_code'
+
+function pendingInviteCode() {
+  const value = uni.getStorageSync(INVITE_STORAGE_KEY)
+  return typeof value === 'string' ? value.trim().toUpperCase() : ''
+}
+
+function rememberInviteCode(value: unknown) {
+  const code = String(value || '').trim().toUpperCase()
+  if (!code) return
+  uni.setStorageSync(INVITE_STORAGE_KEY, code)
+}
+
+function launchInviteCode() {
+  try { return String(uni.getLaunchOptionsSync()?.query?.inviteCode || '') } catch { return '' }
+}
+
 function finishLogin(session: any) {
   if (!session?.token || !session?.user) throw new Error('登录响应缺少令牌')
   if (session.user.role !== 'user') throw new Error('该账号是管理端账号，请使用网页管理端登录')
   saveSession(session)
+  // 邀请码只在本次注册/首次登录时生效，成功后清掉，避免继续带到其他账号。
+  uni.removeStorageSync(INVITE_STORAGE_KEY)
   if (miniWebLoginSession.value) {
     uni.showToast({ title: '网页已登录', icon: 'success' })
     setTimeout(() => uni.reLaunch({ url: '/pages/webview/index' }), 700)
@@ -134,6 +154,8 @@ async function wechatLogin() {
     const code = await miniProgramLoginCode()
     const data: Record<string, any> = { code }
     if (miniWebLoginSession.value) data.miniWebLoginSession = miniWebLoginSession.value
+    const inviteCode = pendingInviteCode()
+    if (inviteCode) data.inviteCode = inviteCode
     const session = await request<any>('/api/users/wechat-login', { method: 'POST', data, header: { 'content-type': 'application/json', Authorization: '' } })
     finishLogin(session)
   } catch (error: any) {
@@ -172,12 +194,14 @@ async function authorizeWechatPhone(event: any) {
   wechatLoading.value = true
   try {
     const loginCode = await miniProgramLoginCode()
+    const inviteCode = pendingInviteCode()
     const session = await request<any>('/api/users/wechat-phone-login', {
       method: 'POST',
       data: {
         loginCode,
         phoneCode,
         agreeTerms: true,
+        ...(inviteCode ? { inviteCode } : {}),
         ...(miniWebLoginSession.value ? { miniWebLoginSession: miniWebLoginSession.value } : {}),
       },
       header: { 'content-type': 'application/json', Authorization: '' },
@@ -188,7 +212,10 @@ async function authorizeWechatPhone(event: any) {
   } finally { wechatLoading.value = false }
 }
 
-function goRegister() { uni.navigateTo({ url: '/pages/register/index' }) }
+function goRegister() {
+  const inviteCode = pendingInviteCode()
+  uni.navigateTo({ url: `/pages/register/index${inviteCode ? `?inviteCode=${encodeURIComponent(inviteCode)}` : ''}` })
+}
 
 function toggleTerms() { wechatTermsAccepted.value = !wechatTermsAccepted.value }
 
@@ -249,6 +276,9 @@ onLoad((query: Record<string, string> = {}) => {
   fromWebview.value = query.from === 'webview'
   miniWebLoginSession.value = query.miniWebLoginSession || ''
   redirectUrl.value = safeMiniProgramRoute(query.redirect)
+  // 分享卡片支持 pages/login/index 与 pages/register/index 两种落地页，
+  // 参数都先落到本地存储，注册或首次登录时再提交。
+  rememberInviteCode(query.inviteCode || launchInviteCode())
   readPendingCampaign()
   void loadCampaigns()
   // The web-view login button already represents an explicit user action.

@@ -155,7 +155,7 @@ public class CreativeAiController {
     @Value("${tripo.model.version:v3.1-20260211}")
     private String tripoModelVersion;
 
-    @Value("${consumer.credit.initial-balance:600}")
+    @Value("${consumer.credit.initial-balance:240}")
     private BigDecimal consumerCreditInitialBalance;
 
     @Value("${replicate.api.key:}")

@@ -1,3 +1,5 @@
+import { markActive } from '../utils/activity'
+
 // Keep the request layer self-contained. WeChat DevTools can briefly expose an
 // incomplete imported module while it is rebuilding the watched output tree;
 // authentication must still work during that window. This is the same storage
@@ -165,6 +167,9 @@ function isCredentialAuthenticationRequest(path: string) {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  // Any network call is evidence the user is actively using the miniapp, which
+  // lets the usage-duration reward ignore time spent with the app idle.
+  markActive()
   const session = readStoredSession()
   const { timeout = DEFAULT_REQUEST_TIMEOUT, ...requestOptions } = options
   const headers: Record<string, string> = { ...(requestOptions.header as Record<string, string> || {}) }
@@ -202,6 +207,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 }
 
 export async function uploadFile<T>(path: string, filePath: string, name = 'file', formData?: Record<string, string>): Promise<T> {
+  markActive()
   const session = readStoredSession()
   let response: UniApp.UploadFileSuccessCallbackResult
   try {

@@ -3,6 +3,7 @@ package com.example.shixun.controller;
 import com.example.shixun.model.User;
 import com.example.shixun.service.UserService;
 import com.example.shixun.service.EmailVerificationService;
+import com.example.shixun.service.ConsumerPointsInviteService;
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -64,6 +65,7 @@ public class UserController {
 
     private final UserService userService;
     private final EmailVerificationService emailVerificationService;
+    private final ConsumerPointsInviteService consumerPointsInviteService;
     private final JwtService jwtService;
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -100,9 +102,11 @@ public class UserController {
     private static final Duration MINI_WEB_LOGIN_TTL = Duration.ofMinutes(3);
 
     public UserController(UserService userService, EmailVerificationService emailVerificationService, JwtService jwtService, JdbcTemplate jdbc,
+                          ConsumerPointsInviteService consumerPointsInviteService,
                           ObjectMapper mapper, PlatformTransactionManager transactionManager) {
         this.userService = userService;
         this.emailVerificationService = emailVerificationService;
+        this.consumerPointsInviteService = consumerPointsInviteService;
         this.jwtService = jwtService;
         this.jdbc = jdbc;
         this.mapper = mapper;
@@ -183,7 +187,10 @@ public class UserController {
         validatePassword(user.getPassword());
         return userService.save(user)
             .thenApply(saved -> {
-                if (publicRegistration) recordComplianceConsent(saved.getId(), body);
+                if (publicRegistration) {
+                    recordComplianceConsent(saved.getId(), body);
+                    consumerPointsInviteService.bindOnRegistration(saved.getId(), text(body.get("inviteCode")));
+                }
                 synchronizePlatformIdentity(saved);
                 return ResponseEntity.status(HttpStatus.CREATED).body(saved);
             })
@@ -239,6 +246,7 @@ public class UserController {
         try {
             User created = userService.createSocialUser(user);
             recordComplianceConsent(created.getId(), body);
+            consumerPointsInviteService.bindOnRegistration(created.getId(), text(body.get("inviteCode")));
             synchronizePlatformIdentity(created);
             userService.touchLastLogin(created.getId());
             recordLoginAudit(created.getId(), "email_registration", "success", null);
@@ -712,6 +720,7 @@ public class UserController {
             User created = createWechatUser(body);
             userService.createSocialUser(created);
             recordComplianceConsent(created.getId(), body);
+            consumerPointsInviteService.bindOnRegistration(created.getId(), text(body.get("inviteCode")));
             jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
                     created.getId(), appId, identity.openId());
             synchronizePlatformIdentity(created);
@@ -785,6 +794,7 @@ public class UserController {
             if (interruptedRegistration != null) return new WechatLoginOutcome(interruptedRegistration, false);
             userService.createSocialUser(created);
             recordComplianceConsent(created.getId(), phoneLoginConsent());
+            consumerPointsInviteService.bindOnRegistration(created.getId(), text(body == null ? null : body.get("inviteCode")));
             jdbc.update("INSERT INTO wechat_user_binding(user_id,app_id,openid) VALUES (?,?,?)",
                     created.getId(), identity.appId(), identity.openId());
             synchronizePlatformIdentity(created);

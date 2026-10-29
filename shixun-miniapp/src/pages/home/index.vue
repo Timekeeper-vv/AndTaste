@@ -9,7 +9,7 @@
           <view class="hero-copy">
             <text class="hero-kicker">完成首次 AI 创作</text>
             <text class="hero-title">创作有礼</text>
-            <text class="hero-description">新用户赠 600 分：可生成 5 张平面图，或 1 次三视图 + 1 张平面图</text>
+            <text class="hero-description">新用户赠 240 分：可生成 2 张平面图</text>
             <view class="hero-link" @tap="startConversation"><text>用对话开始</text><text>›</text></view>
           </view>
         </view>

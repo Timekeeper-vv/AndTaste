@@ -173,3 +173,165 @@ CREATE TABLE consumer_credit_transaction (
     operator VARCHAR(100),
     created_at TIMESTAMP NULL
 );
+
+CREATE TABLE consumer_points_invite_code (
+    user_id BIGINT NOT NULL PRIMARY KEY,
+    invite_code VARCHAR(16) NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE consumer_points_invite_record (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    inviter_id BIGINT NOT NULL,
+    invitee_id BIGINT NOT NULL UNIQUE,
+    invite_code VARCHAR(16) NOT NULL,
+    inviter_points INT NOT NULL DEFAULT 80,
+    invitee_points INT NOT NULL DEFAULT 200,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE consumer_points_usage_daily (
+    user_id BIGINT NOT NULL,
+    stat_date DATE NOT NULL,
+    active_seconds INT NOT NULL DEFAULT 0,
+    awarded_points INT NOT NULL DEFAULT 0,
+    last_heartbeat_at TIMESTAMP NULL,
+    PRIMARY KEY (user_id, stat_date)
+);
+
+CREATE TABLE consumer_points_share_claim (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    claim_date DATE NOT NULL,
+    channel VARCHAR(20) NOT NULL DEFAULT 'timeline',
+    points INT NOT NULL DEFAULT 80,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, claim_date)
+);
+
+CREATE TABLE consumer_points_checkin (
+    user_id BIGINT NOT NULL PRIMARY KEY,
+    last_checkin_date DATE NULL,
+    streak_days INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE consumer_points_red_packet_event (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    event_date DATE NOT NULL,
+    event_slot VARCHAR(8) NOT NULL,
+    packet_limit INT NOT NULL DEFAULT 100,
+    points_min INT NOT NULL DEFAULT 2,
+    points_max INT NOT NULL DEFAULT 10,
+    claimed_count INT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'open',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (event_date, event_slot)
+);
+
+CREATE TABLE consumer_points_red_packet_claim (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    event_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    points INT NOT NULL,
+    claimed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (event_id, user_id)
+);
+
+CREATE TABLE consumer_points_quiz_question (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    category VARCHAR(100) NULL,
+    question_text VARCHAR(1000) NOT NULL,
+    option_a VARCHAR(500) NOT NULL,
+    option_b VARCHAR(500) NOT NULL,
+    option_c VARCHAR(500) NOT NULL,
+    option_d VARCHAR(500) NOT NULL,
+    correct_option CHAR(1) NOT NULL,
+    explanation VARCHAR(1000) NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE consumer_points_quiz_session (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    session_date DATE NOT NULL,
+    sequence_no INT NOT NULL,
+    current_position INT NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'in_progress',
+    wrong_retry_after TIMESTAMP NULL,
+    credit_transaction_id BIGINT NULL,
+    completed_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, session_date, sequence_no)
+);
+
+CREATE TABLE consumer_points_quiz_session_question (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    session_id BIGINT NOT NULL,
+    position_no INT NOT NULL,
+    question_id BIGINT NOT NULL,
+    solved TINYINT(1) NOT NULL DEFAULT 0,
+    UNIQUE (session_id, position_no),
+    UNIQUE (session_id, question_id)
+);
+
+CREATE TABLE consumer_points_quiz_attempt (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    session_id BIGINT NOT NULL,
+    position_no INT NOT NULL,
+    selected_option CHAR(1) NOT NULL,
+    is_correct TINYINT(1) NOT NULL,
+    answered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE consumer_bounty_task (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    campaign_key VARCHAR(80) NOT NULL UNIQUE,
+    title VARCHAR(200) NOT NULL,
+    brief TEXT NOT NULL,
+    deadline DATE NULL,
+    reward_amount INT NOT NULL DEFAULT 2000,
+    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE consumer_bounty_submission (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    task_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    asset_id BIGINT NOT NULL,
+    bundle_id BIGINT NULL,
+    view_asset_ids_json VARCHAR(1000) NULL,
+    product_name VARCHAR(200) NOT NULL,
+    product_category VARCHAR(100) NOT NULL,
+    product_features VARCHAR(1000) NOT NULL,
+    artifact_prototype VARCHAR(500) NOT NULL,
+    product_description TEXT NOT NULL,
+    status VARCHAR(24) NOT NULL DEFAULT 'pending_review',
+    credit_transaction_id BIGINT NULL,
+    selected_for_sample TINYINT(1) NOT NULL DEFAULT 0,
+    reviewed_by VARCHAR(80) NULL,
+    reviewed_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (task_id, asset_id)
+);
+
+CREATE TABLE consumer_bounty_sample_voucher (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    task_id BIGINT NOT NULL,
+    submission_id BIGINT NOT NULL UNIQUE,
+    user_id BIGINT NOT NULL,
+    bundle_id BIGINT NULL,
+    status VARCHAR(24) NOT NULL DEFAULT 'available',
+    material VARCHAR(40) NOT NULL DEFAULT '树脂',
+    sample_quantity INT NOT NULL DEFAULT 1,
+    shipping_included TINYINT(1) NOT NULL DEFAULT 1,
+    expires_at TIMESTAMP NULL,
+    production_request_id BIGINT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    redeemed_at TIMESTAMP NULL
+);
+

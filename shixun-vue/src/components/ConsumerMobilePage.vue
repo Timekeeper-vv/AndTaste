@@ -362,8 +362,8 @@ const previewDownloadUrl = computed(() => previewAsset.value?.id
   : previewAsset.value?.fileUrl || previewAsset.value?.modelUrl || previewModelUrl.value)
 
 const creditBalance = computed(() => Number(creditAccount.value?.balance ?? 0))
-const imageCost = computed(() => Number(creditRules.value?.image2d ?? 1))
-const modelCost = computed(() => modelForm.mode === 'text_to_model' ? Number(creditRules.value?.textTo3d ?? 60) : Number(creditRules.value?.imageTo3d ?? 70))
+const imageCost = computed(() => Number(creditRules.value?.image2d ?? 120))
+const modelCost = computed(() => modelForm.mode === 'text_to_model' ? Number(creditRules.value?.textTo3d ?? 1680) : Number(creditRules.value?.imageTo3d ?? 1680))
 const convertCost = computed(() => Number(creditRules.value?.modelConvert ?? 1))
 const rewardMissions = computed(() => Array.isArray(rewardOverview.value?.missions) ? rewardOverview.value.missions : [])
 const selectedMission = computed(() => rewardMissions.value.find(mission => mission.key === selectedMissionKey.value) || rewardMissions.value[0] || null)

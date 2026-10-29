@@ -2,11 +2,11 @@ package com.example.shixun.controller;
 
 import com.example.shixun.security.JwtAuthenticationFilter;
 import com.example.shixun.security.JwtService;
+import com.example.shixun.service.ConsumerPointsInviteService;
+import com.example.shixun.service.ConsumerPointsRewardService;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.support.GeneratedKeyHolder;
-import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -14,9 +14,6 @@ import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.BigDecimal;
-import java.sql.PreparedStatement;
-import java.sql.Statement;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -29,12 +26,24 @@ import java.util.concurrent.ThreadLocalRandom;
 public class ConsumerPointsActivityController {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
     private static final List<String> PACKET_SLOTS = List.of("09", "14", "21");
+    /** 有效使用时长：每分钟 5 积分，每日最多 1000 积分（200 分钟）。 */
+    private static final int USAGE_POINTS_PER_MINUTE = 5;
+    private static final int USAGE_DAILY_POINT_CAP = 1000;
+    private static final int USAGE_DAILY_SECOND_CAP = USAGE_DAILY_POINT_CAP / USAGE_POINTS_PER_MINUTE * 60;
+    private static final int USAGE_MAX_SECONDS_PER_CALL = 60;
+    /** 分享朋友圈：每次 80 积分，每日一次。 */
+    private static final int SHARE_POINTS = 80;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
+    private final ConsumerPointsRewardService rewards;
+    private final ConsumerPointsInviteService invites;
 
-    public ConsumerPointsActivityController(JdbcTemplate jdbc, PlatformTransactionManager transactionManager) {
+    public ConsumerPointsActivityController(JdbcTemplate jdbc, PlatformTransactionManager transactionManager,
+                                            ConsumerPointsRewardService rewards, ConsumerPointsInviteService invites) {
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(transactionManager);
+        this.rewards = rewards;
+        this.invites = invites;
     }
 
     @GetMapping("/overview")
@@ -46,6 +55,9 @@ public class ConsumerPointsActivityController {
         out.put("checkin", checkinState(userId, today));
         out.put("redPackets", packetState(userId, today));
         out.put("quiz", quizState(userId, today));
+        out.put("usage", usageState(userId, today));
+        out.put("share", shareState(userId, today));
+        out.put("invite", invites.stats(userId));
         out.put("creditAccount", account(userId));
         out.put("tasks", jdbc.queryForList("SELECT campaign_key campaignKey,title,brief,deadline,reward_amount rewardAmount,status FROM consumer_bounty_task WHERE status='active' AND (deadline IS NULL OR deadline>=?) ORDER BY id DESC", today));
         return out;
@@ -64,9 +76,9 @@ public class ConsumerPointsActivityController {
             int prior = ((Number) row.get("streakDays")).intValue();
             String last = row.get("lastDate") == null ? "" : String.valueOf(row.get("lastDate"));
             int streak = today.minusDays(1).toString().equals(last) ? prior + 1 : 1;
-            int reward = 120 + (streak % 7 == 0 ? 300 : 0);
+            int reward = 240 + (streak % 7 == 0 ? 500 : 0);
             jdbc.update("UPDATE consumer_points_checkin SET last_checkin_date=?,streak_days=? WHERE user_id=?", today, streak, userId);
-            grantPoints(userId, reward, "每日签到" + (reward > 120 ? "，连续7天奖励" : ""));
+            grantPoints(userId, reward, "每日签到" + (reward > 240 ? "，连续7天奖励" : ""));
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("date", today.toString()); out.put("streakDays", streak); out.put("points", reward); out.put("creditAccount", account(userId));
             return out;
@@ -261,6 +273,79 @@ public class ConsumerPointsActivityController {
         return result;
     }
 
+    @PostMapping("/usage/heartbeat")
+    public Map<String, Object> usageHeartbeat(@RequestBody(required = false) Map<String, Object> body) {
+        long userId = requireConsumerUser();
+        LocalDate today = LocalDate.now(BUSINESS_ZONE);
+        int reportedSeconds;
+        try {
+            reportedSeconds = Integer.parseInt(String.valueOf(body == null ? null : body.get("activeSeconds")));
+        } catch (RuntimeException error) {
+            throw new IllegalArgumentException("请上报有效使用秒数");
+        }
+        // A single heartbeat covers at most one minute; longer sessions must
+        // report repeatedly so a spoofed call cannot claim a whole day at once.
+        int seconds = Math.max(1, Math.min(USAGE_MAX_SECONDS_PER_CALL, reportedSeconds));
+        return Objects.requireNonNull(transactions.execute(status -> {
+            jdbc.update("INSERT IGNORE INTO consumer_points_usage_daily (user_id,stat_date,active_seconds,awarded_points) VALUES (?,?,0,0)", userId, today);
+            Map<String, Object> row = jdbc.queryForMap(
+                    "SELECT active_seconds activeSeconds,awarded_points awardedPoints FROM consumer_points_usage_daily WHERE user_id=? AND stat_date=? FOR UPDATE",
+                    userId, today);
+            int priorSeconds = ((Number) row.get("activeSeconds")).intValue();
+            int priorPoints = ((Number) row.get("awardedPoints")).intValue();
+            int totalSeconds = Math.min(USAGE_DAILY_SECOND_CAP, priorSeconds + seconds);
+            int earnedPoints = Math.min(USAGE_DAILY_POINT_CAP, totalSeconds / 60 * USAGE_POINTS_PER_MINUTE);
+            int delta = earnedPoints - priorPoints;
+            jdbc.update("UPDATE consumer_points_usage_daily SET active_seconds=?,awarded_points=?,last_heartbeat_at=NOW() WHERE user_id=? AND stat_date=?",
+                    totalSeconds, earnedPoints, userId, today);
+            if (delta > 0) grantPoints(userId, delta, "有效使用时长奖励 " + (totalSeconds / 60) + " 分钟");
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("date", today.toString());
+            out.put("activeSeconds", totalSeconds);
+            out.put("minutes", totalSeconds / 60);
+            out.put("points", earnedPoints);
+            out.put("granted", Math.max(0, delta));
+            out.put("dailyPointCap", USAGE_DAILY_POINT_CAP);
+            out.put("pointsPerMinute", USAGE_POINTS_PER_MINUTE);
+            out.put("creditAccount", account(userId));
+            return out;
+        }));
+    }
+
+    @PostMapping("/share/claim")
+    public Map<String, Object> claimShareReward(@RequestBody(required = false) Map<String, Object> body) {
+        long userId = requireConsumerUser();
+        LocalDate today = LocalDate.now(BUSINESS_ZONE);
+        String channel = "timeline";
+        Object rawChannel = body == null ? null : body.get("channel");
+        if (rawChannel != null && !String.valueOf(rawChannel).isBlank()) channel = String.valueOf(rawChannel).trim();
+        if (channel.length() > 20) throw new IllegalArgumentException("分享渠道无效");
+        String finalChannel = channel;
+        return Objects.requireNonNull(transactions.execute(status -> {
+            Integer claimed = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM consumer_points_share_claim WHERE user_id=? AND claim_date=?", Integer.class, userId, today);
+            if (claimed != null && claimed > 0) throw new IllegalArgumentException("今天已经领取过分享奖励");
+            try {
+                jdbc.update("INSERT INTO consumer_points_share_claim (user_id,claim_date,channel,points) VALUES (?,?,?,?)",
+                        userId, today, finalChannel, SHARE_POINTS);
+            } catch (DataIntegrityViolationException duplicate) {
+                throw new IllegalArgumentException("今天已经领取过分享奖励");
+            }
+            grantPoints(userId, SHARE_POINTS, "分享朋友圈奖励");
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("date", today.toString());
+            out.put("points", SHARE_POINTS);
+            out.put("creditAccount", account(userId));
+            return out;
+        }));
+    }
+
+    @GetMapping("/invite/code")
+    public Map<String, Object> inviteCode() {
+        long userId = requireConsumerUser();
+        return invites.stats(userId);
+    }
+
     @PostMapping("/quiz/start")
     public Map<String, Object> startQuiz() {
         long userId = requireConsumerUser();
@@ -324,8 +409,33 @@ public class ConsumerPointsActivityController {
         Map<String, Object> state = rows.isEmpty() ? new LinkedHashMap<>() : new LinkedHashMap<>(rows.get(0));
         state.put("checkedIn", !rows.isEmpty() && today.toString().equals(String.valueOf(rows.get(0).get("lastDate"))));
         state.put("streakDays", rows.isEmpty() ? 0 : rows.get(0).get("streakDays"));
-        state.put("dailyPoints", 120); state.put("seventhDayBonus", 300);
+        state.put("dailyPoints", 240); state.put("seventhDayBonus", 500);
         return state;
+    }
+
+    private Map<String, Object> usageState(long userId, LocalDate today) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT active_seconds activeSeconds,awarded_points awardedPoints FROM consumer_points_usage_daily WHERE user_id=? AND stat_date=?",
+                userId, today);
+        int seconds = rows.isEmpty() ? 0 : ((Number) rows.get(0).get("activeSeconds")).intValue();
+        int points = rows.isEmpty() ? 0 : ((Number) rows.get(0).get("awardedPoints")).intValue();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("activeSeconds", seconds);
+        out.put("minutes", seconds / 60);
+        out.put("points", points);
+        out.put("dailyPointCap", USAGE_DAILY_POINT_CAP);
+        out.put("pointsPerMinute", USAGE_POINTS_PER_MINUTE);
+        return out;
+    }
+
+    private Map<String, Object> shareState(long userId, LocalDate today) {
+        Integer claimed = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM consumer_points_share_claim WHERE user_id=? AND claim_date=?", Integer.class, userId, today);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("claimedToday", claimed != null && claimed > 0);
+        out.put("points", SHARE_POINTS);
+        out.put("channel", "timeline");
+        return out;
     }
 
     private List<Map<String, Object>> packetState(long userId, LocalDate today) {
@@ -369,20 +479,15 @@ public class ConsumerPointsActivityController {
     }
 
     private void grantPoints(long userId, int points, String remark) {
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT balance FROM consumer_credit_account WHERE user_id=? FOR UPDATE", userId);
-        if (rows.isEmpty()) throw new IllegalStateException("积分账户不存在");
-        BigDecimal before = new BigDecimal(String.valueOf(rows.get(0).get("balance")));
-        BigDecimal amount = BigDecimal.valueOf(points), after = before.add(amount);
-        jdbc.update("UPDATE consumer_credit_account SET balance=? WHERE user_id=?", after, userId);
-        KeyHolder key = new GeneratedKeyHolder();
-        jdbc.update(connection -> {
-            PreparedStatement ps = connection.prepareStatement("INSERT INTO consumer_credit_transaction (transaction_no,user_id,biz_type,amount,direction,status,balance_before,balance_after,remark,operator) VALUES (?,?,?,?,?,?,?,?,?,?)", Statement.RETURN_GENERATED_KEYS);
-            ps.setString(1, "ACT-" + UUID.randomUUID()); ps.setLong(2, userId); ps.setString(3, "reward"); ps.setBigDecimal(4, amount); ps.setString(5, "income"); ps.setString(6, "completed"); ps.setBigDecimal(7, before); ps.setBigDecimal(8, after); ps.setString(9, remark); ps.setString(10, "system"); return ps;
-        }, key);
+        rewards.grant(userId, points, remark);
     }
 
     private Map<String, Object> account(long userId) {
-        return jdbc.queryForMap("SELECT balance FROM consumer_credit_account WHERE user_id=?", userId);
+        // 新用户的积分账户可能尚未创建，活动页首次访问就按规则补上首赠额度。
+        rewards.ensureAccount(userId);
+        return jdbc.queryForMap(
+                "SELECT balance,frozen_balance frozenBalance,total_recharged totalRecharged,total_consumed totalConsumed FROM consumer_credit_account WHERE user_id=?",
+                userId);
     }
 
     private long requireAdmin() {

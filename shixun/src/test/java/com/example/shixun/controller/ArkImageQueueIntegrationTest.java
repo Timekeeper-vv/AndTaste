@@ -21,6 +21,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.io.IOException;
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -165,7 +166,7 @@ class ArkImageQueueIntegrationTest {
                 Duration.ofSeconds(8));
         var failedAccount = jdbc.queryForMap("SELECT balance,frozen_balance frozenBalance,total_consumed totalConsumed " +
                 "FROM consumer_credit_account WHERE user_id=?", failedUser.id());
-        assertThat(failedAccount.get("balance").toString()).isEqualTo("600.00");
+        assertThat(failedAccount.get("balance").toString()).isEqualTo("240.00");
         assertThat(failedAccount.get("frozenBalance").toString()).isEqualTo("0.00");
         assertThat(failedAccount.get("totalConsumed").toString()).isEqualTo("0.00");
         assertThat(jdbc.queryForObject("SELECT status FROM consumer_credit_transaction WHERE user_id=? AND biz_type='image2d'",
@@ -177,6 +178,8 @@ class ArkImageQueueIntegrationTest {
         rateLimitedResponses.set(0);
         TestUser editor = createUser("queue-editor");
         TestUser multiViewUser = createUser("queue-multiview");
+        topUpCredit(editor.id(), 600);
+        topUpCredit(multiViewUser.id(), 600);
         long editorAsset = createReferenceAsset(editor, "editor-reference.png");
         long multiViewAsset = createReferenceAsset(multiViewUser, "multiview-reference.png");
 
@@ -310,6 +313,11 @@ class ArkImageQueueIntegrationTest {
         return new TestUser(id, jwtService.issue(user));
     }
 
+    private void topUpCredit(long userId, int amount) {
+        jdbc.update("INSERT INTO consumer_credit_account (user_id,balance,total_recharged) VALUES (?,?,?)",
+                userId, BigDecimal.valueOf(amount), BigDecimal.valueOf(amount));
+    }
+
     private long createReferenceAsset(TestUser user, String filename) throws IOException {
         Path generated = assetRoot.resolve("generated");
         Files.createDirectories(generated);
@@ -325,7 +333,7 @@ class ArkImageQueueIntegrationTest {
     private void assertCreditSettled(long userId) {
         var account = jdbc.queryForMap("SELECT balance,frozen_balance frozenBalance,total_consumed totalConsumed " +
                 "FROM consumer_credit_account WHERE user_id=?", userId);
-        assertThat(account.get("balance").toString()).isEqualTo("530.00");
+        assertThat(account.get("balance").toString()).isEqualTo("170.00");
         assertThat(account.get("frozenBalance").toString()).isEqualTo("0.00");
         assertThat(account.get("totalConsumed").toString()).isEqualTo("120.00");
         assertThat(jdbc.queryForObject("SELECT status FROM consumer_credit_transaction WHERE user_id=? AND biz_type='image2d'", String.class, userId))
