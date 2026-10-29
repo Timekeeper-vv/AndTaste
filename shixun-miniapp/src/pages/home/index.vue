@@ -25,8 +25,6 @@
           </view>
           <view class="creation-entry secondary-entry works-entry" @tap="openCommercial">
             <image class="secondary-entry-art" src="/static/ui-design/channel-cooperation-entry-hd.jpg" mode="widthFix" />
-            <view class="entry-title-cover"></view>
-            <text class="entry-title">渠道合作</text>
           </view>
         </view>
 
@@ -467,9 +465,8 @@ onShow(() => {
   white-space: nowrap;
 }
 
-/* 入口卡片：盖住原图烘焙的标题，统一改为代码渲染，保证两侧字号一致 */
-.product-entry,
-.works-entry {
+/* 入口卡片：左侧"产品智造"放大到与右侧"渠道合作"字号一致（右侧保持原图烘焙文字不动） */
+.product-entry {
   position: relative;
 }
 
@@ -478,41 +475,28 @@ onShow(() => {
   z-index: 2;
 }
 
+/* 盖住左侧原图烘焙的小标题（bbox x 5.4~32.6%, y 8.2~16.1%） */
 .product-entry .entry-title-cover {
-  top: 5%;
-  left: 3%;
-  width: 34%;
-  height: 14.5%;
+  top: 7.5%;
+  left: 5%;
+  width: 28.5%;
+  height: 9%;
   background: #fe7000;
-}
-
-.works-entry .entry-title-cover {
-  top: 15%;
-  left: 2%;
-  width: 63%;
-  height: 26%;
-  background: linear-gradient(100deg, #bffaf0 0%, #9af6ea 55%, #83f4e7 100%);
-  filter: blur(6rpx);
 }
 
 .entry-title {
   position: absolute;
   z-index: 3;
-  font-size: 40rpx;
+  font-size: 43rpx;
   font-weight: 800;
-  line-height: 1.25;
+  line-height: 1;
   white-space: nowrap;
 }
 
+/* 左侧新标题：对齐原图标题顶部，黄色，字号与右侧卡片标题（字高约41rpx/字宽约43rpx）一致 */
 .product-entry .entry-title {
-  top: 7.5%;
+  top: 8%;
   left: 5.5%;
   color: #ffd358;
-}
-
-.works-entry .entry-title {
-  top: 22%;
-  left: 6%;
-  color: #0b7b6b;
 }
 </style>
