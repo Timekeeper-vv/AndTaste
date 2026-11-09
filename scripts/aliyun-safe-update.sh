@@ -22,7 +22,7 @@ run_root(){ if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 [ -d "$APP_DIR/.git" ] || die "APP_DIR 不是 Git 仓库：$APP_DIR"
 [ -f "$APP_DIR/.env" ] || die "找不到 $APP_DIR/.env；不会在未加载生产配置时更新"
 
-for command in git curl gzip mysqldump mysql tar java; do need "$command"; done
+for command in git curl gzip mysqldump mysql tar java timeout; do need "$command"; done
 need systemctl
 
 ROOT_DIR="$(cd "$APP_DIR" && pwd)"
@@ -89,19 +89,25 @@ dump_database(){
   [ -n "$DB_PASSWORD" ] || die "DB_PASSWORD 为空，已停止更新"
   [[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]] || die "DB_NAME 格式不合法"
   DB_BACKUP="$BACKUP_DIR/${DB_NAME}.sql.gz"
-  info "备份 MySQL 数据库：$DB_NAME"
+  local dump_timeout="${MYSQLDUMP_TIMEOUT:-600}"
+  info "备份 MySQL 数据库：$DB_NAME（超时保护 ${dump_timeout}s）"
+  # --lock-tables=false 配合 --single-transaction：不额外申请表级读锁，避免被
+  # 其他连接的 DDL/长事务持锁卡住；--connect-timeout 避免网络/连接阶段无限等待。
+  local dump_common="--single-transaction --quick --routines --events --triggers --hex-blob --no-tablespaces --set-gtid-purged=OFF --lock-tables=false --connect-timeout=30"
+  local dump_rc=0
   if [[ "$DB_HOST" == "127.0.0.1" || "$DB_HOST" == "localhost" ]] && \
      [ -z "$MYSQL_ADMIN_PASSWORD" ] && run_root mysql -u"$MYSQL_ADMIN_USER" -e 'SELECT 1' >/dev/null 2>&1; then
-    run_root mysqldump --single-transaction --quick --routines --events --triggers \
-      --hex-blob --no-tablespaces --set-gtid-purged=OFF -u"$MYSQL_ADMIN_USER" "$DB_NAME" \
-      | gzip -9 > "$DB_BACKUP"
+    run_root timeout "$dump_timeout" mysqldump $dump_common -u"$MYSQL_ADMIN_USER" "$DB_NAME" \
+      | gzip -9 > "$DB_BACKUP" || dump_rc=$?
   else
     [ -n "$MYSQL_ADMIN_PASSWORD" ] || die "远程 MySQL/RDS 必须设置 MYSQL_ADMIN_PASSWORD"
-    MYSQL_PWD="$MYSQL_ADMIN_PASSWORD" mysqldump -h"$DB_HOST" -P"$DB_PORT" \
-      -u"$MYSQL_ADMIN_USER" --single-transaction --quick --routines --events --triggers \
-      --hex-blob --no-tablespaces --set-gtid-purged=OFF "$DB_NAME" | gzip -9 > "$DB_BACKUP"
+    MYSQL_PWD="$MYSQL_ADMIN_PASSWORD" timeout "$dump_timeout" mysqldump -h"$DB_HOST" -P"$DB_PORT" \
+      -u"$MYSQL_ADMIN_USER" $dump_common "$DB_NAME" | gzip -9 > "$DB_BACKUP" || dump_rc=$?
   fi
-  [ -s "$DB_BACKUP" ] && gzip -t "$DB_BACKUP" || die "数据库备份为空或校验失败：$DB_BACKUP"
+  if [ "$dump_rc" -ne 0 ]; then
+    warn "mysqldump 中途退出（退出码 $dump_rc）；退出码 124 表示备份超时，通常是数据库有锁或长事务"
+  fi
+  [ -s "$DB_BACKUP" ] && gzip -t "$DB_BACKUP" || die "数据库备份为空或校验失败；请检查数据库锁：mysql -u root -e 'SHOW PROCESSLIST'"
   chmod 600 "$DB_BACKUP"
   ok "数据库备份已校验：$DB_BACKUP"
 }
