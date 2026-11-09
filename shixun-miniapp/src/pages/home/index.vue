@@ -43,7 +43,7 @@
         </view>
 
         <view class="section-head campaign-heading"><view><text>馆方征集 · 投稿通道</text></view><text>全部征集 ›</text></view>
-        <view class="home-campaign" v-for="(campaign,index) in campaignsPreview" :key="campaign.key" @tap="selectHomeCampaign(campaign)"><view class="home-campaign-art-frame"><image class="home-campaign-art" :src="campaignImage(index)" mode="scaleToFill" /></view><view class="home-campaign-copy"><text>{{ campaign.targetName }}｜{{ campaign.title }}</text><text>{{ campaign.collectionStyle }} · 文创转化</text><text>作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="home-campaign-points">+{{ campaign.rewardAmount }}</text></view>
+        <view class="home-campaign" v-for="(task,index) in campaignsPreview" :key="task.id" @tap="openBounty"><view class="home-campaign-art-frame"><image class="home-campaign-art" :src="campaignImage(index)" mode="scaleToFill" /></view><view class="home-campaign-copy"><text>{{ task.title }}</text><text>馆藏文物原创设计 · 文创转化</text><text>作品审核通过 · +{{ task.rewardAmount }} 积分</text></view><text class="home-campaign-points">+{{ task.rewardAmount }}</text></view>
         <view class="inspiration-head"><text>灵感库</text><text @tap="openWorks">寻找灵感 ›</text></view><scroll-view scroll-x class="inspiration-scroll"><view v-for="(asset,index) in inspirationAssets" :key="asset.id || index" class="inspiration-card" @tap="openWorks"><image v-if="inspirationSrc(asset)" :src="inspirationSrc(asset)" mode="aspectFill"/><view v-else class="inspiration-placeholder">灵感</view><text>{{ asset.title || ['藏戏面具摆件','猫猫公交吊坠','双尾虎擦手巾'][index % 3] }}</text></view></scroll-view>
         <view v-if="isProfessional" class="management-workspace">
           <view class="section-head management-heading"><view><text>管理工作台</text><text>集中处理</text></view></view>
@@ -63,17 +63,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { deleteConversation, getAssetPreviewAccess, getAssets, getConversations, getCredits, getProductionRequests, getPublicCreatorCampaigns, type ConversationSession, type CreatorCampaign } from '../../api/creative'
+import { deleteConversation, getAssetPreviewAccess, getAssets, getConversations, getCredits, getProductionRequests, type ConversationSession } from '../../api/creative'
 import { apiUrl } from '../../api/client'
 import { getCommercialRequests } from '../../api/commercial'
-import { getActivityOverview } from '../../api/activities'
+import { getActivityOverview, getBountyTasks } from '../../api/activities'
 import { getSession, requireSession } from '../../utils/session'
 
 const user = ref(getSession()?.user)
 const credits = ref(0)
 const assets = ref<any[]>([])
 const conversations = ref<ConversationSession[]>([])
-const campaigns = ref<CreatorCampaign[]>([])
+const bountyTasks = ref<any[]>([])
 const deletingConversationId = ref<number | null>(null)
 const productionRequests = ref<any[]>([])
 const commercialRequests = ref({ quoteRequests: [] as any[], consignmentApplications: [] as any[], selectionDemands: [] as any[] })
@@ -82,10 +82,6 @@ let quizPromptRequested = false
 const heroVisualUrl = ref('')
 const inspirationPreviewUrls = ref<Record<string, string>>({})
 const creatorMode = ref<'amateur' | 'professional'>(readCreatorMode())
-const campaignFallbacks: CreatorCampaign[] = [
-  { key: 'design-bronze', title: '青铜器主题', targetName: '国家博物馆', channelCode: 'design-bronze', collectionStyle: '青铜纹样 · 器物元素', recommendedProducts: [], brief: '', promptHint: '', rewardAmount: 80 },
-  { key: 'design-lacquer', title: '漆器纹样主题', targetName: '湖北省博物馆', channelCode: 'design-lacquer', collectionStyle: '漆器纹样 · 色彩元素', recommendedProducts: [], brief: '', promptHint: '', rewardAmount: 60 },
-]
 const inspirationFallbacks = [
   { id: 'design-mask', title: '藏戏面具摆件', localUrl: '/static/ui-design/inspiration-mask.jpg' },
   { id: 'design-cat', title: '猫猫公交吊坠', localUrl: '/static/ui-design/inspiration-cat.jpg' },
@@ -94,7 +90,7 @@ const inspirationFallbacks = [
 
 const loggedIn = computed(() => Boolean(user.value))
 const isProfessional = computed(() => creatorMode.value === 'professional')
-const campaignsPreview = computed(() => (campaigns.value.length ? campaigns.value : campaignFallbacks).slice(0, 2))
+const campaignsPreview = computed(() => bountyTasks.value.slice(0, 2))
 const inspirationAssets = computed(() => {
   const live = assets.value.filter(asset => asset?.assetType === 'image').slice(0, 6)
   return live.length ? live : inspirationFallbacks
@@ -143,14 +139,9 @@ function openConversationHistory() {
   go('/pages/conversation-create/index?history=1')
 }
 
-function selectHomeCampaign(campaign: CreatorCampaign) {
-  if (campaign.key.startsWith('design-')) {
-    uni.showToast({ title: '征集活动数据加载中', icon: 'none' })
-    return
-  }
-  uni.setStorageSync('pending_creator_campaign', { ...campaign, selectedAt: Date.now() })
-  uni.showToast({ title: '征集方向已选择', icon: 'none' })
-  if (!getSession()) go('/pages/login/index')
+function openBounty() {
+  if (!requireSession()) return
+  go('/pages/activities/index?tab=tasks')
 }
 
 function removeConversation(session: ConversationSession) {
@@ -290,13 +281,13 @@ async function refreshHome() {
     getCommercialRequests(),
     getConversations(),
   ])
-  const campaignResult = await Promise.allSettled([getPublicCreatorCampaigns()])
+  const bountyResult = await Promise.allSettled([getBountyTasks()])
   if (creditResult.status === 'fulfilled') credits.value = Number(creditResult.value?.balance) || 0
   if (assetResult.status === 'fulfilled') assets.value = Array.isArray(assetResult.value) ? assetResult.value : []
   if (requestResult.status === 'fulfilled') productionRequests.value = Array.isArray(requestResult.value) ? requestResult.value : []
   if (commercialResult.status === 'fulfilled') commercialRequests.value = normalizeCommercialRequests(commercialResult.value)
   if (conversationResult.status === 'fulfilled') conversations.value = Array.isArray(conversationResult.value) ? conversationResult.value : []
-  if (campaignResult[0].status === 'fulfilled') campaigns.value = Array.isArray(campaignResult[0].value) ? campaignResult[0].value : []
+  if (bountyResult[0].status === 'fulfilled') bountyTasks.value = Array.isArray(bountyResult[0].value) ? bountyResult[0].value : []
   await Promise.all([hydrateHeroVisual(), hydrateInspirationVisuals()])
   refreshing.value = false
 }
@@ -335,7 +326,7 @@ onShow(() => {
     productionRequests.value = []
     commercialRequests.value = normalizeCommercialRequests(null)
     conversations.value = []
-    void getPublicCreatorCampaigns().then(value => { campaigns.value = Array.isArray(value) ? value : [] }).catch(() => { campaigns.value = [] })
+    void getBountyTasks().then(value => { bountyTasks.value = Array.isArray(value) ? value : [] }).catch(() => { bountyTasks.value = [] })
   }
 })
 </script>
