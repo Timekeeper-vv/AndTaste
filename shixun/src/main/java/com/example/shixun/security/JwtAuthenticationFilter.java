@@ -42,6 +42,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // signs in. Participation, reward history and balances stay protected.
         if ("GET".equalsIgnoreCase(request.getMethod())
                 && "/api/creative/ai/consumer-rewards/campaigns/public".equals(path)) return true;
+        // 首页「馆方征集」展示开放投稿的悬赏任务，未登录也可浏览列表。
+        if ("GET".equalsIgnoreCase(request.getMethod())
+                && "/api/creative/ai/consumer-activities/tasks".equals(path)) return true;
         if ("/api/users/login".equals(path)
                 || "/api/users/wechat-login".equals(path)
                 || "/api/users/wechat-phone-login".equals(path)
