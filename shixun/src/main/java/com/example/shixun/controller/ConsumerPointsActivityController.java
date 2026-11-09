@@ -18,6 +18,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -33,6 +35,8 @@ public class ConsumerPointsActivityController {
     private static final int USAGE_MAX_SECONDS_PER_CALL = 60;
     /** 分享朋友圈：每次 80 积分，每日一次。 */
     private static final int SHARE_POINTS = 80;
+    /** 悬赏入选作品默认销售分成比例(%)。 */
+    private static final BigDecimal DEFAULT_REVENUE_SHARE_RATE = new BigDecimal("10.00");
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
     private final ConsumerPointsRewardService rewards;
@@ -137,8 +141,8 @@ public class ConsumerPointsActivityController {
         String description = requiredText(body, "productDescription", 4000);
         return Objects.requireNonNull(transactions.execute(status -> {
             jdbc.queryForMap("SELECT id FROM consumer_bounty_task WHERE id=? FOR UPDATE", taskId);
-            Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM consumer_bounty_submission WHERE task_id=? AND user_id=?", Integer.class, taskId, userId);
-            if (count != null && count >= 5) throw new IllegalStateException("每个账号最多可提交5件作品");
+            Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM consumer_bounty_submission WHERE task_id=? AND id_card=?", Integer.class, taskId, idCard);
+            if (count != null && count >= 5) throw new IllegalStateException("同一身份证号最多可提交5件作品");
             String viewIdsJson = "[" + String.join(",", viewAssetIds.stream().map(String::valueOf).toList()) + "]";
             jdbc.update("INSERT INTO consumer_bounty_submission (task_id,user_id,asset_id,bundle_id,view_asset_ids_json,product_name,product_category,product_features,artifact_prototype,product_description,id_card,contact_phone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     taskId, userId, assetId, bundleId, viewIdsJson, name, category, features, prototype, description, idCard, contactPhone);
@@ -222,6 +226,7 @@ public class ConsumerPointsActivityController {
                     long bundleId = ((Number) row.get("bundleId")).longValue();
                     jdbc.update("UPDATE creative_multiview_bundle SET status='approved',review_comment='悬赏投稿审核通过',reviewed_by=?,reviewed_at=NOW(),updated_at=NOW() WHERE id=? AND user_id=? AND status IN ('draft','review')", String.valueOf(adminId), bundleId, userId);
                     jdbc.update("INSERT INTO consumer_bounty_sample_voucher (task_id,submission_id,user_id,bundle_id,material,sample_quantity,shipping_included,expires_at) VALUES (?,?,?,?,'树脂',1,1,DATE_ADD(NOW(),INTERVAL 60 DAY))", row.get("taskId"), submissionId, userId, bundleId);
+                    jdbc.update("INSERT IGNORE INTO consumer_bounty_revenue (submission_id,user_id,task_id,share_rate) VALUES (?,?,?,?)", submissionId, userId, row.get("taskId"), DEFAULT_REVENUE_SHARE_RATE);
                 }
             }
             return Map.of("id", submissionId, "status", decision, "points", "approved".equals(decision) ? row.get("rewardAmount") : 0, "sampleVoucher", selected && "approved".equals(decision));
@@ -529,5 +534,88 @@ public class ConsumerPointsActivityController {
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT id FROM user WHERE id=? AND role='user' LIMIT 1", claims.userId());
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前登录身份已失效");
         return claims.userId();
+    }
+
+    @GetMapping("/revenue/mine")
+    public List<Map<String, Object>> myRevenue() {
+        long userId = requireConsumerUser();
+        return jdbc.queryForList(
+                "SELECT r.id revenueId,r.share_rate shareRate,r.total_sales totalSales,r.settled_amount settledAmount," +
+                "ROUND(r.total_sales*r.share_rate/100,2)-r.settled_amount pendingAmount," +
+                "s.product_name productName,t.title taskTitle " +
+                "FROM consumer_bounty_revenue r " +
+                "JOIN consumer_bounty_submission s ON s.id=r.submission_id " +
+                "JOIN consumer_bounty_task t ON t.id=r.task_id " +
+                "WHERE r.user_id=? ORDER BY r.id DESC", userId);
+    }
+
+    @GetMapping("/admin/revenue")
+    public List<Map<String, Object>> adminRevenue() {
+        requireAdmin();
+        return jdbc.queryForList(
+                "SELECT r.id,r.submission_id submissionId,r.user_id userId,u.username,r.share_rate shareRate," +
+                "r.total_sales totalSales,r.settled_amount settledAmount," +
+                "ROUND(r.total_sales*r.share_rate/100,2)-r.settled_amount pendingAmount,r.status," +
+                "s.product_name productName,t.title taskTitle,r.updated_at updatedAt " +
+                "FROM consumer_bounty_revenue r " +
+                "JOIN consumer_bounty_submission s ON s.id=r.submission_id " +
+                "JOIN consumer_bounty_task t ON t.id=r.task_id " +
+                "JOIN user u ON u.id=r.user_id ORDER BY r.id DESC");
+    }
+
+    @PutMapping("/admin/revenue/{id}/rate")
+    public Map<String, Object> updateShareRate(@PathVariable long id, @RequestBody Map<String, Object> body) {
+        requireAdmin();
+        BigDecimal rate = decimal(body.get("shareRate"));
+        if (rate == null || rate.signum() < 0 || rate.compareTo(BigDecimal.valueOf(100)) > 0) throw new IllegalArgumentException("分成比例必须在0到100之间");
+        int changed = jdbc.update("UPDATE consumer_bounty_revenue SET share_rate=? WHERE id=?", rate, id);
+        if (changed != 1) throw new IllegalArgumentException("分成台账不存在");
+        return Map.of("id", id, "shareRate", rate);
+    }
+
+    @PostMapping("/admin/revenue/{id}/sales")
+    public Map<String, Object> recordSales(@PathVariable long id, @RequestBody Map<String, Object> body) {
+        long adminId = requireAdmin();
+        BigDecimal amount = decimal(body.get("amount"));
+        if (amount == null || amount.signum() <= 0) throw new IllegalArgumentException("销售额必须大于0");
+        String note = String.valueOf(body.getOrDefault("note", "")).trim();
+        if (note.length() > 500) throw new IllegalArgumentException("备注过长");
+        return Objects.requireNonNull(transactions.execute(status -> {
+            Map<String, Object> row = jdbc.queryForMap("SELECT id,share_rate shareRate,total_sales totalSales FROM consumer_bounty_revenue WHERE id=? FOR UPDATE", id);
+            BigDecimal newTotal = toDecimal(row.get("totalSales")).add(amount);
+            jdbc.update("UPDATE consumer_bounty_revenue SET total_sales=? WHERE id=?", newTotal, id);
+            jdbc.update("INSERT INTO consumer_bounty_revenue_ledger (revenue_id,kind,amount,note,created_by) VALUES (?,?,?,?,?)", id, "sales", amount, note, String.valueOf(adminId));
+            BigDecimal share = amount.multiply(toDecimal(row.get("shareRate"))).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+            return Map.of("id", id, "recordedSales", amount, "estimatedShare", share, "totalSales", newTotal);
+        }));
+    }
+
+    @PostMapping("/admin/revenue/{id}/settle")
+    public Map<String, Object> settleRevenue(@PathVariable long id, @RequestBody(required = false) Map<String, Object> body) {
+        long adminId = requireAdmin();
+        return Objects.requireNonNull(transactions.execute(status -> {
+            Map<String, Object> row = jdbc.queryForMap("SELECT id,share_rate shareRate,total_sales totalSales,settled_amount settledAmount FROM consumer_bounty_revenue WHERE id=? FOR UPDATE", id);
+            BigDecimal rate = toDecimal(row.get("shareRate"));
+            BigDecimal totalSales = toDecimal(row.get("totalSales"));
+            BigDecimal settled = toDecimal(row.get("settledAmount"));
+            BigDecimal pending = totalSales.multiply(rate).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP).subtract(settled);
+            BigDecimal amount = body != null && body.get("amount") != null ? decimal(body.get("amount")) : pending;
+            if (amount == null || amount.signum() <= 0) throw new IllegalArgumentException("结算金额必须大于0");
+            if (amount.compareTo(pending) > 0) throw new IllegalArgumentException("结算金额不能超过待结算金额");
+            jdbc.update("UPDATE consumer_bounty_revenue SET settled_amount=? WHERE id=?", settled.add(amount), id);
+            jdbc.update("INSERT INTO consumer_bounty_revenue_ledger (revenue_id,kind,amount,note,created_by) VALUES (?,?,?,?,?)", id, "settlement", amount, "分成结算", String.valueOf(adminId));
+            return Map.of("id", id, "settledThisTime", amount, "settledAmount", settled.add(amount), "pendingAmount", pending.subtract(amount));
+        }));
+    }
+
+    private BigDecimal decimal(Object value) {
+        if (value == null) return null;
+        try { return new BigDecimal(String.valueOf(value)); }
+        catch (NumberFormatException error) { return null; }
+    }
+
+    private BigDecimal toDecimal(Object value) {
+        BigDecimal result = decimal(value);
+        return result == null ? BigDecimal.ZERO : result;
     }
 }

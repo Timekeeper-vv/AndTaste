@@ -57,6 +57,7 @@
       </view>
       <view v-for="item in submissions" :key="item.id" class="submission-status">{{ item.productName }} · {{ statusLabel(item.status) }}</view>
       <view v-for="voucher in vouchers" :key="voucher.id" class="voucher">免费树脂打样 1 件，含 1 次快递 · {{ voucher.productName }} · 有效至 {{ String(voucher.expiresAt || '').slice(0, 10) }} · {{ voucher.status === 'available' ? '待使用' : voucher.status }}</view>
+      <view v-for="rev in revenues" :key="rev.revenueId" class="voucher">销售分成 {{ rev.shareRate }}% · {{ rev.productName }} · 待结算 ¥{{ rev.pendingAmount }} · 已结算 ¥{{ rev.settledAmount }}</view>
     </view>
     <text class="footnote">活动积分按服务器记录为准。使用时长、分享与邀请奖励每日额度于次日 0 点刷新。</text>
   </view>
@@ -65,7 +66,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 import { onLoad, onShareAppMessage, onShareTimeline, onShow } from '@dcloudio/uni-app'
-import { answerQuiz, checkinToday, claimRedPacket, claimShareReward, getActivityOverview, getBountyTasks, getCurrentRedPackets, getMyBountySubmissions, getMySampleVouchers, startQuiz, submitBountyTask } from '../../api/activities'
+import { answerQuiz, checkinToday, claimRedPacket, claimShareReward, getActivityOverview, getBountyTasks, getCurrentRedPackets, getMyBountyRevenue, getMyBountySubmissions, getMySampleVouchers, startQuiz, submitBountyTask } from '../../api/activities'
 import { createMultiViewBundle, uploadReference } from '../../api/creative'
 
 const tabs = [{ key: 'checkin', label: '签到' }, { key: 'growth', label: '成长' }, { key: 'redpackets', label: '红包雨' }, { key: 'quiz', label: '答题' }, { key: 'tasks', label: '悬赏令' }]
@@ -88,6 +89,7 @@ const options = computed(() => ({ A: question.value?.optionA, B: question.value?
 const tasks = ref<any[]>([])
 const submissions = ref<any[]>([])
 const vouchers = ref<any[]>([])
+const revenues = ref<any[]>([])
 const selectedTask = ref<any>(null)
 const uploadedAssets = ref<any[]>([])
 const viewLabels = ['正面', '侧面', '背面']
@@ -116,7 +118,7 @@ async function load() {
     session.value = result?.quiz?.session || null
   } catch (error: any) { toast(error?.message || '活动信息加载失败') }
   try { redPackets.value = await getCurrentRedPackets() } catch { /* overview still carries the event state */ }
-  try { tasks.value = await getBountyTasks(); submissions.value = await getMyBountySubmissions(); vouchers.value = await getMySampleVouchers() } catch { tasks.value = []; submissions.value = []; vouchers.value = [] }
+  try { tasks.value = await getBountyTasks(); submissions.value = await getMyBountySubmissions(); vouchers.value = await getMySampleVouchers(); revenues.value = await getMyBountyRevenue() } catch { tasks.value = []; submissions.value = []; vouchers.value = []; revenues.value = [] }
 }
 
 async function run<T>(action: () => Promise<T>) {

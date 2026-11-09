@@ -2,10 +2,11 @@
 import { onMounted, reactive, ref } from 'vue'
 
 const emit = defineEmits<{ alert: [message: string, type?: 'success' | 'error'] }>()
-const view = ref<'tasks' | 'questions' | 'submissions'>('tasks')
+const view = ref<'tasks' | 'questions' | 'submissions' | 'revenue'>('tasks')
 const tasks = ref<any[]>([])
 const questions = ref<any[]>([])
 const submissions = ref<any[]>([])
+const revenues = ref<any[]>([])
 const taskForm = reactive({ campaignKey: '', title: '', brief: '', deadline: '', rewardAmount: 2000, status: 'draft' })
 const questionForm = reactive({ category: '文创知识', question: '', optionA: '', optionB: '', optionC: '', optionD: '', correctOption: 'A', explanation: '', active: true })
 const busy = ref(false)
@@ -19,14 +20,16 @@ async function call(path: string, method = 'GET', body?: unknown) {
 
 async function load() {
   try {
-    const [taskRows, questionRows, submissionRows] = await Promise.all([
+    const [taskRows, questionRows, submissionRows, revenueRows] = await Promise.all([
       call('/api/creative/ai/consumer-activities/admin/tasks'),
       call('/api/creative/ai/consumer-activities/admin/quiz/questions'),
       call('/api/creative/ai/consumer-activities/admin/tasks/submissions'),
+      call('/api/creative/ai/consumer-activities/admin/revenue'),
     ])
     tasks.value = Array.isArray(taskRows) ? taskRows : []
     questions.value = Array.isArray(questionRows) ? questionRows : []
     submissions.value = Array.isArray(submissionRows) ? submissionRows : []
+    revenues.value = Array.isArray(revenueRows) ? revenueRows : []
   } catch (error: any) { emit('alert', `积分活动数据加载失败：${error?.message || error}`, 'error') }
 }
 
@@ -66,13 +69,44 @@ async function review(item: any, decision: 'approved' | 'rejected') {
   finally { busy.value = false }
 }
 
+async function saveRate(item: any) {
+  const value = window.prompt('请输入新的分成比例(%)', String(item.shareRate))
+  if (value == null) return
+  const shareRate = Number(value)
+  if (!(shareRate >= 0 && shareRate <= 100)) { emit('alert', '分成比例需在 0-100 之间', 'error'); return }
+  busy.value = true
+  try { await call(`/api/creative/ai/consumer-activities/admin/revenue/${item.id}/rate`, 'PUT', { shareRate }); emit('alert', '分成比例已更新'); await load() }
+  catch (error: any) { emit('alert', `更新失败：${error?.message || error}`, 'error') }
+  finally { busy.value = false }
+}
+
+async function recordSales(item: any) {
+  const value = window.prompt(`为「${item.productName}」录入一笔销售额（元）`)
+  if (value == null) return
+  const amount = Number(value)
+  if (!(amount > 0)) { emit('alert', '销售额需大于 0', 'error'); return }
+  const note = window.prompt('备注（可选，例如订单号/渠道）', '') || ''
+  busy.value = true
+  try { await call(`/api/creative/ai/consumer-activities/admin/revenue/${item.id}/sales`, 'POST', { amount, note }); emit('alert', '销售额已录入，待结算分成已累加'); await load() }
+  catch (error: any) { emit('alert', `录入失败：${error?.message || error}`, 'error') }
+  finally { busy.value = false }
+}
+
+async function settle(item: any) {
+  if (!window.confirm(`为「${item.productName}」结算全部待结算分成 ¥${item.pendingAmount}？`)) return
+  busy.value = true
+  try { await call(`/api/creative/ai/consumer-activities/admin/revenue/${item.id}/settle`, 'POST'); emit('alert', '分成已结算'); await load() }
+  catch (error: any) { emit('alert', `结算失败：${error?.message || error}`, 'error') }
+  finally { busy.value = false }
+}
+
 onMounted(load)
 </script>
 
 <template>
   <div class="activities-admin">
     <header><div><span class="eyebrow">CONSUMER REWARDS</span><h1>积分活动运营</h1><p>发布悬赏任务、维护题库并审核投稿；签到、红包和答题奖励由服务端按活动规则记入积分流水。</p></div><button @click="load">刷新</button></header>
-    <nav><button :class="{ active: view === 'tasks' }" @click="view = 'tasks'">悬赏任务</button><button :class="{ active: view === 'submissions' }" @click="view = 'submissions'">投稿审核 <b>{{ submissions.filter(x => x.status === 'pending_review').length }}</b></button><button :class="{ active: view === 'questions' }" @click="view = 'questions'">题库 <b>{{ questions.filter(x => x.active).length }}</b></button></nav>
+    <nav><button :class="{ active: view === 'tasks' }" @click="view = 'tasks'">悬赏任务</button><button :class="{ active: view === 'submissions' }" @click="view = 'submissions'">投稿审核 <b>{{ submissions.filter(x => x.status === 'pending_review').length }}</b></button><button :class="{ active: view === 'questions' }" @click="view = 'questions'">题库 <b>{{ questions.filter(x => x.active).length }}</b></button><button :class="{ active: view === 'revenue' }" @click="view = 'revenue'">销售分成</button></nav>
     <section v-if="view === 'tasks'" class="panel">
       <h2>新建悬赏任务</h2>
       <div class="form-grid"><label>任务标识<input v-model.trim="taskForm.campaignKey" placeholder="例如 yunnan_museum_2026" /></label><label>标题<input v-model.trim="taskForm.title" placeholder="云南省博物馆文创产品征集令" /></label><label>奖励积分<input v-model.number="taskForm.rewardAmount" type="number" min="1" /></label><label>截稿日期<input v-model="taskForm.deadline" type="date" /></label><label>状态<select v-model="taskForm.status"><option value="draft">草稿</option><option value="active">开放投稿</option><option value="closed">已截止</option></select></label><label class="wide">任务说明<textarea v-model.trim="taskForm.brief" rows="4" /></label></div>
@@ -85,7 +119,8 @@ onMounted(load)
       <p class="hint">题库至少需要 7 道启用题目才能开放一轮答题。题目将按题目表逐条录入，收到云珊姐的题库后可在此维护。</p>
       <div v-for="question in questions" :key="question.id" class="question-line"><strong>{{ question.question }}</strong><span>A. {{ question.optionA }}　B. {{ question.optionB }}　C. {{ question.optionC }}　D. {{ question.optionD }}</span><em>正确答案：{{ question.correctOption }}</em></div>
     </section>
-    <section v-else class="panel"><h2>悬赏投稿审核</h2><div v-for="item in submissions" :key="item.id" class="submission"><div><strong>{{ item.productName }} · {{ item.title }}</strong><span>{{ item.username }} · {{ item.productCategory }} · 作品文件 #{{ item.assetId }}</span><p>{{ item.productFeatures }}</p><p>文物原型：{{ item.artifactPrototype }}</p><p>{{ item.productDescription }}</p></div><div class="actions"><span>{{ item.status }}</span><template v-if="item.status === 'pending_review'"><button @click="review(item, 'approved')">通过并发 2000 积分</button><button class="reject" @click="review(item, 'rejected')">退回</button></template></div></div><p v-if="!submissions.length" class="hint">暂无投稿</p></section>
+    <section v-else-if="view === 'submissions'" class="panel"><h2>悬赏投稿审核</h2><div v-for="item in submissions" :key="item.id" class="submission"><div><strong>{{ item.productName }} · {{ item.title }}</strong><span>{{ item.username }} · {{ item.productCategory }} · 作品文件 #{{ item.assetId }}</span><p>{{ item.productFeatures }}</p><p>文物原型：{{ item.artifactPrototype }}</p><p>{{ item.productDescription }}</p></div><div class="actions"><span>{{ item.status }}</span><template v-if="item.status === 'pending_review'"><button @click="review(item, 'approved')">通过并发 2000 积分</button><button class="reject" @click="review(item, 'rejected')">退回</button></template></div></div><p v-if="!submissions.length" class="hint">暂无投稿</p></section>
+    <section v-else class="panel"><h2>悬赏销售分成</h2><p class="hint">入选作品销售后按比例分成。这里录入销售额、调整比例并对账结算，作者在小程序「悬赏令」可查看待结算/已结算金额。</p><div v-for="item in revenues" :key="item.id" class="submission"><div><strong>{{ item.productName }} · {{ item.taskTitle }}</strong><span>{{ item.username }} · 分成比例 {{ item.shareRate }}%</span><span>累计销售 ¥{{ item.totalSales }} · 待结算 ¥{{ item.pendingAmount }} · 已结算 ¥{{ item.settledAmount }}</span></div><div class="actions"><button @click="saveRate(item)">改比例</button><button @click="recordSales(item)">录入销售</button><button :disabled="Number(item.pendingAmount) <= 0" @click="settle(item)">结算</button></div></div><p v-if="!revenues.length" class="hint">暂无入选作品的分成台账</p></section>
   </div>
 </template>
 

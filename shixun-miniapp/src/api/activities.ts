@@ -25,3 +25,4 @@ export const claimShareReward = (channel = 'timeline') => request<any>(
   { method: 'POST', data: { channel }, header: { 'content-type': 'application/json' } },
 )
 export const getInviteCode = () => request<any>('/api/creative/ai/consumer-activities/invite/code')
+export const getMyBountyRevenue = () => request<any[]>('/api/creative/ai/consumer-activities/revenue/mine')
