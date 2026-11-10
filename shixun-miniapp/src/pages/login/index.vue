@@ -32,10 +32,10 @@
       <view class="campaign-board-head"><view><text class="campaign-kicker">馆方征集 · 投稿通道</text><text class="campaign-title">馆方征集 · 投稿通道</text></view><text>更多 ›</text></view>
       <scroll-view scroll-x class="campaign-scroll" :show-scrollbar="false">
         <view class="campaign-row">
-          <view v-for="(campaign, index) in displayedCampaigns" :key="campaign.key" class="campaign-card" :class="{ selected: selectedCampaignKey === campaign.key }" @tap="selectCampaign(campaign)">
-            <view class="campaign-art-frame"><image class="campaign-art" :src="campaignImage(index)" mode="scaleToFill" /></view><view class="campaign-info"><text class="campaign-target">{{ campaign.targetName }}｜{{ campaign.title }}</text><text class="campaign-style">{{ campaign.collectionStyle }} · 文创转化</text><text class="campaign-products">作品审核通过 · +{{ campaign.rewardAmount }} 创作积分</text></view><text class="campaign-points">+{{ campaign.rewardAmount }}</text>
+          <view v-for="(task, index) in displayedCampaigns" :key="task.id" class="campaign-card" @tap="openBounty">
+            <view class="campaign-art-frame"><image class="campaign-art" :src="campaignImage(index)" mode="scaleToFill" /></view><view class="campaign-info"><text class="campaign-target">{{ task.title }}</text><text class="campaign-style">馆藏文物原创设计 · 文创转化</text><text class="campaign-products">作品审核通过 · +{{ task.rewardAmount }} 积分</text></view><text class="campaign-points">+{{ task.rewardAmount }}</text>
           </view>
-          <view v-if="campaignLoading && !campaigns.length" class="campaign-loading"><text>正在加载征集任务…</text></view>
+          <view v-if="campaignLoading && !bountyTasks.length" class="campaign-loading"><text>正在加载征集任务…</text></view>
         </view>
       </scroll-view>
       <text class="campaign-notice">平台优先征集方向不代表目标机构已采购、合作、授权或认可具体作品。</text>
@@ -47,7 +47,7 @@
 import { onLoad } from '@dcloudio/uni-app'
 import { computed, ref } from 'vue'
 import { ApiError, request } from '../../api/client'
-import { getPublicCreatorCampaigns, type CreatorCampaign } from '../../api/creative'
+import { getBountyTasks } from '../../api/activities'
 import { saveSession } from '../../utils/session'
 const username = ref('')
 const password = ref('')
@@ -59,14 +59,9 @@ const wechatLoading = ref(false)
 const wechatPhoneRequired = ref(false)
 const wechatTermsAccepted = ref(false)
 const showPasswordLogin = ref(false)
-const campaigns = ref<CreatorCampaign[]>([])
+const bountyTasks = ref<any[]>([])
 const campaignLoading = ref(false)
-const selectedCampaignKey = ref('')
-const campaignFallbacks: CreatorCampaign[] = [
-  { key: 'design-bronze', title: '青铜器主题', targetName: '国家博物馆', channelCode: 'design-bronze', collectionStyle: '青铜纹样 · 器物元素', recommendedProducts: [], brief: '', promptHint: '', rewardAmount: 80 },
-  { key: 'design-lacquer', title: '漆器纹样主题', targetName: '湖北省博物馆', channelCode: 'design-lacquer', collectionStyle: '漆器纹样 · 色彩元素', recommendedProducts: [], brief: '', promptHint: '', rewardAmount: 60 },
-]
-const displayedCampaigns = computed(() => campaigns.value.length ? campaigns.value : campaignFallbacks)
+const displayedCampaigns = computed(() => bountyTasks.value)
 const campaignImage = (index: number) => index % 2 ? '/static/ui-design/campaign-drum.jpg' : '/static/ui-design/campaign-bronze.jpg'
 
 // 邀请码从分享进入时记录一次，注册或首次微信登录时随请求提交。
@@ -223,31 +218,18 @@ function openLegal(type: 'terms' | 'privacy') {
   uni.navigateTo({ url: `/pages/legal/index?type=${type}` })
 }
 
-function readPendingCampaign() {
-  const value = uni.getStorageSync('pending_creator_campaign')
-  if (value && typeof value === 'object' && typeof value.key === 'string' && typeof value.channelCode === 'string') {
-    selectedCampaignKey.value = value.key
-  }
-}
-
-function selectCampaign(campaign: CreatorCampaign) {
-  if (campaign.key.startsWith('design-')) {
-    uni.showToast({ title: '征集活动数据加载中', icon: 'none' })
-    return
-  }
-  selectedCampaignKey.value = campaign.key
-  uni.setStorageSync('pending_creator_campaign', { ...campaign, selectedAt: Date.now() })
-  uni.showToast({ title: '任务已选，登录后自动带入创作', icon: 'none' })
+function openBounty() {
+  uni.navigateTo({ url: '/pages/activities/index?tab=tasks' })
 }
 
 async function loadCampaigns() {
   campaignLoading.value = true
   try {
-    const rows = await getPublicCreatorCampaigns()
-    campaigns.value = Array.isArray(rows) ? rows : []
+    const rows = await getBountyTasks()
+    bountyTasks.value = Array.isArray(rows) ? rows : []
   } catch {
     // Login must remain usable when an optional public task board is offline.
-    campaigns.value = []
+    bountyTasks.value = []
   } finally {
     campaignLoading.value = false
   }
@@ -279,7 +261,6 @@ onLoad((query: Record<string, string> = {}) => {
   // 分享卡片支持 pages/login/index 与 pages/register/index 两种落地页，
   // 参数都先落到本地存储，注册或首次登录时再提交。
   rememberInviteCode(query.inviteCode || launchInviteCode())
-  readPendingCampaign()
   void loadCampaigns()
   // The web-view login button already represents an explicit user action.
   // Continue that action automatically after the native page is ready.
