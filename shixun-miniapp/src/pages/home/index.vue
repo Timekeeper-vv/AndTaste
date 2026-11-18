@@ -332,6 +332,8 @@ async function promptDailyQuiz() {
 }
 
 const ONBOARDING_KEY = 'smart_pig_onboarded_v1'
+// 测试期间每次进入首页都弹引导；上线前改回 false（只首次弹）
+const ALWAYS_SHOW_ONBOARDING = true
 const showOnboarding = ref(false)
 const onboardingStep = ref(0)
 const targetRect = ref({ top: 0, left: 0, width: 0, height: 0 })
@@ -394,7 +396,7 @@ function skipOnboarding() { finishOnboarding() }
 onShow(() => {
   user.value = getSession()?.user
   creatorMode.value = readCreatorMode()
-  if (!uni.getStorageSync(ONBOARDING_KEY)) {
+  if (ALWAYS_SHOW_ONBOARDING || !uni.getStorageSync(ONBOARDING_KEY)) {
     onboardingStep.value = 0
     setTimeout(() => { showOnboarding.value = true; locateStep() }, 300)
   }
