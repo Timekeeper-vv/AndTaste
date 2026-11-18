@@ -56,7 +56,7 @@
       </view>
     </scroll-view>
 
-    <view class="bottom-nav"><view class="nav-item active" @tap="refreshHome"><text class="nav-icon">⌂</text><text>首页</text></view><view class="nav-item" @tap="openWorks"><text class="nav-icon">▣</text><text>作品</text></view><view class="nav-item" @tap="openProfile"><text class="nav-icon">♙</text><text>我的</text></view></view>
+    <view class="bottom-nav"><view class="nav-item active" @tap="refreshHome"><text class="nav-icon">⌂</text><text>首页</text></view><view class="nav-item works-tab" @tap="openWorks"><text class="nav-icon">▣</text><text>作品</text></view><view class="nav-item" @tap="openProfile"><text class="nav-icon">♙</text><text>我的</text></view></view>
 
     <view v-if="showOnboarding" class="spotlight-mask">
       <view class="spotlight-hole" :style="holeStyle"></view>
@@ -344,6 +344,8 @@ const onboardingSteps = [
   { selector: '.secondary-entry-grid', title: '产品智造 · 渠道合作', desc: '左侧打样生产，右侧对接博物馆、景区等渠道上架', below: false },
   { selector: '.campaign-heading', title: '馆方征集 · 投稿', desc: '参与博物馆等机构的征集活动，作品入选获积分和免费树脂打样', below: true },
   { selector: '.hero-swiper', title: '答题赚积分', desc: '顶部轮播含答题入口，答对 7 题领 100 积分', below: true },
+  { selector: '.credit-chip', title: '积分充值', desc: '点这里查看积分余额并充值，创作、打样、答题都用得到', below: true },
+  { selector: '.works-tab', title: '我的作品', desc: '底部「作品」里查看你生成的文创作品和 3D 模型', below: false },
 ]
 
 const holeStyle = computed(() => ({
@@ -369,7 +371,7 @@ function locateStep() {
   if (!step) return
   uni.createSelectorQuery().select(step.selector).boundingClientRect(rect => {
     const info = Array.isArray(rect) ? rect[0] : rect
-    if (!info || !info.width) { finishOnboarding(); return }
+    if (!info || !info.width) { nextOnboarding(); return }
     targetRect.value = { top: info.top ?? 0, left: info.left ?? 0, width: info.width ?? 0, height: info.height ?? 0 }
     bubbleBelow.value = step.below
   }).exec()
