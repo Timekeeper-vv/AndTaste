@@ -57,6 +57,22 @@
     </scroll-view>
 
     <view class="bottom-nav"><view class="nav-item active" @tap="refreshHome"><text class="nav-icon">⌂</text><text>首页</text></view><view class="nav-item" @tap="openWorks"><text class="nav-icon">▣</text><text>作品</text></view><view class="nav-item" @tap="openProfile"><text class="nav-icon">♙</text><text>我的</text></view></view>
+
+    <view v-if="showOnboarding" class="onboarding-mask" @tap.stop>
+      <view class="onboarding-card">
+        <view class="onboarding-dots"><view v-for="(_, i) in onboardingSteps" :key="i" class="onboarding-dot" :class="{ active: i === onboardingStep }"></view></view>
+        <text class="onboarding-step-label">第 {{ onboardingStep + 1 }} 步 · 共 {{ onboardingSteps.length }} 步</text>
+        <text class="onboarding-title">{{ onboardingSteps[onboardingStep].title }}</text>
+        <text class="onboarding-desc">{{ onboardingSteps[onboardingStep].desc }}</text>
+        <view class="onboarding-actions">
+          <text class="onboarding-skip" @tap="skipOnboarding">跳过</text>
+          <view class="onboarding-nav">
+            <text v-if="onboardingStep > 0" class="onboarding-prev" @tap="prevOnboarding">上一步</text>
+            <view class="onboarding-next" @tap="nextOnboarding">{{ onboardingStep >= onboardingSteps.length - 1 ? '开始使用' : '下一步' }}</view>
+          </view>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -314,9 +330,36 @@ async function promptDailyQuiz() {
   finally { uni.setStorageSync(marker, 1) }
 }
 
+const ONBOARDING_KEY = 'smart_pig_onboarded_v1'
+const showOnboarding = ref(false)
+const onboardingStep = ref(0)
+const onboardingSteps = [
+  { title: '创意工坊 · AI 创作', desc: '在首页输入你的想法，AI 帮你生成文创产品设计图，从一句灵感开始。' },
+  { title: '产品智造 · 渠道合作', desc: '产品智造帮你打样、小批量生产；渠道合作对接博物馆、景区等渠道上架。' },
+  { title: '馆方征集 · 投稿赚积分', desc: '参与博物馆等机构的征集活动，作品入选可获创作积分和免费树脂打样。' },
+  { title: '答题 · 积分互动', desc: '每日答题、签到、红包雨等积分活动，答题全对可领 100 积分。' },
+]
+
+function finishOnboarding() {
+  showOnboarding.value = false
+  uni.setStorageSync(ONBOARDING_KEY, 1)
+}
+function nextOnboarding() {
+  if (onboardingStep.value >= onboardingSteps.length - 1) { finishOnboarding(); return }
+  onboardingStep.value += 1
+}
+function prevOnboarding() {
+  if (onboardingStep.value > 0) onboardingStep.value -= 1
+}
+function skipOnboarding() { finishOnboarding() }
+
 onShow(() => {
   user.value = getSession()?.user
   creatorMode.value = readCreatorMode()
+  if (!uni.getStorageSync(ONBOARDING_KEY)) {
+    onboardingStep.value = 0
+    setTimeout(() => { showOnboarding.value = true }, 300)
+  }
   if (user.value) { void refreshHome(); void promptDailyQuiz() }
   else {
     heroVisualUrl.value = ''
@@ -330,6 +373,22 @@ onShow(() => {
   }
 })
 </script>
+
+<style scoped>
+.onboarding-mask{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;padding:0 60rpx;background:rgba(20,35,28,.62)}
+.onboarding-card{display:flex;flex-direction:column;width:100%;max-width:560rpx;padding:48rpx 44rpx 40rpx;border-radius:28rpx;background:#fff;box-shadow:0 24rpx 60rpx rgba(0,0,0,.18)}
+.onboarding-dots{display:flex;justify-content:center;gap:12rpx;margin-bottom:28rpx}
+.onboarding-dot{width:14rpx;height:14rpx;border-radius:50%;background:#dbe5df}
+.onboarding-dot.active{width:34rpx;border-radius:8rpx;background:#1b775e}
+.onboarding-step-label{color:#8a958f;font-size:20rpx;text-align:center}
+.onboarding-title{margin-top:14rpx;color:#263d33;font-size:40rpx;font-weight:800;text-align:center}
+.onboarding-desc{margin-top:20rpx;color:#5f7268;font-size:26rpx;line-height:1.7;text-align:center}
+.onboarding-actions{display:flex;align-items:center;justify-content:space-between;margin-top:44rpx}
+.onboarding-skip{color:#9aa49e;font-size:26rpx}
+.onboarding-nav{display:flex;align-items:center;gap:24rpx}
+.onboarding-prev{color:#5f7268;font-size:26rpx}
+.onboarding-next{display:flex;align-items:center;justify-content:center;min-width:176rpx;height:76rpx;padding:0 32rpx;border-radius:38rpx;background:#1b775e;color:#fff;font-size:28rpx;font-weight:700}
+</style>
 
 <style scoped lang="scss">
 .page{position:relative;min-height:100vh;overflow:hidden;background:#f7f7f3;color:#263d33}
