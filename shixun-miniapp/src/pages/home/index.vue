@@ -58,17 +58,18 @@
 
     <view class="bottom-nav"><view class="nav-item active" @tap="refreshHome"><text class="nav-icon">⌂</text><text>首页</text></view><view class="nav-item" @tap="openWorks"><text class="nav-icon">▣</text><text>作品</text></view><view class="nav-item" @tap="openProfile"><text class="nav-icon">♙</text><text>我的</text></view></view>
 
-    <view v-if="showOnboarding" class="onboarding-mask" @tap.stop>
-      <view class="onboarding-card">
-        <view class="onboarding-dots"><view v-for="(_, i) in onboardingSteps" :key="i" class="onboarding-dot" :class="{ active: i === onboardingStep }"></view></view>
-        <text class="onboarding-step-label">第 {{ onboardingStep + 1 }} 步 · 共 {{ onboardingSteps.length }} 步</text>
-        <text class="onboarding-title">{{ onboardingSteps[onboardingStep].title }}</text>
-        <text class="onboarding-desc">{{ onboardingSteps[onboardingStep].desc }}</text>
-        <view class="onboarding-actions">
-          <text class="onboarding-skip" @tap="skipOnboarding">跳过</text>
-          <view class="onboarding-nav">
-            <text v-if="onboardingStep > 0" class="onboarding-prev" @tap="prevOnboarding">上一步</text>
-            <view class="onboarding-next" @tap="nextOnboarding">{{ onboardingStep >= onboardingSteps.length - 1 ? '开始使用' : '下一步' }}</view>
+    <view v-if="showOnboarding" class="spotlight-mask">
+      <view class="spotlight-hole" :style="holeStyle"></view>
+      <view class="spotlight-bubble" :class="{ above: !bubbleBelow }" :style="bubbleStyle">
+        <view class="spotlight-arrow" :class="{ above: !bubbleBelow }"></view>
+        <text class="spotlight-step">{{ onboardingStep + 1 }} / {{ onboardingSteps.length }}</text>
+        <text class="spotlight-title">{{ onboardingSteps[onboardingStep].title }}</text>
+        <text class="spotlight-desc">{{ onboardingSteps[onboardingStep].desc }}</text>
+        <view class="spotlight-actions">
+          <text class="spotlight-skip" @tap="skipOnboarding">跳过</text>
+          <view class="spotlight-nav">
+            <text v-if="onboardingStep > 0" class="spotlight-prev" @tap="prevOnboarding">上一步</text>
+            <view class="spotlight-next" @tap="nextOnboarding">{{ onboardingStep >= onboardingSteps.length - 1 ? '完成' : '下一步' }}</view>
           </view>
         </view>
       </view>
@@ -333,12 +334,46 @@ async function promptDailyQuiz() {
 const ONBOARDING_KEY = 'smart_pig_onboarded_v1'
 const showOnboarding = ref(false)
 const onboardingStep = ref(0)
+const targetRect = ref({ top: 0, left: 0, width: 0, height: 0 })
+const bubbleBelow = ref(true)
+const windowWidth = uni.getSystemInfoSync().windowWidth
+const windowHeight = uni.getSystemInfoSync().windowHeight
+
 const onboardingSteps = [
-  { title: '创意工坊 · AI 创作', desc: '在首页输入你的想法，AI 帮你生成文创产品设计图，从一句灵感开始。' },
-  { title: '产品智造 · 渠道合作', desc: '产品智造帮你打样、小批量生产；渠道合作对接博物馆、景区等渠道上架。' },
-  { title: '馆方征集 · 投稿赚积分', desc: '参与博物馆等机构的征集活动，作品入选可获创作积分和免费树脂打样。' },
-  { title: '答题 · 积分互动', desc: '每日答题、签到、红包雨等积分活动，答题全对可领 100 积分。' },
+  { selector: '.primary-entry', title: '创意工坊 · AI 创作', desc: '在这里输入你的想法，AI 帮你生成文创产品设计图', below: true },
+  { selector: '.secondary-entry-grid', title: '产品智造 · 渠道合作', desc: '左侧打样生产，右侧对接博物馆、景区等渠道上架', below: false },
+  { selector: '.campaign-heading', title: '馆方征集 · 投稿', desc: '参与博物馆等机构的征集活动，作品入选获积分和免费树脂打样', below: true },
+  { selector: '.hero-swiper', title: '答题赚积分', desc: '顶部轮播含答题入口，答对 7 题领 100 积分', below: true },
 ]
+
+const holeStyle = computed(() => ({
+  top: `${targetRect.value.top}px`,
+  left: `${targetRect.value.left}px`,
+  width: `${targetRect.value.width}px`,
+  height: `${targetRect.value.height}px`,
+}))
+
+const bubbleStyle = computed(() => {
+  const r = targetRect.value
+  const gap = 18
+  const bubbleW = 300
+  const cx = r.left + r.width / 2
+  const left = Math.max(12, Math.min(cx - bubbleW / 2, windowWidth - bubbleW - 12))
+  return bubbleBelow.value
+    ? { top: `${r.top + r.height + gap}px`, left: `${left}px` }
+    : { bottom: `${windowHeight - r.top + gap}px`, left: `${left}px` }
+})
+
+function locateStep() {
+  const step = onboardingSteps[onboardingStep.value]
+  if (!step) return
+  uni.createSelectorQuery().select(step.selector).boundingClientRect(rect => {
+    const info = Array.isArray(rect) ? rect[0] : rect
+    if (!info || !info.width) { finishOnboarding(); return }
+    targetRect.value = { top: info.top ?? 0, left: info.left ?? 0, width: info.width ?? 0, height: info.height ?? 0 }
+    bubbleBelow.value = step.below
+  }).exec()
+}
 
 function finishOnboarding() {
   showOnboarding.value = false
@@ -347,9 +382,10 @@ function finishOnboarding() {
 function nextOnboarding() {
   if (onboardingStep.value >= onboardingSteps.length - 1) { finishOnboarding(); return }
   onboardingStep.value += 1
+  locateStep()
 }
 function prevOnboarding() {
-  if (onboardingStep.value > 0) onboardingStep.value -= 1
+  if (onboardingStep.value > 0) { onboardingStep.value -= 1; locateStep() }
 }
 function skipOnboarding() { finishOnboarding() }
 
@@ -358,7 +394,7 @@ onShow(() => {
   creatorMode.value = readCreatorMode()
   if (!uni.getStorageSync(ONBOARDING_KEY)) {
     onboardingStep.value = 0
-    setTimeout(() => { showOnboarding.value = true }, 300)
+    setTimeout(() => { showOnboarding.value = true; locateStep() }, 300)
   }
   if (user.value) { void refreshHome(); void promptDailyQuiz() }
   else {
@@ -375,19 +411,19 @@ onShow(() => {
 </script>
 
 <style scoped>
-.onboarding-mask{position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;padding:0 60rpx;background:rgba(20,35,28,.62)}
-.onboarding-card{display:flex;flex-direction:column;width:100%;max-width:560rpx;padding:48rpx 44rpx 40rpx;border-radius:28rpx;background:#fff;box-shadow:0 24rpx 60rpx rgba(0,0,0,.18)}
-.onboarding-dots{display:flex;justify-content:center;gap:12rpx;margin-bottom:28rpx}
-.onboarding-dot{width:14rpx;height:14rpx;border-radius:50%;background:#dbe5df}
-.onboarding-dot.active{width:34rpx;border-radius:8rpx;background:#1b775e}
-.onboarding-step-label{color:#8a958f;font-size:20rpx;text-align:center}
-.onboarding-title{margin-top:14rpx;color:#263d33;font-size:40rpx;font-weight:800;text-align:center}
-.onboarding-desc{margin-top:20rpx;color:#5f7268;font-size:26rpx;line-height:1.7;text-align:center}
-.onboarding-actions{display:flex;align-items:center;justify-content:space-between;margin-top:44rpx}
-.onboarding-skip{color:#9aa49e;font-size:26rpx}
-.onboarding-nav{display:flex;align-items:center;gap:24rpx}
-.onboarding-prev{color:#5f7268;font-size:26rpx}
-.onboarding-next{display:flex;align-items:center;justify-content:center;min-width:176rpx;height:76rpx;padding:0 32rpx;border-radius:38rpx;background:#1b775e;color:#fff;font-size:28rpx;font-weight:700}
+.spotlight-mask{position:fixed;inset:0;z-index:999}
+.spotlight-hole{position:fixed;z-index:1000;border-radius:14rpx;box-shadow:0 0 0 9999px rgba(15,28,22,.74);transition:all .28s ease}
+.spotlight-bubble{position:fixed;z-index:1001;display:flex;width:600rpx;flex-direction:column;padding:34rpx 36rpx 30rpx;border-radius:24rpx;background:#fff;box-shadow:0 22rpx 64rpx rgba(0,0,0,.24);transition:all .28s ease}
+.spotlight-arrow{position:absolute;top:-12rpx;left:50%;width:28rpx;height:28rpx;background:#fff;transform:translateX(-50%) rotate(45deg)}
+.spotlight-bubble.above .spotlight-arrow{top:auto;bottom:-12rpx}
+.spotlight-step{color:#8a958f;font-size:20rpx}
+.spotlight-title{margin-top:10rpx;color:#263d33;font-size:34rpx;font-weight:800}
+.spotlight-desc{margin-top:14rpx;color:#5f7268;font-size:24rpx;line-height:1.65}
+.spotlight-actions{display:flex;align-items:center;justify-content:space-between;margin-top:28rpx}
+.spotlight-skip{color:#9aa49e;font-size:24rpx}
+.spotlight-nav{display:flex;align-items:center;gap:22rpx}
+.spotlight-prev{color:#5f7268;font-size:24rpx}
+.spotlight-next{display:flex;align-items:center;justify-content:center;min-width:160rpx;height:72rpx;padding:0 30rpx;border-radius:36rpx;background:#1b775e;color:#fff;font-size:26rpx;font-weight:700}
 </style>
 
 <style scoped lang="scss">
